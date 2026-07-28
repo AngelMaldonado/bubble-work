@@ -139,11 +139,14 @@ flowchart LR
 
 **Goal:** the framework writes back — births create work items; contracts and closures persist.
 
-- [ ] `plane.Client` write methods: create work item, set description/page, link to module
-- [ ] `BirthThread` POSTs the work item with **Brief + Logbook in one description page** (§7.1)
-- [ ] `bubble bubble new|set --outcome --owner --closure` → `store.SetContract` (§4)
+- [x] `bubble bubble set --outcome --owner --closure` → server API → `store.SetContract` (§4), instance-scoped
+- [x] `bubble bubble close|open` (reopen) via the server; `set_contract` MCP tool for parity
+- [x] Short/prefix bubble ids: `ls` shows the module id; heat/set/close/open resolve exact-or-unique-prefix (git-style), ambiguous→400, unknown→404
+- [x] Writes patch the cached bubble in place (no Plane refetch) — instant reflection, avoids rate-limit storms
+- [x] Tests: contract set reflected in `ls`, close→Closed, reopen, `matchBubble` resolution; **live e2e green against cuby** (whoami/ls/heat/set/close/reopen)
+- [ ] `plane.Client` write methods: create work item, set description HTML, link to module
+- [ ] `BirthThread` POSTs the work item with **Brief + Logbook in the description HTML** (§7.1)
 - [ ] `close_bubble` optionally reflects closure into Plane (label/state), not just overlay
-- [ ] Idempotency / error surfacing on partial Plane failures
 - [ ] Tests: birth creates a work item (against a scratch project or mocked transport)
 
 **Dependencies:** Phase 1 (attribution), Phase 2 (read shapes).

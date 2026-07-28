@@ -29,6 +29,8 @@ import (
 var (
 	errNotFound = errors.New("bubble not found")
 	errUnauth   = errors.New("unauthorized")
+	errForbid   = errors.New("not authorized for this instance")
+	errAmbig    = errors.New("ambiguous id")
 )
 
 const (
@@ -156,7 +158,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/bubbles", s.restAuth(s.handleBubbles))
 	mux.HandleFunc("GET /api/bubbles/{id}/heat", s.restAuth(s.handleHeat))
 	mux.HandleFunc("POST /api/threads/birth", s.restAuth(s.handleBirth))
+	mux.HandleFunc("POST /api/bubbles/{id}/contract", s.restAuth(s.handleSetContract))
 	mux.HandleFunc("POST /api/bubbles/{id}/close", s.restAuth(s.handleClose))
+	mux.HandleFunc("POST /api/bubbles/{id}/reopen", s.restAuth(s.handleReopen))
 
 	// Our own MCP front door (§9.5), behind the same member credential using the
 	// SDK's bearer middleware; the verified member reaches tool handlers via
@@ -236,18 +240,59 @@ func (s *Server) Bubbles(ctx context.Context) ([]domain.BubbleView, error) {
 	return out, nil
 }
 
-// Heat returns a single bubble's derived view.
+// Heat returns a single bubble's derived view, accepting a short or full id.
 func (s *Server) Heat(ctx context.Context, id string) (domain.BubbleView, error) {
 	vs, err := s.Bubbles(ctx)
 	if err != nil {
 		return domain.BubbleView{}, err
 	}
+	return matchBubble(vs, id)
+}
+
+// matchBubble resolves a query against the caller's bubbles. A query containing
+// ':' is treated as a full namespaced id (exact match); otherwise it matches the
+// module segment (the short id) by exact value or unique prefix — git-style.
+func matchBubble(vs []domain.BubbleView, q string) (domain.BubbleView, error) {
+	if strings.Contains(q, ":") {
+		for _, v := range vs {
+			if v.ID == q {
+				return v, nil
+			}
+		}
+		return domain.BubbleView{}, errNotFound
+	}
+	var hits []domain.BubbleView
 	for _, v := range vs {
-		if v.ID == id {
-			return v, nil
+		mod := v.ID[strings.LastIndex(v.ID, ":")+1:]
+		if mod == q {
+			return v, nil // exact short id wins outright
+		}
+		if strings.HasPrefix(mod, q) {
+			hits = append(hits, v)
 		}
 	}
-	return domain.BubbleView{}, errNotFound
+	switch len(hits) {
+	case 1:
+		return hits[0], nil
+	case 0:
+		return domain.BubbleView{}, errNotFound
+	default:
+		return domain.BubbleView{}, fmt.Errorf("%w: %q matches %d bubbles — use more characters", errAmbig, q, len(hits))
+	}
+}
+
+// resolveID turns a short/full query into a full namespaced bubble id, scoped to
+// the caller's bubbles.
+func (s *Server) resolveID(ctx context.Context, q string) (string, error) {
+	vs, err := s.Bubbles(ctx)
+	if err != nil {
+		return "", err
+	}
+	v, err := matchBubble(vs, q)
+	if err != nil {
+		return "", err
+	}
+	return v.ID, nil
 }
 
 // BirthThread is the policy gate (§3): no thread is born without a Brief that
@@ -272,15 +317,94 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	}, nil
 }
 
-// CloseBubble records a bubble's closure in the overlay (§5.3), attributed to
-// the acting identity and refused if they aren't scoped to the bubble's instance.
-func (s *Server) CloseBubble(ctx context.Context, id string) error {
+// authorizeBubble confirms the actor may act on a namespaced bubble id and
+// returns the instance slug for cache invalidation.
+func (s *Server) authorizeBubble(ctx context.Context, id string) (slug string, err error) {
 	actor, _ := domain.ActorFrom(ctx)
-	if slug, _, ok := strings.Cut(id, ":"); ok && !actor.CanSee(slug) {
-		return fmt.Errorf("not authorized for instance %q", slug)
+	slug, _, _ = strings.Cut(id, ":")
+	if slug != "" && !actor.CanSee(slug) {
+		return "", errForbid
 	}
-	log.Printf("close_bubble by %s: bubble=%s", actor.Label(), id)
-	return s.store.SetClosed(id, true)
+	return slug, nil
+}
+
+// patchCachedBubble applies an in-place update to a cached bubble so a just-
+// written contract/closure reflects immediately WITHOUT a Plane refetch (those
+// are server-owned overlay fields). If the instance isn't cached, the next read
+// fetches fresh and merges the overlay anyway — so this is a pure optimization
+// that also keeps writes from hammering Plane's rate limit.
+func (s *Server) patchCachedBubble(slug, id string, apply func(*domain.Bubble)) {
+	s.bubblesMu.Lock()
+	defer s.bubblesMu.Unlock()
+	c, ok := s.bubblesCache[slug]
+	if !ok {
+		return
+	}
+	for i := range c.bubbles {
+		if c.bubbles[i].ID == id {
+			apply(&c.bubbles[i])
+			return
+		}
+	}
+}
+
+// SetContract applies a partial §4 contract update to a bubble (short or full id).
+func (s *Server) SetContract(ctx context.Context, q string, in domain.ContractInput) (domain.Contract, error) {
+	id, err := s.resolveID(ctx, q)
+	if err != nil {
+		return domain.Contract{}, err
+	}
+	slug, err := s.authorizeBubble(ctx, id)
+	if err != nil {
+		return domain.Contract{}, err
+	}
+	cur, _, err := s.store.GetContract(id)
+	if err != nil {
+		return domain.Contract{}, err
+	}
+	if in.Outcome != nil {
+		cur.Outcome = *in.Outcome
+	}
+	if in.Owner != nil {
+		cur.Owner = *in.Owner
+	}
+	if in.Closure != nil {
+		cur.Closure = *in.Closure
+	}
+	if err := s.store.SetContract(id, cur); err != nil {
+		return domain.Contract{}, err
+	}
+	s.patchCachedBubble(slug, id, func(b *domain.Bubble) {
+		b.Outcome, b.Owner, b.Closure = cur.Outcome, cur.Owner, cur.Closure
+	})
+	actor, _ := domain.ActorFrom(ctx)
+	log.Printf("set_contract by %s: bubble=%s", actor.Label(), id)
+	return domain.Contract{Outcome: cur.Outcome, Owner: cur.Owner, Closure: cur.Closure, Closed: cur.Closed}, nil
+}
+
+// setClosed opens/closes a bubble in the overlay (§5.3), attributed and scoped;
+// accepts a short or full id.
+func (s *Server) setClosed(ctx context.Context, q string, closed bool) error {
+	id, err := s.resolveID(ctx, q)
+	if err != nil {
+		return err
+	}
+	slug, err := s.authorizeBubble(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetClosed(id, closed); err != nil {
+		return err
+	}
+	s.patchCachedBubble(slug, id, func(b *domain.Bubble) { b.Closed = closed })
+	actor, _ := domain.ActorFrom(ctx)
+	log.Printf("set_closed(%v) by %s: bubble=%s", closed, actor.Label(), id)
+	return nil
+}
+
+// CloseBubble closes a bubble (used by the MCP close_bubble tool).
+func (s *Server) CloseBubble(ctx context.Context, id string) error {
+	return s.setClosed(ctx, id, true)
 }
 
 // collect federates over the acting identity's authorized instances, reading
@@ -427,12 +551,7 @@ func (s *Server) handleBubbles(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleHeat(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Heat(r.Context(), r.PathValue("id"))
-	if errors.Is(err, errNotFound) {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-		return
-	}
-	if err != nil {
-		writeJSON(w, http.StatusBadGateway, map[string]string{"error": err.Error()})
+	if writeErr(w, err) {
 		return
 	}
 	writeJSON(w, http.StatusOK, v)
@@ -452,10 +571,46 @@ func (s *Server) handleBirth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, res)
 }
 
-func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
-	if err := s.CloseBubble(r.Context(), r.PathValue("id")); err != nil {
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+func (s *Server) handleSetContract(w http.ResponseWriter, r *http.Request) {
+	var in domain.ContractInput
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+	c, err := s.SetContract(r.Context(), r.PathValue("id"), in)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) handleClose(w http.ResponseWriter, r *http.Request) {
+	if writeErr(w, s.setClosed(r.Context(), r.PathValue("id"), true)) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "closed": true})
+}
+
+func (s *Server) handleReopen(w http.ResponseWriter, r *http.Request) {
+	if writeErr(w, s.setClosed(r.Context(), r.PathValue("id"), false)) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "closed": false})
+}
+
+// writeErr maps a backend error to an HTTP response; returns true if it wrote one.
+func writeErr(w http.ResponseWriter, err error) bool {
+	switch {
+	case err == nil:
+		return false
+	case errors.Is(err, errForbid):
+		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
+	case errors.Is(err, errNotFound):
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case errors.Is(err, errAmbig):
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+	default:
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return true
 }

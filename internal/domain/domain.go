@@ -140,3 +140,19 @@ type BirthResult struct {
 	Created  bool   `json:"created"`
 	Message  string `json:"message"`
 }
+
+// Contract is a bubble's §4 overlay as returned to clients.
+type Contract struct {
+	Outcome string `json:"outcome"`
+	Owner   string `json:"owner"`
+	Closure string `json:"closure"`
+	Closed  bool   `json:"closed"`
+}
+
+// ContractInput is a partial update of a bubble's contract (§4). A nil field is
+// left unchanged; a non-nil field (including empty string) is applied.
+type ContractInput struct {
+	Outcome *string `json:"outcome,omitempty"`
+	Owner   *string `json:"owner,omitempty"`
+	Closure *string `json:"closure,omitempty"`
+}

@@ -17,6 +17,7 @@ import (
 type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
 	BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
+	SetContract(ctx context.Context, bubbleID string, in domain.ContractInput) (domain.Contract, error)
 	CloseBubble(ctx context.Context, bubbleID string) error
 }
 
@@ -42,6 +43,12 @@ type listOut struct {
 }
 type closeIn struct {
 	BubbleID string `json:"bubble_id" jsonschema:"the bubble (Plane module) id to close"`
+}
+type contractIn struct {
+	BubbleID string  `json:"bubble_id" jsonschema:"the namespaced bubble id"`
+	Outcome  *string `json:"outcome,omitempty" jsonschema:"what done looks like"`
+	Owner    *string `json:"owner,omitempty" jsonschema:"who is accountable now"`
+	Closure  *string `json:"closure,omitempty" jsonschema:"the explicit close signal"`
 }
 type closeOut struct {
 	OK bool `json:"ok"`
@@ -69,6 +76,18 @@ func Handler(b Backend) http.Handler {
 				return nil, domain.BirthResult{}, err
 			}
 			return nil, res, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "set_contract", Description: "Set a bubble's contract — outcome, owner, closure condition (§4). Omitted fields are unchanged."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in contractIn) (*sdk.CallToolResult, domain.Contract, error) {
+			c, err := b.SetContract(withActor(ctx, req), in.BubbleID, domain.ContractInput{
+				Outcome: in.Outcome, Owner: in.Owner, Closure: in.Closure,
+			})
+			if err != nil {
+				return nil, domain.Contract{}, err
+			}
+			return nil, c, nil
 		})
 
 	sdk.AddTool(srv,

@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -147,6 +148,84 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 	if !names["Bubble A"] || !names["Bubble B"] {
 		t.Fatalf("expected bubbles from both projects, got %v", names)
+	}
+}
+
+func TestContractAndClose(t *testing.T) {
+	ts, key := authedServer(t)
+	id := "ws:p1:m1" // "Bubble A" from the fake
+
+	find := func() domain.BubbleView {
+		_, body := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+		var vs []domain.BubbleView
+		json.Unmarshal(body, &vs)
+		for _, v := range vs {
+			if v.ID == id {
+				return v
+			}
+		}
+		t.Fatalf("bubble %s not found", id)
+		return domain.BubbleView{}
+	}
+
+	// set contract
+	code, body := do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/contract", key, `{"owner":"angel","outcome":"ship it"}`)
+	if code != http.StatusOK {
+		t.Fatalf("set contract: want 200, got %d", code)
+	}
+	var c domain.Contract
+	json.Unmarshal(body, &c)
+	if c.Owner != "angel" || c.Outcome != "ship it" {
+		t.Fatalf("unexpected contract: %+v", c)
+	}
+	if v := find(); v.Owner != "angel" {
+		t.Fatalf("owner not reflected in ls: %+v", v)
+	}
+
+	// close → lifecycle closed
+	if code, _ := do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/close", key, ""); code != http.StatusOK {
+		t.Fatalf("close: want 200, got %d", code)
+	}
+	if v := find(); v.Lifecycle != domain.Closed {
+		t.Fatalf("want closed after close, got %s", v.Lifecycle)
+	}
+
+	// reopen → not closed
+	if code, _ := do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/reopen", key, ""); code != http.StatusOK {
+		t.Fatalf("reopen: want 200, got %d", code)
+	}
+	if v := find(); v.Lifecycle == domain.Closed {
+		t.Fatalf("want not-closed after reopen, got %s", v.Lifecycle)
+	}
+
+	// a bubble in an instance the caller can't see doesn't resolve → 404
+	if code, _ := do(t, http.MethodPost, ts.URL+"/api/bubbles/other:p:m/contract", key, `{"owner":"x"}`); code != http.StatusNotFound {
+		t.Fatalf("cross-instance contract: want 404, got %d", code)
+	}
+}
+
+func TestMatchBubble(t *testing.T) {
+	vs := []domain.BubbleView{
+		{ID: "ws:p1:aaaa1111"},
+		{ID: "ws:p2:bbbb2222"},
+		{ID: "ws:p1:aaaa9999"},
+	}
+	check := func(q, wantID string) {
+		t.Helper()
+		v, err := matchBubble(vs, q)
+		if err != nil || v.ID != wantID {
+			t.Fatalf("match %q: want %s, got %q err=%v", q, wantID, v.ID, err)
+		}
+	}
+	check("bbbb2222", "ws:p2:bbbb2222")        // exact short id
+	check("bbbb", "ws:p2:bbbb2222")            // unique prefix
+	check("ws:p1:aaaa1111", "ws:p1:aaaa1111")  // full namespaced id
+
+	if _, err := matchBubble(vs, "aaaa"); !errors.Is(err, errAmbig) {
+		t.Fatalf("prefix 'aaaa' should be ambiguous, got %v", err)
+	}
+	if _, err := matchBubble(vs, "zzzz"); !errors.Is(err, errNotFound) {
+		t.Fatalf("prefix 'zzzz' should be not-found, got %v", err)
 	}
 }
 

@@ -40,6 +40,8 @@ func main() {
 		cmdWhoami(os.Args[2:])
 	case "use":
 		cmdUse(os.Args[2:])
+	case "bubble":
+		cmdBubble(os.Args[2:])
 	case "instance":
 		cmdInstance(os.Args[2:])
 	case "init":
@@ -60,9 +62,10 @@ func usage() {
 Usage:
   bubble serve [--addr :4006]      run the server (REST + MCP brain)
   bubble ls                        list bubbles, hottest first (buoyancy view)
-  bubble heat <bubble-id>          explain a bubble's temperature
+  bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble whoami                    show the identity resolved from your credential
   bubble use [name]                switch active credential profile (no arg: list)
+  bubble bubble set|close|open     set a bubble's contract (§4) or open/close it
   bubble instance add|list|remove  manage Plane instances (run on the server host)
   bubble init [flags]              configure server URL + a credential profile
   bubble reset [--force]           purge all local state and start from scratch
@@ -86,6 +89,72 @@ func cmdWhoami(args []string) {
 	if err := client.Whoami(cfg); err != nil {
 		log.Fatalf("whoami: %v", err)
 	}
+}
+
+// cmdBubble sets a bubble's §4 contract or opens/closes it (via the server).
+func cmdBubble(args []string) {
+	if len(args) < 2 {
+		bubbleUsage()
+		os.Exit(2)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	sub, id := args[0], args[1]
+
+	switch sub {
+	case "set":
+		fs := flag.NewFlagSet("bubble set", flag.ExitOnError)
+		outcome := fs.String("outcome", "", "what 'done' looks like")
+		owner := fs.String("owner", "", "who is accountable now")
+		closure := fs.String("closure", "", "the explicit close signal")
+		_ = fs.Parse(args[2:])
+		var in domain.ContractInput
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "outcome":
+				v := *outcome
+				in.Outcome = &v
+			case "owner":
+				v := *owner
+				in.Owner = &v
+			case "closure":
+				v := *closure
+				in.Closure = &v
+			}
+		})
+		if in.Outcome == nil && in.Owner == nil && in.Closure == nil {
+			log.Fatal("bubble set: provide at least one of --outcome / --owner / --closure")
+		}
+		if err := client.SetContract(cfg, id, in); err != nil {
+			log.Fatalf("bubble set: %v", err)
+		}
+	case "close":
+		if err := client.Close(cfg, id); err != nil {
+			log.Fatalf("bubble close: %v", err)
+		}
+	case "open":
+		if err := client.Reopen(cfg, id); err != nil {
+			log.Fatalf("bubble open: %v", err)
+		}
+	default:
+		bubbleUsage()
+		os.Exit(2)
+	}
+}
+
+func bubbleUsage() {
+	fmt.Fprint(os.Stderr, `bubble bubble — set a bubble's contract (§4) or open/close it
+
+Usage:
+  bubble bubble set <id> [--outcome <text>] [--owner <name>] [--closure <text>]
+  bubble bubble close <id>
+  bubble bubble open  <id>
+
+<id> is the short ID from 'bubble ls' (or any unique prefix of it).
+
+`)
 }
 
 // cmdUse switches the active credential profile, or lists profiles with no arg.

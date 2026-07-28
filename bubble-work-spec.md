@@ -286,7 +286,26 @@ The server is authoritative for the Bubble Work *overlay*; Plane stays authorita
 From a client's point of view the **server handles all state** — it is the single interface and holds the authoritative overlay plus a materialized read-model of Plane. Behind the server, Plane remains the durable book of record.
 
 ### 9.3 Members & attribution — clients as team members
-The server keeps a **member registry** of humans *and* agents. Each member has its own credential and a mapped Plane identity, so every action attributes to a named actor (assignee, comment author) inside Plane. This is what makes a client an actual team member rather than a metaphor: an agent acts *as itself*, under its own name, subject to the same policy.
+Identity is **Plane-native**, so it isn't duplicated (§8). Everyone — human or
+agent — authenticates with a **Plane API key**:
+
+- **Humans use their own key.** The server verifies it via `/users/me`, then uses
+  its **own** per-instance admin keys to find every instance whose member list
+  contains that email — deriving the user's **instance scope** and **role**
+  (`admin` when Plane role ≥ 20) directly from Plane. No account, token, or grant
+  is created for a human.
+- **Agents impersonate a human** by using that human's Plane key. The agent *is*
+  that human for all purposes — same identity, scope, role, and (on the write
+  path) Plane attribution. There is no separate agent registry.
+
+The request resolves to an **Actor** (id, name, kind, admin, the instances it may
+see), and every action is attributed to it. Resolved identities are cached
+briefly to avoid calling Plane on every request. `GET /api/whoami` returns the
+resolved Actor.
+
+> Trade-off of direct-key impersonation: an agent is indistinguishable from the
+> human it acts as, so there is no agent-level audit trail, and revoking an agent
+> means rotating that human's Plane key.
 
 ### 9.4 Policy engine — invariants, not suggestions
 Because every mutation flows through the server, the framework's rules become enforceable:
@@ -305,7 +324,43 @@ Because every mutation flows through the server, the framework's rules become en
 - **Storage:** SQLite — a single file, no external DB, keeps the server minimal and easy to publish.
 - **Sync:** poll Plane's activity endpoint (`.../work-items/{id}/activities/`, filterable by type and date) to keep the read-model fresh and derive heat; upgrade to Plane webhooks later for real-time reaction. Conflict policy follows §9.2 ownership — Plane wins its fields, the server wins the overlay.
 
-### 9.7 Tradeoff
+### 9.7 Federation — multiple Plane instances
+
+The server can federate over several Plane deployments at once (e.g.
+`plane.ayetec.space` and `plane.cuby.work`). Each is registered as an
+**instance**: a named connection to a Plane workspace, with its API key stored
+server-side (§9.2). An instance either **pins one project** or, when no project
+is set, **federates the whole workspace** (auto-discovering every project in
+it).
+
+```mermaid
+flowchart TD
+    M1["👤 member (ayetec)"] --> S
+    M2["👤 member (cuby)"] --> S
+    M3["🤖 agent (both)"] --> S
+    S["🧠 Bubble Work Server<br/><i>instances + member→instance grants</i>"]
+    S -->|granted| A["📦 plane.ayetec.space<br/>project → bubbles"]
+    S -->|granted| C["📦 plane.cuby.work<br/>project → bubbles"]
+
+    classDef srv fill:#0e7490,stroke:#155e75,color:#ecfeff;
+    class S srv;
+```
+
+- **Scope follows Plane membership.** A caller sees only the instances whose
+  Plane workspace lists their email — the isolation boundary between separate
+  orgs. A `cuby` member never sees `ayetec` bubbles.
+- **Bubble ids are namespaced** `<instance-slug>:<project-id>:<module-id>`, so
+  they stay unique and routable (heat/close resolve the right instance and
+  project automatically).
+- **`collect()` fans out** over the caller's authorized instances; one
+  unreachable instance is logged and skipped, never blanking the whole view.
+- **Ownership (extends §9.2):** the instance registry is server-owned overlay
+  state; API keys never leave the server or appear in `instance list`.
+
+Admin (on the server host): `bubble instance add|list|remove`. Membership and
+roles are read from Plane, not managed here.
+
+### 9.8 Tradeoff
 This buys **enforceable invariants, centralized credentials, and a shared multi-actor view** at the cost of **the server having to run somewhere** (a small VPS, container, or home box). SQLite + a single static binary keeps that cost about as low as a stateful server allows.
 
 ---

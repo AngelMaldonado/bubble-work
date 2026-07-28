@@ -7,22 +7,25 @@ import (
 	"database/sql"
 
 	_ "modernc.org/sqlite"
+
+	"github.com/AngelMaldonado/bubble-work/internal/domain"
 )
 
 const schema = `
-CREATE TABLE IF NOT EXISTS members (
-  id       TEXT PRIMARY KEY,
-  name     TEXT NOT NULL,
-  kind     TEXT NOT NULL,          -- human | agent
-  plane_id TEXT,
-  token    TEXT UNIQUE
-);
 CREATE TABLE IF NOT EXISTS bubble_contracts (
-  bubble_id TEXT PRIMARY KEY,      -- Plane module id
+  bubble_id TEXT PRIMARY KEY,      -- "<instance-slug>:<project-id>:<module-id>"
   outcome   TEXT,
   owner     TEXT,
   closure   TEXT,
   closed    INTEGER NOT NULL DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS plane_instances (
+  slug      TEXT PRIMARY KEY,      -- "ayetec", "cuby"
+  name      TEXT,
+  base_url  TEXT NOT NULL,         -- https://plane.ayetec.space
+  api_key   TEXT NOT NULL,
+  workspace TEXT NOT NULL,         -- workspace slug
+  project   TEXT NOT NULL          -- pinned project id, or '' for the whole workspace
 );
 `
 
@@ -102,16 +105,61 @@ func (s *Store) SetClosed(bubbleID string, closed bool) error {
 	return err
 }
 
-// MemberByToken resolves a client credential to a team member (§9.3).
-func (s *Store) MemberByToken(token string) (id, name, kind string, ok bool, err error) {
-	e := s.db.QueryRow(
-		`SELECT id, name, kind FROM members WHERE token = ?`, token,
-	).Scan(&id, &name, &kind)
-	if e == sql.ErrNoRows {
-		return "", "", "", false, nil
+// ---- Plane instances (§9.7 federation) ----
+
+// AddInstance registers or updates a Plane instance (upsert by slug).
+func (s *Store) AddInstance(i domain.Instance) error {
+	_, err := s.db.Exec(
+		`INSERT INTO plane_instances(slug, name, base_url, api_key, workspace, project)
+		 VALUES(?, ?, ?, ?, ?, ?)
+		 ON CONFLICT(slug) DO UPDATE SET
+		   name=excluded.name, base_url=excluded.base_url, api_key=excluded.api_key,
+		   workspace=excluded.workspace, project=excluded.project`,
+		i.Slug, i.Name, i.BaseURL, i.APIKey, i.Workspace, i.Project,
+	)
+	return err
+}
+
+func scanInstances(rows *sql.Rows) ([]domain.Instance, error) {
+	defer rows.Close()
+	var out []domain.Instance
+	for rows.Next() {
+		var i domain.Instance
+		if err := rows.Scan(&i.Slug, &i.Name, &i.BaseURL, &i.APIKey, &i.Workspace, &i.Project); err != nil {
+			return nil, err
+		}
+		out = append(out, i)
 	}
-	if e != nil {
-		return "", "", "", false, e
+	return out, rows.Err()
+}
+
+// ListInstances returns every registered instance (admin view; includes keys).
+func (s *Store) ListInstances() ([]domain.Instance, error) {
+	rows, err := s.db.Query(
+		`SELECT slug, COALESCE(name,''), base_url, api_key, workspace, project
+		 FROM plane_instances ORDER BY slug`)
+	if err != nil {
+		return nil, err
 	}
-	return id, name, kind, true, nil
+	return scanInstances(rows)
+}
+
+// InstanceExists reports whether a slug is registered.
+func (s *Store) InstanceExists(slug string) (bool, error) {
+	var one int
+	err := s.db.QueryRow(`SELECT 1 FROM plane_instances WHERE slug = ?`, slug).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	return err == nil, err
+}
+
+// RemoveInstance deletes an instance.
+func (s *Store) RemoveInstance(slug string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM plane_instances WHERE slug = ?`, slug)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }

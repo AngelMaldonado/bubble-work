@@ -34,9 +34,14 @@ func New(base, key, workspace, project string) *Client {
 	}
 }
 
-// Configured reports whether enough is set to reach Plane.
+// Configured reports whether enough is set to reach Plane at the workspace
+// level. A pinned project is optional (empty = whole workspace).
 func (c *Client) Configured() bool {
-	return c != nil && c.APIKey != "" && c.Workspace != "" && c.Project != ""
+	return c != nil && c.APIKey != "" && c.Workspace != ""
+}
+
+func (c *Client) workspaceBase() string {
+	return fmt.Sprintf("/api/v1/workspaces/%s", c.Workspace)
 }
 
 func (c *Client) projectBase() string {
@@ -58,6 +63,70 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("plane GET %s: %s", path, resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// User is the profile behind an API key (from /users/me).
+type User struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+}
+
+// Me identifies the user that owns this client's API key (§9.3 pass-through).
+func (c *Client) Me(ctx context.Context) (User, error) {
+	// /users/me may return the user flat or wrapped as {"user": {...}}.
+	var resp struct {
+		User
+		Wrapped *User `json:"user"`
+	}
+	if err := c.get(ctx, "/api/v1/users/me", &resp); err != nil {
+		return User{}, err
+	}
+	if resp.Wrapped != nil && resp.Wrapped.ID != "" {
+		return *resp.Wrapped, nil
+	}
+	return resp.User, nil
+}
+
+// Plane workspace roles.
+const (
+	RoleAdmin  = 20
+	RoleMember = 15
+	RoleGuest  = 5
+)
+
+// Member is a Plane workspace member with their role (from /members/).
+type Member struct {
+	ID          string `json:"id"`
+	Email       string `json:"email"`
+	DisplayName string `json:"display_name"`
+	Role        int    `json:"role"`
+}
+
+// Members lists the workspace members and their roles (needs workspaces.members:read).
+func (c *Client) Members(ctx context.Context) ([]Member, error) {
+	var out []Member // this endpoint returns a bare JSON array
+	if err := c.get(ctx, c.workspaceBase()+"/members/", &out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// Project is a Workspace (§7.1). Used to auto-discover a whole workspace.
+type Project struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// ListProjects returns every project in the workspace (project need not be set).
+func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
+	var r struct {
+		Results []Project `json:"results"`
+	}
+	if err := c.get(ctx, c.workspaceBase()+"/projects/", &r); err != nil {
+		return nil, err
+	}
+	return r.Results, nil
 }
 
 // Module is a Bubble (§7.1).

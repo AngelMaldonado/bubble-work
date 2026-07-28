@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -65,11 +66,67 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
+// getPaged walks a cursor-paginated list endpoint, invoking each with every
+// page's raw `results` array until Plane reports no further pages.
+func (c *Client) getPaged(ctx context.Context, path string, each func(json.RawMessage) error) error {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	cursor := ""
+	for {
+		u := fmt.Sprintf("%s%sper_page=100", path, sep)
+		if cursor != "" {
+			u += "&cursor=" + url.QueryEscape(cursor)
+		}
+		var env struct {
+			Results    json.RawMessage `json:"results"`
+			NextCursor string          `json:"next_cursor"`
+			NextPage   bool            `json:"next_page_results"`
+		}
+		if err := c.get(ctx, u, &env); err != nil {
+			return err
+		}
+		if len(env.Results) > 0 {
+			if err := each(env.Results); err != nil {
+				return err
+			}
+		}
+		if !env.NextPage || env.NextCursor == "" {
+			return nil
+		}
+		cursor = env.NextCursor
+	}
+}
+
 // User is the profile behind an API key (from /users/me).
 type User struct {
 	ID          string `json:"id"`
 	Email       string `json:"email"`
 	DisplayName string `json:"display_name"`
+}
+
+// Verify checks the client can reach Plane and resolve its target: it
+// authenticates via /users/me and confirms the workspace (or pinned project)
+// exists. Used by `instance add` to fail fast on typos before storing.
+func (c *Client) Verify(ctx context.Context) (User, error) {
+	u, err := c.Me(ctx)
+	if err != nil {
+		return User{}, fmt.Errorf("API key or base URL rejected: %w", err)
+	}
+	if c.Project == "" {
+		if _, err := c.ListProjects(ctx); err != nil {
+			return User{}, fmt.Errorf("workspace %q unreachable (check --workspace and key scope): %w", c.Workspace, err)
+		}
+	} else {
+		var p struct {
+			ID string `json:"id"`
+		}
+		if err := c.get(ctx, c.projectBase()+"/", &p); err != nil {
+			return User{}, fmt.Errorf("project %q not found in workspace %q: %w", c.Project, c.Workspace, err)
+		}
+	}
+	return u, nil
 }
 
 // Me identifies the user that owns this client's API key (§9.3 pass-through).
@@ -120,13 +177,16 @@ type Project struct {
 
 // ListProjects returns every project in the workspace (project need not be set).
 func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
-	var r struct {
-		Results []Project `json:"results"`
-	}
-	if err := c.get(ctx, c.workspaceBase()+"/projects/", &r); err != nil {
-		return nil, err
-	}
-	return r.Results, nil
+	var out []Project
+	err := c.getPaged(ctx, c.workspaceBase()+"/projects/", func(raw json.RawMessage) error {
+		var page []Project
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		out = append(out, page...)
+		return nil
+	})
+	return out, err
 }
 
 // Module is a Bubble (§7.1).
@@ -135,11 +195,14 @@ type Module struct {
 	Name string `json:"name"`
 }
 
-// WorkItem is a Thread (§7.1).
+// WorkItem is a Thread (§7.1). Timestamps come straight from the list response,
+// so heat can be derived without a per-item activity fetch.
 type WorkItem struct {
-	ID        string
-	Name      string
-	Completed bool
+	ID          string
+	Name        string
+	CreatedAt   time.Time
+	CompletedAt *time.Time
+	Active      bool
 }
 
 // Activity is a raw Plane timeline entry; only some map to heat (see Meaningful).
@@ -151,32 +214,46 @@ type Activity struct {
 
 // ListModules returns the bubbles in the project.
 func (c *Client) ListModules(ctx context.Context) ([]Module, error) {
-	var r struct {
-		Results []Module `json:"results"`
-	}
-	if err := c.get(ctx, c.projectBase()+"/modules/", &r); err != nil {
-		return nil, err
-	}
-	return r.Results, nil
+	var out []Module
+	err := c.getPaged(ctx, c.projectBase()+"/modules/", func(raw json.RawMessage) error {
+		var page []Module
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		out = append(out, page...)
+		return nil
+	})
+	return out, err
 }
 
-// ListModuleWorkItems returns the threads in a bubble.
+// ListModuleWorkItems returns the threads in a bubble, with the timestamps and
+// state group used to derive heat (§5) without extra calls.
 func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]WorkItem, error) {
-	var r struct {
-		Results []struct {
-			ID          string  `json:"id"`
-			Name        string  `json:"name"`
-			CompletedAt *string `json:"completed_at"`
-		} `json:"results"`
-	}
-	if err := c.get(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", &r); err != nil {
-		return nil, err
-	}
-	out := make([]WorkItem, 0, len(r.Results))
-	for _, it := range r.Results {
-		out = append(out, WorkItem{ID: it.ID, Name: it.Name, Completed: it.CompletedAt != nil})
-	}
-	return out, nil
+	var out []WorkItem
+	err := c.getPaged(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", func(raw json.RawMessage) error {
+		// On module-issues, `state` is the state UUID string (not the expanded
+		// object), so we don't decode it — `completed_at` tells us if it's active.
+		var page []struct {
+			ID          string     `json:"id"`
+			Name        string     `json:"name"`
+			CreatedAt   time.Time  `json:"created_at"`
+			CompletedAt *time.Time `json:"completed_at"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		for _, it := range page {
+			out = append(out, WorkItem{
+				ID:          it.ID,
+				Name:        it.Name,
+				CreatedAt:   it.CreatedAt,
+				CompletedAt: it.CompletedAt,
+				Active:      it.CompletedAt == nil,
+			})
+		}
+		return nil
+	})
+	return out, err
 }
 
 // ListActivities returns a work item's timeline (source of heat evidence, §5.1).

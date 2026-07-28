@@ -14,7 +14,7 @@
 | 1 | Identity & membership | Clients authenticate as team members; writes attributed | ✅ |
 | 1.5 | Federation (multi-instance) | Server federates N Plane instances; members scoped per instance | ✅ |
 | 1.6 | Plane-native identity | Humans auth via Plane pass-through; role + scope derived from Plane | ✅ |
-| 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ⬜ |
+| 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ✅ |
 | 3 | Plane write path | Birth & contracts flow into Plane | ⬜ |
 | 4 | Heat & lifecycle hardening | Tested, explainable temperature rules | ⬜ |
 | 5 | Scheduler & push | Cooling/dormant transitions notify with nobody at the keyboard | ⬜ |
@@ -116,19 +116,22 @@ flowchart LR
 
 ---
 
-## Phase 2 — Plane read path (real buoyancy)
+## Phase 2 — Plane read path (real buoyancy) ✅
 
-**Goal:** `bubble ls` reflects each live Plane instance with correct temperatures.
+**Goal:** `bubble ls` reflects each live Plane instance with correct temperatures — fast.
 
-- [ ] Verify JSON shapes against a live Plane project (modules, `module-issues`, activities)
-- [ ] Handle cursor pagination (`?cursor=…`) in `plane.Client` list calls
-- [ ] Harden `Meaningful()` against real activity `field`/`verb` values (§5.1 allowlist)
-- [ ] Instance connectivity check (`bubble instance add` verifies workspace/project resolve)
-- [ ] Read-model cache table + refresh (per instance), so `ls` is fast and rate-limit friendly
-- [ ] Tests: `Meaningful()` mapping; heat over a fixture activity set
+- [x] Cursor pagination (`per_page` + `next_cursor`/`next_page_results`) in `plane.Client` list calls
+- [x] Concurrent fan-out across projects/modules (`errgroup`, bounded); one bad module/instance logged + skipped
+- [x] Per-instance bubble cache (TTL) so repeated `ls` is instant; client timeout raised to 60s
+- [x] **Heat without the N×M×K activity explosion:** evidence derived from work-item `created_at` (thread born) + `completed_at` (todo done) in the list response — no per-item activity call
+- [x] Tests: heat classifier (all lifecycle branches + score decay); fetch/pagination via fake Plane
+- [x] Verified JSON shapes against a **live** Plane project — `bubble ls` on cuby surfaced and fixed `state` (a UUID string on module-issues, not the expanded object)
+- [x] Instance connectivity check — `bubble instance add` verifies via `/users/me` + workspace/project resolve before storing (`--no-verify` bypasses)
 
 **Dependencies:** Phase 1.5.
-**Definition of Done:** against your real `ayetec` and `cuby` instances, `bubble ls` lists their modules as bubbles, hottest-first, tagged by instance, and `bubble heat <instance>:<id>` explains the state from actual activity — no manual data.
+**Definition of Done:** against your real `ayetec`/`cuby`, `bubble ls` returns quickly and lists modules as bubbles, hottest-first, tagged by instance. ✅ **Met** — live `bubble ls` on cuby returned the two seeded bubbles (🔥 Hot) plus all real modules (🧊 Dormant, no owner) in well under the timeout.
+
+> Design note: heat now comes from work-item timestamps, not the activities endpoint. This trades some fidelity (a completed/created todo counts as evidence; comments don't surface) for staying within Plane's rate limits and sub-second `ls`. A precise activity-based breakdown can enrich `bubble heat <id>` later.
 
 ---
 

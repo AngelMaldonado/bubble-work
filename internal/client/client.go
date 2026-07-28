@@ -21,7 +21,7 @@ func getJSON(url, token string, out any) error {
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	c := &http.Client{Timeout: 15 * time.Second}
+	c := &http.Client{Timeout: 60 * time.Second}
 	resp, err := c.Do(req)
 	if err != nil {
 		return err

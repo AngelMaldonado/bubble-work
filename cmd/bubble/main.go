@@ -4,6 +4,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -11,10 +12,12 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/client"
 	"github.com/AngelMaldonado/bubble-work/internal/config"
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/server"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
@@ -212,6 +215,7 @@ func cmdInstance(args []string) {
 		ws := fs.String("workspace", "", "Plane workspace slug (required)")
 		proj := fs.String("project", "", "Plane project id to pin (optional; omit for the whole workspace)")
 		force := fs.Bool("force", false, "overwrite an existing instance with the same slug")
+		noVerify := fs.Bool("no-verify", false, "skip the live connectivity check against Plane")
 		_ = fs.Parse(args[1:])
 		if *slug == "" || *url == "" || *key == "" || *ws == "" {
 			log.Fatal("instance add: --slug, --url, --key and --workspace are required (--project is optional)")
@@ -222,6 +226,15 @@ func cmdInstance(args []string) {
 		}
 		if exists && !*force {
 			log.Fatalf("instance add: an instance named %q already exists — choose a different --slug, or pass --force to overwrite it (this replaces its URL, key and workspace)", *slug)
+		}
+		if !*noVerify {
+			ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+			u, err := plane.New(*url, *key, *ws, *proj).Verify(ctx)
+			cancel()
+			if err != nil {
+				log.Fatalf("instance add: connectivity check failed: %v\n(use --no-verify to register anyway)", err)
+			}
+			fmt.Printf("verified — authenticated as %s\n", u.Email)
 		}
 		if err := st.AddInstance(domain.Instance{
 			Slug: *slug, Name: *name, BaseURL: *url, APIKey: *key, Workspace: *ws, Project: *proj,
@@ -277,9 +290,10 @@ func instanceUsage() {
 
 Usage:
   bubble instance add --slug <slug> --url <base-url> --key <api-key> \
-                      --workspace <ws> [--project <project-id>] [--name <name>] [--force]
+                      --workspace <ws> [--project <project-id>] [--name <name>] [--force] [--no-verify]
                       (omit --project to federate the whole workspace;
-                       --force overwrites an existing slug, otherwise add errors)
+                       --force overwrites an existing slug, otherwise add errors;
+                       add verifies connectivity to Plane unless --no-verify)
   bubble instance list
   bubble instance remove <slug>
 

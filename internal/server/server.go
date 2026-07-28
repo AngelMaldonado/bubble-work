@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
@@ -30,9 +31,14 @@ var (
 	errUnauth   = errors.New("unauthorized")
 )
 
-// authTTL is how long a resolved identity is cached, to avoid hitting Plane on
-// every request.
-const authTTL = 5 * time.Minute
+const (
+	// authTTL caches a resolved identity to avoid hitting Plane every request.
+	authTTL = 5 * time.Minute
+	// bubblesTTL caches an instance's fetched bubbles so repeated `ls` is instant.
+	bubblesTTL = 60 * time.Second
+	// fetchConcurrency bounds parallel Plane calls per instance fetch.
+	fetchConcurrency = 8
+)
 
 // Server holds the overlay store and the cycle pulse. Plane clients are built
 // per-request from the acting identity's authorized instances (federation).
@@ -43,6 +49,9 @@ type Server struct {
 
 	mu    sync.Mutex
 	cache map[string]cachedActor
+
+	bubblesMu    sync.Mutex
+	bubblesCache map[string]cachedBubbles
 }
 
 type cachedActor struct {
@@ -50,10 +59,21 @@ type cachedActor struct {
 	exp   time.Time
 }
 
+type cachedBubbles struct {
+	bubbles []domain.Bubble
+	exp     time.Time
+}
+
 // New builds a server. With no instances configured (or none authorized for the
 // caller) it degrades gracefully to an empty world.
 func New(st *store.Store, cycle time.Duration) *Server {
-	return &Server{store: st, cycle: cycle, now: time.Now, cache: map[string]cachedActor{}}
+	return &Server{
+		store:        st,
+		cycle:        cycle,
+		now:          time.Now,
+		cache:        map[string]cachedActor{},
+		bubblesCache: map[string]cachedBubbles{},
+	}
 }
 
 // resolve turns a bearer credential into an Actor. The credential is always a
@@ -263,8 +283,8 @@ func (s *Server) CloseBubble(ctx context.Context, id string) error {
 	return s.store.SetClosed(id, true)
 }
 
-// collect federates over the acting member's authorized instances, pulling
-// bubbles from each Plane and merging the server-owned contract overlay. One
+// collect federates over the acting identity's authorized instances, reading
+// each from a short-lived cache (or fetching it concurrently on a miss). One
 // unreachable instance is logged and skipped — it never blanks the whole view.
 func (s *Server) collect(ctx context.Context) ([]domain.Bubble, error) {
 	actor, ok := domain.ActorFrom(ctx)
@@ -275,59 +295,117 @@ func (s *Server) collect(ctx context.Context) ([]domain.Bubble, error) {
 	if err != nil {
 		return nil, err
 	}
+
 	var out []domain.Bubble
 	for _, inst := range all {
-		if !actor.CanSee(inst.Slug) {
+		if !actor.CanSee(inst.Slug) || !plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Configured() {
 			continue
 		}
-		if !plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Configured() {
+		bs, err := s.instanceBubbles(ctx, inst)
+		if err != nil {
+			log.Printf("instance %s: %v", inst.Slug, err)
 			continue
 		}
-		// A pinned project scopes to one; an empty project means the whole
-		// workspace, so discover every project in it.
-		projects := []string{inst.Project}
-		if inst.Project == "" {
-			disc := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "")
-			ps, err := disc.ListProjects(ctx)
-			if err != nil {
-				log.Printf("instance %s: list projects: %v", inst.Slug, err)
-				continue
-			}
-			projects = projects[:0]
-			for _, p := range ps {
-				projects = append(projects, p.ID)
-			}
-		}
-
-		for _, projID := range projects {
-			cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, projID)
-			mods, err := cl.ListModules(ctx)
-			if err != nil {
-				log.Printf("instance %s project %s: list modules: %v", inst.Slug, projID, err)
-				continue
-			}
-			for _, m := range mods {
-				// Namespaced id carries the project so writes/close can route.
-				id := inst.Slug + ":" + projID + ":" + m.ID
-				b := domain.Bubble{ID: id, Name: m.Name, Instance: inst.Slug}
-				if c, ok, _ := s.store.GetContract(id); ok {
-					b.Outcome, b.Owner, b.Closure, b.Closed = c.Outcome, c.Owner, c.Closure, c.Closed
-				}
-				items, _ := cl.ListModuleWorkItems(ctx, m.ID)
-				for _, it := range items {
-					b.Threads = append(b.Threads, domain.Thread{ID: it.ID, Name: it.Name, Active: !it.Completed})
-					acts, _ := cl.ListActivities(ctx, it.ID)
-					for _, a := range acts {
-						if kind, ok := plane.Meaningful(a); ok {
-							b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: kind, At: a.At})
-						}
-					}
-				}
-				out = append(out, b)
-			}
-		}
+		out = append(out, bs...)
 	}
 	return out, nil
+}
+
+// instanceBubbles returns an instance's bubbles from cache, or fetches them.
+func (s *Server) instanceBubbles(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
+	now := s.now()
+	s.bubblesMu.Lock()
+	if c, ok := s.bubblesCache[inst.Slug]; ok && now.Before(c.exp) {
+		s.bubblesMu.Unlock()
+		return c.bubbles, nil
+	}
+	s.bubblesMu.Unlock()
+
+	bs, err := s.fetchInstance(ctx, inst)
+	if err != nil {
+		return nil, err
+	}
+	s.bubblesMu.Lock()
+	s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, exp: now.Add(bubblesTTL)}
+	s.bubblesMu.Unlock()
+	return bs, nil
+}
+
+// fetchInstance pulls an instance's bubbles from Plane. It discovers projects
+// (unless one is pinned) and fans out across modules concurrently. Heat evidence
+// comes from work-item timestamps in the list response — no per-item activity
+// call — so this stays within Plane's rate limits.
+func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
+	base := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "")
+	projects := []string{inst.Project}
+	if inst.Project == "" {
+		ps, err := base.ListProjects(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("list projects: %w", err)
+		}
+		projects = projects[:0]
+		for _, p := range ps {
+			projects = append(projects, p.ID)
+		}
+	}
+
+	var (
+		mu  sync.Mutex
+		out []domain.Bubble
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(fetchConcurrency)
+
+	for _, projID := range projects {
+		projID := projID
+		cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, projID)
+		mods, err := cl.ListModules(gctx)
+		if err != nil {
+			log.Printf("instance %s project %s: list modules: %v", inst.Slug, projID, err)
+			continue
+		}
+		for _, m := range mods {
+			m := m
+			g.Go(func() error {
+				items, err := cl.ListModuleWorkItems(gctx, m.ID)
+				if err != nil {
+					log.Printf("instance %s module %s: list work items: %v", inst.Slug, m.ID, err)
+					return nil // one bad module shouldn't fail the whole fetch
+				}
+				b := s.buildBubble(inst.Slug, projID, m, items)
+				mu.Lock()
+				out = append(out, b)
+				mu.Unlock()
+				return nil
+			})
+		}
+	}
+	if err := g.Wait(); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+// buildBubble assembles a bubble from a module + its work items, deriving heat
+// evidence from each item's created (thread born) and completed (todo done)
+// timestamps (§5.1), then merging the server-owned contract overlay (§4).
+func (s *Server) buildBubble(slug, projID string, m plane.Module, items []plane.WorkItem) domain.Bubble {
+	// Namespaced id carries the project so writes/close can route.
+	id := slug + ":" + projID + ":" + m.ID
+	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug}
+	if c, ok, _ := s.store.GetContract(id); ok {
+		b.Outcome, b.Owner, b.Closure, b.Closed = c.Outcome, c.Owner, c.Closure, c.Closed
+	}
+	for _, it := range items {
+		b.Threads = append(b.Threads, domain.Thread{ID: it.ID, Name: it.Name, Active: it.Active})
+		if !it.CreatedAt.IsZero() {
+			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: "thread-created", At: it.CreatedAt})
+		}
+		if it.CompletedAt != nil {
+			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: "completed-todo", At: *it.CompletedAt})
+		}
+	}
+	return b
 }
 
 // ---- HTTP handlers ----

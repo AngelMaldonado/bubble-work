@@ -281,7 +281,7 @@ func TestTickTransition(t *testing.T) {
 		t.Fatalf("tick2: want 1 notification, got %d (err %v)", n, err)
 	}
 
-	ns, _ := st.ListNotifications([]string{"ws"}, 10)
+	ns, _ := st.ListNotifications("", []string{"ws"}, false, 10)
 	if len(ns) != 1 || ns[0].Kind != "dormant" {
 		t.Fatalf("want 1 dormant notification, got %+v", ns)
 	}

@@ -42,6 +42,16 @@ CREATE TABLE IF NOT EXISTS notifications (
   kind        TEXT NOT NULL,
   message     TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS notification_reads (
+  email           TEXT NOT NULL,      -- stable per-person key (cross-instance)
+  notification_id INTEGER NOT NULL,
+  read_at         TEXT NOT NULL,
+  PRIMARY KEY (email, notification_id)
+);
+CREATE TABLE IF NOT EXISTS member_prefs (
+  email          TEXT PRIMARY KEY,
+  notify_enabled INTEGER NOT NULL DEFAULT 0
+);
 `
 
 // Store wraps the SQLite connection.
@@ -212,25 +222,38 @@ func (s *Store) AddNotification(n domain.Notification) error {
 	return err
 }
 
-// ListNotifications returns recent notifications for the given instances,
-// newest first. An empty instance list returns nothing.
-func (s *Store) ListNotifications(instances []string, limit int) ([]domain.Notification, error) {
+func inClause(instances []string) (string, []any) {
+	ph := make([]string, len(instances))
+	args := make([]any, len(instances))
+	for i, inst := range instances {
+		ph[i] = "?"
+		args[i] = inst
+	}
+	return strings.Join(ph, ","), args
+}
+
+// ListNotifications returns notifications for the given instances with a per-
+// person unread flag (via email). unreadOnly filters to unread; newest first.
+func (s *Store) ListNotifications(email string, instances []string, unreadOnly bool, limit int) ([]domain.Notification, error) {
 	if len(instances) == 0 {
 		return nil, nil
 	}
 	if limit <= 0 {
 		limit = 50
 	}
-	ph := make([]string, len(instances))
-	args := make([]any, 0, len(instances)+1)
-	for i, inst := range instances {
-		ph[i] = "?"
-		args = append(args, inst)
+	in, inArgs := inClause(instances)
+	q := `SELECT n.id, n.created_at, n.instance, n.bubble_id, n.bubble_name, n.kind, n.message,
+	             CASE WHEN r.notification_id IS NULL THEN 1 ELSE 0 END AS unread
+	      FROM notifications n
+	      LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.email = ?
+	      WHERE n.instance IN (` + in + `)`
+	if unreadOnly {
+		q += ` AND r.notification_id IS NULL`
 	}
+	q += ` ORDER BY n.id DESC LIMIT ?`
+
+	args := append([]any{email}, inArgs...)
 	args = append(args, limit)
-	q := `SELECT created_at, instance, bubble_id, bubble_name, kind, message
-	      FROM notifications WHERE instance IN (` + strings.Join(ph, ",") + `)
-	      ORDER BY id DESC LIMIT ?`
 	rows, err := s.db.Query(q, args...)
 	if err != nil {
 		return nil, err
@@ -239,10 +262,78 @@ func (s *Store) ListNotifications(instances []string, limit int) ([]domain.Notif
 	var out []domain.Notification
 	for rows.Next() {
 		var n domain.Notification
-		if err := rows.Scan(&n.At, &n.Instance, &n.BubbleID, &n.BubbleName, &n.Kind, &n.Message); err != nil {
+		var unread int
+		if err := rows.Scan(&n.ID, &n.At, &n.Instance, &n.BubbleID, &n.BubbleName, &n.Kind, &n.Message, &unread); err != nil {
 			return nil, err
 		}
+		n.Unread = unread == 1
 		out = append(out, n)
 	}
 	return out, rows.Err()
+}
+
+// UnreadCount counts a person's unread notifications across their instances.
+func (s *Store) UnreadCount(email string, instances []string) (int, error) {
+	if len(instances) == 0 {
+		return 0, nil
+	}
+	in, inArgs := inClause(instances)
+	q := `SELECT COUNT(*) FROM notifications n
+	      LEFT JOIN notification_reads r ON r.notification_id = n.id AND r.email = ?
+	      WHERE n.instance IN (` + in + `) AND r.notification_id IS NULL`
+	args := append([]any{email}, inArgs...)
+	var c int
+	err := s.db.QueryRow(q, args...).Scan(&c)
+	return c, err
+}
+
+// MarkRead records read receipts for the given notification ids.
+func (s *Store) MarkRead(email string, ids []int64, at string) error {
+	for _, id := range ids {
+		if _, err := s.db.Exec(
+			`INSERT OR IGNORE INTO notification_reads(email, notification_id, read_at) VALUES(?, ?, ?)`,
+			email, id, at); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MarkAllRead marks every notification in the person's instances as read.
+func (s *Store) MarkAllRead(email string, instances []string, at string) error {
+	if len(instances) == 0 {
+		return nil
+	}
+	in, inArgs := inClause(instances)
+	q := `INSERT OR IGNORE INTO notification_reads(email, notification_id, read_at)
+	      SELECT ?, n.id, ? FROM notifications n WHERE n.instance IN (` + in + `)`
+	args := append([]any{email, at}, inArgs...)
+	_, err := s.db.Exec(q, args...)
+	return err
+}
+
+// NotifyEnabled reports whether a person has opted into notifications.
+func (s *Store) NotifyEnabled(email string) (bool, error) {
+	var v int
+	err := s.db.QueryRow(`SELECT notify_enabled FROM member_prefs WHERE email = ?`, email).Scan(&v)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return v == 1, nil
+}
+
+// SetNotifyEnabled sets a person's opt-in preference.
+func (s *Store) SetNotifyEnabled(email string, enabled bool) error {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO member_prefs(email, notify_enabled) VALUES(?, ?)
+		 ON CONFLICT(email) DO UPDATE SET notify_enabled = excluded.notify_enabled`,
+		email, v)
+	return err
 }

@@ -162,6 +162,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/bubbles/{id}/close", s.restAuth(s.handleClose))
 	mux.HandleFunc("POST /api/bubbles/{id}/reopen", s.restAuth(s.handleReopen))
 	mux.HandleFunc("GET /api/notifications", s.restAuth(s.handleNotifications))
+	mux.HandleFunc("POST /api/notifications/read", s.restAuth(s.handleMarkRead))
+	mux.HandleFunc("POST /api/notifications/prefs", s.restAuth(s.handlePrefs))
 	mux.HandleFunc("POST /api/tick", s.restAuth(s.handleTick))
 
 	// Our own MCP front door (§9.5), behind the same member credential using the
@@ -780,11 +782,63 @@ func (s *Server) handleReopen(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
 	actor, _ := domain.ActorFrom(r.Context())
-	ns, err := s.store.ListNotifications(actor.Instances, 50)
+	enabled, err := s.store.NotifyEnabled(actor.Email)
 	if writeErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, ns)
+	inbox := domain.Inbox{Enabled: enabled}
+	if enabled {
+		unreadOnly := r.URL.Query().Get("unread") == "1"
+		ns, err := s.store.ListNotifications(actor.Email, actor.Instances, unreadOnly, 50)
+		if writeErr(w, err) {
+			return
+		}
+		count, err := s.store.UnreadCount(actor.Email, actor.Instances)
+		if writeErr(w, err) {
+			return
+		}
+		inbox.Notifications, inbox.UnreadCount = ns, count
+	}
+	writeJSON(w, http.StatusOK, inbox)
+}
+
+func (s *Server) handleMarkRead(w http.ResponseWriter, r *http.Request) {
+	actor, _ := domain.ActorFrom(r.Context())
+	var req struct {
+		IDs []int64 `json:"ids"`
+		All bool    `json:"all"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	stamp := s.now().Format(time.RFC3339)
+	var err error
+	if req.All {
+		err = s.store.MarkAllRead(actor.Email, actor.Instances, stamp)
+	} else {
+		err = s.store.MarkRead(actor.Email, req.IDs, stamp)
+	}
+	if writeErr(w, err) {
+		return
+	}
+	count, _ := s.store.UnreadCount(actor.Email, actor.Instances)
+	writeJSON(w, http.StatusOK, map[string]int{"unread_count": count})
+}
+
+func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
+	actor, _ := domain.ActorFrom(r.Context())
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	if writeErr(w, s.store.SetNotifyEnabled(actor.Email, req.Enabled)) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
 }
 
 func (s *Server) handleTick(w http.ResponseWriter, r *http.Request) {

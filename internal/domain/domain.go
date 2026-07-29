@@ -174,10 +174,20 @@ type ContractInput struct {
 // Notification records a bubble crossing into a colder state (§5) — the push
 // side of the buoyancy model: it tells you what's sinking without you looking.
 type Notification struct {
+	ID         int64  `json:"id"`
 	At         string `json:"at"`
 	Instance   string `json:"instance"`
 	BubbleID   string `json:"bubble_id"`
 	BubbleName string `json:"bubble_name"`
 	Kind       string `json:"kind"` // "cooling" | "dormant"
 	Message    string `json:"message"`
+	Unread     bool   `json:"unread"`
+}
+
+// Inbox is a person's notification view: whether they've opted in, how many are
+// unread, and the items themselves (with per-person read state).
+type Inbox struct {
+	Enabled       bool           `json:"enabled"`
+	UnreadCount   int            `json:"unread_count"`
+	Notifications []Notification `json:"notifications"`
 }

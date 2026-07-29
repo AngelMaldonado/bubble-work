@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -70,7 +71,9 @@ Usage:
   bubble ls                        list bubbles, hottest first (buoyancy view)
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble whoami                    show the identity resolved from your credential
-  bubble notifications             list cooling/dormant alerts (alias: inbox)
+  bubble notifications             your inbox of cooling/dormant alerts (alias: inbox)
+  bubble notifications on|off      opt in/out of notifications
+  bubble notifications read <id|all>  mark notifications read
   bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list)
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
@@ -105,7 +108,39 @@ func cmdNotifications(args []string) {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	if err := client.Notifications(cfg); err != nil {
+	if len(args) == 0 {
+		if err := client.Notifications(cfg); err != nil {
+			log.Fatalf("notifications: %v", err)
+		}
+		return
+	}
+	switch args[0] {
+	case "on":
+		err = client.SetNotifyPref(cfg, true)
+	case "off":
+		err = client.SetNotifyPref(cfg, false)
+	case "read":
+		if len(args) < 2 {
+			log.Fatal("usage: bubble notifications read <id|all>")
+		}
+		if args[1] == "all" {
+			err = client.MarkRead(cfg, nil, true)
+		} else {
+			var ids []int64
+			for _, a := range args[1:] {
+				n, e := strconv.ParseInt(a, 10, 64)
+				if e != nil {
+					log.Fatalf("notifications read: %q is not an id", a)
+				}
+				ids = append(ids, n)
+			}
+			err = client.MarkRead(cfg, ids, false)
+		}
+	default:
+		fmt.Fprint(os.Stderr, "usage: bubble notifications [read <id|all> | on | off]\n")
+		os.Exit(2)
+	}
+	if err != nil {
 		log.Fatalf("notifications: %v", err)
 	}
 }

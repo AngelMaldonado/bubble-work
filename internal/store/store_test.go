@@ -85,17 +85,49 @@ func TestNotifications(t *testing.T) {
 	must(st.AddNotification(domain.Notification{At: "t1", Instance: "ayetec", BubbleID: "ayetec:p:m", BubbleName: "A", Kind: "cooling", Message: "a cooling"}))
 	must(st.AddNotification(domain.Notification{At: "t2", Instance: "cuby", BubbleID: "cuby:p:m", BubbleName: "B", Kind: "dormant", Message: "b dormant"}))
 
-	ns, err := st.ListNotifications([]string{"ayetec"}, 50)
+	const me = "me@x"
+	// scoped by instance
+	ns, err := st.ListNotifications(me, []string{"ayetec"}, false, 50)
 	must(err)
-	if len(ns) != 1 || ns[0].Instance != "ayetec" {
-		t.Fatalf("scoped list: want 1 ayetec, got %+v", ns)
+	if len(ns) != 1 || ns[0].Instance != "ayetec" || !ns[0].Unread {
+		t.Fatalf("scoped list: want 1 unread ayetec, got %+v", ns)
 	}
-	both, _ := st.ListNotifications([]string{"ayetec", "cuby"}, 50)
+	both, _ := st.ListNotifications(me, []string{"ayetec", "cuby"}, false, 50)
 	if len(both) != 2 {
 		t.Fatalf("want 2 across both, got %d", len(both))
 	}
-	if none, _ := st.ListNotifications(nil, 50); len(none) != 0 {
+	if none, _ := st.ListNotifications(me, nil, false, 50); len(none) != 0 {
 		t.Fatalf("no instances should return none, got %d", len(none))
+	}
+
+	// unread count + read receipts (per person)
+	if c, _ := st.UnreadCount(me, []string{"ayetec", "cuby"}); c != 2 {
+		t.Fatalf("want 2 unread, got %d", c)
+	}
+	must(st.MarkRead(me, []int64{both[0].ID}, "now"))
+	if c, _ := st.UnreadCount(me, []string{"ayetec", "cuby"}); c != 1 {
+		t.Fatalf("after read one: want 1 unread, got %d", c)
+	}
+	// another person is unaffected
+	if c, _ := st.UnreadCount("other@x", []string{"ayetec", "cuby"}); c != 2 {
+		t.Fatalf("other person: want 2 unread, got %d", c)
+	}
+	// unread-only filter
+	if un, _ := st.ListNotifications(me, []string{"ayetec", "cuby"}, true, 50); len(un) != 1 {
+		t.Fatalf("unread-only: want 1, got %d", len(un))
+	}
+	must(st.MarkAllRead(me, []string{"ayetec", "cuby"}, "now"))
+	if c, _ := st.UnreadCount(me, []string{"ayetec", "cuby"}); c != 0 {
+		t.Fatalf("after mark all: want 0 unread, got %d", c)
+	}
+
+	// prefs (opt-in), keyed by email, default off
+	if on, _ := st.NotifyEnabled(me); on {
+		t.Fatal("default should be opted out")
+	}
+	must(st.SetNotifyEnabled(me, true))
+	if on, _ := st.NotifyEnabled(me); !on {
+		t.Fatal("should be opted in after enable")
 	}
 }
 

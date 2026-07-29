@@ -154,18 +154,56 @@ func Tick(cfg config.Config) error {
 	return nil
 }
 
-// Notifications lists recent cooling/dormant alerts for your instances.
+// Notifications lists your cooling/dormant alerts with per-person read state.
 func Notifications(cfg config.Config) error {
-	var ns []domain.Notification
-	if err := getJSON(cfg.ServerURL+"/api/notifications", cfg.ActiveToken(), &ns); err != nil {
+	var box domain.Inbox
+	if err := getJSON(cfg.ServerURL+"/api/notifications", cfg.ActiveToken(), &box); err != nil {
 		return err
 	}
-	if len(ns) == 0 {
-		fmt.Println("no notifications — nothing is sinking (run `bubble tick` to sweep now).")
+	if !box.Enabled {
+		fmt.Println("notifications are off — turn them on with `bubble notifications on`.")
 		return nil
 	}
-	for _, n := range ns {
-		fmt.Printf("%s  %s\n", n.At, n.Message)
+	if len(box.Notifications) == 0 {
+		fmt.Println("inbox empty — nothing is sinking (run `bubble tick` to sweep now).")
+		return nil
+	}
+	for _, n := range box.Notifications {
+		mark := "  "
+		if n.Unread {
+			mark = "• "
+		}
+		fmt.Printf("%s%-5d %s  %s\n", mark, n.ID, n.At, n.Message)
+	}
+	fmt.Printf("\n%d unread. Mark read with `bubble notifications read <id|all>`.\n", box.UnreadCount)
+	return nil
+}
+
+// MarkRead marks notifications read (ids, or all).
+func MarkRead(cfg config.Config, ids []int64, all bool) error {
+	body := map[string]any{"all": all}
+	if !all {
+		body["ids"] = ids
+	}
+	var res struct {
+		Unread int `json:"unread_count"`
+	}
+	if err := postJSON(cfg, "/api/notifications/read", body, &res); err != nil {
+		return err
+	}
+	fmt.Printf("marked read — %d unread remaining\n", res.Unread)
+	return nil
+}
+
+// SetNotifyPref opts in/out of notifications.
+func SetNotifyPref(cfg config.Config, enabled bool) error {
+	if err := postJSON(cfg, "/api/notifications/prefs", map[string]bool{"enabled": enabled}, nil); err != nil {
+		return err
+	}
+	if enabled {
+		fmt.Println("notifications on")
+	} else {
+		fmt.Println("notifications off")
 	}
 	return nil
 }

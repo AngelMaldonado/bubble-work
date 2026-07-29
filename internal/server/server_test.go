@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -289,6 +292,57 @@ func TestTickTransition(t *testing.T) {
 	// Tick 3: no further change → no new notification.
 	if n, _ := srv.Tick(ctx); n != 0 {
 		t.Fatalf("tick3: want 0 (no transition), got %d", n)
+	}
+}
+
+func TestPlaneWebhook(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{Slug: "ws", BaseURL: fake.URL, APIKey: "k", Workspace: "w", Project: ""}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := st.SetWebhookSecret("ws", "topsecret"); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	// warm the cache so we can observe the webhook dropping it
+	srv.bubblesCache["ws"] = cachedBubbles{exp: srv.now().Add(time.Hour)}
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	body := `{"event":"issue","action":"created"}`
+	sign := func(secret string) string {
+		m := hmac.New(sha256.New, []byte(secret))
+		m.Write([]byte(body))
+		return hex.EncodeToString(m.Sum(nil))
+	}
+	post := func(slug, sig string) int {
+		req, _ := http.NewRequest(http.MethodPost, ts.URL+"/webhooks/plane/"+slug, strings.NewReader(body))
+		req.Header.Set("X-Plane-Signature", sig)
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if code := post("ws", "deadbeef"); code != http.StatusForbidden {
+		t.Fatalf("bad signature: want 403, got %d", code)
+	}
+	if code := post("nope", sign("topsecret")); code != http.StatusNotFound {
+		t.Fatalf("unknown instance: want 404, got %d", code)
+	}
+	if code := post("ws", sign("topsecret")); code != http.StatusOK {
+		t.Fatalf("valid webhook: want 200, got %d", code)
+	}
+	// the valid webhook should have evicted the cache
+	srv.bubblesMu.Lock()
+	_, cached := srv.bubblesCache["ws"]
+	srv.bubblesMu.Unlock()
+	if cached {
+		t.Fatal("cache should have been dropped by the webhook")
 	}
 }
 

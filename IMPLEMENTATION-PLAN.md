@@ -18,7 +18,7 @@
 | 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
 | 4 | Heat & lifecycle hardening | Tested, explainable temperature rules | ⬜ |
 | 5 | Scheduler & inbox | Cooling/dormant transitions land in a per-person inbox, unattended | ✅ |
-| 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | ⬜ |
+| 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 |
 | 7 | Packaging & release | One-command install / documented deploy | ⬜ |
 
 ## Phase dependencies
@@ -195,17 +195,19 @@ flowchart LR
 
 ---
 
-## Phase 6 — Sync robustness & webhooks (optional)
+## Phase 6 — Sync robustness & webhooks 🔄
 
-**Goal:** real-time reaction and a clean conflict policy; only if polling proves insufficient.
+**Goal:** real-time reaction when the server is publicly reachable; polling remains the fallback.
 
-- [ ] `POST /webhooks/plane` endpoint to ingest Plane events → invalidate/refresh cache
-- [ ] Conflict policy per §9.2 (Plane wins its fields; server wins the overlay)
-- [ ] Rate-limit / backoff around Plane calls
-- [ ] Fallback to polling when webhooks are unavailable
+- [x] `POST /webhooks/plane/{slug}` endpoint, per-instance, **HMAC-SHA256 verified** (`X-Plane-Signature`) → drops that instance's cache so `ls` is fresh on next read
+- [x] Webhook secret stored per instance (`webhook_secret` col + migration); `bubble instance webhook <slug> --secret`
+- [x] Polling is the fallback (unchanged) — webhooks only accelerate freshness
+- [x] Tests: valid signature → 200 + cache dropped; bad signature → 403; unknown instance → 404
+- [ ] Deploy publicly (Cloudflare tunnel → host) + register the Plane webhooks — *ops, in progress*
+- [ ] Conflict policy note per §9.2 (Plane wins its fields; server wins the overlay) — already true by construction
 
 **Dependencies:** Phase 2.
-**Definition of Done:** a change made directly in Plane's UI appears in `bubble ls` within seconds via webhook, with polling as a proven fallback.
+**Definition of Done:** a change made directly in Plane's UI appears in `bubble ls` within seconds via webhook, with polling as the proven fallback. ⏳ **Code done; awaiting public deploy + webhook registration.**
 
 ---
 

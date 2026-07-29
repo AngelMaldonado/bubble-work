@@ -6,9 +6,13 @@ package server
 
 import (
 	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"sort"
@@ -169,6 +173,10 @@ func (s *Server) Handler() http.Handler {
 	// Our own MCP front door (§9.5), behind the same member credential using the
 	// SDK's bearer middleware; the verified member reaches tool handlers via
 	// req.Extra.TokenInfo.
+	// Plane webhooks authenticate via HMAC signature, not a member token, so
+	// they are NOT behind restAuth.
+	mux.HandleFunc("POST /webhooks/plane/{slug}", s.handlePlaneWebhook)
+
 	mcp := auth.RequireBearerToken(
 		s.verifyToken,
 		&auth.RequireBearerTokenOptions{AllowMissingExpiration: true},
@@ -408,6 +416,47 @@ func (s *Server) authorizeBubble(ctx context.Context, id string) (slug string, e
 		return "", errForbid
 	}
 	return slug, nil
+}
+
+// dropInstanceCache evicts an instance's cached bubbles so the next read
+// refetches from Plane. Used by webhooks, where we don't know exactly what
+// changed, only that something did.
+func (s *Server) dropInstanceCache(slug string) {
+	s.bubblesMu.Lock()
+	delete(s.bubblesCache, slug)
+	s.bubblesMu.Unlock()
+}
+
+// handlePlaneWebhook receives a Plane webhook for one instance, verifies its
+// HMAC-SHA256 signature, and drops that instance's cache so `ls` reflects the
+// change near-instantly (§6). Real-time freshness; heat is still derived.
+func (s *Server) handlePlaneWebhook(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	inst, ok, err := s.instanceBySlug(slug)
+	if err != nil {
+		http.Error(w, "error", http.StatusInternalServerError)
+		return
+	}
+	if !ok || inst.WebhookSecret == "" {
+		http.Error(w, "unknown webhook", http.StatusNotFound)
+		return
+	}
+	body, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, "bad body", http.StatusBadRequest)
+		return
+	}
+	mac := hmac.New(sha256.New, []byte(inst.WebhookSecret))
+	mac.Write(body)
+	want := hex.EncodeToString(mac.Sum(nil))
+	got := r.Header.Get("X-Plane-Signature")
+	if !hmac.Equal([]byte(want), []byte(got)) {
+		http.Error(w, "bad signature", http.StatusForbidden)
+		return
+	}
+	s.dropInstanceCache(slug)
+	log.Printf("webhook: %s refreshed from Plane", slug)
+	w.WriteHeader(http.StatusOK)
 }
 
 // patchCachedBubble applies an in-place update to a cached bubble so a just-

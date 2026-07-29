@@ -35,12 +35,13 @@ type Thread struct {
 // Instance is a configured Plane deployment the server federates over. Each maps
 // to one pinned Plane project. API keys live server-side only (§9.2).
 type Instance struct {
-	Slug      string // short id, e.g. "ayetec"
-	Name      string
-	BaseURL   string // e.g. https://plane.ayetec.space
-	APIKey    string
-	Workspace string // Plane workspace slug
-	Project   string // pinned Plane project id = our Workspace (§7.1)
+	Slug          string // short id, e.g. "ayetec"
+	Name          string
+	BaseURL       string // e.g. https://plane.ayetec.space
+	APIKey        string
+	Workspace     string // Plane workspace slug
+	Project       string // pinned Plane project id = our Workspace (§7.1)
+	WebhookSecret string // HMAC secret for verifying inbound Plane webhooks (§6)
 }
 
 // Bubble is a durable grouping of threads (maps to a Plane Module) plus its

@@ -21,12 +21,13 @@ CREATE TABLE IF NOT EXISTS bubble_contracts (
   closed    INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS plane_instances (
-  slug      TEXT PRIMARY KEY,      -- "ayetec", "cuby"
-  name      TEXT,
-  base_url  TEXT NOT NULL,         -- https://plane.ayetec.space
-  api_key   TEXT NOT NULL,
-  workspace TEXT NOT NULL,         -- workspace slug
-  project   TEXT NOT NULL          -- pinned project id, or '' for the whole workspace
+  slug           TEXT PRIMARY KEY,  -- "ayetec", "cuby"
+  name           TEXT,
+  base_url       TEXT NOT NULL,     -- https://plane.ayetec.space
+  api_key        TEXT NOT NULL,
+  workspace      TEXT NOT NULL,     -- workspace slug
+  project        TEXT NOT NULL,     -- pinned project id, or '' for the whole workspace
+  webhook_secret TEXT               -- HMAC secret for inbound Plane webhooks (§6)
 );
 CREATE TABLE IF NOT EXISTS bubble_state (
   bubble_id  TEXT PRIMARY KEY,     -- last-known lifecycle, for transition detection
@@ -75,6 +76,9 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
+	// Best-effort migration for DBs created before webhook_secret existed.
+	// Errors ("duplicate column") are expected on already-migrated DBs.
+	_, _ = db.Exec(`ALTER TABLE plane_instances ADD COLUMN webhook_secret TEXT`)
 	return &Store{db: db}, nil
 }
 
@@ -150,7 +154,7 @@ func scanInstances(rows *sql.Rows) ([]domain.Instance, error) {
 	var out []domain.Instance
 	for rows.Next() {
 		var i domain.Instance
-		if err := rows.Scan(&i.Slug, &i.Name, &i.BaseURL, &i.APIKey, &i.Workspace, &i.Project); err != nil {
+		if err := rows.Scan(&i.Slug, &i.Name, &i.BaseURL, &i.APIKey, &i.Workspace, &i.Project, &i.WebhookSecret); err != nil {
 			return nil, err
 		}
 		out = append(out, i)
@@ -161,12 +165,22 @@ func scanInstances(rows *sql.Rows) ([]domain.Instance, error) {
 // ListInstances returns every registered instance (admin view; includes keys).
 func (s *Store) ListInstances() ([]domain.Instance, error) {
 	rows, err := s.db.Query(
-		`SELECT slug, COALESCE(name,''), base_url, api_key, workspace, project
+		`SELECT slug, COALESCE(name,''), base_url, api_key, workspace, project, COALESCE(webhook_secret,'')
 		 FROM plane_instances ORDER BY slug`)
 	if err != nil {
 		return nil, err
 	}
 	return scanInstances(rows)
+}
+
+// SetWebhookSecret stores the HMAC secret for an instance's inbound webhooks.
+func (s *Store) SetWebhookSecret(slug, secret string) (bool, error) {
+	res, err := s.db.Exec(`UPDATE plane_instances SET webhook_secret = ? WHERE slug = ?`, secret, slug)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // InstanceExists reports whether a slug is registered.

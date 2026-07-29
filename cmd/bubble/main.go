@@ -450,6 +450,26 @@ func cmdInstance(args []string) {
 			}
 			fmt.Printf("%-12s  %-30s  workspace=%s  project=%s\n", i.Slug, i.BaseURL, i.Workspace, proj)
 		}
+	case "webhook":
+		fs := flag.NewFlagSet("instance webhook", flag.ExitOnError)
+		secret := fs.String("secret", "", "the webhook secret from Plane (required)")
+		if len(args) < 2 {
+			log.Fatal("usage: bubble instance webhook <slug> --secret <secret>")
+		}
+		slug := args[1]
+		_ = fs.Parse(args[2:])
+		if *secret == "" {
+			log.Fatal("instance webhook: --secret is required (create the webhook in Plane, then paste its secret)")
+		}
+		ok, err := st.SetWebhookSecret(slug, *secret)
+		if err != nil {
+			log.Fatalf("instance webhook: %v", err)
+		}
+		if !ok {
+			log.Fatalf("instance webhook: no such instance %q", slug)
+		}
+		fmt.Printf("webhook secret set for %s\n", slug)
+		fmt.Printf("register a Plane webhook pointing at:  <your-public-url>/webhooks/plane/%s\n", slug)
 	case "remove":
 		if len(args) < 2 {
 			log.Fatal("usage: bubble instance remove <slug>")
@@ -479,6 +499,7 @@ Usage:
                        --force overwrites an existing slug, otherwise add errors;
                        add verifies connectivity to Plane unless --no-verify)
   bubble instance list
+  bubble instance webhook <slug> --secret <secret>   (enable real-time sync)
   bubble instance remove <slug>
 
 `)

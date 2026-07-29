@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"io"
@@ -234,6 +235,80 @@ func TestContractAndClose(t *testing.T) {
 	// a bubble in an instance the caller can't see doesn't resolve → 404
 	if code, _ := do(t, http.MethodPost, ts.URL+"/api/bubbles/other:p:m/contract", key, `{"owner":"x"}`); code != http.StatusNotFound {
 		t.Fatalf("cross-instance contract: want 404, got %d", code)
+	}
+}
+
+// TestTickTransition drives a real sweep: a bubble that is hot at the first tick
+// (fresh work item) goes dormant once enough time passes, and the second tick
+// records exactly one notification.
+func TestTickTransition(t *testing.T) {
+	created := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"P"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"w1","name":"W","created_at":"2026-01-01T12:00:00Z"}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	defer fake.Close()
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{Slug: "ws", BaseURL: fake.URL, APIKey: "k", Workspace: "w", Project: ""}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour) // 1h cycle
+	ctx := context.Background()
+
+	// Tick 1: 10 min after creation → bubble is hot → baseline, no notification.
+	srv.now = func() time.Time { return created.Add(10 * time.Minute) }
+	if n, err := srv.Tick(ctx); err != nil || n != 0 {
+		t.Fatalf("tick1: want 0 notifications, got %d (err %v)", n, err)
+	}
+
+	// Tick 2: 3h later → latest evidence is >2 cycles old → dormant → 1 notification.
+	srv.now = func() time.Time { return created.Add(3 * time.Hour) }
+	if n, err := srv.Tick(ctx); err != nil || n != 1 {
+		t.Fatalf("tick2: want 1 notification, got %d (err %v)", n, err)
+	}
+
+	ns, _ := st.ListNotifications([]string{"ws"}, 10)
+	if len(ns) != 1 || ns[0].Kind != "dormant" {
+		t.Fatalf("want 1 dormant notification, got %+v", ns)
+	}
+
+	// Tick 3: no further change → no new notification.
+	if n, _ := srv.Tick(ctx); n != 0 {
+		t.Fatalf("tick3: want 0 (no transition), got %d", n)
+	}
+}
+
+func TestCoolingNotice(t *testing.T) {
+	cases := []struct {
+		prev, cur domain.Lifecycle
+		notify    bool
+	}{
+		{domain.Hot, domain.Cooling, true},
+		{domain.Warm, domain.Dormant, true},
+		{domain.Cooling, domain.Dormant, true},
+		{domain.Cooling, domain.Cooling, false}, // no transition
+		{domain.Dormant, domain.Hot, false},     // warming up — good news, no alert
+		{domain.Hot, domain.Warm, false},        // still not cold enough
+		{domain.Cooling, domain.Closed, false},  // closed isn't a cooling alert
+	}
+	for _, c := range cases {
+		if _, got := coolingNotice(c.prev, c.cur); got != c.notify {
+			t.Fatalf("%s->%s: want notify=%v, got %v", c.prev, c.cur, c.notify, got)
+		}
 	}
 }
 

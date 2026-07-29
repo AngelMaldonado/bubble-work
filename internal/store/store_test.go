@@ -60,6 +60,45 @@ func TestInstanceCRUD(t *testing.T) {
 	}
 }
 
+func TestNotifications(t *testing.T) {
+	st := openTestStore(t)
+
+	// lifecycle tracking
+	if _, ok, _ := st.GetLifecycle("ayetec:p:m"); ok {
+		t.Fatal("no lifecycle expected yet")
+	}
+	if err := st.SetLifecycle("ayetec:p:m", "hot", "2026-01-01T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	lc, ok, _ := st.GetLifecycle("ayetec:p:m")
+	if !ok || lc != "hot" {
+		t.Fatalf("want hot, got %q ok=%v", lc, ok)
+	}
+
+	// notifications, scoped by instance
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(st.AddNotification(domain.Notification{At: "t1", Instance: "ayetec", BubbleID: "ayetec:p:m", BubbleName: "A", Kind: "cooling", Message: "a cooling"}))
+	must(st.AddNotification(domain.Notification{At: "t2", Instance: "cuby", BubbleID: "cuby:p:m", BubbleName: "B", Kind: "dormant", Message: "b dormant"}))
+
+	ns, err := st.ListNotifications([]string{"ayetec"}, 50)
+	must(err)
+	if len(ns) != 1 || ns[0].Instance != "ayetec" {
+		t.Fatalf("scoped list: want 1 ayetec, got %+v", ns)
+	}
+	both, _ := st.ListNotifications([]string{"ayetec", "cuby"}, 50)
+	if len(both) != 2 {
+		t.Fatalf("want 2 across both, got %d", len(both))
+	}
+	if none, _ := st.ListNotifications(nil, 50); len(none) != 0 {
+		t.Fatalf("no instances should return none, got %d", len(none))
+	}
+}
+
 func TestContractOverlay(t *testing.T) {
 	st := openTestStore(t)
 	const id = "ayetec:p1:m1"

@@ -5,6 +5,7 @@ package store
 
 import (
 	"database/sql"
+	"strings"
 
 	_ "modernc.org/sqlite"
 
@@ -26,6 +27,20 @@ CREATE TABLE IF NOT EXISTS plane_instances (
   api_key   TEXT NOT NULL,
   workspace TEXT NOT NULL,         -- workspace slug
   project   TEXT NOT NULL          -- pinned project id, or '' for the whole workspace
+);
+CREATE TABLE IF NOT EXISTS bubble_state (
+  bubble_id  TEXT PRIMARY KEY,     -- last-known lifecycle, for transition detection
+  lifecycle  TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS notifications (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  created_at  TEXT NOT NULL,
+  instance    TEXT NOT NULL,
+  bubble_id   TEXT NOT NULL,
+  bubble_name TEXT NOT NULL,
+  kind        TEXT NOT NULL,
+  message     TEXT NOT NULL
 );
 `
 
@@ -162,4 +177,72 @@ func (s *Store) RemoveInstance(slug string) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// ---- Lifecycle tracking & notifications (§5 push) ----
+
+// GetLifecycle returns a bubble's last-recorded lifecycle, ok=false if none.
+func (s *Store) GetLifecycle(bubbleID string) (string, bool, error) {
+	var lc string
+	err := s.db.QueryRow(`SELECT lifecycle FROM bubble_state WHERE bubble_id = ?`, bubbleID).Scan(&lc)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return lc, true, nil
+}
+
+// SetLifecycle records a bubble's current lifecycle (upsert).
+func (s *Store) SetLifecycle(bubbleID, lifecycle, updatedAt string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO bubble_state(bubble_id, lifecycle, updated_at) VALUES(?, ?, ?)
+		 ON CONFLICT(bubble_id) DO UPDATE SET lifecycle=excluded.lifecycle, updated_at=excluded.updated_at`,
+		bubbleID, lifecycle, updatedAt)
+	return err
+}
+
+// AddNotification appends a notification.
+func (s *Store) AddNotification(n domain.Notification) error {
+	_, err := s.db.Exec(
+		`INSERT INTO notifications(created_at, instance, bubble_id, bubble_name, kind, message)
+		 VALUES(?, ?, ?, ?, ?, ?)`,
+		n.At, n.Instance, n.BubbleID, n.BubbleName, n.Kind, n.Message)
+	return err
+}
+
+// ListNotifications returns recent notifications for the given instances,
+// newest first. An empty instance list returns nothing.
+func (s *Store) ListNotifications(instances []string, limit int) ([]domain.Notification, error) {
+	if len(instances) == 0 {
+		return nil, nil
+	}
+	if limit <= 0 {
+		limit = 50
+	}
+	ph := make([]string, len(instances))
+	args := make([]any, 0, len(instances)+1)
+	for i, inst := range instances {
+		ph[i] = "?"
+		args = append(args, inst)
+	}
+	args = append(args, limit)
+	q := `SELECT created_at, instance, bubble_id, bubble_name, kind, message
+	      FROM notifications WHERE instance IN (` + strings.Join(ph, ",") + `)
+	      ORDER BY id DESC LIMIT ?`
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []domain.Notification
+	for rows.Next() {
+		var n domain.Notification
+		if err := rows.Scan(&n.At, &n.Instance, &n.BubbleID, &n.BubbleName, &n.Kind, &n.Message); err != nil {
+			return nil, err
+		}
+		out = append(out, n)
+	}
+	return out, rows.Err()
 }

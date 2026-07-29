@@ -38,6 +38,10 @@ func main() {
 		cmdHeat(os.Args[2:])
 	case "whoami":
 		cmdWhoami(os.Args[2:])
+	case "notifications", "inbox":
+		cmdNotifications(os.Args[2:])
+	case "tick":
+		cmdTick(os.Args[2:])
 	case "use":
 		cmdUse(os.Args[2:])
 	case "birth":
@@ -66,6 +70,8 @@ Usage:
   bubble ls                        list bubbles, hottest first (buoyancy view)
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble whoami                    show the identity resolved from your credential
+  bubble notifications             list cooling/dormant alerts (alias: inbox)
+  bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list)
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble set|close|open     set a bubble's contract (§4) or open/close it
@@ -91,6 +97,26 @@ func cmdWhoami(args []string) {
 	}
 	if err := client.Whoami(cfg); err != nil {
 		log.Fatalf("whoami: %v", err)
+	}
+}
+
+func cmdNotifications(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Notifications(cfg); err != nil {
+		log.Fatalf("notifications: %v", err)
+	}
+}
+
+func cmdTick(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Tick(cfg); err != nil {
+		log.Fatalf("tick: %v", err)
 	}
 }
 
@@ -454,6 +480,10 @@ func cmdServe(args []string) {
 	}
 
 	srv := server.New(st, cfg.Cycle())
+	if iv := cfg.TickInterval(); iv > 0 {
+		go srv.RunTicker(context.Background(), iv)
+		log.Printf("cooling sweep every %s", iv)
+	}
 	log.Printf("bubble-work %s listening on %s (REST /api, MCP %s/mcp)", version, cfg.Addr, cfg.Addr)
 	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Handler()))
 }

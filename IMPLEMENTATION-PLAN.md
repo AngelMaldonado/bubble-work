@@ -17,7 +17,7 @@
 | 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ✅ |
 | 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
 | 4 | Heat & lifecycle hardening | Tested, explainable temperature rules | ⬜ |
-| 5 | Scheduler & push | Cooling/dormant transitions notify with nobody at the keyboard | ⬜ |
+| 5 | Scheduler & push | Cooling/dormant transitions notify with nobody at the keyboard | ✅ |
 | 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | ⬜ |
 | 7 | Packaging & release | One-command install / documented deploy | ⬜ |
 
@@ -171,19 +171,19 @@ flowchart LR
 
 ---
 
-## Phase 5 — Scheduler & push
+## Phase 5 — Scheduler & push ✅
 
 **Goal:** time-driven side effects happen with nobody at the keyboard (§6 of the earlier brainstorm).
 
-- [ ] `bubble tick` one-shot: recompute, detect cooling/dormant transitions
-- [ ] Notification sink(s): stderr/log first, then webhook or CLI digest
-- [ ] "Recommend closing" output for zombie bubbles (§8)
-- [ ] Optional in-process ticker inside `serve` (interval configurable)
-- [ ] Doc: sample `launchd`/cron/systemd-timer entry to run `bubble tick`
-- [ ] Tests: a bubble crossing into Dormant emits exactly one notification
+- [x] `Tick` recomputes all bubbles (server-wide) and detects downward transitions
+- [x] Notifications recorded in the store (scoped per instance) + logged; `bubble notifications` / `inbox` lists them
+- [x] Dormant notice recommends "revive or close" (§8); first sighting is baselined silently (no flood)
+- [x] In-process ticker inside `serve` (interval from `tick_minutes`, default 60; 0 disables); `bubble tick` / `POST /api/tick` triggers on demand
+- [x] Tests: `coolingNotice` transition matrix; store lifecycle-tracking + instance-scoped notifications
+- [ ] Doc: sample `launchd`/cron entry (folds into Phase 7 packaging)
 
 **Dependencies:** Phase 4.
-**Definition of Done:** a bubble that goes quiet past its threshold produces a notification on a scheduled `tick`, and never manufactures heat to stay warm.
+**Definition of Done:** a bubble that goes quiet past its threshold produces a notification on a scheduled tick, and never manufactures heat to stay warm. ✅ **Met** (unit-tested; live sweep available via `bubble tick`).
 
 ---
 

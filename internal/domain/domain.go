@@ -64,7 +64,7 @@ type Bubble struct {
 // Plane); agents are resolved from a server-minted token (§9.3). Instances is
 // the set of instance slugs the actor may see.
 type Actor struct {
-	ID        string   `json:"id"`   // Plane user id, or agent member id
+	ID        string   `json:"id"` // Plane user id, or agent member id
 	Name      string   `json:"name"`
 	Kind      string   `json:"kind"` // "human" | "agent"
 	Email     string   `json:"email,omitempty"`
@@ -169,4 +169,15 @@ type ContractInput struct {
 	Outcome *string `json:"outcome,omitempty"`
 	Owner   *string `json:"owner,omitempty"`
 	Closure *string `json:"closure,omitempty"`
+}
+
+// Notification records a bubble crossing into a colder state (§5) — the push
+// side of the buoyancy model: it tells you what's sinking without you looking.
+type Notification struct {
+	At         string `json:"at"`
+	Instance   string `json:"instance"`
+	BubbleID   string `json:"bubble_id"`
+	BubbleName string `json:"bubble_name"`
+	Kind       string `json:"kind"` // "cooling" | "dormant"
+	Message    string `json:"message"`
 }

@@ -161,6 +161,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/bubbles/{id}/contract", s.restAuth(s.handleSetContract))
 	mux.HandleFunc("POST /api/bubbles/{id}/close", s.restAuth(s.handleClose))
 	mux.HandleFunc("POST /api/bubbles/{id}/reopen", s.restAuth(s.handleReopen))
+	mux.HandleFunc("GET /api/notifications", s.restAuth(s.handleNotifications))
+	mux.HandleFunc("POST /api/tick", s.restAuth(s.handleTick))
 
 	// Our own MCP front door (§9.5), behind the same member credential using the
 	// SDK's bearer middleware; the verified member reaches tool handlers via
@@ -610,6 +612,106 @@ func (s *Server) buildBubble(slug, projID string, m plane.Module, items []plane.
 	return b
 }
 
+// ---- Scheduler & notifications (§5 push) ----
+
+// collectAll federates over EVERY configured instance (not actor-scoped), using
+// the stored admin keys — for the server-side tick sweep.
+func (s *Server) collectAll(ctx context.Context) []domain.Bubble {
+	all, err := s.store.ListInstances()
+	if err != nil {
+		log.Printf("tick: list instances: %v", err)
+		return nil
+	}
+	var out []domain.Bubble
+	for _, inst := range all {
+		if !plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Configured() {
+			continue
+		}
+		bs, err := s.instanceBubbles(ctx, inst)
+		if err != nil {
+			log.Printf("tick: instance %s: %v", inst.Slug, err)
+			continue
+		}
+		out = append(out, bs...)
+	}
+	return out
+}
+
+// coolingNotice decides whether a lifecycle transition warrants a notification.
+// Only downward moves into Cooling or Dormant are surfaced — the buoyancy model
+// alerts on things sinking, not on good news.
+func coolingNotice(prev, cur domain.Lifecycle) (kind string, notify bool) {
+	if cur == prev {
+		return "", false
+	}
+	switch cur {
+	case domain.Cooling, domain.Dormant:
+		return string(cur), true
+	default:
+		return "", false
+	}
+}
+
+func notifyMessage(b domain.Bubble, cur domain.Lifecycle) string {
+	switch cur {
+	case domain.Dormant:
+		return fmt.Sprintf("🧊 %q (%s) went dormant — revive it with real work, or close it (§8).", b.Name, b.Instance)
+	default:
+		return fmt.Sprintf("💧 %q (%s) is cooling — no meaningful output recently.", b.Name, b.Instance)
+	}
+}
+
+// Tick recomputes every bubble's temperature, records a notification for each
+// downward transition, and returns how many were created. First sighting of a
+// bubble is baselined silently (no notification flood on first run).
+func (s *Server) Tick(ctx context.Context) (int, error) {
+	now := s.now()
+	stamp := now.Format(time.RFC3339)
+	n := 0
+	for _, b := range s.collectAll(ctx) {
+		cur := heat.Classify(b, s.cycle, now).Lifecycle
+		prev, had, err := s.store.GetLifecycle(b.ID)
+		if err != nil {
+			log.Printf("tick: get lifecycle %s: %v", b.ID, err)
+			continue
+		}
+		if had && string(cur) != prev {
+			if kind, ok := coolingNotice(domain.Lifecycle(prev), cur); ok {
+				msg := notifyMessage(b, cur)
+				if err := s.store.AddNotification(domain.Notification{
+					At: stamp, Instance: b.Instance, BubbleID: b.ID, BubbleName: b.Name, Kind: kind, Message: msg,
+				}); err == nil {
+					log.Printf("notify: %s", msg)
+					n++
+				}
+			}
+		}
+		if !had || string(cur) != prev {
+			_ = s.store.SetLifecycle(b.ID, string(cur), stamp)
+		}
+	}
+	return n, nil
+}
+
+// RunTicker runs Tick immediately and then every interval until ctx is done.
+func (s *Server) RunTicker(ctx context.Context, interval time.Duration) {
+	if interval <= 0 {
+		return
+	}
+	t := time.NewTicker(interval)
+	defer t.Stop()
+	for {
+		if _, err := s.Tick(ctx); err != nil {
+			log.Printf("tick: %v", err)
+		}
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+		}
+	}
+}
+
 // ---- HTTP handlers ----
 
 func writeJSON(w http.ResponseWriter, code int, v any) {
@@ -674,6 +776,23 @@ func (s *Server) handleReopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "closed": false})
+}
+
+func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {
+	actor, _ := domain.ActorFrom(r.Context())
+	ns, err := s.store.ListNotifications(actor.Instances, 50)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, ns)
+}
+
+func (s *Server) handleTick(w http.ResponseWriter, r *http.Request) {
+	n, err := s.Tick(r.Context())
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"new_notifications": n})
 }
 
 // writeErr maps a backend error to an HTTP response; returns true if it wrote one.

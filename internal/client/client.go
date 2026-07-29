@@ -142,6 +142,34 @@ func SetContract(cfg config.Config, id string, in domain.ContractInput) error {
 	return nil
 }
 
+// Tick asks the server to sweep for cooling bubbles now.
+func Tick(cfg config.Config) error {
+	var res struct {
+		New int `json:"new_notifications"`
+	}
+	if err := postJSON(cfg, "/api/tick", nil, &res); err != nil {
+		return err
+	}
+	fmt.Printf("swept — %d new notification(s)\n", res.New)
+	return nil
+}
+
+// Notifications lists recent cooling/dormant alerts for your instances.
+func Notifications(cfg config.Config) error {
+	var ns []domain.Notification
+	if err := getJSON(cfg.ServerURL+"/api/notifications", cfg.ActiveToken(), &ns); err != nil {
+		return err
+	}
+	if len(ns) == 0 {
+		fmt.Println("no notifications — nothing is sinking (run `bubble tick` to sweep now).")
+		return nil
+	}
+	for _, n := range ns {
+		fmt.Printf("%s  %s\n", n.At, n.Message)
+	}
+	return nil
+}
+
 // Birth creates a thread in a bubble (server enforces the §3 birth rule).
 func Birth(cfg config.Config, bubbleID, name, brief, logbook string, small bool) error {
 	req := domain.BirthRequest{

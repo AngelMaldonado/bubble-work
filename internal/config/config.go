@@ -20,7 +20,8 @@ type Config struct {
 	ServerURL string `json:"server_url"` // client → server base URL
 	Addr      string `json:"addr"`       // server listen address
 
-	CycleHours int `json:"cycle_hours"` // the heat-window pulse length (§1)
+	CycleHours  int `json:"cycle_hours"`  // the heat-window pulse length (§1)
+	TickMinutes int `json:"tick_minutes"` // server: how often to sweep for cooling bubbles (§5)
 
 	// Credential profiles let one client switch between workspaces/identities
 	// (e.g. different Plane keys per org). Current is the active profile name.
@@ -98,9 +99,10 @@ func DBPath() (string, error) {
 // Load reads the config, filling sensible defaults when the file is absent.
 func Load() (Config, error) {
 	c := Config{
-		ServerURL:  "http://localhost:4006",
-		Addr:       ":4006",
-		CycleHours: 168, // one week
+		ServerURL:   "http://localhost:4006",
+		Addr:        ":4006",
+		CycleHours:  168, // one week
+		TickMinutes: 60,  // sweep hourly for cooling bubbles
 	}
 	p, err := Path()
 	if err != nil {
@@ -143,4 +145,10 @@ func (c Config) Cycle() time.Duration {
 		h = 168
 	}
 	return time.Duration(h) * time.Hour
+}
+
+// TickInterval returns how often the server sweeps for cooling bubbles.
+// Zero disables the automatic ticker.
+func (c Config) TickInterval() time.Duration {
+	return time.Duration(c.TickMinutes) * time.Minute
 }

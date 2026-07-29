@@ -112,6 +112,10 @@ bubble serve [--addr :4006]          run the server (REST + MCP brain)
 bubble ls                            list bubbles, hottest first (buoyancy view)
 bubble heat <instance:project:mod>   explain a bubble's temperature
 bubble whoami                        show the identity resolved from your credential
+bubble notifications                 list cooling/dormant alerts (alias: inbox)
+bubble tick                          sweep now for cooling bubbles
+bubble birth <id> [flags]            create a thread in a bubble (needs Brief + Logbook)
+bubble bubble set|close|open <id>    set a bubble's contract (§4) or open/close it
 bubble use [name]                    switch active credential profile (no arg: list)
 bubble init [--name --token …]       configure server URL + a credential profile
 bubble reset [--force]               purge all local state and start from scratch

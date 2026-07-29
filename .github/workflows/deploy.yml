@@ -5,6 +5,7 @@ name: deploy
 on:
   push:
     branches: [main]
+    paths-ignore: ["**.md"]   # docs-only changes don't need a rebuild/reload
   workflow_dispatch: {}
 
 # One deploy at a time; let an in-flight deploy finish rather than cancelling it.

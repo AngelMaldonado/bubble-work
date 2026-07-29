@@ -514,8 +514,11 @@ func cmdServe(args []string) {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// Precedence: --addr flag, then $PORT (services-platform convention), then config.
 	if *addr != "" {
 		cfg.Addr = *addr
+	} else if p := os.Getenv("PORT"); p != "" {
+		cfg.Addr = ":" + p
 	}
 
 	dbPath, err := config.DBPath()

@@ -15,6 +15,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"runtime/debug"
 	"sort"
 	"strings"
 	"sync"
@@ -173,6 +174,9 @@ func (s *Server) Handler() http.Handler {
 	// Our own MCP front door (§9.5), behind the same member credential using the
 	// SDK's bearer middleware; the verified member reaches tool handlers via
 	// req.Extra.TokenInfo.
+	// Health check (unauthenticated) — for the services platform's health_url.
+	mux.HandleFunc("GET /health", s.handleHealth)
+
 	// Plane webhooks authenticate via HMAC signature, not a member token, so
 	// they are NOT behind restAuth.
 	mux.HandleFunc("POST /webhooks/plane/{slug}", s.handlePlaneWebhook)
@@ -888,6 +892,23 @@ func (s *Server) handlePrefs(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"enabled": req.Enabled})
+}
+
+// handleHealth reports liveness plus the build revision/time (from the embedded
+// VCS stamp), so a stale server is easy to spot.
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	info := map[string]string{"status": "ok"}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, kv := range bi.Settings {
+			switch kv.Key {
+			case "vcs.revision":
+				info["revision"] = kv.Value
+			case "vcs.time":
+				info["built"] = kv.Value
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, info)
 }
 
 func (s *Server) handleTick(w http.ResponseWriter, r *http.Request) {

@@ -1,0 +1,20 @@
+name: deploy
+
+# Push to main → the reko Mac mini's self-hosted runner rebuilds and reloads the
+# service via the shared services-platform deploy script. See DEPLOY.md.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch: {}
+
+# One deploy at a time; let an in-flight deploy finish rather than cancelling it.
+concurrency:
+  group: deploy-angel-bubble-work
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, reko, services]
+    steps:
+      - name: Deploy angel-bubble-work
+        run: /Users/reko/dev/_infra/bin/deploy-service angel-bubble-work

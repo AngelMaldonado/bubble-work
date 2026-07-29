@@ -3,9 +3,11 @@
 package plane
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -64,6 +66,94 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return fmt.Errorf("plane GET %s: %s", path, resp.Status)
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
+}
+
+// post sends a JSON body to Plane and decodes the response (out may be nil).
+func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	data, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(data))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("X-API-Key", c.APIKey)
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("plane POST %s: %s: %s", path, resp.Status, strings.TrimSpace(string(b)))
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// DefaultState returns a state id to create work items in: the project's default
+// state, else an unstarted/backlog one, else the first.
+func (c *Client) DefaultState(ctx context.Context) (string, error) {
+	var states []struct {
+		ID      string `json:"id"`
+		Group   string `json:"group"`
+		Default bool   `json:"default"`
+	}
+	err := c.getPaged(ctx, c.projectBase()+"/states/", func(raw json.RawMessage) error {
+		var page []struct {
+			ID      string `json:"id"`
+			Group   string `json:"group"`
+			Default bool   `json:"default"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		states = append(states, page...)
+		return nil
+	})
+	if err != nil {
+		return "", err
+	}
+	var unstarted, first string
+	for _, s := range states {
+		if first == "" {
+			first = s.ID
+		}
+		if s.Default {
+			return s.ID, nil
+		}
+		if unstarted == "" && (s.Group == "unstarted" || s.Group == "backlog") {
+			unstarted = s.ID
+		}
+	}
+	if unstarted != "" {
+		return unstarted, nil
+	}
+	if first == "" {
+		return "", fmt.Errorf("project has no states")
+	}
+	return first, nil
+}
+
+// CreateWorkItem creates a work item (thread) and returns its id.
+func (c *Client) CreateWorkItem(ctx context.Context, name, descriptionHTML, stateID string) (string, error) {
+	var out struct {
+		ID string `json:"id"`
+	}
+	body := map[string]any{"name": name, "state": stateID, "description_html": descriptionHTML}
+	if err := c.post(ctx, c.projectBase()+"/work-items/", body, &out); err != nil {
+		return "", err
+	}
+	return out.ID, nil
+}
+
+// AddIssuesToModule links work items to a module (bubble).
+func (c *Client) AddIssuesToModule(ctx context.Context, moduleID string, issueIDs []string) error {
+	return c.post(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", map[string]any{"issues": issueIDs}, nil)
 }
 
 // getPaged walks a cursor-paginated list endpoint, invoking each with every

@@ -40,6 +40,8 @@ func main() {
 		cmdWhoami(os.Args[2:])
 	case "use":
 		cmdUse(os.Args[2:])
+	case "birth":
+		cmdBirth(os.Args[2:])
 	case "bubble":
 		cmdBubble(os.Args[2:])
 	case "instance":
@@ -65,6 +67,7 @@ Usage:
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble whoami                    show the identity resolved from your credential
   bubble use [name]                switch active credential profile (no arg: list)
+  bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble set|close|open     set a bubble's contract (§4) or open/close it
   bubble instance add|list|remove  manage Plane instances (run on the server host)
   bubble init [flags]              configure server URL + a credential profile
@@ -89,6 +92,57 @@ func cmdWhoami(args []string) {
 	if err := client.Whoami(cfg); err != nil {
 		log.Fatalf("whoami: %v", err)
 	}
+}
+
+// cmdBirth creates a thread in a bubble. The server enforces the §3 birth rule
+// (Brief with a Definition of Done, plus a Logbook unless --small).
+func cmdBirth(args []string) {
+	if len(args) < 1 {
+		birthUsage()
+		os.Exit(2)
+	}
+	id := args[0]
+	fs := flag.NewFlagSet("birth", flag.ExitOnError)
+	name := fs.String("name", "", "thread name (required)")
+	brief := fs.String("brief", "", "Brief text (or use --brief-file)")
+	briefFile := fs.String("brief-file", "", "read the Brief from a file")
+	logbook := fs.String("logbook", "", "Logbook text (or use --logbook-file)")
+	logbookFile := fs.String("logbook-file", "", "read the Logbook from a file")
+	small := fs.Bool("small", false, "small thread — allow an empty Logbook (§3.2)")
+	_ = fs.Parse(args[1:])
+
+	readIf := func(inline, path, label string) string {
+		if path == "" {
+			return inline
+		}
+		b, err := os.ReadFile(path)
+		if err != nil {
+			log.Fatalf("birth: reading %s: %v", label, err)
+		}
+		return string(b)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Birth(cfg, id, *name,
+		readIf(*brief, *briefFile, "--brief-file"),
+		readIf(*logbook, *logbookFile, "--logbook-file"), *small); err != nil {
+		log.Fatalf("birth: %v", err)
+	}
+}
+
+func birthUsage() {
+	fmt.Fprint(os.Stderr, `bubble birth — create a thread in a bubble (enforces the §3 birth rule)
+
+Usage:
+  bubble birth <bubble-id> --name <name> \
+      (--brief <text> | --brief-file <path>) \
+      (--logbook <text> | --logbook-file <path> | --small)
+
+The Brief must include a "Definition of Done". <bubble-id> is the short id from 'bubble ls'.
+
+`)
 }
 
 // cmdBubble sets a bubble's §4 contract or opens/closes it (via the server).

@@ -26,6 +26,10 @@ func fakePlane() *httptest.Server {
 			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
 		case strings.HasSuffix(p, "/members/"):
 			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"state-1","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/work-items/") && r.Method == http.MethodPost:
+			io.WriteString(w, `{"id":"new-wid-123"}`)
 		case strings.HasSuffix(p, "/projects/"):
 			io.WriteString(w, `{"results":[{"id":"p1","name":"Proj One"},{"id":"p2","name":"Proj Two"}]}`)
 		case strings.HasSuffix(p, "/modules/") && strings.Contains(p, "/projects/p1/"):
@@ -151,6 +155,35 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 }
 
+func TestBirthCreatesWorkItem(t *testing.T) {
+	ts, key := authedServer(t)
+	body := `{"bubble_id":"ws:p1:m1","name":"New thread","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`
+
+	code, resp := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, body)
+	if code != http.StatusOK {
+		t.Fatalf("birth: want 200, got %d (%s)", code, resp)
+	}
+	var r domain.BirthResult
+	json.Unmarshal(resp, &r)
+	if !r.Created || r.ThreadID != "new-wid-123" {
+		t.Fatalf("unexpected birth result: %+v", r)
+	}
+
+	// the new thread shows up on the bubble (cache patched, no refetch)
+	_, lb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	var vs []domain.BubbleView
+	json.Unmarshal(lb, &vs)
+	for _, v := range vs {
+		if v.ID == "ws:p1:m1" {
+			if v.Threads != 1 {
+				t.Fatalf("want 1 thread after birth, got %d", v.Threads)
+			}
+			return
+		}
+	}
+	t.Fatal("bubble ws:p1:m1 not found after birth")
+}
+
 func TestContractAndClose(t *testing.T) {
 	ts, key := authedServer(t)
 	id := "ws:p1:m1" // "Bubble A" from the fake
@@ -217,9 +250,9 @@ func TestMatchBubble(t *testing.T) {
 			t.Fatalf("match %q: want %s, got %q err=%v", q, wantID, v.ID, err)
 		}
 	}
-	check("bbbb2222", "ws:p2:bbbb2222")        // exact short id
-	check("bbbb", "ws:p2:bbbb2222")            // unique prefix
-	check("ws:p1:aaaa1111", "ws:p1:aaaa1111")  // full namespaced id
+	check("bbbb2222", "ws:p2:bbbb2222")       // exact short id
+	check("bbbb", "ws:p2:bbbb2222")           // unique prefix
+	check("ws:p1:aaaa1111", "ws:p1:aaaa1111") // full namespaced id
 
 	if _, err := matchBubble(vs, "aaaa"); !errors.Is(err, errAmbig) {
 		t.Fatalf("prefix 'aaaa' should be ambiguous, got %v", err)
@@ -239,7 +272,7 @@ func TestBirthPolicyGate(t *testing.T) {
 	if code, _ := do(t, http.MethodPost, url, key, `{"brief":"do it","logbook":"phase 1"}`); code != http.StatusUnprocessableEntity {
 		t.Fatalf("no DoD: want 422, got %d", code)
 	}
-	if code, _ := do(t, http.MethodPost, url, key, `{"brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`); code != http.StatusOK {
+	if code, _ := do(t, http.MethodPost, url, key, `{"bubble_id":"ws:p1:m1","name":"T","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`); code != http.StatusOK {
 		t.Fatalf("valid birth: want 200, got %d", code)
 	}
 }

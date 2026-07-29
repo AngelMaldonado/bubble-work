@@ -33,7 +33,10 @@ func withActor(ctx context.Context, req *sdk.CallToolRequest) context.Context {
 		return ctx
 	}
 	if a, ok := ti.Extra["actor"].(domain.Actor); ok {
-		return domain.WithActor(ctx, a)
+		ctx = domain.WithActor(ctx, a)
+	}
+	if cred, ok := ti.Extra["cred"].(string); ok {
+		ctx = domain.WithCred(ctx, cred)
 	}
 	return ctx
 }

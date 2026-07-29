@@ -142,6 +142,24 @@ func SetContract(cfg config.Config, id string, in domain.ContractInput) error {
 	return nil
 }
 
+// Birth creates a thread in a bubble (server enforces the §3 birth rule).
+func Birth(cfg config.Config, bubbleID, name, brief, logbook string, small bool) error {
+	req := domain.BirthRequest{
+		BubbleID: bubbleID, Name: name, Brief: brief, Logbook: logbook, SmallThread: small,
+	}
+	var res domain.BirthResult
+	if err := postJSON(cfg, "/api/threads/birth", req, &res); err != nil {
+		return err
+	}
+	if res.Created {
+		fmt.Printf("born: %s\n", res.Message)
+		fmt.Printf("  thread id: %s\n", res.ThreadID)
+	} else {
+		fmt.Println(res.Message)
+	}
+	return nil
+}
+
 // Close / Reopen flip a bubble's closed flag (§5.3).
 func Close(cfg config.Config, id string) error {
 	if err := postJSON(cfg, "/api/bubbles/"+id+"/close", nil, nil); err != nil {

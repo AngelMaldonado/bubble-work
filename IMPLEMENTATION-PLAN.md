@@ -15,7 +15,7 @@
 | 1.5 | Federation (multi-instance) | Server federates N Plane instances; members scoped per instance | ✅ |
 | 1.6 | Plane-native identity | Humans auth via Plane pass-through; role + scope derived from Plane | ✅ |
 | 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ✅ |
-| 3 | Plane write path | Birth & contracts flow into Plane | ⬜ |
+| 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
 | 4 | Heat & lifecycle hardening | Tested, explainable temperature rules | ⬜ |
 | 5 | Scheduler & push | Cooling/dormant transitions notify with nobody at the keyboard | ⬜ |
 | 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | ⬜ |
@@ -144,10 +144,12 @@ flowchart LR
 - [x] Short/prefix bubble ids: `ls` shows the module id; heat/set/close/open resolve exact-or-unique-prefix (git-style), ambiguous→400, unknown→404
 - [x] Writes patch the cached bubble in place (no Plane refetch) — instant reflection, avoids rate-limit storms
 - [x] Tests: contract set reflected in `ls`, close→Closed, reopen, `matchBubble` resolution; **live e2e green against cuby** (whoami/ls/heat/set/close/reopen)
-- [ ] `plane.Client` write methods: create work item, set description HTML, link to module
-- [ ] `BirthThread` POSTs the work item with **Brief + Logbook in the description HTML** (§7.1)
-- [ ] `close_bubble` optionally reflects closure into Plane (label/state), not just overlay
-- [ ] Tests: birth creates a work item (against a scratch project or mocked transport)
+- [x] `plane.Client` write methods: `CreateWorkItem`, `DefaultState`, `AddIssuesToModule` (POST helper)
+- [x] `BirthThread` POSTs the work item with **Brief + Logbook in `description_html`** (§7.1), links it to the module, patches the cache
+- [x] `bubble birth <id> --name --brief[-file] --logbook[-file] [--small]` CLI + `birth_thread` MCP
+- [x] **Impersonation writes:** the work item is created with the caller's own Plane key (threaded via request context, never serialized), so Plane attributes it to them
+- [x] Tests: birth creates a work item + reflects on the bubble (fake Plane); **live-validated on cuby** (real work item created, attributed to the caller)
+- [ ] `close_bubble` optionally reflects closure into Plane (label/state), not just overlay — *deferred*
 
 **Dependencies:** Phase 1 (attribution), Phase 2 (read shapes).
 **Definition of Done:** birthing a thread through CLI or MCP creates a real Plane work item carrying its Brief + Logbook; setting/closing a bubble's contract survives a server restart.

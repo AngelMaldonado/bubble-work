@@ -112,6 +112,20 @@ func ActorFrom(ctx context.Context) (Actor, bool) {
 	return a, ok
 }
 
+type credCtxKey struct{}
+
+// WithCred stashes the caller's raw Plane API key on the context so write
+// operations can act AS that person (impersonation). It is never serialized.
+func WithCred(ctx context.Context, cred string) context.Context {
+	return context.WithValue(ctx, credCtxKey{}, cred)
+}
+
+// CredFrom returns the caller's raw Plane key, if present.
+func CredFrom(ctx context.Context) (string, bool) {
+	c, ok := ctx.Value(credCtxKey{}).(string)
+	return c, ok
+}
+
 // BubbleView is the derived, client-facing projection of a bubble (§9.5).
 type BubbleView struct {
 	ID        string    `json:"id"`

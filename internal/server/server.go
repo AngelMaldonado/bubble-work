@@ -194,7 +194,8 @@ func (s *Server) restAuth(next http.HandlerFunc) http.HandlerFunc {
 			return
 		}
 		log.Printf("%s → %s %s", actor.Label(), r.Method, r.URL.Path)
-		next(w, r.WithContext(domain.WithActor(r.Context(), actor)))
+		ctx := domain.WithCred(domain.WithActor(r.Context(), actor), bearer(r))
+		next(w, r.WithContext(ctx))
 	}
 }
 
@@ -207,7 +208,7 @@ func (s *Server) verifyToken(ctx context.Context, token string, r *http.Request)
 	}
 	return &auth.TokenInfo{
 		UserID: actor.ID,
-		Extra:  map[string]any{"actor": actor},
+		Extra:  map[string]any{"actor": actor, "cred": token},
 	}, nil
 }
 
@@ -308,13 +309,90 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	if strings.TrimSpace(req.Logbook) == "" && !req.SmallThread {
 		return domain.BirthResult{}, fmt.Errorf("birth rejected: a LOGBOOK is required unless small_thread=true (§3.2)")
 	}
-	// TODO: POST the work item to Plane (Brief+Logbook → work-item description
-	// page, §7.1) once the write mapping is wired. For now we enforce the gate.
-	log.Printf("birth_thread by %s: bubble=%s name=%q", actor.Label(), req.BubbleID, req.Name)
-	return domain.BirthResult{
-		Created: false,
-		Message: fmt.Sprintf("birth artifacts valid — ready to create the work item in Plane (actor: %s)", actor.Label()),
-	}, nil
+	if strings.TrimSpace(req.Name) == "" {
+		return domain.BirthResult{}, fmt.Errorf("birth rejected: a thread name is required")
+	}
+
+	// Resolve the target bubble and split its namespaced id.
+	id, err := s.resolveID(ctx, req.BubbleID)
+	if err != nil {
+		return domain.BirthResult{}, err
+	}
+	parts := strings.SplitN(id, ":", 3)
+	if len(parts) != 3 {
+		return domain.BirthResult{}, fmt.Errorf("malformed bubble id %q", id)
+	}
+	slug, projectID, moduleID := parts[0], parts[1], parts[2]
+	inst, ok, err := s.instanceBySlug(slug)
+	if err != nil {
+		return domain.BirthResult{}, err
+	}
+	if !ok {
+		return domain.BirthResult{}, errNotFound
+	}
+
+	// Write AS the acting person (impersonation): use their presented Plane key
+	// so Plane attributes the work item to them. Fall back to the instance admin
+	// key only if no caller credential is available.
+	writeKey := inst.APIKey
+	if cred, ok := domain.CredFrom(ctx); ok && cred != "" {
+		writeKey = cred
+	}
+	cl := plane.New(inst.BaseURL, writeKey, inst.Workspace, projectID)
+
+	state, err := cl.DefaultState(ctx)
+	if err != nil {
+		return domain.BirthResult{}, fmt.Errorf("resolve state: %w", err)
+	}
+	wid, err := cl.CreateWorkItem(ctx, req.Name, briefLogbookHTML(req.Brief, req.Logbook), state)
+	if err != nil {
+		return domain.BirthResult{}, fmt.Errorf("create work item: %w", err)
+	}
+	if err := cl.AddIssuesToModule(ctx, moduleID, []string{wid}); err != nil {
+		log.Printf("birth_thread: created %s but link to module failed: %v", wid, err)
+	}
+
+	// Reflect the new thread in the cache without a refetch.
+	s.patchCachedBubble(slug, id, func(b *domain.Bubble) {
+		b.Threads = append(b.Threads, domain.Thread{ID: wid, Name: req.Name, Active: true})
+		b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: "thread-created", At: s.now()})
+	})
+	log.Printf("birth_thread by %s: bubble=%s -> work item %s", actor.Label(), id, wid)
+	return domain.BirthResult{ThreadID: wid, Created: true, Message: fmt.Sprintf("created thread %q in %s", req.Name, id)}, nil
+}
+
+// instanceBySlug looks up a registered instance by slug.
+func (s *Server) instanceBySlug(slug string) (domain.Instance, bool, error) {
+	all, err := s.store.ListInstances()
+	if err != nil {
+		return domain.Instance{}, false, err
+	}
+	for _, i := range all {
+		if i.Slug == slug {
+			return i, true, nil
+		}
+	}
+	return domain.Instance{}, false, nil
+}
+
+// briefLogbookHTML renders the two birth artifacts into one description page (§7.1).
+func briefLogbookHTML(brief, logbook string) string {
+	esc := func(s string) string {
+		s = strings.ReplaceAll(s, "&", "&amp;")
+		s = strings.ReplaceAll(s, "<", "&lt;")
+		s = strings.ReplaceAll(s, ">", "&gt;")
+		return strings.ReplaceAll(s, "\n", "<br/>")
+	}
+	var b strings.Builder
+	b.WriteString("<h2>Brief</h2><p>")
+	b.WriteString(esc(brief))
+	b.WriteString("</p>")
+	if strings.TrimSpace(logbook) != "" {
+		b.WriteString("<h2>Logbook</h2><p>")
+		b.WriteString(esc(logbook))
+		b.WriteString("</p>")
+	}
+	return b.String()
 }
 
 // authorizeBubble confirms the actor may act on a namespaced bubble id and

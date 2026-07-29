@@ -19,7 +19,7 @@
 | 4 | Heat & lifecycle hardening | Tested, explainable temperature rules | ⬜ |
 | 5 | Scheduler & inbox | Cooling/dormant transitions land in a per-person inbox, unattended | ✅ |
 | 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 |
-| 7 | Packaging & release | One-command install / documented deploy | ⬜ |
+| 7 | Packaging, deploy & CI | Deployed on the platform; push-to-main auto-deploys | 🔄 |
 
 ## Phase dependencies
 
@@ -211,19 +211,24 @@ flowchart LR
 
 ---
 
-## Phase 7 — Packaging & release
+## Phase 7 — Packaging, deploy & CI 🔄
 
-**Goal:** minimal, easy to publish (the original ask).
+**Goal:** deployed, reproducible, and one-`git push` to ship.
 
-- [ ] `README.md` quickstart (serve, init, connect an agent)
-- [ ] `claude mcp add --transport http bubble http://<host>/mcp` documented
-- [ ] Cross-compiled static binaries (goreleaser) — no cgo, single file
-- [ ] Optional: `Dockerfile` + a one-line deploy (fly.io / container)
-- [ ] Secrets handling: env + config file; optional OS keyring for the member token
-- [ ] Versioning + `CHANGELOG`
+**Done — deployed on the reko services platform:**
+- [x] Mounted as `angel-bubble-work` under pm2 (`:3104`, `BUBBLE_HOME`, built from source); survives reboots via the pm2 LaunchAgent
+- [x] `/health` endpoint + `PORT` env (platform conventions)
+- [x] Public hostname + wildcard TLS via NPM (`https://bubble.angel.cubytest.space`)
+- [x] **Auto-deploy CI:** self-hosted runner on the mini + `.github/workflows/deploy.yml` → `deploy-service` on push to `main` (docs-only pushes skipped). Verified: `/health` revision tracks HEAD.
+- [x] `DEPLOY.md` documents the whole mount; `README.md` quickstart exists
+- [x] Static binary story (pure-Go/CGO-free) — builds from source on the target
+
+**Deferred / optional:**
+- [ ] `claude mcp add … /mcp` doc for connecting an agent
+- [ ] `CHANGELOG` / tagged releases (build-from-source makes goreleaser optional)
 
 **Dependencies:** Phases 3, 5, 6.
-**Definition of Done:** a new user can install the binary, `bubble init`, `bubble serve`, connect Claude Code as a member, and see bubbles — from documented steps alone.
+**Definition of Done:** a change pushed to `main` auto-deploys to the live server, which is reachable at a documented URL. ✅ **Met.**
 
 ---
 

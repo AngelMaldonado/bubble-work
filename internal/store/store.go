@@ -18,7 +18,8 @@ CREATE TABLE IF NOT EXISTS bubble_contracts (
   outcome   TEXT,
   owner     TEXT,
   closure   TEXT,
-  closed    INTEGER NOT NULL DEFAULT 0
+  closed    INTEGER NOT NULL DEFAULT 0,
+  stage     TEXT NOT NULL DEFAULT ''  -- explicit stage overlay: '' | 'reviewed' (§ web-ui)
 );
 CREATE TABLE IF NOT EXISTS plane_instances (
   slug           TEXT PRIMARY KEY,  -- "ayetec", "cuby"
@@ -64,6 +65,7 @@ type Contract struct {
 	Owner   string
 	Closure string
 	Closed  bool
+	Stage   string // "" | "reviewed"
 }
 
 // Open opens (and migrates) the SQLite database at path.
@@ -76,9 +78,10 @@ func Open(path string) (*Store, error) {
 		db.Close()
 		return nil, err
 	}
-	// Best-effort migration for DBs created before webhook_secret existed.
-	// Errors ("duplicate column") are expected on already-migrated DBs.
+	// Best-effort migrations for pre-existing DBs (errors on already-migrated
+	// DBs are expected and ignored).
 	_, _ = db.Exec(`ALTER TABLE plane_instances ADD COLUMN webhook_secret TEXT`)
+	_, _ = db.Exec(`ALTER TABLE bubble_contracts ADD COLUMN stage TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 
@@ -90,9 +93,9 @@ func (s *Store) GetContract(bubbleID string) (Contract, bool, error) {
 	var c Contract
 	var closed int
 	err := s.db.QueryRow(
-		`SELECT COALESCE(outcome,''), COALESCE(owner,''), COALESCE(closure,''), closed
+		`SELECT COALESCE(outcome,''), COALESCE(owner,''), COALESCE(closure,''), closed, COALESCE(stage,'')
 		   FROM bubble_contracts WHERE bubble_id = ?`, bubbleID,
-	).Scan(&c.Outcome, &c.Owner, &c.Closure, &closed)
+	).Scan(&c.Outcome, &c.Owner, &c.Closure, &closed, &c.Stage)
 	if err == sql.ErrNoRows {
 		return Contract{}, false, nil
 	}
@@ -110,12 +113,12 @@ func (s *Store) SetContract(bubbleID string, c Contract) error {
 		closed = 1
 	}
 	_, err := s.db.Exec(
-		`INSERT INTO bubble_contracts(bubble_id, outcome, owner, closure, closed)
-		 VALUES(?, ?, ?, ?, ?)
+		`INSERT INTO bubble_contracts(bubble_id, outcome, owner, closure, closed, stage)
+		 VALUES(?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(bubble_id) DO UPDATE SET
 		   outcome = excluded.outcome, owner = excluded.owner,
-		   closure = excluded.closure, closed = excluded.closed`,
-		bubbleID, c.Outcome, c.Owner, c.Closure, closed,
+		   closure = excluded.closure, closed = excluded.closed, stage = excluded.stage`,
+		bubbleID, c.Outcome, c.Owner, c.Closure, closed, c.Stage,
 	)
 	return err
 }
@@ -130,6 +133,16 @@ func (s *Store) SetClosed(bubbleID string, closed bool) error {
 		`INSERT INTO bubble_contracts(bubble_id, closed) VALUES(?, ?)
 		 ON CONFLICT(bubble_id) DO UPDATE SET closed = excluded.closed`,
 		bubbleID, ci,
+	)
+	return err
+}
+
+// SetStage sets just the explicit stage overlay (” | 'reviewed').
+func (s *Store) SetStage(bubbleID, stage string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO bubble_contracts(bubble_id, stage) VALUES(?, ?)
+		 ON CONFLICT(bubble_id) DO UPDATE SET stage = excluded.stage`,
+		bubbleID, stage,
 	)
 	return err
 }

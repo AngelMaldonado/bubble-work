@@ -165,6 +165,79 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 }
 
+func TestLevelsReviewAndSearch(t *testing.T) {
+	// fake with one work item (old timestamp → dormant), so we can walk the bands.
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"P"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"w1","name":"Design signup","created_at":"2026-01-01T12:00:00Z"}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Onboarding"}]}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	defer fake.Close()
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{Slug: "ws", BaseURL: fake.URL, APIKey: "k", Workspace: "w", Project: ""}); err != nil {
+		t.Fatal(err)
+	}
+	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	defer ts.Close()
+	const id = "ws:p1:m1"
+	key := "k"
+
+	level := func() string {
+		_, body := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+		var vs []domain.BubbleView
+		json.Unmarshal(body, &vs)
+		for _, v := range vs {
+			if v.ID == id {
+				return v.Level
+			}
+		}
+		t.Fatal("bubble not found")
+		return ""
+	}
+
+	// dormant + no owner → rip
+	if l := level(); l != "rip" {
+		t.Fatalf("initial: want rip, got %q", l)
+	}
+	// give it an owner → dormant with owner+evidence → zzzz
+	do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/contract", key, `{"owner":"angel"}`)
+	if l := level(); l != "zzzz" {
+		t.Fatalf("with owner: want zzzz, got %q", l)
+	}
+	// review → reviewed
+	if code, _ := do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/review", key, ""); code != http.StatusOK {
+		t.Fatalf("review: want 200, got %d", code)
+	}
+	if l := level(); l != "reviewed" {
+		t.Fatalf("after review: want reviewed, got %q", l)
+	}
+	// close → done (wins over reviewed)
+	do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/close", key, "")
+	if l := level(); l != "done" {
+		t.Fatalf("after close: want done, got %q", l)
+	}
+
+	// thread search
+	_, body := do(t, http.MethodGet, ts.URL+"/api/threads?q=sign", key, "")
+	var hits []domain.ThreadHit
+	json.Unmarshal(body, &hits)
+	if len(hits) != 1 || hits[0].Name != "Design signup" || hits[0].BubbleID != id {
+		t.Fatalf("search: want 1 hit for Design signup, got %+v", hits)
+	}
+}
+
 func TestServiceAdmin(t *testing.T) {
 	st := openStore(t)
 	fake := fakePlane()

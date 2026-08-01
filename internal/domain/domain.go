@@ -56,6 +56,7 @@ type Bubble struct {
 	Owner    string // §4 contract: who is accountable now
 	Closure  string // §4 contract: the explicit close signal
 	Closed   bool
+	Stage    string // explicit overlay: "" | "reviewed"
 	Threads  []Thread
 	Evidence []EvidenceEvent
 }
@@ -134,11 +135,22 @@ type BubbleView struct {
 	Name      string    `json:"name"`
 	Instance  string    `json:"instance"`
 	Lifecycle Lifecycle `json:"lifecycle"`
+	Level     string    `json:"level"` // UI band: in_progress|zzzz|rip|reviewed|done
 	Score     float64   `json:"score"` // 0..1 buoyancy score, for ordering
 	Reason    string    `json:"reason"`
 	Outcome   string    `json:"outcome,omitempty"`
 	Owner     string    `json:"owner,omitempty"`
 	Threads   int       `json:"threads"`
+}
+
+// ThreadHit is a searchable thread (task) for the ⌘K omnibar.
+type ThreadHit struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	BubbleID   string `json:"bubble_id"`
+	BubbleName string `json:"bubble_name"`
+	Instance   string `json:"instance"`
+	Open       bool   `json:"open"`
 }
 
 // BirthRequest carries the two birth artifacts the policy engine enforces (§3).

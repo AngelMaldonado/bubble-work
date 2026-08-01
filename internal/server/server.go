@@ -208,6 +208,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/bubbles/{id}/contract", s.restAuth(s.handleSetContract))
 	mux.HandleFunc("POST /api/bubbles/{id}/close", s.restAuth(s.handleClose))
 	mux.HandleFunc("POST /api/bubbles/{id}/reopen", s.restAuth(s.handleReopen))
+	mux.HandleFunc("POST /api/bubbles/{id}/review", s.restAuth(s.handleReview))
+	mux.HandleFunc("POST /api/bubbles/{id}/unreview", s.restAuth(s.handleUnreview))
+	mux.HandleFunc("GET /api/threads", s.restAuth(s.handleThreads))
 	mux.HandleFunc("GET /api/notifications", s.restAuth(s.handleNotifications))
 	mux.HandleFunc("POST /api/notifications/read", s.restAuth(s.handleMarkRead))
 	mux.HandleFunc("POST /api/notifications/prefs", s.restAuth(s.handlePrefs))
@@ -286,6 +289,30 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 
 // ---- Backend implementation (shared by REST + MCP) ----
 
+// bubbleLevel maps a bubble to its UI band (§ web-ui): explicit stage/closed win,
+// otherwise heat decides in-progress ↔ zzzz ↔ rip.
+func bubbleLevel(b domain.Bubble, lc domain.Lifecycle) string {
+	switch {
+	case b.Closed:
+		return "done"
+	case b.Stage == "reviewed":
+		return "reviewed"
+	}
+	switch lc {
+	case domain.Hot, domain.Warm:
+		return "in_progress"
+	case domain.Cooling:
+		return "zzzz"
+	case domain.Dormant:
+		if b.Owner == "" || len(b.Evidence) == 0 {
+			return "rip" // never got going / abandoned
+		}
+		return "zzzz" // had a life, went quiet
+	default:
+		return "zzzz"
+	}
+}
+
 // toViews classifies bubbles into derived views, hottest first (buoyancy).
 func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 	now := s.now()
@@ -294,7 +321,8 @@ func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 		r := heat.Classify(b, s.cycle, now)
 		out = append(out, domain.BubbleView{
 			ID: b.ID, Name: b.Name, Instance: b.Instance,
-			Lifecycle: r.Lifecycle, Score: r.Score, Reason: r.Reason,
+			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle),
+			Score: r.Score, Reason: r.Reason,
 			Outcome: b.Outcome, Owner: b.Owner, Threads: len(b.Threads),
 		})
 	}
@@ -716,6 +744,52 @@ func (s *Server) CloseBubble(ctx context.Context, id string) error {
 	return s.setClosed(ctx, id, true)
 }
 
+// setStage sets a bubble's explicit stage overlay (” | 'reviewed'), scoped and
+// cache-patched; accepts a short or full id.
+func (s *Server) setStage(ctx context.Context, q, stage string) error {
+	id, err := s.resolveID(ctx, q)
+	if err != nil {
+		return err
+	}
+	slug, err := s.authorizeBubble(ctx, id)
+	if err != nil {
+		return err
+	}
+	if err := s.store.SetStage(id, stage); err != nil {
+		return err
+	}
+	s.patchCachedBubble(slug, id, func(b *domain.Bubble) { b.Stage = stage })
+	actor, _ := domain.ActorFrom(ctx)
+	log.Printf("set_stage(%q) by %s: bubble=%s", stage, actor.Label(), id)
+	return nil
+}
+
+// SearchThreads returns the caller's threads (tasks) matching q, for the ⌘K
+// omnibar (case-insensitive substring; empty q returns all, capped).
+func (s *Server) SearchThreads(ctx context.Context, q string) ([]domain.ThreadHit, error) {
+	bubbles, err := s.collect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	q = strings.ToLower(strings.TrimSpace(q))
+	out := make([]domain.ThreadHit, 0, 32)
+	for _, b := range bubbles {
+		for _, t := range b.Threads {
+			if q != "" && !strings.Contains(strings.ToLower(t.Name), q) {
+				continue
+			}
+			out = append(out, domain.ThreadHit{
+				ID: t.ID, Name: t.Name, BubbleID: b.ID, BubbleName: b.Name,
+				Instance: b.Instance, Open: t.Active,
+			})
+			if len(out) >= 100 {
+				return out, nil
+			}
+		}
+	}
+	return out, nil
+}
+
 // collect federates over the acting identity's authorized instances, reading
 // each from a short-lived cache (or fetching it concurrently on a miss). One
 // unreachable instance is logged and skipped — it never blanks the whole view.
@@ -827,7 +901,7 @@ func (s *Server) buildBubble(slug, projID string, m plane.Module, items []plane.
 	id := slug + ":" + projID + ":" + m.ID
 	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug}
 	if c, ok, _ := s.store.GetContract(id); ok {
-		b.Outcome, b.Owner, b.Closure, b.Closed = c.Outcome, c.Owner, c.Closure, c.Closed
+		b.Outcome, b.Owner, b.Closure, b.Closed, b.Stage = c.Outcome, c.Owner, c.Closure, c.Closed, c.Stage
 	}
 	for _, it := range items {
 		b.Threads = append(b.Threads, domain.Thread{ID: it.ID, Name: it.Name, Active: it.Active})
@@ -1031,6 +1105,28 @@ func (s *Server) handleReopen(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true, "closed": false})
+}
+
+func (s *Server) handleReview(w http.ResponseWriter, r *http.Request) {
+	if writeErr(w, s.setStage(r.Context(), r.PathValue("id"), "reviewed")) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"stage": "reviewed"})
+}
+
+func (s *Server) handleUnreview(w http.ResponseWriter, r *http.Request) {
+	if writeErr(w, s.setStage(r.Context(), r.PathValue("id"), "")) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"stage": ""})
+}
+
+func (s *Server) handleThreads(w http.ResponseWriter, r *http.Request) {
+	hits, err := s.SearchThreads(r.Context(), r.URL.Query().Get("q"))
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, hits)
 }
 
 func (s *Server) handleNotifications(w http.ResponseWriter, r *http.Request) {

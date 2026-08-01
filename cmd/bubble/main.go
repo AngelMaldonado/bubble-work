@@ -37,6 +37,8 @@ func main() {
 		cmdLs(os.Args[2:])
 	case "heat":
 		cmdHeat(os.Args[2:])
+	case "search":
+		cmdSearch(os.Args[2:])
 	case "whoami":
 		cmdWhoami(os.Args[2:])
 	case "notifications", "inbox":
@@ -74,6 +76,7 @@ Usage:
   bubble serve [--addr :4006]      run the server (REST + MCP brain)
   bubble ls                        list bubbles, hottest first (buoyancy view)
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
+  bubble search <query>            fuzzy-search threads (tasks) across your instances
   bubble whoami                    show the identity resolved from your credential
   bubble notifications             your inbox of cooling/dormant alerts (alias: inbox)
   bubble notifications on|off      opt in/out of notifications
@@ -94,6 +97,19 @@ profile (`+"`bubble init --name cuby --token <key>`"+`) and switch between them
 with `+"`bubble use cuby`"+`. An agent impersonates a human by using that human's key.
 
 `)
+}
+
+func cmdSearch(args []string) {
+	if len(args) < 1 {
+		log.Fatal("usage: bubble search <query>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Search(cfg, strings.Join(args, " ")); err != nil {
+		log.Fatalf("search: %v", err)
+	}
 }
 
 func cmdWhoami(args []string) {
@@ -284,6 +300,14 @@ func cmdBubble(args []string) {
 		if err := client.Reopen(cfg, id); err != nil {
 			log.Fatalf("bubble open: %v", err)
 		}
+	case "review":
+		if err := client.Review(cfg, id); err != nil {
+			log.Fatalf("bubble review: %v", err)
+		}
+	case "unreview":
+		if err := client.Unreview(cfg, id); err != nil {
+			log.Fatalf("bubble unreview: %v", err)
+		}
 	default:
 		bubbleUsage()
 		os.Exit(2)
@@ -296,8 +320,8 @@ func bubbleUsage() {
 Usage:
   bubble bubble new --workspace <instance>:<project-id> --name <name>
   bubble bubble set <id> [--outcome <text>] [--owner <name>] [--closure <text>]
-  bubble bubble close <id>
-  bubble bubble open  <id>
+  bubble bubble close <id>   ·   open <id>
+  bubble bubble review <id>  ·   unreview <id>
 
 <id> is the short ID from 'bubble ls' (or any unique prefix of it).
 

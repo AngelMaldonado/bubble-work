@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"os"
 	"strings"
 	"time"
@@ -334,6 +335,43 @@ func Birth(cfg config.Config, bubbleID, name, brief, logbook string, small bool)
 	return nil
 }
 
+// Review / Unreview set or clear a bubble's reviewed stage (§ web-ui).
+func Review(cfg config.Config, id string) error {
+	if err := postJSON(cfg, "/api/bubbles/"+id+"/review", nil, nil); err != nil {
+		return err
+	}
+	fmt.Printf("marked reviewed: %s\n", id)
+	return nil
+}
+
+func Unreview(cfg config.Config, id string) error {
+	if err := postJSON(cfg, "/api/bubbles/"+id+"/unreview", nil, nil); err != nil {
+		return err
+	}
+	fmt.Printf("review cleared: %s\n", id)
+	return nil
+}
+
+// Search fuzzy-lists threads (tasks) matching q, across your instances.
+func Search(cfg config.Config, q string) error {
+	var hits []domain.ThreadHit
+	if err := getJSON(cfg.ServerURL+"/api/threads?q="+url.QueryEscape(q), cfg.ActiveToken(), &hits); err != nil {
+		return err
+	}
+	if len(hits) == 0 {
+		fmt.Println("no matching threads")
+		return nil
+	}
+	for _, h := range hits {
+		state := "done"
+		if h.Open {
+			state = "open"
+		}
+		fmt.Printf("%-5s  %-30s  %s · %s\n", state, trunc(h.Name, 30), h.BubbleName, h.Instance)
+	}
+	return nil
+}
+
 // Close / Reopen flip a bubble's closed flag (§5.3).
 func Close(cfg config.Config, id string) error {
 	if err := postJSON(cfg, "/api/bubbles/"+id+"/close", nil, nil); err != nil {
@@ -356,6 +394,31 @@ func orDash(s string) string {
 		return "—"
 	}
 	return s
+}
+
+// levelIcon / levelLabel render the 5 UI bands (§ web-ui) in the CLI.
+func levelIcon(level string) string {
+	switch level {
+	case "in_progress":
+		return "🔥"
+	case "reviewed":
+		return "👀"
+	case "zzzz":
+		return "😴"
+	case "rip":
+		return "🪦"
+	case "done":
+		return "🏆"
+	default:
+		return "•"
+	}
+}
+
+func levelLabel(level string) string {
+	if level == "in_progress" {
+		return "wip"
+	}
+	return level
 }
 
 func icon(l domain.Lifecycle) string {
@@ -409,10 +472,10 @@ func Ls(cfg config.Config) error {
 		fmt.Println(strings.TrimRight(line, " "))
 	}
 
-	row("  ", "INSTANCE", "STATE", "BUBBLE", "ID", "WHY")
+	row("  ", "INSTANCE", "LEVEL", "BUBBLE", "ID", "WHY")
 	row("  ", strings.Repeat("-", iw), "-----", "------", strings.Repeat("-", dw), "---")
 	for _, v := range vs {
-		row(icon(v.Lifecycle), v.Instance, string(v.Lifecycle), v.Name, shortID(v.ID), v.Reason)
+		row(levelIcon(v.Level), v.Instance, levelLabel(v.Level), v.Name, shortID(v.ID), v.Reason)
 	}
 	return nil
 }

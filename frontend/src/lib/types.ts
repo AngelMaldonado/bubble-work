@@ -55,6 +55,25 @@ export interface Inbox {
   notifications: Notification[];
 }
 
+export interface AdminStats {
+  instances: number;
+  cached_instances: number;
+  cached_identities: number;
+  revision: string;
+  built: string;
+  started_at: string;
+}
+
+export interface AdminInstance {
+  slug: string;
+  name: string;
+  base_url: string;
+  workspace: string;
+  project: string;
+  has_webhook: boolean;
+  cached: boolean;
+}
+
 export const LEVELS: { key: Level; label: string; icon: string }[] = [
   { key: 'in_progress', label: 'In progress', icon: '🔥' },
   { key: 'reviewed', label: 'Reviewed', icon: '👀' },

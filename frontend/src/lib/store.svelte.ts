@@ -13,7 +13,11 @@ class Store {
 
   loading = $state(true);
   error = $state<string | null>(null);
+  flash = $state<string | null>(null); // transient info notice (e.g. godmode readouts)
   authed = $state<boolean>(!!getToken());
+
+  // godmode: view bubbles across ALL orgs (service-admin only).
+  allOrgs = $state(false);
 
   // active filters ("" = all). project holds a Plane project id.
   instance = $state<string>('');
@@ -99,11 +103,16 @@ class Store {
     }
   }
 
+  get godmode(): boolean {
+    return !!this.actor?.service_admin;
+  }
+
   async refresh(): Promise<void> {
     this.polling = true;
+    const crossOrg = this.allOrgs && this.godmode;
     try {
       const [bubbles, inbox] = await Promise.all([
-        api.bubbles(),
+        crossOrg ? api.adminBubbles() : api.bubbles(),
         api.inbox().catch(() => null),
       ]);
       this.bubbles = bubbles;

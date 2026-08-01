@@ -16,13 +16,13 @@
 | 1.6 | Plane-native identity | Humans auth via Plane pass-through; role + scope derived from Plane | ✅ |
 | 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ✅ |
 | 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
-| 3.5 | Workspace & bubble creation | Create Plane projects (modules+cycles+pages) + bubbles from the binary | ⬜ |
-| 3.6 | Cycle-aware heat | Measure heat against the current Plane cycle (§1), rolling-window fallback | ⬜ |
-| 3.7 | Service admin (godmode) | Cross-org ops over the API for a service admin | 🔄 |
-| 4 | Web UI (buoyancy workspace) | Floating 5-band workspace + ⌘K + `>` palette | ⬜ |
+| 3.5 | Workspace & bubble creation | Create Plane projects (modules+cycles+pages) + bubbles from the binary | ✅ |
+| 3.6 | Cycle-aware heat | Measure heat against the current Plane cycle (§1), rolling-window fallback | ✅ |
+| 3.7 | Service admin (godmode) | Cross-org ops over the API for a service admin | ✅ |
+| 4 | Web UI (buoyancy workspace) | Floating 5-band workspace + ⌘K + `>` palette (+ themes, sphere bubbles, minimap, project filter, godmode surface) | ✅ |
 | 5 | Scheduler & inbox | Cooling/dormant transitions land in a per-person inbox, unattended | ✅ |
-| 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 |
-| 7 | Packaging, deploy & CI | Deployed on the platform; push-to-main auto-deploys | 🔄 |
+| 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 (webhooks deferred; resolution hardened) |
+| 7 | Packaging, deploy & CI | Deployed on the platform; push-to-main auto-deploys | ✅ (test-gate in CI still TODO) |
 
 ## Phase dependencies
 

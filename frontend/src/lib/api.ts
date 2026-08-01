@@ -1,6 +1,6 @@
 // Thin typed client over the server REST surface (§9). The browser presents the
 // same credential as the CLI — a Plane API key — as a Bearer token.
-import type { Actor, BubbleView, ThreadHit, Inbox } from './types';
+import type { Actor, BubbleView, ThreadHit, Inbox, AdminStats, AdminInstance } from './types';
 
 const TOKEN_KEY = 'bubble.token';
 
@@ -68,4 +68,11 @@ export const api = {
   reopen: (id: string) => req<void>('POST', `/api/bubbles/${id}/reopen`),
   contract: (id: string, patch: { outcome?: string; owner?: string }) =>
     req<void>('POST', `/api/bubbles/${id}/contract`, patch),
+
+  // service-admin (godmode) — server gates these on ServiceAdmin (§ admin).
+  adminStats: () => req<AdminStats>('GET', '/api/admin/stats'),
+  adminInstances: () => req<AdminInstance[]>('GET', '/api/admin/instances'),
+  adminBubbles: () => req<BubbleView[]>('GET', '/api/admin/bubbles'),
+  adminRefresh: () => req<void>('POST', '/api/admin/refresh'),
+  adminTick: () => req<void>('POST', '/api/admin/tick'),
 };

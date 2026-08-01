@@ -27,6 +27,14 @@
   const themeLabel = $derived(
     theme.choice === 'system' ? 'system' : theme.choice === 'dark' ? 'dark' : 'light',
   );
+
+  // auto-dismiss transient godmode/info notices
+  $effect(() => {
+    if (store.flash) {
+      const t = setTimeout(() => (store.flash = null), 4500);
+      return () => clearTimeout(t);
+    }
+  });
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -40,6 +48,9 @@
 
   {#if store.error}
     <div class="banner">{store.error}</div>
+  {/if}
+  {#if store.flash}
+    <div class="flash" role="status">{store.flash}</div>
   {/if}
 
   <main class="canvas">
@@ -102,6 +113,12 @@
 
       {#if unread > 0}
         <span class="chip alert" title="unread notices">✉ {unread}</span>
+      {/if}
+
+      {#if store.godmode}
+        <span class="chip god" title="service-admin (godmode) — use ⌘K › godmode:">
+          ⚡ {store.allOrgs ? 'all orgs' : 'godmode'}
+        </span>
       {/if}
     </div>
 
@@ -252,6 +269,18 @@
   .chip.alert {
     color: var(--done);
     border-color: color-mix(in oklab, var(--done) 40%, transparent);
+  }
+  .chip.god {
+    color: var(--wip);
+    border-color: color-mix(in oklab, var(--wip) 45%, transparent);
+    font-weight: 700;
+  }
+  .flash {
+    padding: 0.55rem 1.25rem;
+    padding-top: 4.2rem;
+    background: color-mix(in oklab, var(--reviewed) 18%, transparent);
+    color: var(--text);
+    font-size: 0.82rem;
   }
   .who {
     color: var(--muted);

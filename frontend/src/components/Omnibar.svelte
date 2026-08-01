@@ -100,7 +100,61 @@
     })),
   ]);
 
-  const allCommands = $derived([...COMMANDS, ...instanceCmds]);
+  // service-admin (godmode) commands — only present when the caller is elevated.
+  const adminCmds = $derived<Cmd[]>(
+    store.godmode
+      ? [
+          {
+            id: 'god:allorgs',
+            label: store.allOrgs ? 'godmode: my orgs only' : 'godmode: all orgs',
+            hint: 'cross-org bubble view',
+            run: () => {
+              store.allOrgs = !store.allOrgs;
+              return store.refresh();
+            },
+          },
+          {
+            id: 'god:stats',
+            label: 'godmode: stats',
+            run: () =>
+              api.adminStats().then((s) => {
+                store.flash = `godmode · ${s.instances} instances · ${s.cached_instances} cached · ${s.cached_identities} ids · rev ${s.revision.slice(0, 7)}`;
+              }),
+          },
+          {
+            id: 'god:instances',
+            label: 'godmode: instances',
+            run: () =>
+              api.adminInstances().then((list) => {
+                store.flash =
+                  'instances: ' +
+                  list.map((i) => i.slug + (i.cached ? '·cached' : '')).join(', ');
+              }),
+          },
+          {
+            id: 'god:refresh',
+            label: 'godmode: refresh caches',
+            run: () =>
+              api
+                .adminRefresh()
+                .then(() => store.refresh())
+                .then(() => {
+                  store.flash = 'caches refreshed';
+                }),
+          },
+          {
+            id: 'god:tick',
+            label: 'godmode: tick now',
+            run: () =>
+              api.adminTick().then(() => {
+                store.flash = 'cooling sweep triggered';
+              }),
+          },
+        ]
+      : [],
+  );
+
+  const allCommands = $derived([...COMMANDS, ...adminCmds, ...instanceCmds]);
   const filteredCmds = $derived(fuzzyFilter(cmdQuery, allCommands, (c) => c.label));
   const filteredBubbles = $derived(fuzzyFilter(query, store.visible, (b) => b.name).slice(0, 8));
   const pickBubbles = $derived(fuzzyFilter(argValue, store.visible, (b) => b.name).slice(0, 8));

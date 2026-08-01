@@ -13,8 +13,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log"
 	"net/http"
+	"path"
 	"runtime/debug"
 	"sort"
 	"strings"
@@ -29,6 +31,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/mcpapi"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
+	"github.com/AngelMaldonado/bubble-work/web"
 )
 
 var (
@@ -239,7 +242,31 @@ func (s *Server) Handler() http.Handler {
 	)(mcpapi.Handler(s))
 	mux.Handle("/mcp", mcp)
 	mux.Handle("/mcp/", mcp)
+
+	// The browser UI (§ web-ui) — embedded SPA served at "/" with a fallback to
+	// index.html for client-side routes. Least-specific pattern, so every /api,
+	// /mcp, /webhooks and /health route above still wins.
+	mux.Handle("/", spaHandler())
 	return mux
+}
+
+// spaHandler serves the embedded web bundle: real files (assets, index.html) are
+// served directly; any other path falls back to index.html so the SPA can route.
+func spaHandler() http.HandlerFunc {
+	dist := web.Dist()
+	fileServer := http.FileServerFS(dist)
+	return func(w http.ResponseWriter, r *http.Request) {
+		clean := strings.TrimPrefix(path.Clean(r.URL.Path), "/")
+		if clean == "" {
+			clean = "index.html"
+		}
+		if _, err := fs.Stat(dist, clean); err != nil {
+			// unknown path (or a directory) → hand the SPA its entry point
+			r = r.Clone(r.Context())
+			r.URL.Path = "/"
+		}
+		fileServer.ServeHTTP(w, r)
+	}
 }
 
 // bearer extracts a token from the Authorization: Bearer <token> header.

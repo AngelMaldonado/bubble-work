@@ -1,0 +1,71 @@
+// Thin typed client over the server REST surface (§9). The browser presents the
+// same credential as the CLI — a Plane API key — as a Bearer token.
+import type { Actor, BubbleView, ThreadHit, Inbox } from './types';
+
+const TOKEN_KEY = 'bubble.token';
+
+export function getToken(): string {
+  return localStorage.getItem(TOKEN_KEY) ?? '';
+}
+
+export function setToken(tok: string): void {
+  localStorage.setItem(TOKEN_KEY, tok.trim());
+}
+
+export function clearToken(): void {
+  localStorage.removeItem(TOKEN_KEY);
+}
+
+export class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(path, {
+    method,
+    headers: {
+      Authorization: `Bearer ${getToken()}`,
+      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+    },
+    body: body !== undefined ? JSON.stringify(body) : undefined,
+  });
+  if (!res.ok) {
+    const text = (await res.text()).trim();
+    throw new ApiError(res.status, text || res.statusText);
+  }
+  if (res.status === 204) return undefined as T;
+  const ct = res.headers.get('content-type') ?? '';
+  if (!ct.includes('application/json')) return undefined as T;
+  return (await res.json()) as T;
+}
+
+export const api = {
+  whoami: () => req<Actor>('GET', '/api/whoami'),
+  bubbles: () => req<BubbleView[]>('GET', '/api/bubbles'),
+  threads: (q: string) =>
+    req<ThreadHit[]>('GET', `/api/threads?q=${encodeURIComponent(q)}`),
+  inbox: () => req<Inbox>('GET', '/api/notifications'),
+
+  createBubble: (instance: string, workspace: string, name: string) =>
+    req<{ id: string }>('POST', '/api/bubbles', { instance, workspace, name }),
+  birth: (input: {
+    instance: string;
+    bubble_id: string;
+    name: string;
+    brief: string;
+    logbook: string;
+    small_thread: boolean;
+  }) => req<{ thread_id: string; created: boolean; message: string }>('POST', '/api/threads/birth', input),
+
+  review: (id: string) => req<void>('POST', `/api/bubbles/${id}/review`),
+  unreview: (id: string) => req<void>('POST', `/api/bubbles/${id}/unreview`),
+  close: (id: string) => req<void>('POST', `/api/bubbles/${id}/close`),
+  reopen: (id: string) => req<void>('POST', `/api/bubbles/${id}/reopen`),
+  contract: (id: string, patch: { outcome?: string; owner?: string }) =>
+    req<void>('POST', `/api/bubbles/${id}/contract`, patch),
+};

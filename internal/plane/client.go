@@ -68,13 +68,14 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	return json.NewDecoder(resp.Body).Decode(out)
 }
 
-// post sends a JSON body to Plane and decodes the response (out may be nil).
-func (c *Client) post(ctx context.Context, path string, body, out any) error {
+// send writes a JSON body to Plane with the given method and decodes the
+// response (out may be nil).
+func (c *Client) send(ctx context.Context, method, path string, body, out any) error {
 	data, err := json.Marshal(body)
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+path, bytes.NewReader(data))
+	req, err := http.NewRequestWithContext(ctx, method, c.BaseURL+path, bytes.NewReader(data))
 	if err != nil {
 		return err
 	}
@@ -87,12 +88,48 @@ func (c *Client) post(ctx context.Context, path string, body, out any) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("plane POST %s: %s: %s", path, resp.Status, strings.TrimSpace(string(b)))
+		return fmt.Errorf("plane %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
 	}
 	return nil
+}
+
+func (c *Client) post(ctx context.Context, path string, body, out any) error {
+	return c.send(ctx, http.MethodPost, path, body, out)
+}
+
+func (c *Client) patch(ctx context.Context, path string, body, out any) error {
+	return c.send(ctx, http.MethodPatch, path, body, out)
+}
+
+// CreateProject creates a Plane project (our Workspace) and enables the given
+// feature toggles (module_view etc.). Minimal by default: modules on, rest off.
+func (c *Client) CreateProject(ctx context.Context, name, identifier string, features map[string]bool) (Project, error) {
+	var out Project
+	if err := c.post(ctx, c.workspaceBase()+"/projects/", map[string]any{"name": name, "identifier": identifier}, &out); err != nil {
+		return Project{}, err
+	}
+	if len(features) > 0 {
+		body := make(map[string]any, len(features))
+		for k, v := range features {
+			body[k] = v
+		}
+		if err := c.patch(ctx, c.workspaceBase()+"/projects/"+out.ID+"/", body, nil); err != nil {
+			return out, fmt.Errorf("project %s created but enabling features failed: %w", out.ID, err)
+		}
+	}
+	return out, nil
+}
+
+// CreateModule creates a Plane module (a Bubble) in the client's pinned project.
+func (c *Client) CreateModule(ctx context.Context, name string) (Module, error) {
+	var out Module
+	if err := c.post(ctx, c.projectBase()+"/modules/", map[string]any{"name": name}, &out); err != nil {
+		return Module{}, err
+	}
+	return out, nil
 }
 
 // DefaultState returns a state id to create work items in: the project's default
@@ -261,8 +298,9 @@ func (c *Client) Members(ctx context.Context) ([]Member, error) {
 
 // Project is a Workspace (§7.1). Used to auto-discover a whole workspace.
 type Project struct {
-	ID   string `json:"id"`
-	Name string `json:"name"`
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Identifier string `json:"identifier"`
 }
 
 // ListProjects returns every project in the workspace (project need not be set).

@@ -172,6 +172,41 @@ type ContractInput struct {
 	Closure *string `json:"closure,omitempty"`
 }
 
+// CreateWorkspaceRequest asks the server to create a Plane project (our
+// Workspace). Modules, Cycles and Pages are on by default (Cycles is the heat
+// cadence, §1; Pages backs docs); Views/Intake are opt-in.
+type CreateWorkspaceRequest struct {
+	Instance   string `json:"instance"`
+	Name       string `json:"name"`
+	Identifier string `json:"identifier,omitempty"` // auto-derived from name if empty
+	NoCycles   bool   `json:"no_cycles,omitempty"`  // cycles on by default
+	NoPages    bool   `json:"no_pages,omitempty"`   // pages on by default
+	Views      bool   `json:"views,omitempty"`      // off by default
+	Intake     bool   `json:"intake,omitempty"`     // off by default
+}
+
+// Workspace is a created Plane project (§7.1).
+type Workspace struct {
+	ID         string `json:"id"`
+	Name       string `json:"name"`
+	Identifier string `json:"identifier"`
+	Instance   string `json:"instance"`
+}
+
+// CreateBubbleRequest asks the server to create a Plane module (a Bubble) in a
+// project (§3.5).
+type CreateBubbleRequest struct {
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+	Name     string `json:"name"`
+}
+
+// NewBubble is a freshly created bubble with its namespaced id.
+type NewBubble struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
 // Notification records a bubble crossing into a colder state (§5) — the push
 // side of the buoyancy model: it tells you what's sinking without you looking.
 type Notification struct {

@@ -208,6 +208,28 @@ func SetNotifyPref(cfg config.Config, enabled bool) error {
 	return nil
 }
 
+// CreateWorkspace creates a Plane project (Workspace) with modules enabled.
+func CreateWorkspace(cfg config.Config, req domain.CreateWorkspaceRequest) error {
+	var ws domain.Workspace
+	if err := postJSON(cfg, "/api/workspaces", req, &ws); err != nil {
+		return err
+	}
+	fmt.Printf("created workspace %q  [%s]\n", ws.Name, ws.Identifier)
+	fmt.Printf("  project id: %s\n", ws.ID)
+	fmt.Printf("  add a bubble: bubble bubble new --workspace %s:%s --name <name>\n", ws.Instance, ws.ID)
+	return nil
+}
+
+// CreateBubble creates a Plane module (a Bubble) in a project.
+func CreateBubble(cfg config.Config, req domain.CreateBubbleRequest) error {
+	var b domain.NewBubble
+	if err := postJSON(cfg, "/api/bubbles", req, &b); err != nil {
+		return err
+	}
+	fmt.Printf("created bubble %q\n  id: %s\n", b.Name, b.ID)
+	return nil
+}
+
 // Birth creates a thread in a bubble (server enforces the §3 birth rule).
 func Birth(cfg config.Config, bubbleID, name, brief, logbook string, small bool) error {
 	req := domain.BirthRequest{

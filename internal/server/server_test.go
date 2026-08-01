@@ -26,6 +26,12 @@ func fakePlane() *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		switch {
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"id":"newproj","name":"BW Sandbox","identifier":"BWSBX"}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/projects/"):
+			io.WriteString(w, `{}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"id":"newmod","name":"First bubble"}`)
 		case strings.HasSuffix(p, "/users/me"):
 			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
 		case strings.HasSuffix(p, "/members/"):
@@ -156,6 +162,37 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 	if !names["Bubble A"] || !names["Bubble B"] {
 		t.Fatalf("expected bubbles from both projects, got %v", names)
+	}
+}
+
+func TestCreateWorkspaceAndBubble(t *testing.T) {
+	ts, key := authedServer(t)
+
+	// create workspace (project)
+	code, body := do(t, http.MethodPost, ts.URL+"/api/workspaces", key, `{"instance":"ws","name":"BW Sandbox","identifier":"BWSBX"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create workspace: want 201, got %d (%s)", code, body)
+	}
+	var w domain.Workspace
+	json.Unmarshal(body, &w)
+	if w.ID != "newproj" || w.Identifier != "BWSBX" || w.Instance != "ws" {
+		t.Fatalf("unexpected workspace: %+v", w)
+	}
+
+	// create bubble (module) in it
+	code, body = do(t, http.MethodPost, ts.URL+"/api/bubbles", key, `{"instance":"ws","project":"newproj","name":"First bubble"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("create bubble: want 201, got %d (%s)", code, body)
+	}
+	var b domain.NewBubble
+	json.Unmarshal(body, &b)
+	if b.ID != "ws:newproj:newmod" {
+		t.Fatalf("want namespaced id ws:newproj:newmod, got %q", b.ID)
+	}
+
+	// scope: an instance you can't see is refused
+	if code, _ := do(t, http.MethodPost, ts.URL+"/api/workspaces", key, `{"instance":"other","name":"x"}`); code != http.StatusForbidden {
+		t.Fatalf("cross-instance create: want 403, got %d", code)
 	}
 }
 

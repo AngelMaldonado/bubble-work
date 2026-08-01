@@ -160,6 +160,8 @@ func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/whoami", s.restAuth(s.handleWhoami))
+	mux.HandleFunc("POST /api/workspaces", s.restAuth(s.handleCreateWorkspace))
+	mux.HandleFunc("POST /api/bubbles", s.restAuth(s.handleCreateBubble))
 	mux.HandleFunc("GET /api/bubbles", s.restAuth(s.handleBubbles))
 	mux.HandleFunc("GET /api/bubbles/{id}/heat", s.restAuth(s.handleHeat))
 	mux.HandleFunc("POST /api/threads/birth", s.restAuth(s.handleBirth))
@@ -375,6 +377,98 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	})
 	log.Printf("birth_thread by %s: bubble=%s -> work item %s", actor.Label(), id, wid)
 	return domain.BirthResult{ThreadID: wid, Created: true, Message: fmt.Sprintf("created thread %q in %s", req.Name, id)}, nil
+}
+
+// writeKey returns the Plane key to write with: the caller's own (impersonation)
+// if present, else the instance admin key.
+func (s *Server) writeKey(ctx context.Context, inst domain.Instance) string {
+	if cred, ok := domain.CredFrom(ctx); ok && cred != "" {
+		return cred
+	}
+	return inst.APIKey
+}
+
+// deriveIdentifier makes a Plane project identifier from a name (uppercase
+// alphanumerics, up to 5 chars).
+func deriveIdentifier(name string) string {
+	var b strings.Builder
+	for _, r := range strings.ToUpper(name) {
+		if (r >= 'A' && r <= 'Z') || (r >= '0' && r <= '9') {
+			b.WriteRune(r)
+			if b.Len() >= 5 {
+				break
+			}
+		}
+	}
+	if b.Len() == 0 {
+		return "BW"
+	}
+	return b.String()
+}
+
+// CreateWorkspace creates a Plane project (our Workspace) with modules enabled
+// (§3.5), attributed to the caller and scoped to an instance they can see.
+func (s *Server) CreateWorkspace(ctx context.Context, req domain.CreateWorkspaceRequest) (domain.Workspace, error) {
+	actor, _ := domain.ActorFrom(ctx)
+	if !actor.CanSee(req.Instance) {
+		return domain.Workspace{}, errForbid
+	}
+	inst, ok, err := s.instanceBySlug(req.Instance)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	if !ok {
+		return domain.Workspace{}, errNotFound
+	}
+	if strings.TrimSpace(req.Name) == "" {
+		return domain.Workspace{}, fmt.Errorf("workspace name is required")
+	}
+	ident := strings.TrimSpace(req.Identifier)
+	if ident == "" {
+		ident = deriveIdentifier(req.Name)
+	}
+	features := map[string]bool{
+		"module_view":      true,          // bubbles need modules
+		"cycle_view":       !req.NoCycles, // heat cadence (§1) — on by default
+		"page_view":        !req.NoPages,  // docs — on by default
+		"issue_views_view": req.Views,
+		"intake_view":      req.Intake,
+	}
+	cl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, "")
+	p, err := cl.CreateProject(ctx, req.Name, ident, features)
+	if err != nil {
+		return domain.Workspace{}, fmt.Errorf("create project: %w", err)
+	}
+	s.dropInstanceCache(req.Instance)
+	log.Printf("create_workspace by %s: %s (%s) in %s", actor.Label(), p.ID, ident, req.Instance)
+	return domain.Workspace{ID: p.ID, Name: p.Name, Identifier: p.Identifier, Instance: req.Instance}, nil
+}
+
+// CreateBubble creates a Plane module (a Bubble) in a project (§3.5).
+func (s *Server) CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error) {
+	actor, _ := domain.ActorFrom(ctx)
+	if !actor.CanSee(req.Instance) {
+		return domain.NewBubble{}, errForbid
+	}
+	inst, ok, err := s.instanceBySlug(req.Instance)
+	if err != nil {
+		return domain.NewBubble{}, err
+	}
+	if !ok {
+		return domain.NewBubble{}, errNotFound
+	}
+	if strings.TrimSpace(req.Project) == "" || strings.TrimSpace(req.Name) == "" {
+		return domain.NewBubble{}, fmt.Errorf("instance, project and name are required")
+	}
+	cl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, req.Project)
+	m, err := cl.CreateModule(ctx, req.Name)
+	if err != nil {
+		return domain.NewBubble{}, fmt.Errorf("create module: %w", err)
+	}
+	s.dropInstanceCache(req.Instance)
+	id := req.Instance + ":" + req.Project + ":" + m.ID
+	log.Printf("create_bubble by %s: %s", actor.Label(), id)
+	return domain.NewBubble{ID: id, Name: m.Name}, nil
 }
 
 // instanceBySlug looks up a registered instance by slug.
@@ -804,6 +898,32 @@ func (s *Server) handleBirth(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, res)
+}
+
+func (s *Server) handleCreateWorkspace(w http.ResponseWriter, r *http.Request) {
+	var req domain.CreateWorkspaceRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	ws, err := s.CreateWorkspace(r.Context(), req)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, ws)
+}
+
+func (s *Server) handleCreateBubble(w http.ResponseWriter, r *http.Request) {
+	var req domain.CreateBubbleRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
+		return
+	}
+	b, err := s.CreateBubble(r.Context(), req)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, b)
 }
 
 func (s *Server) handleSetContract(w http.ResponseWriter, r *http.Request) {

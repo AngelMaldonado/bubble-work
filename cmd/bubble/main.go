@@ -47,6 +47,8 @@ func main() {
 		cmdUse(os.Args[2:])
 	case "birth":
 		cmdBirth(os.Args[2:])
+	case "workspace":
+		cmdWorkspace(os.Args[2:])
 	case "bubble":
 		cmdBubble(os.Args[2:])
 	case "instance":
@@ -76,8 +78,9 @@ Usage:
   bubble notifications read <id|all>  mark notifications read
   bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list)
+  bubble workspace new [flags]     create a Plane project (modules on) — our Workspace
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
-  bubble bubble set|close|open     set a bubble's contract (§4) or open/close it
+  bubble bubble new|set|close|open create a bubble or set its contract (§4)
   bubble instance add|list|remove  manage Plane instances (run on the server host)
   bubble init [flags]              configure server URL + a credential profile
   bubble reset [--force]           purge all local state and start from scratch
@@ -208,7 +211,7 @@ The Brief must include a "Definition of Done". <bubble-id> is the short id from 
 
 // cmdBubble sets a bubble's §4 contract or opens/closes it (via the server).
 func cmdBubble(args []string) {
-	if len(args) < 2 {
+	if len(args) < 1 {
 		bubbleUsage()
 		os.Exit(2)
 	}
@@ -216,7 +219,32 @@ func cmdBubble(args []string) {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	sub, id := args[0], args[1]
+	sub := args[0]
+
+	// `new` takes flags, not a positional id.
+	if sub == "new" {
+		fs := flag.NewFlagSet("bubble new", flag.ExitOnError)
+		ws := fs.String("workspace", "", "<instance>:<project-id>")
+		name := fs.String("name", "", "bubble name")
+		_ = fs.Parse(args[1:])
+		if *ws == "" || *name == "" {
+			log.Fatal("bubble new: --workspace <instance>:<project> and --name are required")
+		}
+		inst, proj, found := strings.Cut(*ws, ":")
+		if !found || inst == "" || proj == "" {
+			log.Fatal("bubble new: --workspace must be <instance>:<project-id>")
+		}
+		if err := client.CreateBubble(cfg, domain.CreateBubbleRequest{Instance: inst, Project: proj, Name: *name}); err != nil {
+			log.Fatalf("bubble new: %v", err)
+		}
+		return
+	}
+
+	if len(args) < 2 {
+		bubbleUsage()
+		os.Exit(2)
+	}
+	id := args[1]
 
 	switch sub {
 	case "set":
@@ -260,14 +288,57 @@ func cmdBubble(args []string) {
 }
 
 func bubbleUsage() {
-	fmt.Fprint(os.Stderr, `bubble bubble — set a bubble's contract (§4) or open/close it
+	fmt.Fprint(os.Stderr, `bubble bubble — create a bubble, or set its contract (§4) / open-close it
 
 Usage:
+  bubble bubble new --workspace <instance>:<project-id> --name <name>
   bubble bubble set <id> [--outcome <text>] [--owner <name>] [--closure <text>]
   bubble bubble close <id>
   bubble bubble open  <id>
 
 <id> is the short ID from 'bubble ls' (or any unique prefix of it).
+
+`)
+}
+
+// cmdWorkspace creates a Plane project (our Workspace) with modules enabled.
+func cmdWorkspace(args []string) {
+	if len(args) < 1 || args[0] != "new" {
+		workspaceUsage()
+		os.Exit(2)
+	}
+	fs := flag.NewFlagSet("workspace new", flag.ExitOnError)
+	inst := fs.String("instance", "", "instance slug (required)")
+	name := fs.String("name", "", "workspace name (required)")
+	ident := fs.String("identifier", "", "Plane project identifier (auto-derived if omitted)")
+	noCycles := fs.Bool("no-cycles", false, "disable Plane cycles (on by default — heat cadence)")
+	noPages := fs.Bool("no-pages", false, "disable Plane pages (on by default)")
+	views := fs.Bool("views", false, "also enable Plane views")
+	intake := fs.Bool("intake", false, "also enable Plane intake")
+	_ = fs.Parse(args[1:])
+	if *inst == "" || *name == "" {
+		log.Fatal("workspace new: --instance and --name are required")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.CreateWorkspace(cfg, domain.CreateWorkspaceRequest{
+		Instance: *inst, Name: *name, Identifier: *ident,
+		NoCycles: *noCycles, NoPages: *noPages, Views: *views, Intake: *intake,
+	}); err != nil {
+		log.Fatalf("workspace new: %v", err)
+	}
+}
+
+func workspaceUsage() {
+	fmt.Fprint(os.Stderr, `bubble workspace — create a Plane project (our Workspace) with modules on
+
+Usage:
+  bubble workspace new --instance <slug> --name <name> [--identifier <ID>] \
+                       [--no-cycles] [--no-pages] [--views] [--intake]
+
+Modules, Cycles and Pages are enabled by default; Views/Intake are opt-in.
 
 `)
 }

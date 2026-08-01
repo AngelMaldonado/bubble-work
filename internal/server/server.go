@@ -923,6 +923,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(fetchConcurrency)
 
+	now := s.now()
 	for _, projID := range projects {
 		projID := projID
 		cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, projID)
@@ -931,6 +932,8 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 			log.Printf("instance %s project %s: list modules: %v", inst.Slug, projID, err)
 			continue
 		}
+		// Align heat to this project's active Plane cycle (§3.6); zero → rolling.
+		cycleStart, cyclePrev := s.projectCycleWindow(gctx, cl, now)
 		for _, m := range mods {
 			m := m
 			g.Go(func() error {
@@ -940,6 +943,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 					return nil // one bad module shouldn't fail the whole fetch
 				}
 				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items)
+				b.CycleStart, b.CyclePrevStart = cycleStart, cyclePrev
 				mu.Lock()
 				out = append(out, b)
 				mu.Unlock()
@@ -951,6 +955,56 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 		return nil, err
 	}
 	return out, nil
+}
+
+// projectCycleWindow fetches a project's cycles and returns the active cycle's
+// window (§3.6). Best-effort: on any error or when cycles are off/absent it
+// returns zero times, so heat falls back to the rolling window.
+func (s *Server) projectCycleWindow(ctx context.Context, cl *plane.Client, now time.Time) (curStart, prevStart time.Time) {
+	cycles, err := cl.ListCycles(ctx)
+	if err != nil || len(cycles) == 0 {
+		return time.Time{}, time.Time{}
+	}
+	return cycleWindow(cycles, now)
+}
+
+// cycleWindow picks the cycle containing `now` and the one immediately before it.
+// Zero times mean "no active cycle" → the caller falls back to the rolling
+// window. Pure, so it is unit-tested directly.
+func cycleWindow(cycles []plane.Cycle, now time.Time) (curStart, prevStart time.Time) {
+	var active *plane.Cycle
+	for i := range cycles {
+		st, ok1 := cycles[i].Start()
+		en, ok2 := cycles[i].End()
+		if ok1 && ok2 && !now.Before(st) && !now.After(en) {
+			active = &cycles[i]
+			break
+		}
+	}
+	if active == nil {
+		return time.Time{}, time.Time{}
+	}
+	curStart, _ = active.Start()
+
+	// Previous cycle: the one whose end is latest among those ending at/before the
+	// active cycle's start.
+	var prevEnd time.Time
+	for i := range cycles {
+		en, ok := cycles[i].End()
+		if !ok || en.After(curStart) {
+			continue
+		}
+		if st, ok2 := cycles[i].Start(); ok2 && en.After(prevEnd) {
+			prevEnd, prevStart = en, st
+		}
+	}
+	if prevStart.IsZero() {
+		// No prior cycle recorded — assume one active-length cycle before.
+		if ae, ok := active.End(); ok {
+			prevStart = curStart.Add(-ae.Sub(curStart))
+		}
+	}
+	return curStart, prevStart
 }
 
 // buildBubble assembles a bubble from a module + its work items, deriving heat

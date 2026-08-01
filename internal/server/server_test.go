@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
@@ -603,5 +604,31 @@ func TestTransientMembersFailIsRetryable(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"instances":["ws"]`) {
 		t.Fatalf("want scope restored to [ws], got %s", body)
+	}
+}
+
+// TestCycleWindow verifies the active-cycle picker (§3.6): it selects the cycle
+// containing `now` and the one immediately before it, and returns zero when now
+// falls outside every cycle (→ rolling-window fallback).
+func TestCycleWindow(t *testing.T) {
+	cycles := []plane.Cycle{
+		{Name: "S1", StartDate: "2026-06-01", EndDate: "2026-06-14"},
+		{Name: "S2", StartDate: "2026-06-15", EndDate: "2026-06-28"},
+		{Name: "S3", StartDate: "2026-06-29", EndDate: "2026-07-12"},
+	}
+	now := time.Date(2026, 7, 5, 9, 0, 0, 0, time.UTC) // inside S3
+
+	cur, prev := cycleWindow(cycles, now)
+	if !cur.Equal(time.Date(2026, 6, 29, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("curStart: want 2026-06-29, got %s", cur)
+	}
+	if !prev.Equal(time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC)) {
+		t.Fatalf("prevStart: want 2026-06-15 (S2 start), got %s", prev)
+	}
+
+	// now outside all cycles → zero window (fallback to rolling).
+	cur, prev = cycleWindow(cycles, time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC))
+	if !cur.IsZero() || !prev.IsZero() {
+		t.Fatalf("out-of-range: want zero window, got cur=%s prev=%s", cur, prev)
 	}
 }

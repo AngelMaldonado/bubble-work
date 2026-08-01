@@ -61,6 +61,12 @@ type Bubble struct {
 	Stage    string // explicit overlay: "" | "reviewed"
 	Threads  []Thread
 	Evidence []EvidenceEvent
+
+	// Cycle-aware heat window (§3.6): the active Plane cycle's start and the
+	// previous cycle's start. Zero means the project has no active cycle, so heat
+	// falls back to the rolling window (CycleHours).
+	CycleStart     time.Time
+	CyclePrevStart time.Time
 }
 
 // Actor is the resolved identity of a request. Humans are resolved by

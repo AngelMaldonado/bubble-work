@@ -377,6 +377,55 @@ func (c *Client) ListModules(ctx context.Context) ([]Module, error) {
 	return out, err
 }
 
+// Cycle is a project's repeating pulse (§1). start_date/end_date may be null on
+// draft cycles, so they are decoded as strings and parsed leniently.
+type Cycle struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	StartDate string `json:"start_date"`
+	EndDate   string `json:"end_date"`
+}
+
+// ListCycles returns every cycle in the client's project (needs Project set).
+func (c *Client) ListCycles(ctx context.Context) ([]Cycle, error) {
+	var out []Cycle
+	err := c.getPaged(ctx, c.projectBase()+"/cycles/", func(raw json.RawMessage) error {
+		var page []Cycle
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		out = append(out, page...)
+		return nil
+	})
+	return out, err
+}
+
+// Start parses a cycle's start_date; ok is false when it is unset/invalid.
+func (c Cycle) Start() (t time.Time, ok bool) { return parsePlaneDate(c.StartDate) }
+
+// End parses a cycle's end_date (treated as end-of-day for date-only values).
+func (c Cycle) End() (t time.Time, ok bool) {
+	t, ok = parsePlaneDate(c.EndDate)
+	if ok && len(c.EndDate) == len("2006-01-02") {
+		t = t.Add(24*time.Hour - time.Second) // inclusive end of that day
+	}
+	return t, ok
+}
+
+// parsePlaneDate accepts RFC3339 timestamps or bare YYYY-MM-DD dates.
+func parsePlaneDate(s string) (time.Time, bool) {
+	if s == "" {
+		return time.Time{}, false
+	}
+	if t, err := time.Parse(time.RFC3339, s); err == nil {
+		return t, true
+	}
+	if t, err := time.Parse("2006-01-02", s); err == nil {
+		return t, true
+	}
+	return time.Time{}, false
+}
+
 // ListModuleWorkItems returns the threads in a bubble, with the timestamps and
 // state group used to derive heat (§5) without extra calls.
 func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]WorkItem, error) {

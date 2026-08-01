@@ -54,3 +54,39 @@ func TestScoreDecay(t *testing.T) {
 		t.Fatalf("fresh (%.3f) should outscore stale (%.3f)", fresh.Score, stale.Score)
 	}
 }
+
+// TestClassifyCycleAware: when the bubble carries a Plane cycle window, recency
+// is measured against those real boundaries, not the rolling `cycle` argument.
+func TestClassifyCycleAware(t *testing.T) {
+	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
+	curStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)   // active cycle began 9 days ago
+	prevStart := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC) // previous cycle
+
+	base := func(evAt time.Time) domain.Bubble {
+		return domain.Bubble{
+			Owner:          "me",
+			Threads:        []domain.Thread{{Active: true}},
+			Evidence:       []domain.EvidenceEvent{{At: evAt}},
+			CycleStart:     curStart,
+			CyclePrevStart: prevStart,
+		}
+	}
+
+	// The rolling `cycle` arg is deliberately tiny (1h) — if it were used instead
+	// of the window, everything would read as ancient. Cycle-aware must win.
+	cycle := time.Hour
+
+	// Evidence inside the active cycle → Hot, even though it's 3 days old
+	// (far older than the 1h rolling window).
+	if r := Classify(base(now.Add(-72*time.Hour)), cycle, now); r.Lifecycle != domain.Hot {
+		t.Fatalf("in-cycle evidence: want Hot, got %s", r.Lifecycle)
+	}
+	// Evidence in the previous cycle (with active threads) → Warm.
+	if r := Classify(base(time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)), cycle, now); r.Lifecycle != domain.Warm {
+		t.Fatalf("prev-cycle evidence: want Warm, got %s", r.Lifecycle)
+	}
+	// Evidence before the previous cycle → Dormant (silent 2+ cycles).
+	if r := Classify(base(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)), cycle, now); r.Lifecycle != domain.Dormant {
+		t.Fatalf("stale evidence: want Dormant, got %s", r.Lifecycle)
+	}
+}

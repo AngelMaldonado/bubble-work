@@ -24,15 +24,33 @@ type Result struct {
 // bubble is Hot if it produced meaningful output in the current cycle, Warm if
 // it did last cycle and still has active threads, Cooling if it has gone quiet,
 // and Dormant if it has been silent for two or more cycles or has no owner.
+//
+// When the bubble carries a Plane cycle window (§3.6), recency is measured
+// against those real sprint boundaries; otherwise it falls back to a rolling
+// window of length `cycle` ending now.
 func Classify(b domain.Bubble, cycle time.Duration, now time.Time) Result {
 	if b.Closed {
 		return Result{domain.Closed, 0, "outcome reached or explicitly abandoned"}
 	}
 
-	var latest time.Time
-	inCurrent, inPrevious := false, false
+	// Resolve the heat window: Plane cycle when present, rolling otherwise.
 	curStart := now.Add(-cycle)
 	prevStart := now.Add(-2 * cycle)
+	decay := cycle
+	if !b.CycleStart.IsZero() {
+		curStart = b.CycleStart
+		if !b.CyclePrevStart.IsZero() {
+			prevStart = b.CyclePrevStart
+			if d := curStart.Sub(prevStart); d > 0 {
+				decay = d // score decays over the real cycle length
+			}
+		} else {
+			prevStart = curStart.Add(-cycle)
+		}
+	}
+
+	var latest time.Time
+	inCurrent, inPrevious := false, false
 	for _, e := range b.Evidence {
 		if e.At.After(latest) {
 			latest = e.At
@@ -58,7 +76,7 @@ func Classify(b domain.Bubble, cycle time.Duration, now time.Time) Result {
 	// cycle. Fresh output ≈ 1.0; a cycle-old bubble ≈ 0.37; two cycles ≈ 0.14.
 	score := 0.0
 	if !latest.IsZero() {
-		score = math.Exp(-now.Sub(latest).Seconds() / cycle.Seconds())
+		score = math.Exp(-now.Sub(latest).Seconds() / decay.Seconds())
 	}
 
 	switch {
@@ -66,7 +84,7 @@ func Classify(b domain.Bubble, cycle time.Duration, now time.Time) Result {
 		return Result{domain.Hot, score, "meaningful output in the current cycle"}
 	case inPrevious && active:
 		return Result{domain.Warm, score, "output last cycle; active threads remain"}
-	case latest.IsZero() || now.Sub(latest) >= 2*cycle || !hasOwner:
+	case latest.IsZero() || latest.Before(prevStart) || !hasOwner:
 		return Result{domain.Dormant, score, dormantReason(latest, hasOwner)}
 	default:
 		return Result{domain.Cooling, score, "no meaningful output this cycle or last"}

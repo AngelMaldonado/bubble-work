@@ -3,7 +3,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { svelte } from '@sveltejs/vite-plugin-svelte';
 
 // Dev proxies the API/MCP/webhook surface to a running `bubble serve`.
-const backend = process.env.BUBBLE_DEV_BACKEND || 'http://127.0.0.1:4096';
+const backend = process.env.BUBBLE_DEV_BACKEND || 'http://127.0.0.1:4006';
 
 export default defineConfig({
   plugins: [tailwindcss(), svelte()],

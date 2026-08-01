@@ -16,6 +16,7 @@
 | 1.6 | Plane-native identity | Humans auth via Plane pass-through; role + scope derived from Plane | ✅ |
 | 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ✅ |
 | 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
+| 3.5 | Workspace & bubble creation | Create Plane projects (modules on) + bubbles from the binary | ⬜ |
 | 4 | Web UI (buoyancy workspace) | Floating 5-band workspace + ⌘K + `>` palette | ⬜ |
 | 5 | Scheduler & inbox | Cooling/dormant transitions land in a per-person inbox, unattended | ✅ |
 | 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 |
@@ -153,6 +154,23 @@ flowchart LR
 
 **Dependencies:** Phase 1 (attribution), Phase 2 (read shapes).
 **Definition of Done:** birthing a thread through CLI or MCP creates a real Plane work item carrying its Brief + Logbook; setting/closing a bubble's contract survives a server restart.
+
+---
+
+## Phase 3.5 — Workspace & bubble creation (remove the manual Plane-UI step)
+
+**Goal:** create a usable Workspace (a Plane project **with modules enabled**) and
+Bubbles (modules) straight from the binary — no more Plane-UI clicks + feature
+toggling. (We hit this seeding cuby: modules are off by default → `module_view` must be set.)
+
+- [ ] `plane.Client.CreateProject(name, identifier, features)` — `module_view:true` by default, rest off (minimal); optional `cycle_view`/`page_view`/… ; `CreateModule(projectID, name)`
+- [ ] Server: `POST /api/instances/{slug}/workspaces` (create project) + `POST /api/workspaces/{instance:project}/bubbles` (create module) — caller's key (impersonation), instance-scoped, cache invalidated
+- [ ] CLI: `bubble workspace new --instance <slug> --name <name> [--identifier <ID>] [--cycles] [--pages]`; `bubble bubble new --workspace <instance>:<project> --name <name>`
+- [ ] `identifier` auto-derived from the name when omitted
+- [ ] Tests: create project sets `module_view`; create module returns a namespaced bubble id (fake Plane)
+
+**Dependencies:** Phase 3.
+**Definition of Done:** `bubble workspace new …` yields a Plane project with modules on, and `bubble bubble new …` adds a bubble to it — both appear in `bubble ls` with zero Plane-UI steps. The Phase 4 `>` palette ("new workspace" / "new bubble") reuses these.
 
 ---
 

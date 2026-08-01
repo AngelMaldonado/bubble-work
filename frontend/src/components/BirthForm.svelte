@@ -124,7 +124,7 @@
     border-radius: 18px;
     background: var(--surface-solid);
     border: 1px solid var(--line);
-    box-shadow: 0 30px 80px oklch(0.06 0.03 265 / 0.7);
+    box-shadow: 0 30px 80px var(--shadow-strong);
     display: grid;
     gap: 0.5rem;
   }
@@ -164,7 +164,7 @@
     padding: 0.55rem 0.7rem;
     border-radius: 10px;
     border: 1px solid var(--line);
-    background: oklch(0.12 0.02 265 / 0.6);
+    background: color-mix(in oklab, var(--text) 6%, transparent);
     color: var(--text);
     outline: none;
     width: 100%;

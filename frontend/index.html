@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>bubble.work</title>
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      (function () {
+        var c = localStorage.getItem('bubble.theme') || 'system';
+        var dark = c === 'dark' || (c === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        var mode = dark ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-mode', mode);
+        document.documentElement.style.colorScheme = mode;
+      })();
+    </script>
   </head>
   <body>
     <div id="app"></div>

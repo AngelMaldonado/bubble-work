@@ -96,8 +96,8 @@
   }
   .count {
     font-size: 0.72rem;
-    color: var(--faint);
-    background: oklch(0.28 0.03 265 / 0.6);
+    color: var(--muted);
+    background: var(--hover);
     padding: 0.05rem 0.45rem;
     border-radius: 999px;
   }
@@ -117,6 +117,7 @@
   .cards {
     display: flex;
     flex-wrap: wrap;
+    justify-content: center;
     gap: 0.9rem;
   }
   .none {

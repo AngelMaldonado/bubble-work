@@ -23,6 +23,7 @@
   let threads = $state<ThreadHit[]>([]);
   let searching = $state(false);
   let inputEl = $state<HTMLInputElement | null>(null);
+  let resultsEl = $state<HTMLDivElement | null>(null);
 
   // two-stage state for commands that target a bubble / need text
   let stage = $state<'root' | 'pick' | 'input'>('root');
@@ -133,6 +134,13 @@
 
   $effect(() => {
     if (open && inputEl) inputEl.focus();
+  });
+
+  // keep the highlighted row visible as you arrow through the list
+  $effect(() => {
+    void sel;
+    const el = resultsEl?.querySelector('.row.active');
+    if (el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
   });
 
   type Row =
@@ -272,7 +280,7 @@
       {/if}
     </div>
 
-    <div class="results">
+    <div class="results" bind:this={resultsEl}>
       {#if stage === 'input'}
         <div class="ctx">
           {pending?.label.replace('…', '')} → <b>{pendingBubble?.name}</b> · ⏎ to apply
@@ -336,36 +344,59 @@
     transform: translateX(-50%);
     width: min(94vw, 620px);
     border-radius: 18px;
-    overflow: hidden;
     background: var(--surface-solid);
     border: 1px solid var(--line);
-    box-shadow: 0 30px 80px oklch(0.06 0.03 265 / 0.7);
+    box-shadow: 0 30px 80px var(--shadow-strong);
   }
+  /* the input is its own inset field (margin, not padding) so its focus glow is
+     fully rounded and never clipped by the palette's overflow. */
   .input {
     display: flex;
     align-items: center;
     gap: 0.75rem;
-    padding: 0.9rem 1.1rem;
-    border-bottom: 1px solid var(--line);
+    margin: 0.7rem;
+    padding: 0.8rem 0.95rem;
+    border-radius: 12px;
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+    border: 1px solid var(--line);
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+  .input:focus-within {
+    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--wip) 20%, transparent);
   }
   .glyph {
     font-size: 0.8rem;
     color: var(--faint);
     font-weight: 700;
-    min-width: 1.6rem;
+    min-width: 1.7rem;
+    padding-left: 0.15rem;
   }
   .input input {
     flex: 1;
+    min-width: 0;
     background: transparent;
     border: none;
     outline: none;
+    box-shadow: none;
     color: var(--text);
     font-size: 1rem;
+  }
+  /* defeat any framework focus ring on the bare input (the field glows instead) */
+  .input input:focus,
+  .input input:focus-visible {
+    outline: none;
+    box-shadow: none;
+    border: none;
   }
   .results {
     max-height: 46vh;
     overflow-y: auto;
-    padding: 0.35rem;
+    padding: 0.5rem;
+    scroll-padding-block: 0.5rem;
+    border-top: 1px solid var(--line);
   }
   .row {
     width: 100%;
@@ -381,7 +412,7 @@
     text-align: left;
   }
   .row.active {
-    background: oklch(0.34 0.05 265 / 0.75);
+    background: var(--hover);
   }
   .lead {
     color: var(--faint);

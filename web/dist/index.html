@@ -5,8 +5,18 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <title>bubble.work</title>
-    <script type="module" crossorigin src="/assets/index-CIr_-eg0.js"></script>
-    <link rel="stylesheet" crossorigin href="/assets/index-BazTaq1u.css">
+    <script>
+      // Apply the saved theme before first paint to avoid a flash.
+      (function () {
+        var c = localStorage.getItem('bubble.theme') || 'system';
+        var dark = c === 'dark' || (c === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+        var mode = dark ? 'dark' : 'light';
+        document.documentElement.setAttribute('data-mode', mode);
+        document.documentElement.style.colorScheme = mode;
+      })();
+    </script>
+    <script type="module" crossorigin src="/assets/index-BjOfnvFN.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-BeSBq3iB.css">
   </head>
   <body>
     <div id="app"></div>

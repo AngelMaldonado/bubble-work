@@ -23,6 +23,8 @@ type Config struct {
 	CycleHours  int `json:"cycle_hours"`  // the heat-window pulse length (§1)
 	TickMinutes int `json:"tick_minutes"` // server: how often to sweep for cooling bubbles (§5)
 
+	AdminEmails []string `json:"admin_emails,omitempty"` // server: Plane emails granted godmode
+
 	// Credential profiles let one client switch between workspaces/identities
 	// (e.g. different Plane keys per org). Current is the active profile name.
 	Current  string            `json:"current,omitempty"`

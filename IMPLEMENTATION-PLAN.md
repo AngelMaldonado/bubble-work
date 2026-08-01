@@ -18,6 +18,7 @@
 | 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
 | 3.5 | Workspace & bubble creation | Create Plane projects (modules+cycles+pages) + bubbles from the binary | ⬜ |
 | 3.6 | Cycle-aware heat | Measure heat against the current Plane cycle (§1), rolling-window fallback | ⬜ |
+| 3.7 | Service admin (godmode) | Cross-org ops over the API for a service admin | 🔄 |
 | 4 | Web UI (buoyancy workspace) | Floating 5-band workspace + ⌘K + `>` palette | ⬜ |
 | 5 | Scheduler & inbox | Cooling/dormant transitions land in a per-person inbox, unattended | ✅ |
 | 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 |
@@ -190,6 +191,23 @@ as fallback.
 
 **Dependencies:** Phase 2, Phase 3.5 (projects created with cycles on).
 **Definition of Done:** a bubble's temperature is computed against its instance's current Plane cycle when one exists, matching §1; projects without cycles still work via the rolling window.
+
+---
+
+## Phase 3.7 — Service admin (godmode) ✅ (pending commit)
+
+**Goal:** a service admin can run cross-org operational/admin tasks over the API,
+without SSH to the host.
+
+- [x] `Actor.ServiceAdmin` flag; break-glass **admin token** (`$BUBBLE_ADMIN_TOKEN`) → godmode Actor (all instances); **admin emails** (`admin_emails` config) grant the flag to humans using their own key
+- [x] `/api/admin/*` gated on `ServiceAdmin`, audit-logged: `instances` (redacted), `bubbles` (all orgs), `stats`, `refresh` (flush caches), `tick`
+- [x] CLI `bubble admin instances|bubbles|stats|refresh|tick` (auth via `$BUBBLE_ADMIN_TOKEN` or active profile)
+- [x] Tests: admin token → 200, normal member → 403, no token → 401
+- [ ] Later: remote instance management (add/remove/webhook), `whoami-as <email>` debug
+
+**Definition of Done:** with `$BUBBLE_ADMIN_TOKEN` set, `bubble admin stats/instances/bubbles` work cross-org; normal callers get 403. ✅ **Met** (unit-tested; awaiting live).
+
+> Security: the admin token is a cross-org secret (bypasses §9.3 isolation) — env-only, rotatable, every action audit-logged.
 
 ---
 

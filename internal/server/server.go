@@ -59,6 +59,36 @@ type Server struct {
 
 	bubblesMu    sync.Mutex
 	bubblesCache map[string]cachedBubbles
+
+	adminToken  string          // godmode break-glass credential (from env)
+	adminEmails map[string]bool // Plane emails granted service-admin
+	startedAt   time.Time
+}
+
+// SetAdmin configures godmode: a break-glass token and/or a set of admin emails
+// that get the ServiceAdmin flag (§ admin).
+func (s *Server) SetAdmin(token string, emails []string) {
+	s.adminToken = token
+	s.adminEmails = make(map[string]bool, len(emails))
+	for _, e := range emails {
+		if e = strings.ToLower(strings.TrimSpace(e)); e != "" {
+			s.adminEmails[e] = true
+		}
+	}
+}
+
+// godmodeActor is the identity behind the admin token: cross-org, all instances.
+func (s *Server) godmodeActor() domain.Actor {
+	var slugs []string
+	if insts, err := s.store.ListInstances(); err == nil {
+		for _, i := range insts {
+			slugs = append(slugs, i.Slug)
+		}
+	}
+	return domain.Actor{
+		ID: "service-admin", Name: "service-admin", Kind: "admin",
+		Admin: true, ServiceAdmin: true, Instances: slugs,
+	}
 }
 
 type cachedActor struct {
@@ -80,6 +110,8 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		now:          time.Now,
 		cache:        map[string]cachedActor{},
 		bubblesCache: map[string]cachedBubbles{},
+		adminEmails:  map[string]bool{},
+		startedAt:    time.Now(),
 	}
 }
 
@@ -90,6 +122,10 @@ func New(st *store.Store, cycle time.Duration) *Server {
 func (s *Server) resolve(ctx context.Context, cred string) (domain.Actor, error) {
 	if cred == "" {
 		return domain.Actor{}, errUnauth
+	}
+	// Break-glass admin token → godmode (no Plane round-trip, not cached).
+	if s.adminToken != "" && hmac.Equal([]byte(cred), []byte(s.adminToken)) {
+		return s.godmodeActor(), nil
 	}
 	now := s.now()
 
@@ -152,7 +188,11 @@ func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor
 	if name == "" {
 		name = email
 	}
-	return domain.Actor{ID: uid, Name: name, Kind: "human", Email: email, Admin: admin, Instances: scope}, nil
+	return domain.Actor{
+		ID: uid, Name: name, Kind: "human", Email: email, Admin: admin,
+		ServiceAdmin: s.adminEmails[strings.ToLower(email)],
+		Instances:    scope,
+	}, nil
 }
 
 // Handler assembles the REST + MCP routes onto one mux. Every route is behind
@@ -172,6 +212,13 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/notifications/read", s.restAuth(s.handleMarkRead))
 	mux.HandleFunc("POST /api/notifications/prefs", s.restAuth(s.handlePrefs))
 	mux.HandleFunc("POST /api/tick", s.restAuth(s.handleTick))
+
+	// Service-admin (godmode) — cross-org ops, gated on ServiceAdmin (§ admin).
+	mux.HandleFunc("GET /api/admin/instances", s.adminOnly(s.handleAdminInstances))
+	mux.HandleFunc("GET /api/admin/bubbles", s.adminOnly(s.handleAdminBubbles))
+	mux.HandleFunc("GET /api/admin/stats", s.adminOnly(s.handleAdminStats))
+	mux.HandleFunc("POST /api/admin/refresh", s.adminOnly(s.handleAdminRefresh))
+	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
 
 	// Our own MCP front door (§9.5), behind the same member credential using the
 	// SDK's bearer middleware; the verified member reaches tool handlers via
@@ -239,12 +286,8 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 
 // ---- Backend implementation (shared by REST + MCP) ----
 
-// Bubbles returns every bubble as a derived view, hottest first (buoyancy).
-func (s *Server) Bubbles(ctx context.Context) ([]domain.BubbleView, error) {
-	bubbles, err := s.collect(ctx)
-	if err != nil {
-		return nil, err
-	}
+// toViews classifies bubbles into derived views, hottest first (buoyancy).
+func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 	now := s.now()
 	out := make([]domain.BubbleView, 0, len(bubbles))
 	for _, b := range bubbles {
@@ -256,7 +299,44 @@ func (s *Server) Bubbles(ctx context.Context) ([]domain.BubbleView, error) {
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
-	return out, nil
+	return out
+}
+
+// Bubbles returns the caller's bubbles as derived views.
+func (s *Server) Bubbles(ctx context.Context) ([]domain.BubbleView, error) {
+	bubbles, err := s.collect(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.toViews(bubbles), nil
+}
+
+// AllBubbles returns bubbles across EVERY instance (service-admin, bypasses scope).
+func (s *Server) AllBubbles(ctx context.Context) []domain.BubbleView {
+	return s.toViews(s.collectAll(ctx))
+}
+
+// flushCaches clears the identity and bubble caches (service-admin refresh).
+func (s *Server) flushCaches() {
+	s.mu.Lock()
+	s.cache = map[string]cachedActor{}
+	s.mu.Unlock()
+	s.bubblesMu.Lock()
+	s.bubblesCache = map[string]cachedBubbles{}
+	s.bubblesMu.Unlock()
+}
+
+// adminOnly wraps a handler behind auth + the ServiceAdmin flag, and audit-logs.
+func (s *Server) adminOnly(next http.HandlerFunc) http.HandlerFunc {
+	return s.restAuth(func(w http.ResponseWriter, r *http.Request) {
+		actor, _ := domain.ActorFrom(r.Context())
+		if !actor.ServiceAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]string{"error": "service admin only"})
+			return
+		}
+		log.Printf("ADMIN %s → %s %s", actor.Label(), r.Method, r.URL.Path)
+		next(w, r)
+	})
 }
 
 // Heat returns a single bubble's derived view, accepting a short or full id.
@@ -1037,6 +1117,58 @@ func (s *Server) handleTick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"new_notifications": n})
+}
+
+func (s *Server) handleAdminInstances(w http.ResponseWriter, r *http.Request) {
+	insts, err := s.store.ListInstances()
+	if writeErr(w, err) {
+		return
+	}
+	out := make([]domain.AdminInstance, 0, len(insts))
+	s.bubblesMu.Lock()
+	for _, i := range insts {
+		_, cached := s.bubblesCache[i.Slug]
+		out = append(out, domain.AdminInstance{
+			Slug: i.Slug, Name: i.Name, BaseURL: i.BaseURL, Workspace: i.Workspace,
+			Project: i.Project, HasWebhook: i.WebhookSecret != "", Cached: cached,
+		})
+	}
+	s.bubblesMu.Unlock()
+	writeJSON(w, http.StatusOK, out)
+}
+
+func (s *Server) handleAdminBubbles(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, s.AllBubbles(r.Context()))
+}
+
+func (s *Server) handleAdminRefresh(w http.ResponseWriter, r *http.Request) {
+	s.flushCaches()
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
+	insts, _ := s.store.ListInstances()
+	s.bubblesMu.Lock()
+	cachedInst := len(s.bubblesCache)
+	s.bubblesMu.Unlock()
+	s.mu.Lock()
+	cachedIdents := len(s.cache)
+	s.mu.Unlock()
+	st := domain.AdminStats{
+		Instances: len(insts), CachedInstances: cachedInst, CachedIdents: cachedIdents,
+		StartedAt: s.startedAt.Format(time.RFC3339),
+	}
+	if bi, ok := debug.ReadBuildInfo(); ok {
+		for _, kv := range bi.Settings {
+			switch kv.Key {
+			case "vcs.revision":
+				st.Revision = kv.Value
+			case "vcs.time":
+				st.Built = kv.Value
+			}
+		}
+	}
+	writeJSON(w, http.StatusOK, st)
 }
 
 // writeErr maps a backend error to an HTTP response; returns true if it wrote one.

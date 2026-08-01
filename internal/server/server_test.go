@@ -165,6 +165,42 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 }
 
+func TestServiceAdmin(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{Slug: "ws", BaseURL: fake.URL, APIKey: "k", Workspace: "w", Project: ""}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	srv.SetAdmin("root-secret", []string{"boss@x"})
+	ts := httptest.NewServer(srv.Handler())
+	defer ts.Close()
+
+	// a normal member (any key → owner@x, not admin) is refused
+	if code, _ := do(t, http.MethodGet, ts.URL+"/api/admin/stats", "member-key", ""); code != http.StatusForbidden {
+		t.Fatalf("normal member on admin route: want 403, got %d", code)
+	}
+	// the admin token gets in
+	code, body := do(t, http.MethodGet, ts.URL+"/api/admin/stats", "root-secret", "")
+	if code != http.StatusOK {
+		t.Fatalf("admin token: want 200, got %d", code)
+	}
+	var stats domain.AdminStats
+	json.Unmarshal(body, &stats)
+	if stats.Instances != 1 {
+		t.Fatalf("stats: want 1 instance, got %d", stats.Instances)
+	}
+	// admin sees all instances' bubbles
+	if code, _ := do(t, http.MethodGet, ts.URL+"/api/admin/bubbles", "root-secret", ""); code != http.StatusOK {
+		t.Fatalf("admin bubbles: want 200, got %d", code)
+	}
+	// no token → 401 (auth), not 403
+	if code, _ := do(t, http.MethodGet, ts.URL+"/api/admin/stats", "", ""); code != http.StatusUnauthorized {
+		t.Fatalf("no token on admin route: want 401, got %d", code)
+	}
+}
+
 func TestCreateWorkspaceAndBubble(t *testing.T) {
 	ts, key := authedServer(t)
 

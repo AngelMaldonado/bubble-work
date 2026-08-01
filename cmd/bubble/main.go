@@ -53,6 +53,8 @@ func main() {
 		cmdBubble(os.Args[2:])
 	case "instance":
 		cmdInstance(os.Args[2:])
+	case "admin":
+		cmdAdmin(os.Args[2:])
 	case "init":
 		cmdInit(os.Args[2:])
 	case "reset":
@@ -82,6 +84,7 @@ Usage:
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble new|set|close|open create a bubble or set its contract (§4)
   bubble instance add|list|remove  manage Plane instances (run on the server host)
+  bubble admin <cmd>               service-admin ops (godmode; needs admin token/email)
   bubble init [flags]              configure server URL + a credential profile
   bubble reset [--force]           purge all local state and start from scratch
 
@@ -380,6 +383,57 @@ func cmdUse(args []string) {
 	fmt.Printf("switched to profile %q — run `bubble whoami` to confirm\n", name)
 }
 
+// cmdAdmin runs service-admin (godmode) operations. It authenticates with
+// $BUBBLE_ADMIN_TOKEN if set, else the active profile (for admin-email humans).
+func cmdAdmin(args []string) {
+	if len(args) < 1 {
+		adminUsage()
+		os.Exit(2)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	token := os.Getenv("BUBBLE_ADMIN_TOKEN")
+	if token == "" {
+		token = cfg.ActiveToken()
+	}
+	switch args[0] {
+	case "instances":
+		err = client.AdminInstances(cfg, token)
+	case "bubbles":
+		err = client.AdminBubbles(cfg, token)
+	case "stats":
+		err = client.AdminStats(cfg, token)
+	case "refresh":
+		err = client.AdminRefresh(cfg, token)
+	case "tick":
+		err = client.AdminTick(cfg, token)
+	default:
+		adminUsage()
+		os.Exit(2)
+	}
+	if err != nil {
+		log.Fatalf("admin: %v", err)
+	}
+}
+
+func adminUsage() {
+	fmt.Fprint(os.Stderr, `bubble admin — service-admin (godmode) operations
+
+Auth: $BUBBLE_ADMIN_TOKEN (break-glass), or your active profile if your email is
+an admin email.
+
+Usage:
+  bubble admin instances     list all instances (across orgs)
+  bubble admin bubbles       list bubbles across ALL instances
+  bubble admin stats         server health snapshot
+  bubble admin refresh       flush server caches
+  bubble admin tick          force a cooling sweep now
+
+`)
+}
+
 // cmdReset purges all local Bubble Work state (config + database), returning to
 // a clean slate. It only removes files Bubble owns — never a whole directory —
 // and confirms first unless --force is given.
@@ -610,6 +664,10 @@ func cmdServe(args []string) {
 	}
 
 	srv := server.New(st, cfg.Cycle())
+	srv.SetAdmin(os.Getenv("BUBBLE_ADMIN_TOKEN"), cfg.AdminEmails)
+	if os.Getenv("BUBBLE_ADMIN_TOKEN") != "" || len(cfg.AdminEmails) > 0 {
+		log.Printf("service-admin enabled (token=%v, %d admin email(s))", os.Getenv("BUBBLE_ADMIN_TOKEN") != "", len(cfg.AdminEmails))
+	}
 	if iv := cfg.TickInterval(); iv > 0 {
 		go srv.RunTicker(context.Background(), iv)
 		log.Printf("cooling sweep every %s", iv)

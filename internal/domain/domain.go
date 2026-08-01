@@ -65,12 +65,13 @@ type Bubble struct {
 // Plane); agents are resolved from a server-minted token (§9.3). Instances is
 // the set of instance slugs the actor may see.
 type Actor struct {
-	ID        string   `json:"id"` // Plane user id, or agent member id
-	Name      string   `json:"name"`
-	Kind      string   `json:"kind"` // "human" | "agent"
-	Email     string   `json:"email,omitempty"`
-	Admin     bool     `json:"admin"`
-	Instances []string `json:"instances"`
+	ID           string   `json:"id"` // Plane user id, or "service-admin"
+	Name         string   `json:"name"`
+	Kind         string   `json:"kind"` // "human" | "agent" | "admin"
+	Email        string   `json:"email,omitempty"`
+	Admin        bool     `json:"admin"`                   // Plane workspace admin (role ≥ 20)
+	ServiceAdmin bool     `json:"service_admin,omitempty"` // godmode — cross-org ops (§ admin)
+	Instances    []string `json:"instances"`
 }
 
 // Label returns a stable human label for logs and attribution.
@@ -205,6 +206,27 @@ type CreateBubbleRequest struct {
 type NewBubble struct {
 	ID   string `json:"id"`
 	Name string `json:"name"`
+}
+
+// AdminInstance is a redacted instance view for service admins (no secrets).
+type AdminInstance struct {
+	Slug       string `json:"slug"`
+	Name       string `json:"name"`
+	BaseURL    string `json:"base_url"`
+	Workspace  string `json:"workspace"`
+	Project    string `json:"project"`
+	HasWebhook bool   `json:"has_webhook"`
+	Cached     bool   `json:"cached"`
+}
+
+// AdminStats is a service-admin health snapshot.
+type AdminStats struct {
+	Instances       int    `json:"instances"`
+	CachedInstances int    `json:"cached_instances"`
+	CachedIdents    int    `json:"cached_identities"`
+	Revision        string `json:"revision"`
+	Built           string `json:"built"`
+	StartedAt       string `json:"started_at"`
 }
 
 // Notification records a bubble crossing into a colder state (§5) — the push

@@ -208,6 +208,92 @@ func SetNotifyPref(cfg config.Config, enabled bool) error {
 	return nil
 }
 
+// postTok POSTs with an explicit bearer token (used by admin commands).
+func postTok(cfg config.Config, path, token string, out any) error {
+	req, err := http.NewRequest(http.MethodPost, cfg.ServerURL+path, nil)
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("forbidden — not a service admin (set BUBBLE_ADMIN_TOKEN or use an admin email)")
+	}
+	if resp.StatusCode >= 300 {
+		return serverError(resp, path)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// AdminInstances lists all instances (service admin).
+func AdminInstances(cfg config.Config, token string) error {
+	var is []domain.AdminInstance
+	if err := getJSON(cfg.ServerURL+"/api/admin/instances", token, &is); err != nil {
+		return err
+	}
+	for _, i := range is {
+		fmt.Printf("%-12s  %-30s  ws=%s  project=%s  webhook=%v  cached=%v\n",
+			i.Slug, i.BaseURL, i.Workspace, orDash(i.Project), i.HasWebhook, i.Cached)
+	}
+	return nil
+}
+
+// AdminBubbles lists bubbles across ALL instances (service admin).
+func AdminBubbles(cfg config.Config, token string) error {
+	var vs []domain.BubbleView
+	if err := getJSON(cfg.ServerURL+"/api/admin/bubbles", token, &vs); err != nil {
+		return err
+	}
+	for _, v := range vs {
+		fmt.Printf("%s  %-10s  %-26s  %-8s  %s\n", icon(v.Lifecycle), v.Instance, v.Name, v.Lifecycle, v.Reason)
+	}
+	return nil
+}
+
+// AdminStats prints a service-admin health snapshot.
+func AdminStats(cfg config.Config, token string) error {
+	var st domain.AdminStats
+	if err := getJSON(cfg.ServerURL+"/api/admin/stats", token, &st); err != nil {
+		return err
+	}
+	fmt.Printf("instances        : %d\n", st.Instances)
+	fmt.Printf("cached instances : %d\n", st.CachedInstances)
+	fmt.Printf("cached identities: %d\n", st.CachedIdents)
+	fmt.Printf("revision         : %s\n", st.Revision)
+	fmt.Printf("built            : %s\n", st.Built)
+	fmt.Printf("started          : %s\n", st.StartedAt)
+	return nil
+}
+
+// AdminRefresh flushes server caches; AdminTick forces a sweep (service admin).
+func AdminRefresh(cfg config.Config, token string) error {
+	if err := postTok(cfg, "/api/admin/refresh", token, nil); err != nil {
+		return err
+	}
+	fmt.Println("caches flushed")
+	return nil
+}
+
+func AdminTick(cfg config.Config, token string) error {
+	var res struct {
+		New int `json:"new_notifications"`
+	}
+	if err := postTok(cfg, "/api/admin/tick", token, &res); err != nil {
+		return err
+	}
+	fmt.Printf("swept — %d new notification(s)\n", res.New)
+	return nil
+}
+
 // CreateWorkspace creates a Plane project (Workspace) with modules enabled.
 func CreateWorkspace(cfg config.Config, req domain.CreateWorkspaceRequest) error {
 	var ws domain.Workspace

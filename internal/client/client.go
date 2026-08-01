@@ -102,7 +102,7 @@ func postJSON(cfg config.Config, path string, body, out any) error {
 	} else {
 		buf = bytes.NewReader(nil)
 	}
-	req, err := http.NewRequest(http.MethodPost, cfg.ServerURL+path, buf)
+	req, err := http.NewRequest(http.MethodPost, cfg.ActiveServer()+path, buf)
 	if err != nil {
 		return err
 	}
@@ -158,7 +158,7 @@ func Tick(cfg config.Config) error {
 // Notifications lists your cooling/dormant alerts with per-person read state.
 func Notifications(cfg config.Config) error {
 	var box domain.Inbox
-	if err := getJSON(cfg.ServerURL+"/api/notifications", cfg.ActiveToken(), &box); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/notifications", cfg.ActiveToken(), &box); err != nil {
 		return err
 	}
 	if !box.Enabled {
@@ -211,7 +211,7 @@ func SetNotifyPref(cfg config.Config, enabled bool) error {
 
 // postTok POSTs with an explicit bearer token (used by admin commands).
 func postTok(cfg config.Config, path, token string, out any) error {
-	req, err := http.NewRequest(http.MethodPost, cfg.ServerURL+path, nil)
+	req, err := http.NewRequest(http.MethodPost, cfg.ActiveServer()+path, nil)
 	if err != nil {
 		return err
 	}
@@ -238,7 +238,7 @@ func postTok(cfg config.Config, path, token string, out any) error {
 // AdminInstances lists all instances (service admin).
 func AdminInstances(cfg config.Config, token string) error {
 	var is []domain.AdminInstance
-	if err := getJSON(cfg.ServerURL+"/api/admin/instances", token, &is); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/instances", token, &is); err != nil {
 		return err
 	}
 	for _, i := range is {
@@ -251,7 +251,7 @@ func AdminInstances(cfg config.Config, token string) error {
 // AdminBubbles lists bubbles across ALL instances (service admin).
 func AdminBubbles(cfg config.Config, token string) error {
 	var vs []domain.BubbleView
-	if err := getJSON(cfg.ServerURL+"/api/admin/bubbles", token, &vs); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/bubbles", token, &vs); err != nil {
 		return err
 	}
 	for _, v := range vs {
@@ -263,7 +263,7 @@ func AdminBubbles(cfg config.Config, token string) error {
 // AdminStats prints a service-admin health snapshot.
 func AdminStats(cfg config.Config, token string) error {
 	var st domain.AdminStats
-	if err := getJSON(cfg.ServerURL+"/api/admin/stats", token, &st); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/stats", token, &st); err != nil {
 		return err
 	}
 	fmt.Printf("instances        : %d\n", st.Instances)
@@ -355,7 +355,7 @@ func Unreview(cfg config.Config, id string) error {
 // Search fuzzy-lists threads (tasks) matching q, across your instances.
 func Search(cfg config.Config, q string) error {
 	var hits []domain.ThreadHit
-	if err := getJSON(cfg.ServerURL+"/api/threads?q="+url.QueryEscape(q), cfg.ActiveToken(), &hits); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/threads?q="+url.QueryEscape(q), cfg.ActiveToken(), &hits); err != nil {
 		return err
 	}
 	if len(hits) == 0 {
@@ -441,7 +441,7 @@ func icon(l domain.Lifecycle) string {
 // Ls renders bubbles hottest-first — the "tend what floats at the top" view.
 func Ls(cfg config.Config) error {
 	var vs []domain.BubbleView
-	if err := getJSON(cfg.ServerURL+"/api/bubbles", cfg.ActiveToken(), &vs); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/bubbles", cfg.ActiveToken(), &vs); err != nil {
 		return err
 	}
 	if len(vs) == 0 {
@@ -484,7 +484,7 @@ func Ls(cfg config.Config) error {
 // that Plane pass-through auth worked, and which instances/role Plane granted.
 func Whoami(cfg config.Config) error {
 	var a domain.Actor
-	if err := getJSON(cfg.ServerURL+"/api/whoami", cfg.ActiveToken(), &a); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/whoami", cfg.ActiveToken(), &a); err != nil {
 		return err
 	}
 	fmt.Printf("name      : %s\n", a.Name)
@@ -504,7 +504,7 @@ func Whoami(cfg config.Config) error {
 // Heat explains a single bubble's temperature.
 func Heat(cfg config.Config, id string) error {
 	var v domain.BubbleView
-	if err := getJSON(cfg.ServerURL+"/api/bubbles/"+id+"/heat", cfg.ActiveToken(), &v); err != nil {
+	if err := getJSON(cfg.ActiveServer()+"/api/bubbles/"+id+"/heat", cfg.ActiveToken(), &v); err != nil {
 		return err
 	}
 	fmt.Printf("%s  %s\n", icon(v.Lifecycle), v.Name)

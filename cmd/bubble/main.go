@@ -82,7 +82,8 @@ Usage:
   bubble notifications on|off      opt in/out of notifications
   bubble notifications read <id|all>  mark notifications read
   bubble tick                      sweep now for cooling bubbles
-  bubble use [name]                switch active credential profile (no arg: list)
+  bubble use [name]                switch active credential profile (no arg: list;
+                                   --tokens shows keys masked, add --reveal for full)
   bubble workspace new [flags]     create a Plane project (modules on) — our Workspace
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble new|set|close|open create a bubble or set its contract (§4)
@@ -92,9 +93,10 @@ Usage:
   bubble reset [--force]           purge all local state and start from scratch
 
 Everyone authenticates with a Plane API key — identity, role and instance scope
-are discovered from Plane. Store one key per workspace/identity as a named
-profile (`+"`bubble init --name cuby --token <key>`"+`) and switch between them
-with `+"`bubble use cuby`"+`. An agent impersonates a human by using that human's key.
+are discovered from Plane. Store one key + server per workspace/identity as a
+named profile (`+"`bubble init --name cuby --token <key> --server <url>`"+`) so
+`+"`bubble use cuby`"+` switches BOTH the credential and the server at once. An
+agent impersonates a human by using that human's key.
 
 `)
 }
@@ -120,6 +122,7 @@ func cmdWhoami(args []string) {
 	if cfg.Current != "" {
 		fmt.Printf("profile   : %s\n", cfg.Current)
 	}
+	fmt.Printf("server    : %s\n", cfg.ActiveServer())
 	if err := client.Whoami(cfg); err != nil {
 		log.Fatalf("whoami: %v", err)
 	}
@@ -370,15 +373,37 @@ Modules, Cycles and Pages are enabled by default; Views/Intake are opt-in.
 `)
 }
 
+// tokenDisplay renders a stored key: full when reveal is set, otherwise masked
+// to a recognizable fingerprint (prefix…suffix) that leaks nothing usable.
+func tokenDisplay(token string, reveal bool) string {
+	if token == "" {
+		return "(none)"
+	}
+	if reveal {
+		return token
+	}
+	if len(token) <= 18 {
+		return "****"
+	}
+	return token[:14] + "…" + token[len(token)-4:]
+}
+
 // cmdUse switches the active credential profile, or lists profiles with no arg.
 func cmdUse(args []string) {
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+
+	fs := flag.NewFlagSet("use", flag.ExitOnError)
+	tokens := fs.Bool("tokens", false, "show each profile's Plane API key (masked)")
+	reveal := fs.Bool("reveal", false, "with --tokens, print the FULL key (careful: exposes secrets on screen)")
+	_ = fs.Parse(args)
+	rest := fs.Args()
+
 	names := cfg.ProfileNames()
 
-	if len(args) == 0 {
+	if len(rest) == 0 {
 		if len(names) == 0 {
 			fmt.Println("no profiles yet — add one with `bubble init --name <name> --token <key>`")
 			return
@@ -388,12 +413,24 @@ func cmdUse(args []string) {
 			if n == cfg.Current {
 				marker = "* "
 			}
-			fmt.Printf("%s%s\n", marker, n)
+			p := cfg.Profiles[n]
+			server := p.Server
+			if server == "" {
+				server = cfg.ServerURL + " (default)"
+			}
+			if *tokens {
+				fmt.Printf("%s%-12s %-24s → %s\n", marker, n, tokenDisplay(p.Token, *reveal), server)
+			} else {
+				fmt.Printf("%s%-12s → %s\n", marker, n, server)
+			}
+		}
+		if *tokens && !*reveal {
+			fmt.Println("\n(keys masked — add --reveal to print them in full)")
 		}
 		return
 	}
 
-	name := args[0]
+	name := rest[0]
 	if _, ok := cfg.Profiles[name]; !ok {
 		if len(names) == 0 {
 			log.Fatalf("use: no profile named %q — add one with `bubble init --name %s --token <key>`", name, name)
@@ -404,7 +441,7 @@ func cmdUse(args []string) {
 	if err := config.Save(cfg); err != nil {
 		log.Fatalf("use: %v", err)
 	}
-	fmt.Printf("switched to profile %q — run `bubble whoami` to confirm\n", name)
+	fmt.Printf("switched to profile %q → %s\n", name, cfg.ActiveServer())
 }
 
 // cmdAdmin runs service-admin (godmode) operations. It authenticates with
@@ -729,25 +766,38 @@ func cmdInit(args []string) {
 		log.Fatalf("config: %v", err)
 	}
 	fs := flag.NewFlagSet("init", flag.ExitOnError)
-	fs.StringVar(&cfg.ServerURL, "server", cfg.ServerURL, "server base URL (client)")
+	server := fs.String("server", "", "server base URL — pinned to the profile when --name is given, else the active profile's (or the global default)")
 	fs.StringVar(&cfg.Addr, "addr", cfg.Addr, "server listen address")
 	fs.IntVar(&cfg.CycleHours, "cycle-hours", cfg.CycleHours, "heat-window pulse length in hours")
-	name := fs.String("name", "", "profile name to store the token under (e.g. a workspace); switches to it")
+	name := fs.String("name", "", "profile name to store the token/server under (e.g. a workspace); switches to it")
 	token := fs.String("token", "", "your Plane API key")
 	_ = fs.Parse(args)
 
 	switch {
-	case *token != "" && *name != "":
-		cfg.SetProfile(*name, *token) // store under a profile and activate it
+	case *name != "":
+		// Create/update a named profile with its own token + server, and activate
+		// it. Empty flags leave existing values intact (so you can set just one).
+		cfg.UpsertProfile(*name, *token, *server)
 	case *token != "":
 		cfg.Token = *token // legacy single credential (no profile)
+		if *server != "" {
+			cfg.ServerURL = *server
+		}
+	case *server != "":
+		// No name/token: retarget the ACTIVE profile's server (not the global
+		// default), so switching a server can't leak across profiles.
+		if cfg.Current != "" {
+			cfg.UpsertProfile(cfg.Current, "", *server)
+		} else {
+			cfg.ServerURL = *server
+		}
 	}
 
 	if err := config.Save(cfg); err != nil {
 		log.Fatalf("save: %v", err)
 	}
-	if *token != "" && *name != "" {
-		fmt.Printf("saved profile %q and set it active\n", *name)
+	if *name != "" {
+		fmt.Printf("saved profile %q (server %s) and set it active\n", *name, cfg.ActiveServer())
 	}
 	p, _ := config.Path()
 	fmt.Printf("config saved to %s\n", p)

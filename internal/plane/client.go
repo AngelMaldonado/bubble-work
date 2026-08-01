@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -13,6 +14,28 @@ import (
 	"strings"
 	"time"
 )
+
+// APIError is a non-2xx response from Plane, carrying the status code so callers
+// can distinguish a rejected credential (401/403) from a transient upstream
+// failure (429/5xx) that should be retried rather than treated as "no access".
+type APIError struct {
+	Status int
+	Path   string
+}
+
+func (e *APIError) Error() string {
+	return fmt.Sprintf("plane %s: HTTP %d", e.Path, e.Status)
+}
+
+// IsAuthError reports whether err is a Plane 401/403 (credential rejected).
+// Anything else (transient status, timeout, network) is not an auth failure.
+func IsAuthError(err error) bool {
+	var e *APIError
+	if errors.As(err, &e) {
+		return e.Status == 401 || e.Status == 403
+	}
+	return false
+}
 
 // Client talks to a Plane workspace/project over the REST API using X-API-Key.
 type Client struct {
@@ -63,7 +86,7 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
-		return fmt.Errorf("plane GET %s: %s", path, resp.Status)
+		return &APIError{Status: resp.StatusCode, Path: "GET " + path}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }

@@ -12,6 +12,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -549,5 +550,58 @@ func TestBirthPolicyGate(t *testing.T) {
 	}
 	if code, _ := do(t, http.MethodPost, url, key, `{"bubble_id":"ws:p1:m1","name":"T","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`); code != http.StatusOK {
 		t.Fatalf("valid birth: want 200, got %d", code)
+	}
+}
+
+// TestTransientMembersFailIsRetryable guards the "bubbles suddenly vanished"
+// bug: a transient failure of the Plane members fetch must surface as a
+// retryable 502 (never 401, which would sign a browser out) and must NOT be
+// cached as an authoritative empty scope — once Plane recovers, the next
+// request must see full scope again.
+func TestTransientMembersFailIsRetryable(t *testing.T) {
+	st := openStore(t)
+	var failMembers atomic.Bool
+	failMembers.Store(true)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			if failMembers.Load() {
+				w.WriteHeader(http.StatusInternalServerError)
+				io.WriteString(w, `{"error":"boom"}`)
+				return
+			}
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"P1"}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"B"}]}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	t.Cleanup(ts.Close)
+
+	// During the outage: retryable 502, not 401.
+	if code, _ := do(t, "GET", ts.URL+"/api/whoami", "k", ""); code != http.StatusBadGateway {
+		t.Fatalf("during members outage want 502, got %d", code)
+	}
+	// Recover Plane: the outage must not have poisoned the cache.
+	failMembers.Store(false)
+	code, body := do(t, "GET", ts.URL+"/api/whoami", "k", "")
+	if code != http.StatusOK {
+		t.Fatalf("after recovery want 200, got %d: %s", code, body)
+	}
+	if !strings.Contains(string(body), `"instances":["ws"]`) {
+		t.Fatalf("want scope restored to [ws], got %s", body)
 	}
 }

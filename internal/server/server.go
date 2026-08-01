@@ -39,6 +39,10 @@ var (
 	errUnauth   = errors.New("unauthorized")
 	errForbid   = errors.New("not authorized for this instance")
 	errAmbig    = errors.New("ambiguous id")
+	// errUpstream is a transient Plane failure during resolution. It must map to
+	// 5xx (not 401) so callers retry instead of signing out, and it is never
+	// cached — see resolveUncached.
+	errUpstream = errors.New("upstream plane error")
 )
 
 const (
@@ -158,14 +162,24 @@ func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor
 		return domain.Actor{}, err
 	}
 	var email, name, uid string
+	var meTransient error // a non-auth failure (429/5xx/timeout) while identifying
 	for _, inst := range instances {
 		u, err := plane.New(inst.BaseURL, cred, inst.Workspace, "").Me(ctx)
 		if err == nil && u.Email != "" {
 			email, name, uid = u.Email, u.DisplayName, u.ID
+			meTransient = nil
 			break
+		}
+		if err != nil && !plane.IsAuthError(err) {
+			meTransient = err // remember: could not reach Plane, not "key rejected"
 		}
 	}
 	if email == "" {
+		// A transient upstream failure must NOT look like "key rejected" — that
+		// would 401 the caller (and sign a browser out). Surface it as upstream.
+		if meTransient != nil {
+			return domain.Actor{}, fmt.Errorf("%w: identifying via Plane: %v", errUpstream, meTransient)
+		}
 		return domain.Actor{}, errUnauth
 	}
 
@@ -173,9 +187,11 @@ func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor
 	// instance whose member list contains this email.
 	var scope []string
 	admin := false
+	var memberErr error // a failed membership fetch (transient or misconfig)
 	for _, inst := range instances {
 		members, err := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Members(ctx)
 		if err != nil {
+			memberErr = err // can't confirm membership here — remember it
 			continue
 		}
 		for _, mm := range members {
@@ -187,6 +203,12 @@ func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor
 				break
 			}
 		}
+	}
+	// An empty scope caused by a fetch error is NOT authoritative — do not return
+	// (and let resolve cache) a scopeless actor for authTTL, or a single blip
+	// blacks out every bubble for minutes. Fail so the caller simply retries.
+	if len(scope) == 0 && memberErr != nil {
+		return domain.Actor{}, fmt.Errorf("%w: scoping via Plane members: %v", errUpstream, memberErr)
 	}
 	if name == "" {
 		name = email
@@ -283,6 +305,14 @@ func (s *Server) restAuth(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		actor, err := s.resolve(r.Context(), bearer(r))
 		if err != nil {
+			// Transient upstream failure → 502 so the client retries; a real auth
+			// failure → 401. Never 401 on a Plane blip (it would sign browsers out).
+			if errors.Is(err, errUpstream) {
+				writeJSON(w, http.StatusBadGateway, map[string]string{
+					"error": "temporarily unable to reach Plane — retrying",
+				})
+				return
+			}
 			writeJSON(w, http.StatusUnauthorized, map[string]string{
 				"error": "unauthorized — present your Plane API key (humans) or agent token (agents) as a Bearer credential",
 			})

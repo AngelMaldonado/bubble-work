@@ -49,10 +49,12 @@ type Instance struct {
 // ID is namespaced as "<instance-slug>:<module-id>" so it is unique across
 // federated instances.
 type Bubble struct {
-	ID       string
-	Name     string
-	Instance string // origin instance slug
-	Outcome  string // §4 contract: what "done" looks like
+	ID          string
+	Name        string
+	Instance    string // origin instance slug
+	Project     string // origin Plane project id (our Workspace)
+	ProjectName string // human name of that project, when known
+	Outcome     string // §4 contract: what "done" looks like
 	Owner    string // §4 contract: who is accountable now
 	Closure  string // §4 contract: the explicit close signal
 	Closed   bool
@@ -131,16 +133,18 @@ func CredFrom(ctx context.Context) (string, bool) {
 
 // BubbleView is the derived, client-facing projection of a bubble (§9.5).
 type BubbleView struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Instance  string    `json:"instance"`
-	Lifecycle Lifecycle `json:"lifecycle"`
-	Level     string    `json:"level"` // UI band: in_progress|zzzz|rip|reviewed|done
-	Score     float64   `json:"score"` // 0..1 buoyancy score, for ordering
-	Reason    string    `json:"reason"`
-	Outcome   string    `json:"outcome,omitempty"`
-	Owner     string    `json:"owner,omitempty"`
-	Threads   int       `json:"threads"`
+	ID          string    `json:"id"`
+	Name        string    `json:"name"`
+	Instance    string    `json:"instance"`
+	Project     string    `json:"project"`                 // Plane project id (our Workspace)
+	ProjectName string    `json:"project_name,omitempty"`  // human name, when known
+	Lifecycle   Lifecycle `json:"lifecycle"`
+	Level       string    `json:"level"` // UI band: in_progress|zzzz|rip|reviewed|done
+	Score       float64   `json:"score"` // 0..1 buoyancy score, for ordering
+	Reason      string    `json:"reason"`
+	Outcome     string    `json:"outcome,omitempty"`
+	Owner       string    `json:"owner,omitempty"`
+	Threads     int       `json:"threads"`
 }
 
 // ThreadHit is a searchable thread (task) for the ⌘K omnibar.

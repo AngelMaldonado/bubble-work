@@ -67,7 +67,12 @@
   <footer class="statusbar">
     <div class="side">
       {#if store.instances.length > 1}
-        <select class="picker" bind:value={store.instance} aria-label="instance filter">
+        <select
+          class="picker"
+          value={store.instance}
+          onchange={(e) => store.selectInstance(e.currentTarget.value)}
+          aria-label="instance filter"
+        >
           <option value="">all instances</option>
           {#each store.instances as slug (slug)}
             <option value={slug}>{slug}</option>
@@ -75,6 +80,20 @@
         </select>
       {:else if store.instances.length === 1}
         <span class="chip">{store.instances[0]}</span>
+      {/if}
+
+      {#if store.projects.length > 1}
+        <select
+          class="picker"
+          value={store.project}
+          onchange={(e) => store.selectProject(e.currentTarget.value)}
+          aria-label="project filter"
+        >
+          <option value="">all projects</option>
+          {#each store.projects as p (p.id)}
+            <option value={p.id}>{p.name}</option>
+          {/each}
+        </select>
       {/if}
 
       <span class="who" title={store.actor?.email}>

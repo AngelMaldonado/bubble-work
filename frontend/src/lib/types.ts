@@ -18,6 +18,8 @@ export interface BubbleView {
   id: string;
   name: string;
   instance: string;
+  project: string;
+  project_name?: string;
   lifecycle: Lifecycle;
   level: Level;
   score: number;

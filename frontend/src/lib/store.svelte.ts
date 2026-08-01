@@ -15,8 +15,9 @@ class Store {
   error = $state<string | null>(null);
   authed = $state<boolean>(!!getToken());
 
-  // active instance filter ("" = all the caller's instances)
+  // active filters ("" = all). project holds a Plane project id.
   instance = $state<string>('');
+  project = $state<string>('');
   polling = $state(false);
 
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -26,7 +27,35 @@ class Store {
   }
 
   get visible(): BubbleView[] {
-    return this.instance ? this.bubbles.filter((b) => b.instance === this.instance) : this.bubbles;
+    return this.bubbles.filter(
+      (b) =>
+        (!this.instance || b.instance === this.instance) &&
+        (!this.project || b.project === this.project),
+    );
+  }
+
+  // projects present within the current instance scope (id + display name)
+  get projects(): { id: string; name: string }[] {
+    const seen = new Map<string, string>();
+    for (const b of this.bubbles) {
+      if (this.instance && b.instance !== this.instance) continue;
+      if (!seen.has(b.project)) seen.set(b.project, b.project_name || b.project);
+    }
+    return [...seen.entries()]
+      .map(([id, name]) => ({ id, name }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  selectInstance(v: string): void {
+    this.instance = v;
+    // drop the project filter if it no longer exists in the new scope
+    if (this.project && !this.projects.some((p) => p.id === this.project)) {
+      this.project = '';
+    }
+  }
+
+  selectProject(v: string): void {
+    this.project = v;
   }
 
   byLevel(level: Level): BubbleView[] {

@@ -348,6 +348,7 @@ func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 		r := heat.Classify(b, s.cycle, now)
 		out = append(out, domain.BubbleView{
 			ID: b.ID, Name: b.Name, Instance: b.Instance,
+			Project: b.Project, ProjectName: b.ProjectName,
 			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle),
 			Score: r.Score, Reason: r.Reason,
 			Outcome: b.Outcome, Owner: b.Owner, Threads: len(b.Threads),
@@ -872,6 +873,7 @@ func (s *Server) instanceBubbles(ctx context.Context, inst domain.Instance) ([]d
 func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
 	base := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "")
 	projects := []string{inst.Project}
+	projName := map[string]string{}
 	if inst.Project == "" {
 		ps, err := base.ListProjects(ctx)
 		if err != nil {
@@ -880,6 +882,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 		projects = projects[:0]
 		for _, p := range ps {
 			projects = append(projects, p.ID)
+			projName[p.ID] = p.Name
 		}
 	}
 
@@ -906,7 +909,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 					log.Printf("instance %s module %s: list work items: %v", inst.Slug, m.ID, err)
 					return nil // one bad module shouldn't fail the whole fetch
 				}
-				b := s.buildBubble(inst.Slug, projID, m, items)
+				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items)
 				mu.Lock()
 				out = append(out, b)
 				mu.Unlock()
@@ -923,10 +926,10 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 // buildBubble assembles a bubble from a module + its work items, deriving heat
 // evidence from each item's created (thread born) and completed (todo done)
 // timestamps (§5.1), then merging the server-owned contract overlay (§4).
-func (s *Server) buildBubble(slug, projID string, m plane.Module, items []plane.WorkItem) domain.Bubble {
+func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, items []plane.WorkItem) domain.Bubble {
 	// Namespaced id carries the project so writes/close can route.
 	id := slug + ":" + projID + ":" + m.ID
-	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug}
+	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug, Project: projID, ProjectName: projName}
 	if c, ok, _ := s.store.GetContract(id); ok {
 		b.Outcome, b.Owner, b.Closure, b.Closed, b.Stage = c.Outcome, c.Owner, c.Closure, c.Closed, c.Stage
 	}

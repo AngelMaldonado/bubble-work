@@ -16,7 +16,7 @@
 | 1.6 | Plane-native identity | Humans auth via Plane pass-through; role + scope derived from Plane | ✅ |
 | 2 | Plane read path | `bubble ls` shows real bubbles with correct heat (per instance) | ✅ |
 | 3 | Plane write path | Birth & contracts flow into Plane | ✅ |
-| 4 | Heat & lifecycle hardening | Tested, explainable temperature rules | ⬜ |
+| 4 | Web UI (buoyancy workspace) | Floating 5-band workspace + ⌘K + `>` palette | ⬜ |
 | 5 | Scheduler & inbox | Cooling/dormant transitions land in a per-person inbox, unattended | ✅ |
 | 6 | Sync robustness & webhooks | Real-time updates; conflict policy enforced | 🔄 |
 | 7 | Packaging, deploy & CI | Deployed on the platform; push-to-main auto-deploys | 🔄 |
@@ -156,18 +156,32 @@ flowchart LR
 
 ---
 
-## Phase 4 — Heat & lifecycle hardening
+## Phase 4 — Web UI: the buoyancy workspace
 
-**Goal:** the temperature rules are precise, tested, and explainable.
+**Goal:** a full-screen floating-bubbles workspace (Svelte + Skeleton) with a ⌘K
+omnibar and a `>` command palette. Full design: [`web-ui-design.md`](./web-ui-design.md).
+This absorbs the old "heat sharpening" — the **5 levels** are the sharpened,
+human view of heat (🔥 In progress · 😴 Zzzz · 🪦 RIP · 👀 Reviewed · 🏆 Done):
+In-progress/Zzzz/RIP are automatic from heat, Reviewed/Done are explicit.
 
-- [ ] Finalize the cycle model (configurable pulse; document current vs previous windows)
-- [ ] Confirm transition rules Hot→Warm→Cooling→Dormant→Closed against §5.3 edge cases
-- [ ] `bubble heat` shows the contributing evidence events + which cycle each fell in
-- [ ] Table-driven tests for `Classify()` across every lifecycle branch
-- [ ] Document the buoyancy `Score` formula in the spec
+**Backend (Go) changes it needs:**
+- [ ] `reviewed` **stage overlay** on the contract store + `POST /api/bubbles/{id}/review|unreview` (cache-patched)
+- [ ] **`Level`** field on `BubbleView`, computed from heat + stage + closed (the 5-level table)
+- [ ] **Threads/search endpoint** `GET /api/threads?q=` (id, name, bubble, instance, open/done) for ⌘K
+- [ ] **Serve the embedded SPA** — `//go:embed all:web/dist`, mounted at `/` with SPA fallback
 
-**Dependencies:** Phase 2.
-**Definition of Done:** every lifecycle branch has a passing test; `bubble heat` explains *why* with the evidence that produced the verdict.
+**Frontend (Svelte 5 + Skeleton 5 + Tailwind 4 + Vite/bun, mirroring `~/dev/mdserve`):**
+- [ ] Scaffold `frontend/` + typed API client + store (bubbles/levels, active instance, polling)
+- [ ] Floating workspace: 5 bands + WIP **soft-warning** on In progress; trophy drawer for Done
+- [ ] ⌘K omnibar — fuzzy search over instance-scoped threads
+- [ ] `>` command palette — new bubble, birth thread (Brief+DoD form), review, close, set owner/outcome, switch instance
+- [ ] Paste-key auth (Bearer) for v1
+
+**Build/deploy:**
+- [ ] `frontend` build → `web/dist` embedded by `go build`; deploy script runs `bun install && bun run build` first (mini needs bun)
+
+**Dependencies:** Phases 2, 3, 5.
+**Definition of Done:** the browser at `https://bubble.angel.cubytest.space` shows the floating workspace with the 5 bands, ⌘K searches threads, and `>` runs actions — all through the server APIs.
 
 ---
 

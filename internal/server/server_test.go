@@ -541,8 +541,12 @@ func TestPlaneWebhook(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(st, time.Hour)
-	// warm the cache so we can observe the webhook dropping it
-	srv.bubblesCache["ws"] = cachedBubbles{exp: srv.now().Add(time.Hour)}
+	// Seed a stale one-bubble snapshot so we can observe the webhook refreshing
+	// it from Plane (the fake returns two bubbles).
+	srv.bubblesCache["ws"] = cachedBubbles{
+		bubbles:   []domain.Bubble{{ID: "ws:stale:x", Name: "stale"}},
+		updatedAt: srv.now(),
+	}
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 
@@ -572,12 +576,20 @@ func TestPlaneWebhook(t *testing.T) {
 	if code := post("ws", sign("topsecret")); code != http.StatusOK {
 		t.Fatalf("valid webhook: want 200, got %d", code)
 	}
-	// the valid webhook should have evicted the cache
-	srv.bubblesMu.Lock()
-	_, cached := srv.bubblesCache["ws"]
-	srv.bubblesMu.Unlock()
-	if cached {
-		t.Fatal("cache should have been dropped by the webhook")
+	// the valid webhook triggers a background refresh from Plane, replacing the
+	// stale seed with the fake's two bubbles.
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		srv.bubblesMu.Lock()
+		c, ok := srv.bubblesCache["ws"]
+		srv.bubblesMu.Unlock()
+		if ok && len(c.bubbles) == 2 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("webhook did not refresh the snapshot from Plane")
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
 }
 

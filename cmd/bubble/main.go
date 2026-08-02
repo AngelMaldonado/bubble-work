@@ -735,6 +735,9 @@ func cmdServe(args []string) {
 	if os.Getenv("BUBBLE_ADMIN_TOKEN") != "" || len(cfg.AdminEmails) > 0 {
 		log.Printf("service-admin enabled (token=%v, %d admin email(s))", os.Getenv("BUBBLE_ADMIN_TOKEN") != "", len(cfg.AdminEmails))
 	}
+	// Background refresher keeps a warm, full snapshot so reads never fetch Plane
+	// on the request path (fast loads, no partial "popping").
+	go srv.RunRefresher(context.Background())
 	if iv := cfg.TickInterval(); iv > 0 {
 		go srv.RunTicker(context.Background(), iv)
 		log.Printf("cooling sweep every %s", iv)

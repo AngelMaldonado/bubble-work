@@ -25,6 +25,7 @@ import (
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
@@ -48,11 +49,11 @@ var (
 const (
 	// authTTL caches a resolved identity to avoid hitting Plane every request.
 	authTTL = 5 * time.Minute
-	// bubblesTTL caches an instance's fetched bubbles so repeated `ls` is instant.
-	bubblesTTL = 60 * time.Second
-	// partialTTL is a short TTL used when a fetch came back rate-limited/partial,
-	// so we retry soon instead of holding a degraded snapshot for the full TTL.
-	partialTTL = 15 * time.Second
+	// snapshotRefresh is how often the background refresher rebuilds each
+	// instance's bubble snapshot. Reads are served from the snapshot and never
+	// fetch Plane on the request path, so this cadence — not request latency —
+	// governs freshness.
+	snapshotRefresh = 45 * time.Second
 	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept modest
 	// so a full fetch (modules + work-items + cycles) doesn't burst past Plane's
 	// rate limit; get() also retries 429s with backoff.
@@ -69,8 +70,12 @@ type Server struct {
 	mu    sync.Mutex
 	cache map[string]cachedActor
 
+	// snapshot holds each instance's fully-materialized bubbles, rebuilt by the
+	// background refresher. Reads serve from here and never fetch Plane on the
+	// request path. sf coalesces concurrent refreshes of the same instance.
 	bubblesMu    sync.Mutex
 	bubblesCache map[string]cachedBubbles
+	sf           singleflight.Group
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
@@ -109,8 +114,9 @@ type cachedActor struct {
 }
 
 type cachedBubbles struct {
-	bubbles []domain.Bubble
-	exp     time.Time
+	bubbles   []domain.Bubble
+	updatedAt time.Time
+	partial   bool
 }
 
 // New builds a server. With no instances configured (or none authorized for the
@@ -726,8 +732,10 @@ func (s *Server) handlePlaneWebhook(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad signature", http.StatusForbidden)
 		return
 	}
-	s.dropInstanceCache(slug)
-	log.Printf("webhook: %s refreshed from Plane", slug)
+	// Rebuild this instance's snapshot in the background so the change shows up
+	// without a blocking read (singleflight coalesces with the periodic refresh).
+	go s.refreshInstance(context.Background(), inst)
+	log.Printf("webhook: %s refresh triggered from Plane", slug)
 	w.WriteHeader(http.StatusOK)
 }
 
@@ -884,41 +892,88 @@ func (s *Server) collect(ctx context.Context) ([]domain.Bubble, error) {
 	return out, nil
 }
 
-// instanceBubbles returns an instance's bubbles from cache, or fetches them.
+// instanceBubbles serves an instance's bubbles from the in-memory snapshot,
+// never fetching Plane on the request path. On a cold snapshot (first ever read,
+// before the background refresher has populated it) it fetches once so the very
+// first load isn't empty; thereafter the refresher keeps it warm.
 func (s *Server) instanceBubbles(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
-	now := s.now()
 	s.bubblesMu.Lock()
-	if c, ok := s.bubblesCache[inst.Slug]; ok && now.Before(c.exp) {
-		s.bubblesMu.Unlock()
+	c, ok := s.bubblesCache[inst.Slug]
+	s.bubblesMu.Unlock()
+	if ok {
 		return c.bubbles, nil
 	}
-	s.bubblesMu.Unlock()
+	return s.refreshInstance(ctx, inst)
+}
 
-	bs, partial, err := s.fetchInstance(ctx, inst)
-	if err != nil {
-		// Total failure (e.g. list-projects 429'd) — serve a prior snapshot if we
-		// have one rather than showing an empty board.
+// refreshInstance fetches an instance from Plane and atomically updates its
+// snapshot, coalescing concurrent refreshes of the same instance (background
+// loop + cold reads + webhooks). It keeps the last good snapshot on failure and
+// never lets a rate-limited partial shrink a fuller one — so reads never see a
+// half-populated or empty board once warm.
+func (s *Server) refreshInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
+	v, err, _ := s.sf.Do(inst.Slug, func() (any, error) {
+		bs, partial, err := s.fetchInstance(ctx, inst)
+		if err != nil {
+			// Total failure (e.g. list-projects 429'd) — keep the prior snapshot
+			// rather than blanking the board.
+			s.bubblesMu.Lock()
+			prev, ok := s.bubblesCache[inst.Slug]
+			s.bubblesMu.Unlock()
+			if ok {
+				return prev.bubbles, nil
+			}
+			return nil, err
+		}
 		s.bubblesMu.Lock()
-		prev, ok := s.bubblesCache[inst.Slug]
-		s.bubblesMu.Unlock()
-		if ok {
+		defer s.bubblesMu.Unlock()
+		prev, had := s.bubblesCache[inst.Slug]
+		// A partial must not replace a fuller snapshot — hold the better one.
+		if partial && had && len(prev.bubbles) > len(bs) {
 			return prev.bubbles, nil
 		}
+		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, updatedAt: s.now(), partial: partial}
+		return bs, nil
+	})
+	if err != nil {
 		return nil, err
 	}
-	s.bubblesMu.Lock()
-	if partial {
-		// A rate-limited partial must not replace a fuller snapshot; keep the
-		// better one and retry soon (short TTL).
-		if prev, ok := s.bubblesCache[inst.Slug]; ok && len(prev.bubbles) > len(bs) {
-			bs = prev.bubbles
-		}
-		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, exp: now.Add(partialTTL)}
-	} else {
-		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, exp: now.Add(bubblesTTL)}
+	return v.([]domain.Bubble), nil
+}
+
+// RefreshAll rebuilds every configured instance's snapshot. Used at startup and
+// on each background tick; one unreachable instance is logged and skipped.
+func (s *Server) RefreshAll(ctx context.Context) {
+	all, err := s.store.ListInstances()
+	if err != nil {
+		log.Printf("refresh: list instances: %v", err)
+		return
 	}
-	s.bubblesMu.Unlock()
-	return bs, nil
+	for _, inst := range all {
+		if !plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Configured() {
+			continue
+		}
+		if _, err := s.refreshInstance(ctx, inst); err != nil {
+			log.Printf("refresh: instance %s: %v", inst.Slug, err)
+		}
+	}
+}
+
+// RunRefresher warms the snapshot immediately, then rebuilds it every
+// snapshotRefresh until ctx is done. This — not request latency — is what keeps
+// the board fresh.
+func (s *Server) RunRefresher(ctx context.Context) {
+	s.RefreshAll(ctx)
+	t := time.NewTicker(snapshotRefresh)
+	defer t.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			s.RefreshAll(ctx)
+		}
+	}
 }
 
 // fetchInstance pulls an instance's bubbles from Plane. It discovers projects
@@ -1385,6 +1440,8 @@ func (s *Server) handleAdminBubbles(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) handleAdminRefresh(w http.ResponseWriter, r *http.Request) {
 	s.flushCaches()
+	// Re-warm the snapshot in the background so the next read isn't a cold fetch.
+	go s.RefreshAll(context.Background())
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 

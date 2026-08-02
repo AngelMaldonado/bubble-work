@@ -1,6 +1,16 @@
 // Thin typed client over the server REST surface (§9). The browser presents the
 // same credential as the CLI — a Plane API key — as a Bearer token.
-import type { Actor, BubbleView, ThreadHit, Inbox, AdminStats, AdminInstance } from './types';
+import type {
+  Actor,
+  BubbleView,
+  ThreadHit,
+  Inbox,
+  AdminStats,
+  AdminInstance,
+  ThreadNode,
+  ThreadDetail,
+  Comment,
+} from './types';
 
 const TOKEN_KEY = 'bubble.token';
 
@@ -50,6 +60,13 @@ export const api = {
   threads: (q: string) =>
     req<ThreadHit[]>('GET', `/api/threads?q=${encodeURIComponent(q)}`),
   inbox: () => req<Inbox>('GET', '/api/notifications'),
+
+  // interior read model (INTERIOR-PLAN.md)
+  timeline: (bubbleId: string) =>
+    req<ThreadNode[]>('GET', `/api/bubbles/${encodeURIComponent(bubbleId)}/threads`),
+  thread: (id: string) => req<ThreadDetail>('GET', `/api/threads/${encodeURIComponent(id)}`),
+  comments: (id: string) =>
+    req<Comment[]>('GET', `/api/threads/${encodeURIComponent(id)}/comments`),
 
   createBubble: (instance: string, workspace: string, name: string) =>
     req<{ id: string }>('POST', '/api/bubbles', { instance, workspace, name }),

@@ -7,6 +7,7 @@
   import Minimap from './Minimap.svelte';
   import Omnibar from './Omnibar.svelte';
   import BirthForm from './BirthForm.svelte';
+  import BubbleDetail from './BubbleDetail.svelte';
   import ProjectCombobox from './ProjectCombobox.svelte';
 
   let omni = $state(false);
@@ -140,6 +141,9 @@
 <Omnibar bind:open={omni} onbirth={startBirth} />
 {#if birthTarget}
   <BirthForm bubble={birthTarget} onclose={() => (birthTarget = null)} />
+{/if}
+{#if store.detail}
+  <BubbleDetail />
 {/if}
 
 <style>

@@ -32,8 +32,8 @@
   <button
     class="orb"
     class:busy
-    onclick={() => (pinned = !pinned)}
-    aria-label={bubble.name}
+    onclick={() => store.openDetail(bubble)}
+    aria-label="open {bubble.name}"
   >
     <span class="sheen"></span>
     {#if bubble.threads > 0}<span class="badge">{bubble.threads}</span>{/if}
@@ -55,6 +55,7 @@
     {#if bubble.outcome}<p class="outcome">🎯 {bubble.outcome}</p>{/if}
 
     <div class="acts">
+      <button class="open" onclick={() => store.openDetail(bubble)}>🔎 open</button>
       {#if !isDone}
         {#if isReviewed}
           <button onclick={() => act(() => api.unreview(bubble.id))}>↩ un-review</button>
@@ -222,9 +223,7 @@
     width: 236px;
     padding: 0.85rem 0.9rem;
     border-radius: 16px;
-    background: color-mix(in oklab, var(--surface-solid) 74%, transparent);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+    background: var(--surface-solid);
     border: 1px solid color-mix(in oklab, var(--glow) 30%, var(--line));
     box-shadow: 0 20px 46px var(--shadow-strong);
     display: grid;
@@ -285,11 +284,13 @@
   }
   .acts {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.4rem;
     margin-top: 0.15rem;
   }
   .acts button {
-    flex: 1;
+    flex: 1 1 auto;
+    min-width: 0;
     padding: 0.4rem 0.4rem;
     border-radius: 9px;
     border: 1px solid var(--line);
@@ -302,6 +303,13 @@
   .acts button:hover {
     background: var(--hover);
     border-color: color-mix(in oklab, var(--glow) 40%, var(--line));
+  }
+  /* primary action: its own full-width row so the pair below never overflows */
+  .acts button.open {
+    flex-basis: 100%;
+    border-color: color-mix(in oklab, var(--glow) 45%, var(--line));
+    color: var(--text);
+    font-weight: 600;
   }
 
   @media (prefers-reduced-motion: reduce) {

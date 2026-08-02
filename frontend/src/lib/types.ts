@@ -38,6 +38,65 @@ export interface ThreadHit {
   open: boolean;
 }
 
+// ---- Thread interior (INTERIOR-PLAN.md) ----
+
+export interface ThreadNode {
+  id: string; // namespaced slug:project:workitem
+  seq: number;
+  title: string;
+  active: boolean;
+  owner?: string;
+  parent?: string;
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface TOCEntry {
+  level: number;
+  title: string;
+  slug: string;
+}
+
+export interface Todo {
+  text: string;
+  done: boolean;
+}
+
+export interface Artifact {
+  title: string;
+  toc: TOCEntry[];
+  markdown: string;
+}
+
+export interface Logbook {
+  markdown: string;
+  todos: Todo[];
+  dod?: Todo[];
+  phased: boolean;
+}
+
+export interface ThreadDetail {
+  id: string;
+  seq: number;
+  title: string;
+  kind: 'simple' | 'phased';
+  active: boolean;
+  priority?: string;
+  assignees?: string[];
+  artifacts: Artifact[];
+  logbook?: Logbook;
+  revisions: Artifact[];
+  created_at: string;
+  completed_at?: string;
+}
+
+export interface Comment {
+  id: string;
+  author: string;
+  markdown: string;
+  created_at: string;
+}
+
 export interface Notification {
   id: number;
   at: string;

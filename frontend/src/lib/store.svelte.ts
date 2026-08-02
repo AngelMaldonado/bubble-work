@@ -24,6 +24,9 @@ class Store {
   project = $state<string>('');
   polling = $state(false);
 
+  // the bubble whose timeline detail panel is open (null = closed).
+  detail = $state<BubbleView | null>(null);
+
   private timer: ReturnType<typeof setInterval> | null = null;
 
   get instances(): string[] {
@@ -156,6 +159,14 @@ class Store {
 
   bubble(id: string): BubbleView | undefined {
     return this.bubbles.find((b) => b.id === id);
+  }
+
+  openDetail(b: BubbleView): void {
+    this.detail = b;
+  }
+
+  closeDetail(): void {
+    this.detail = null;
   }
 }
 

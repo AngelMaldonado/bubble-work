@@ -19,6 +19,9 @@ type Backend interface {
 	BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
 	SetContract(ctx context.Context, bubbleID string, in domain.ContractInput) (domain.Contract, error)
 	CloseBubble(ctx context.Context, bubbleID string) error
+	Timeline(ctx context.Context, bubbleID string) ([]domain.ThreadNode, error)
+	ThreadDetail(ctx context.Context, threadID string) (domain.ThreadDetail, error)
+	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
 }
 
 // withActor lifts the MCP-verified identity (carried in req.Extra.TokenInfo by
@@ -55,6 +58,18 @@ type contractIn struct {
 }
 type closeOut struct {
 	OK bool `json:"ok"`
+}
+type timelineIn struct {
+	BubbleID string `json:"bubble_id" jsonschema:"the bubble id (short or namespaced) whose thread history to read"`
+}
+type timelineOut struct {
+	Threads []domain.ThreadNode `json:"threads"`
+}
+type threadIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the thread id from thread_timeline, or a work-item id"`
+}
+type commentsOut struct {
+	Comments []domain.Comment `json:"comments"`
 }
 
 // Handler builds the MCP server and returns a streamable-HTTP handler to mount.
@@ -100,6 +115,36 @@ func Handler(b Backend) http.Handler {
 				return nil, closeOut{}, err
 			}
 			return nil, closeOut{OK: true}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "thread_timeline", Description: "List a bubble's threads newest-first — how the bubble has progressed over time (INTERIOR Phase 10). Read this to understand a bubble before acting."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in timelineIn) (*sdk.CallToolResult, timelineOut, error) {
+			ts, err := b.Timeline(withActor(ctx, req), in.BubbleID)
+			if err != nil {
+				return nil, timelineOut{}, err
+			}
+			return nil, timelineOut{Threads: ts}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "read_thread", Description: "Read a thread's interior: work artifacts (Brief), the Logbook, its Definition of Done, and revisions. REQUIRED before implementing a thread — the birth rule says confirm the outcome and DoD first (§3)."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in threadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.ThreadDetail(withActor(ctx, req), in.ThreadID)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "thread_comments", Description: "Read a thread's discussion (comments), oldest-first (INTERIOR Phase 12)."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in threadIn) (*sdk.CallToolResult, commentsOut, error) {
+			cs, err := b.ThreadComments(withActor(ctx, req), in.ThreadID)
+			if err != nil {
+				return nil, commentsOut{}, err
+			}
+			return nil, commentsOut{Comments: cs}, nil
 		})
 
 	return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, nil)

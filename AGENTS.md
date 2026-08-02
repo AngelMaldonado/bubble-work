@@ -50,6 +50,15 @@ closing or redefining a bubble when its outcome no longer justifies the work.
   member. The framework's rules are enforced server-side, so they cannot be
   bypassed from any client.
 
+## Surface parity (default)
+
+A server capability lands on **all three client surfaces in the same change**:
+the REST API, the CLI thin client, and the MCP tools. The logic lives in a
+server method that each surface reuses (CLI over HTTP, MCP calling the method
+directly), so they never drift. The web UI follows when the capability has a
+visual form. Only skip a surface when the capability is inherently specific to
+one (e.g. mds rendering is UI-only) — and say so.
+
 ## Working protocol
 
 Before: read the thread, identify its Bubble/Brief/Logbook, repair missing birth

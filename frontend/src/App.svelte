@@ -6,7 +6,10 @@
 
   onMount(() => {
     void store.boot();
-    return () => store.stopPolling();
+    return () => {
+      store.stopStream();
+      store.stopSecondary();
+    };
   });
 </script>
 

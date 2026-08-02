@@ -77,6 +77,11 @@ type Server struct {
 	bubblesCache map[string]cachedBubbles
 	sf           singleflight.Group
 
+	// subs are live SSE listeners (F4). broadcast() nudges each when the snapshot
+	// changes so connected boards update without polling.
+	subsMu sync.Mutex
+	subs   map[chan struct{}]struct{}
+
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
 	startedAt   time.Time
@@ -129,11 +134,40 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		now:          time.Now,
 		cache:        map[string]cachedActor{},
 		bubblesCache: map[string]cachedBubbles{},
+		subs:         map[chan struct{}]struct{}{},
 		adminEmails:  map[string]bool{},
 		startedAt:    time.Now(),
 	}
 	s.loadPersistedSnapshots()
 	return s
+}
+
+// subscribe registers an SSE listener; unsubscribe removes it. broadcast nudges
+// every listener non-blockingly (a full buffer means an update is already
+// pending, so the drop is harmless).
+func (s *Server) subscribe() chan struct{} {
+	ch := make(chan struct{}, 1)
+	s.subsMu.Lock()
+	s.subs[ch] = struct{}{}
+	s.subsMu.Unlock()
+	return ch
+}
+
+func (s *Server) unsubscribe(ch chan struct{}) {
+	s.subsMu.Lock()
+	delete(s.subs, ch)
+	s.subsMu.Unlock()
+}
+
+func (s *Server) broadcast() {
+	s.subsMu.Lock()
+	defer s.subsMu.Unlock()
+	for ch := range s.subs {
+		select {
+		case ch <- struct{}{}:
+		default:
+		}
+	}
 }
 
 // loadPersistedSnapshots warms the in-memory snapshot from sqlite at boot (F2),
@@ -279,6 +313,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/workspaces", s.restAuth(s.handleCreateWorkspace))
 	mux.HandleFunc("POST /api/bubbles", s.restAuth(s.handleCreateBubble))
 	mux.HandleFunc("GET /api/bubbles", s.restAuth(s.handleBubbles))
+	mux.HandleFunc("GET /api/stream", s.restAuth(s.handleStream))
 	mux.HandleFunc("GET /api/bubbles/{id}/heat", s.restAuth(s.handleHeat))
 	mux.HandleFunc("GET /api/bubbles/{id}/threads", s.restAuth(s.handleTimeline))
 	mux.HandleFunc("POST /api/threads/birth", s.restAuth(s.handleBirth))
@@ -794,6 +829,7 @@ func (s *Server) patchCachedBubble(slug, id string, apply func(*domain.Bubble)) 
 	for i := range c.bubbles {
 		if c.bubbles[i].ID == id {
 			apply(&c.bubbles[i])
+			s.broadcast() // reflect the write to live SSE listeners immediately (F4)
 			return
 		}
 	}
@@ -976,6 +1012,7 @@ func (s *Server) refreshInstance(ctx context.Context, inst domain.Instance) ([]d
 		s.bubblesMu.Unlock()
 		// Persist outside the lock so restarts serve the last-known board (F2).
 		s.persistSnapshot(inst.Slug, bs)
+		s.broadcast() // nudge live SSE listeners (F4)
 		return bs, nil
 	})
 	if err != nil {
@@ -1274,6 +1311,62 @@ func (s *Server) handleBubbles(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, vs)
+}
+
+// handleStream is a Server-Sent Events stream of the caller's bubbles (F4). It
+// pushes the current board on connect and whenever the snapshot changes, so the
+// UI doesn't have to poll. A heartbeat keeps intermediaries from timing out.
+func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
+		return
+	}
+	h := w.Header()
+	h.Set("Content-Type", "text/event-stream")
+	h.Set("Cache-Control", "no-cache")
+	h.Set("Connection", "keep-alive")
+	h.Set("X-Accel-Buffering", "no") // stop reverse proxies buffering the stream
+
+	sub := s.subscribe()
+	defer s.unsubscribe(sub)
+
+	send := func() bool {
+		vs, err := s.Bubbles(r.Context())
+		if err != nil {
+			return true // transient upstream — keep the connection, retry next nudge
+		}
+		data, err := json.Marshal(vs)
+		if err != nil {
+			return true
+		}
+		if _, err := fmt.Fprintf(w, "event: bubbles\ndata: %s\n\n", data); err != nil {
+			return false
+		}
+		flusher.Flush()
+		return true
+	}
+	if !send() { // initial board on connect
+		return
+	}
+
+	ping := time.NewTicker(25 * time.Second)
+	defer ping.Stop()
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-sub:
+			if !send() {
+				return
+			}
+		case <-ping.C:
+			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
+				return
+			}
+			flusher.Flush()
+		}
+	}
 }
 
 func (s *Server) handleHeat(w http.ResponseWriter, r *http.Request) {

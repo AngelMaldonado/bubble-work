@@ -3,7 +3,8 @@
 import { api, ApiError, getToken, setToken, clearToken } from './api';
 import type { Actor, BubbleView, Inbox, Level } from './types';
 
-const POLL_MS = 20_000;
+const SEC_MS = 30_000; // secondary timer: inbox freshness (+ cross-org when godmode)
+const RECONNECT_MS = 3_000; // SSE reconnect backoff
 const FOCUS_CAP = 5; // soft warning threshold for the In-progress band
 
 class Store {
@@ -27,7 +28,8 @@ class Store {
   // the bubble whose timeline detail panel is open (null = closed).
   detail = $state<BubbleView | null>(null);
 
-  private timer: ReturnType<typeof setInterval> | null = null;
+  private secTimer: ReturnType<typeof setInterval> | null = null;
+  private stream: AbortController | null = null;
 
   get instances(): string[] {
     return this.actor?.instances ?? [];
@@ -94,7 +96,8 @@ class Store {
       this.actor = await api.whoami();
       this.authed = true;
       await this.refresh();
-      this.startPolling();
+      this.startStream();
+      this.startSecondary();
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {
         this.signOut();
@@ -132,14 +135,98 @@ class Store {
     }
   }
 
-  startPolling(): void {
-    this.stopPolling();
-    this.timer = setInterval(() => void this.refresh(), POLL_MS);
+  // ---- live updates (F4): SSE stream for bubbles, light timer for the rest ----
+
+  private get crossOrg(): boolean {
+    return this.allOrgs && this.godmode;
   }
 
-  stopPolling(): void {
-    if (this.timer) clearInterval(this.timer);
-    this.timer = null;
+  async refreshInbox(): Promise<void> {
+    this.inbox = await api.inbox().catch(() => this.inbox);
+  }
+
+  // The stream is actor-scoped; the cross-org (godmode) board and the inbox are
+  // refreshed on a slow timer instead of polling bubbles every few seconds.
+  startSecondary(): void {
+    this.stopSecondary();
+    this.secTimer = setInterval(() => {
+      if (this.crossOrg) void this.refresh();
+      else void this.refreshInbox();
+    }, SEC_MS);
+  }
+
+  stopSecondary(): void {
+    if (this.secTimer) clearInterval(this.secTimer);
+    this.secTimer = null;
+  }
+
+  startStream(): void {
+    this.stopStream();
+    const ac = new AbortController();
+    this.stream = ac;
+    void this.consumeStream(ac);
+  }
+
+  stopStream(): void {
+    this.stream?.abort();
+    this.stream = null;
+  }
+
+  private async consumeStream(ac: AbortController): Promise<void> {
+    while (this.authed && this.stream === ac && !ac.signal.aborted) {
+      try {
+        const res = await fetch('/api/stream', {
+          headers: { Authorization: `Bearer ${getToken()}` },
+          signal: ac.signal,
+        });
+        if (res.status === 401 || res.status === 403) {
+          this.signOut();
+          return;
+        }
+        if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+
+        this.error = null;
+        const reader = res.body.getReader();
+        const dec = new TextDecoder();
+        let buf = '';
+        for (;;) {
+          const { value, done } = await reader.read();
+          if (done) break;
+          buf += dec.decode(value, { stream: true });
+          let i: number;
+          while ((i = buf.indexOf('\n\n')) >= 0) {
+            this.handleFrame(buf.slice(0, i));
+            buf = buf.slice(i + 2);
+          }
+        }
+      } catch {
+        if (ac.signal.aborted) return;
+      }
+      // dropped connection — back off, then the while-loop reconnects
+      await new Promise((r) => setTimeout(r, RECONNECT_MS));
+    }
+  }
+
+  private handleFrame(frame: string): void {
+    let event = 'message';
+    let data = '';
+    for (const line of frame.split('\n')) {
+      if (line.startsWith(':')) return; // heartbeat/comment
+      if (line.startsWith('event:')) event = line.slice(6).trim();
+      else if (line.startsWith('data:')) data += line.slice(5).trim();
+    }
+    if (event !== 'bubbles' || !data) return;
+    try {
+      const vs = JSON.parse(data) as BubbleView[];
+      // in cross-org (godmode) mode the board comes from the admin poll, not this
+      // actor-scoped stream.
+      if (!this.crossOrg) {
+        this.bubbles = vs;
+        this.error = null;
+      }
+    } catch {
+      /* ignore malformed frame */
+    }
   }
 
   async signIn(token: string): Promise<void> {
@@ -149,7 +236,8 @@ class Store {
   }
 
   signOut(): void {
-    this.stopPolling();
+    this.stopStream();
+    this.stopSecondary();
     clearToken();
     this.actor = null;
     this.bubbles = [];

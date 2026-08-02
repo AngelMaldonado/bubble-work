@@ -180,6 +180,37 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 }
 
+// F4: the SSE stream pushes the board on connect as an `event: bubbles` frame.
+func TestStreamPushesInitialBoard(t *testing.T) {
+	ts, key := authedServer(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	req, _ := http.NewRequestWithContext(ctx, http.MethodGet, ts.URL+"/api/stream", nil)
+	req.Header.Set("Authorization", "Bearer "+key)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("connect: %v", err)
+	}
+	defer resp.Body.Close()
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/event-stream") {
+		t.Fatalf("content-type = %q, want text/event-stream", ct)
+	}
+	buf := make([]byte, 4096)
+	var acc strings.Builder
+	for !strings.Contains(acc.String(), "\n\n") {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			acc.WriteString(string(buf[:n]))
+		}
+		if err != nil {
+			break
+		}
+	}
+	if got := acc.String(); !strings.Contains(got, "event: bubbles") || !strings.Contains(got, "data:") {
+		t.Fatalf("no initial bubbles frame: %q", got)
+	}
+}
+
 // F2: a persisted snapshot warms the in-memory board at boot, so reads serve the
 // last-known state immediately after a restart (before any Plane fetch).
 func TestSnapshotWarmsOnBoot(t *testing.T) {

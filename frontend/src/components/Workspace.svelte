@@ -7,6 +7,7 @@
   import Minimap from './Minimap.svelte';
   import Omnibar from './Omnibar.svelte';
   import BirthForm from './BirthForm.svelte';
+  import ProjectCombobox from './ProjectCombobox.svelte';
 
   let omni = $state(false);
   let birthTarget = $state<BubbleView | null>(null);
@@ -94,17 +95,7 @@
       {/if}
 
       {#if store.projects.length > 1}
-        <select
-          class="picker"
-          value={store.project}
-          onchange={(e) => store.selectProject(e.currentTarget.value)}
-          aria-label="project filter"
-        >
-          <option value="">all projects</option>
-          {#each store.projects as p (p.id)}
-            <option value={p.id}>{p.name}</option>
-          {/each}
-        </select>
+        <span class="projwrap"><ProjectCombobox /></span>
       {/if}
 
       <span class="who" title={store.actor?.email}>
@@ -132,9 +123,15 @@
         <span class="tico">{theme.icon}</span>
         <span class="tlabel">{themeLabel}</span>
       </button>
-      <span class="dot" class:live={store.polling} title={store.polling ? 'syncing' : 'polling'}
-        >●</span
+      <span
+        class="state"
+        class:live={!store.error}
+        class:err={!!store.error}
+        title={store.error ? 'cannot reach the server' : store.polling ? 'syncing…' : 'connected'}
       >
+        <span class="pip"></span>
+        {store.error ? 'offline' : store.polling ? 'syncing' : 'live'}
+      </span>
     </div>
   </footer>
 </div>
@@ -252,6 +249,12 @@
   .right {
     justify-content: flex-end;
   }
+  .projwrap {
+    display: inline-flex;
+    flex: 0 0 auto;
+    width: 9.5rem;
+    max-width: 28vw;
+  }
   .picker {
     background: var(--surface-solid);
     color: var(--text);
@@ -287,6 +290,8 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+    flex: 0 0 auto; /* never collapse to zero — always show the name */
+    max-width: 16rem;
   }
   .hint b {
     color: var(--muted);
@@ -312,12 +317,37 @@
   .tlabel {
     font-size: 0.72rem;
   }
-  .dot {
+  .state {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     color: var(--faint);
     transition: color 0.3s ease;
   }
-  .dot.live {
+  .state .pip {
+    width: 7px;
+    height: 7px;
+    border-radius: 999px;
+    background: currentColor;
+    box-shadow: 0 0 0 0 currentColor;
+  }
+  .state.live {
     color: oklch(0.7 0.16 145);
+  }
+  .state.live .pip {
+    animation: pulse 2.4s ease-in-out infinite;
+  }
+  .state.err {
+    color: oklch(0.68 0.19 25);
+  }
+  @keyframes pulse {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in oklab, currentColor 60%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 4px transparent;
+    }
   }
 
   @media (max-width: 560px) {

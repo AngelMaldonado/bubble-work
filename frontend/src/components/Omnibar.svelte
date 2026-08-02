@@ -19,6 +19,7 @@
   };
 
   let query = $state('');
+  let commandMode = $state(false); // entered by typing ">"; the ">" is never kept as text
   let sel = $state(0);
   let threads = $state<ThreadHit[]>([]);
   let searching = $state(false);
@@ -31,8 +32,17 @@
   let pendingBubble = $state<BubbleView | null>(null);
   let argValue = $state('');
 
-  const isCommand = $derived(query.startsWith('>'));
-  const cmdQuery = $derived(isCommand ? query.slice(1).trim() : '');
+  // Typing ">" flips into command mode and is consumed (rendered as the mode
+  // badge, never shown as a literal character in the field).
+  $effect(() => {
+    if (!commandMode && query.startsWith('>')) {
+      commandMode = true;
+      query = query.replace(/^>+\s*/, '');
+    }
+  });
+
+  const isCommand = $derived(commandMode);
+  const cmdQuery = $derived(query.trim());
 
   const COMMANDS: Cmd[] = [
     { id: 'refresh', label: 'refresh', hint: 're-poll the server', run: () => store.refresh() },
@@ -214,6 +224,7 @@
 
   function reset() {
     query = '';
+    commandMode = false;
     argValue = '';
     stage = 'root';
     pending = null;
@@ -271,11 +282,17 @@
   function onKey(e: KeyboardEvent) {
     if (e.key === 'Escape') {
       e.preventDefault();
-      if (stage !== 'root') {
+      if (stage !== 'root' || commandMode) {
         reset();
       } else {
         close();
       }
+      return;
+    }
+    // Backspace on an empty command field leaves command mode (removes the badge).
+    if (e.key === 'Backspace' && commandMode && query === '' && stage === 'root') {
+      e.preventDefault();
+      commandMode = false;
       return;
     }
     if (stage === 'input') {
@@ -309,7 +326,11 @@
   ></div>
   <div class="palette" role="dialog" aria-modal="true">
     <div class="input">
-      <span class="glyph">{isCommand || stage !== 'root' ? '›' : '⌘K'}</span>
+      {#if isCommand || stage !== 'root'}
+        <span class="glyph cmd" aria-label="command mode">›</span>
+      {:else}
+        <span class="glyph">⌘K</span>
+      {/if}
       {#if stage === 'pick'}
         <input
           bind:this={inputEl}
@@ -329,7 +350,7 @@
           bind:this={inputEl}
           bind:value={query}
           onkeydown={onKey}
-          placeholder="search threads · type > for commands"
+          placeholder={commandMode ? 'run a command…' : 'search threads · type > for commands'}
         />
       {/if}
     </div>
@@ -422,11 +443,25 @@
     box-shadow: 0 0 0 3px color-mix(in oklab, var(--wip) 20%, transparent);
   }
   .glyph {
-    font-size: 0.8rem;
-    color: var(--faint);
-    font-weight: 700;
-    min-width: 1.7rem;
-    padding-left: 0.15rem;
+    display: inline-grid;
+    place-content: center;
+    min-width: 2.1rem;
+    height: 1.7rem;
+    padding: 0 0.4rem;
+    border-radius: 8px;
+    background: var(--hover);
+    border: 1px solid var(--line);
+    font-size: 0.82rem;
+    font-weight: 800;
+    color: var(--muted);
+    flex: none;
+  }
+  /* command-mode badge — same footprint as ⌘K, bigger chevron */
+  .glyph.cmd {
+    font-size: 1.15rem;
+    line-height: 1;
+    color: var(--wip);
+    border-color: color-mix(in oklab, var(--wip) 45%, var(--line));
   }
   .input input {
     flex: 1;

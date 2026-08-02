@@ -120,9 +120,10 @@ type cachedBubbles struct {
 }
 
 // New builds a server. With no instances configured (or none authorized for the
-// caller) it degrades gracefully to an empty world.
+// caller) it degrades gracefully to an empty world. Any persisted snapshot is
+// loaded so the board serves the last-known state instantly after a restart.
 func New(st *store.Store, cycle time.Duration) *Server {
-	return &Server{
+	s := &Server{
 		store:        st,
 		cycle:        cycle,
 		now:          time.Now,
@@ -130,6 +131,45 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		bubblesCache: map[string]cachedBubbles{},
 		adminEmails:  map[string]bool{},
 		startedAt:    time.Now(),
+	}
+	s.loadPersistedSnapshots()
+	return s
+}
+
+// loadPersistedSnapshots warms the in-memory snapshot from sqlite at boot (F2),
+// so the first reads after a restart/redeploy return the last-known board
+// without waiting for the background refresher's first pass.
+func (s *Server) loadPersistedSnapshots() {
+	rows, err := s.store.LoadSnapshots()
+	if err != nil {
+		log.Printf("snapshot load: %v", err)
+		return
+	}
+	s.bubblesMu.Lock()
+	defer s.bubblesMu.Unlock()
+	for _, r := range rows {
+		var bs []domain.Bubble
+		if err := json.Unmarshal([]byte(r.Bubbles), &bs); err != nil {
+			log.Printf("snapshot load %s: %v", r.Slug, err)
+			continue
+		}
+		t, _ := time.Parse(time.RFC3339, r.UpdatedAt)
+		s.bubblesCache[r.Slug] = cachedBubbles{bubbles: bs, updatedAt: t}
+	}
+	if n := len(s.bubblesCache); n > 0 {
+		log.Printf("loaded %d persisted instance snapshot(s)", n)
+	}
+}
+
+// persistSnapshot writes an instance's snapshot to sqlite (best-effort).
+func (s *Server) persistSnapshot(slug string, bs []domain.Bubble) {
+	data, err := json.Marshal(bs)
+	if err != nil {
+		log.Printf("snapshot marshal %s: %v", slug, err)
+		return
+	}
+	if err := s.store.SaveSnapshot(slug, string(data), s.now().Format(time.RFC3339)); err != nil {
+		log.Printf("snapshot save %s: %v", slug, err)
 	}
 }
 
@@ -926,13 +966,16 @@ func (s *Server) refreshInstance(ctx context.Context, inst domain.Instance) ([]d
 			return nil, err
 		}
 		s.bubblesMu.Lock()
-		defer s.bubblesMu.Unlock()
 		prev, had := s.bubblesCache[inst.Slug]
 		// A partial must not replace a fuller snapshot — hold the better one.
 		if partial && had && len(prev.bubbles) > len(bs) {
+			s.bubblesMu.Unlock()
 			return prev.bubbles, nil
 		}
 		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, updatedAt: s.now(), partial: partial}
+		s.bubblesMu.Unlock()
+		// Persist outside the lock so restarts serve the last-known board (F2).
+		s.persistSnapshot(inst.Slug, bs)
 		return bs, nil
 	})
 	if err != nil {

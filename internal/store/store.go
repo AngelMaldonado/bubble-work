@@ -54,6 +54,11 @@ CREATE TABLE IF NOT EXISTS member_prefs (
   email          TEXT PRIMARY KEY,
   notify_enabled INTEGER NOT NULL DEFAULT 0
 );
+CREATE TABLE IF NOT EXISTS bubble_snapshots (
+  slug       TEXT PRIMARY KEY,   -- instance slug
+  bubbles    TEXT NOT NULL,      -- JSON-encoded []domain.Bubble (materialized read model)
+  updated_at TEXT NOT NULL       -- RFC3339 timestamp of the fetch
+);
 `
 
 // Store wraps the SQLite connection.
@@ -363,4 +368,40 @@ func (s *Store) SetNotifyEnabled(email string, enabled bool) error {
 		 ON CONFLICT(email) DO UPDATE SET notify_enabled = excluded.notify_enabled`,
 		email, v)
 	return err
+}
+
+// Snapshot is a persisted materialized read model for one instance (F2). bubbles
+// is opaque JSON to the store — the server owns its shape.
+type Snapshot struct {
+	Slug      string
+	Bubbles   string
+	UpdatedAt string
+}
+
+// SaveSnapshot upserts an instance's materialized bubble snapshot so a restart
+// can serve the last-known board instantly, before the background refresher runs.
+func (s *Store) SaveSnapshot(slug, bubblesJSON, updatedAt string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO bubble_snapshots(slug, bubbles, updated_at) VALUES(?, ?, ?)
+		 ON CONFLICT(slug) DO UPDATE SET bubbles = excluded.bubbles, updated_at = excluded.updated_at`,
+		slug, bubblesJSON, updatedAt)
+	return err
+}
+
+// LoadSnapshots returns every persisted instance snapshot (for boot warm-up).
+func (s *Store) LoadSnapshots() ([]Snapshot, error) {
+	rows, err := s.db.Query(`SELECT slug, bubbles, updated_at FROM bubble_snapshots`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Snapshot
+	for rows.Next() {
+		var sn Snapshot
+		if err := rows.Scan(&sn.Slug, &sn.Bubbles, &sn.UpdatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, sn)
+	}
+	return out, rows.Err()
 }

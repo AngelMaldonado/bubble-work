@@ -180,6 +180,22 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 }
 
+// F2: a persisted snapshot warms the in-memory board at boot, so reads serve the
+// last-known state immediately after a restart (before any Plane fetch).
+func TestSnapshotWarmsOnBoot(t *testing.T) {
+	st := openStore(t)
+	if err := st.SaveSnapshot("ws", `[{"ID":"ws:p:m","Name":"Persisted"}]`, "2026-08-02T00:00:00Z"); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	srv.bubblesMu.Lock()
+	c, ok := srv.bubblesCache["ws"]
+	srv.bubblesMu.Unlock()
+	if !ok || len(c.bubbles) != 1 || c.bubbles[0].Name != "Persisted" {
+		t.Fatalf("boot did not warm from persisted snapshot: %+v", c)
+	}
+}
+
 func TestInteriorEndpoints(t *testing.T) {
 	ts, key := authedServer(t)
 

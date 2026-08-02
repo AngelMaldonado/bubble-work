@@ -156,3 +156,37 @@ func TestContractOverlay(t *testing.T) {
 		t.Fatalf("close should preserve fields: %+v", c)
 	}
 }
+
+func TestSnapshotPersistence(t *testing.T) {
+	st := openTestStore(t)
+
+	if rows, err := st.LoadSnapshots(); err != nil || len(rows) != 0 {
+		t.Fatalf("fresh store: want no snapshots, got %v err=%v", rows, err)
+	}
+
+	if err := st.SaveSnapshot("ayetec", `[{"ID":"a"}]`, "2026-08-02T00:00:00Z"); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+	// upsert replaces, does not duplicate
+	if err := st.SaveSnapshot("ayetec", `[{"ID":"a"},{"ID":"b"}]`, "2026-08-02T01:00:00Z"); err != nil {
+		t.Fatalf("resave: %v", err)
+	}
+	if err := st.SaveSnapshot("cuby", `[]`, "2026-08-02T02:00:00Z"); err != nil {
+		t.Fatalf("save2: %v", err)
+	}
+
+	rows, err := st.LoadSnapshots()
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(rows) != 2 {
+		t.Fatalf("want 2 snapshots, got %d", len(rows))
+	}
+	got := map[string]Snapshot{}
+	for _, r := range rows {
+		got[r.Slug] = r
+	}
+	if got["ayetec"].Bubbles != `[{"ID":"a"},{"ID":"b"}]` || got["ayetec"].UpdatedAt != "2026-08-02T01:00:00Z" {
+		t.Fatalf("ayetec not upserted: %+v", got["ayetec"])
+	}
+}

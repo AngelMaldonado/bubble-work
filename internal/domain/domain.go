@@ -4,6 +4,8 @@ package domain
 import (
 	"context"
 	"time"
+
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 )
 
 // Lifecycle is a bubble's temperature/buoyancy state (§5.3).
@@ -161,6 +163,45 @@ type ThreadHit struct {
 	BubbleName string `json:"bubble_name"`
 	Instance   string `json:"instance"`
 	Open       bool   `json:"open"`
+}
+
+// ThreadNode is one entry in a bubble's timeline — the git-log-oneline history
+// (INTERIOR-PLAN.md Phase 10). ID is namespaced (slug:project:workitem) so a
+// client can open the thread directly.
+type ThreadNode struct {
+	ID          string     `json:"id"`
+	Seq         int        `json:"seq"`
+	Title       string     `json:"title"`
+	Active      bool       `json:"active"`
+	Owner       string     `json:"owner,omitempty"`
+	Parent      string     `json:"parent,omitempty"` // raw parent work-item id
+	CreatedAt   time.Time  `json:"created_at"`
+	CompletedAt *time.Time `json:"completed_at,omitempty"`
+}
+
+// ThreadDetail is a thread's full interior: work-artifact files, the logbook,
+// and revision artifacts (INTERIOR-PLAN.md Phase 11). Read-only in v1.
+type ThreadDetail struct {
+	ID          string        `json:"id"`
+	Seq         int           `json:"seq"`
+	Title       string        `json:"title"`
+	Kind        string        `json:"kind"` // "simple" | "phased"
+	Active      bool          `json:"active"`
+	Priority    string        `json:"priority,omitempty"`
+	Assignees   []string      `json:"assignees,omitempty"`
+	Artifacts   []md.Artifact `json:"artifacts"`
+	Logbook     *md.Logbook   `json:"logbook,omitempty"`
+	Revisions   []md.Artifact `json:"revisions"`
+	CreatedAt   time.Time     `json:"created_at"`
+	CompletedAt *time.Time    `json:"completed_at,omitempty"`
+}
+
+// Comment is one rendered entry in a thread's comment feed (Phase 12).
+type Comment struct {
+	ID        string    `json:"id"`
+	Author    string    `json:"author"`
+	Markdown  string    `json:"markdown"`
+	CreatedAt time.Time `json:"created_at"`
 }
 
 // BirthRequest carries the two birth artifacts the policy engine enforces (§3).

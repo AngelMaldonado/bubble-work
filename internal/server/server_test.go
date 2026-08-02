@@ -42,6 +42,19 @@ func fakePlane() *httptest.Server {
 			io.WriteString(w, `{"results":[{"id":"state-1","group":"unstarted","default":true}]}`)
 		case strings.HasSuffix(p, "/work-items/") && r.Method == http.MethodPost:
 			io.WriteString(w, `{"id":"new-wid-123"}`)
+		case strings.Contains(p, "/modules/m1/") && strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[
+				{"id":"wi-1","name":"First thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"sort_order":1000,"assignees":["u1"]},
+				{"id":"wi-2","name":"Second thread","created_at":"2026-02-01T10:00:00Z","completed_at":"2026-03-01T00:00:00Z","sequence_id":2,"sort_order":2000,"parent":"wi-1","assignees":[]}
+			]}`)
+		case strings.HasSuffix(p, "/relations/"):
+			io.WriteString(w, `{"relates_to":["rev-1"],"blocking":[],"blocked_by":[]}`)
+		case strings.HasSuffix(p, "/comments/"):
+			io.WriteString(w, `{"results":[{"id":"c1","actor":"u1","comment_html":"<p>looks good</p>","created_at":"2026-04-01T00:00:00Z"}]}`)
+		case r.Method == http.MethodGet && strings.Contains(p, "/work-items/rev-1/"):
+			io.WriteString(w, `{"id":"rev-1","name":"rev: first pass","description_html":"<h2>Findings</h2><p>looks solid</p>","sequence_id":9}`)
+		case r.Method == http.MethodGet && strings.Contains(p, "/work-items/"):
+			io.WriteString(w, `{"id":"wi-1","name":"First thread","description_html":"<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul><li data-checked='true'>scaffold</li><li data-checked='false'>wire</li></ul>","sequence_id":1,"priority":"high","assignees":["u1"],"created_at":"2026-01-01T10:00:00Z"}`)
 		case strings.HasSuffix(p, "/projects/"):
 			io.WriteString(w, `{"results":[{"id":"p1","name":"Proj One"},{"id":"p2","name":"Proj Two"}]}`)
 		case strings.HasSuffix(p, "/modules/") && strings.Contains(p, "/projects/p1/"):
@@ -164,6 +177,79 @@ func TestFederationWholeWorkspace(t *testing.T) {
 	}
 	if !names["Bubble A"] || !names["Bubble B"] {
 		t.Fatalf("expected bubbles from both projects, got %v", names)
+	}
+}
+
+func TestInteriorEndpoints(t *testing.T) {
+	ts, key := authedServer(t)
+
+	// Timeline: newest thread first, owner resolved, ids namespaced.
+	code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/threads", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("timeline status %d: %s", code, body)
+	}
+	var nodes []domain.ThreadNode
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		t.Fatalf("decode timeline: %v", err)
+	}
+	if len(nodes) != 2 {
+		t.Fatalf("want 2 nodes, got %d: %s", len(nodes), body)
+	}
+	if nodes[0].ID != "ws:p1:wi-2" { // Feb is newer than Jan
+		t.Errorf("timeline not newest-first: %+v", nodes)
+	}
+	if nodes[1].ID != "ws:p1:wi-1" || nodes[1].Owner != "Owner" {
+		t.Errorf("owner not resolved / wrong node: %+v", nodes[1])
+	}
+	if nodes[1].Active != true || nodes[0].Active != false {
+		t.Errorf("active flags wrong: %+v", nodes)
+	}
+
+	// Thread detail: artifacts, logbook todos, revisions, kind.
+	code, body = do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail status %d: %s", code, body)
+	}
+	var d domain.ThreadDetail
+	if err := json.Unmarshal(body, &d); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if d.Kind != "simple" {
+		t.Errorf("kind = %q, want simple", d.Kind)
+	}
+	if d.Logbook == nil || len(d.Logbook.Todos) != 2 || !d.Logbook.Todos[0].Done || d.Logbook.Todos[1].Done {
+		t.Errorf("logbook todos wrong: %+v", d.Logbook)
+	}
+	if len(d.Artifacts) == 0 || d.Artifacts[0].Title != "Brief" {
+		t.Errorf("artifacts wrong: %+v", d.Artifacts)
+	}
+	if len(d.Revisions) != 1 || d.Revisions[0].Title != "first pass" {
+		t.Errorf("revisions wrong: %+v", d.Revisions)
+	}
+	if len(d.Assignees) != 1 || d.Assignees[0] != "Owner" {
+		t.Errorf("assignees wrong: %+v", d.Assignees)
+	}
+
+	// Comments: rendered to markdown, author resolved.
+	code, body = do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("comments status %d: %s", code, body)
+	}
+	var cs []domain.Comment
+	if err := json.Unmarshal(body, &cs); err != nil {
+		t.Fatalf("decode comments: %v", err)
+	}
+	if len(cs) != 1 || cs[0].Author != "Owner" || cs[0].Markdown != "looks good" {
+		t.Errorf("comments wrong: %+v", cs)
+	}
+}
+
+// A caller cannot read the interior of an instance they aren't a member of.
+func TestInteriorForbidsUnseenInstance(t *testing.T) {
+	ts, key := authedServer(t)
+	code, _ := do(t, http.MethodGet, ts.URL+"/api/threads/other:p1:wi-1", key, "")
+	if code != http.StatusForbidden {
+		t.Errorf("cross-instance read status = %d, want 403", code)
 	}
 }
 
@@ -309,7 +395,8 @@ func TestCreateWorkspaceAndBubble(t *testing.T) {
 
 func TestBirthCreatesWorkItem(t *testing.T) {
 	ts, key := authedServer(t)
-	body := `{"bubble_id":"ws:p1:m1","name":"New thread","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`
+	// Use m2 (empty baseline); m1 carries the interior fixture's threads.
+	body := `{"bubble_id":"ws:p2:m2","name":"New thread","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`
 
 	code, resp := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, body)
 	if code != http.StatusOK {
@@ -326,14 +413,14 @@ func TestBirthCreatesWorkItem(t *testing.T) {
 	var vs []domain.BubbleView
 	json.Unmarshal(lb, &vs)
 	for _, v := range vs {
-		if v.ID == "ws:p1:m1" {
+		if v.ID == "ws:p2:m2" {
 			if v.Threads != 1 {
 				t.Fatalf("want 1 thread after birth, got %d", v.Threads)
 			}
 			return
 		}
 	}
-	t.Fatal("bubble ws:p1:m1 not found after birth")
+	t.Fatal("bubble ws:p2:m2 not found after birth")
 }
 
 func TestContractAndClose(t *testing.T) {

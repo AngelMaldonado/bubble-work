@@ -173,6 +173,10 @@ func ParseTodos(section string) []Todo {
 	return out
 }
 
+// NewArtifact builds a single artifact (title + body) with a TOC derived from
+// the body's H2+ headings — used for free-form content like revision notes.
+func NewArtifact(title, body string) Artifact { return makeArtifact(title, body) }
+
 func makeArtifact(title, body string) Artifact {
 	return Artifact{Title: title, Markdown: strings.TrimSpace(body), TOC: toc(body)}
 }

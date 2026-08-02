@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,8 +20,9 @@ import (
 // can distinguish a rejected credential (401/403) from a transient upstream
 // failure (429/5xx) that should be retried rather than treated as "no access".
 type APIError struct {
-	Status int
-	Path   string
+	Status     int
+	Path       string
+	retryAfter time.Duration // from Retry-After, used internally for backoff
 }
 
 func (e *APIError) Error() string {
@@ -75,20 +77,64 @@ func (c *Client) projectBase() string {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
-	if err != nil {
+	const maxAttempts = 3 // 1 try + 2 retries
+	var lastErr error
+	for attempt := 0; attempt < maxAttempts; attempt++ {
+		if attempt > 0 {
+			// back off before retrying (429/5xx/transient). Honor Retry-After
+			// when present, else exponential 0.4s, 0.8s.
+			wait := time.Duration(400*(1<<(attempt-1))) * time.Millisecond
+			if ra, ok := lastErr.(*APIError); ok && ra.retryAfter > 0 {
+				wait = ra.retryAfter
+			}
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(wait):
+			}
+		}
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+		if err != nil {
+			return err
+		}
+		req.Header.Set("X-API-Key", c.APIKey)
+		resp, err := c.HTTP.Do(req)
+		if err != nil {
+			lastErr = err // network/timeout → retry
+			continue
+		}
+		// Retry only on rate-limit / server errors; other statuses are final.
+		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
+			lastErr = &APIError{Status: resp.StatusCode, Path: "GET " + path, retryAfter: retryAfter(resp)}
+			resp.Body.Close()
+			continue
+		}
+		if resp.StatusCode >= 300 {
+			resp.Body.Close()
+			return &APIError{Status: resp.StatusCode, Path: "GET " + path}
+		}
+		err = json.NewDecoder(resp.Body).Decode(out)
+		resp.Body.Close()
 		return err
 	}
-	req.Header.Set("X-API-Key", c.APIKey)
-	resp, err := c.HTTP.Do(req)
-	if err != nil {
-		return err
+	return lastErr
+}
+
+// retryAfter parses a Retry-After header expressed in whole seconds, capped at
+// 5s so a hostile value can't stall a fetch.
+func retryAfter(resp *http.Response) time.Duration {
+	v := resp.Header.Get("Retry-After")
+	if v == "" {
+		return 0
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode >= 300 {
-		return &APIError{Status: resp.StatusCode, Path: "GET " + path}
+	secs, err := strconv.Atoi(strings.TrimSpace(v))
+	if err != nil || secs <= 0 {
+		return 0
 	}
-	return json.NewDecoder(resp.Body).Decode(out)
+	if secs > 5 {
+		secs = 5
+	}
+	return time.Duration(secs) * time.Second
 }
 
 // send writes a JSON body to Plane with the given method and decodes the

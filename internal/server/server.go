@@ -50,8 +50,13 @@ const (
 	authTTL = 5 * time.Minute
 	// bubblesTTL caches an instance's fetched bubbles so repeated `ls` is instant.
 	bubblesTTL = 60 * time.Second
-	// fetchConcurrency bounds parallel Plane calls per instance fetch.
-	fetchConcurrency = 8
+	// partialTTL is a short TTL used when a fetch came back rate-limited/partial,
+	// so we retry soon instead of holding a degraded snapshot for the full TTL.
+	partialTTL = 15 * time.Second
+	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept modest
+	// so a full fetch (modules + work-items + cycles) doesn't burst past Plane's
+	// rate limit; get() also retries 429s with backoff.
+	fetchConcurrency = 4
 )
 
 // Server holds the overlay store and the cycle pulse. Plane clients are built
@@ -886,12 +891,29 @@ func (s *Server) instanceBubbles(ctx context.Context, inst domain.Instance) ([]d
 	}
 	s.bubblesMu.Unlock()
 
-	bs, err := s.fetchInstance(ctx, inst)
+	bs, partial, err := s.fetchInstance(ctx, inst)
 	if err != nil {
+		// Total failure (e.g. list-projects 429'd) — serve a prior snapshot if we
+		// have one rather than showing an empty board.
+		s.bubblesMu.Lock()
+		prev, ok := s.bubblesCache[inst.Slug]
+		s.bubblesMu.Unlock()
+		if ok {
+			return prev.bubbles, nil
+		}
 		return nil, err
 	}
 	s.bubblesMu.Lock()
-	s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, exp: now.Add(bubblesTTL)}
+	if partial {
+		// A rate-limited partial must not replace a fuller snapshot; keep the
+		// better one and retry soon (short TTL).
+		if prev, ok := s.bubblesCache[inst.Slug]; ok && len(prev.bubbles) > len(bs) {
+			bs = prev.bubbles
+		}
+		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, exp: now.Add(partialTTL)}
+	} else {
+		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, exp: now.Add(bubblesTTL)}
+	}
 	s.bubblesMu.Unlock()
 	return bs, nil
 }
@@ -900,14 +922,14 @@ func (s *Server) instanceBubbles(ctx context.Context, inst domain.Instance) ([]d
 // (unless one is pinned) and fans out across modules concurrently. Heat evidence
 // comes from work-item timestamps in the list response — no per-item activity
 // call — so this stays within Plane's rate limits.
-func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
+func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, bool, error) {
 	base := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "")
 	projects := []string{inst.Project}
 	projName := map[string]string{}
 	if inst.Project == "" {
 		ps, err := base.ListProjects(ctx)
 		if err != nil {
-			return nil, fmt.Errorf("list projects: %w", err)
+			return nil, false, fmt.Errorf("list projects: %w", err)
 		}
 		projects = projects[:0]
 		for _, p := range ps {
@@ -917,8 +939,9 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 	}
 
 	var (
-		mu  sync.Mutex
-		out []domain.Bubble
+		mu     sync.Mutex
+		out    []domain.Bubble
+		failed int // module/project fetches that errored (→ partial result)
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(fetchConcurrency)
@@ -930,6 +953,9 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 		mods, err := cl.ListModules(gctx)
 		if err != nil {
 			log.Printf("instance %s project %s: list modules: %v", inst.Slug, projID, err)
+			mu.Lock()
+			failed++
+			mu.Unlock()
 			continue
 		}
 		// Align heat to this project's active Plane cycle (§3.6); zero → rolling.
@@ -940,6 +966,9 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 				items, err := cl.ListModuleWorkItems(gctx, m.ID)
 				if err != nil {
 					log.Printf("instance %s module %s: list work items: %v", inst.Slug, m.ID, err)
+					mu.Lock()
+					failed++
+					mu.Unlock()
 					return nil // one bad module shouldn't fail the whole fetch
 				}
 				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items)
@@ -952,9 +981,9 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 		}
 	}
 	if err := g.Wait(); err != nil {
-		return nil, err
+		return nil, false, err
 	}
-	return out, nil
+	return out, failed > 0, nil
 }
 
 // projectCycleWindow fetches a project's cycles and returns the active cycle's

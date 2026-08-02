@@ -393,13 +393,55 @@ type Module struct {
 }
 
 // WorkItem is a Thread (§7.1). Timestamps come straight from the list response,
-// so heat can be derived without a per-item activity fetch.
+// so heat can be derived without a per-item activity fetch. The interior view
+// (INTERIOR-PLAN.md) also uses Sequence/Parent/Assignees for the timeline.
 type WorkItem struct {
 	ID          string
 	Name        string
 	CreatedAt   time.Time
 	CompletedAt *time.Time
 	Active      bool
+	Sequence    int      // sequence_id, e.g. the 12 in PROJ-12
+	SortOrder   float64  // Plane's manual ordering key
+	Parent      string   // parent work-item id ("" if top-level)
+	Assignees   []string // assignee user ids
+}
+
+// WorkItemDetail is a single work item with its rich-text body and metadata,
+// fetched on demand for the thread interior (INTERIOR-PLAN.md Phase 8/11).
+type WorkItemDetail struct {
+	ID              string
+	Name            string
+	DescriptionHTML string
+	Sequence        int
+	Priority        string
+	StateID         string
+	Parent          string
+	Assignees       []string
+	CreatedAt       time.Time
+	CompletedAt     *time.Time
+}
+
+// Relations groups a work item's typed relationships (INTERIOR-PLAN.md). Each
+// slice holds related work-item ids. RelatesTo drives revision artifacts.
+type Relations struct {
+	Blocking     []string `json:"blocking"`
+	BlockedBy    []string `json:"blocked_by"`
+	Duplicate    []string `json:"duplicate"`
+	RelatesTo    []string `json:"relates_to"`
+	StartAfter   []string `json:"start_after"`
+	StartBefore  []string `json:"start_before"`
+	FinishAfter  []string `json:"finish_after"`
+	FinishBefore []string `json:"finish_before"`
+}
+
+// Comment is one work-item comment (INTERIOR-PLAN.md Phase 12). HTML is the
+// raw ProseMirror body; the server converts it to Markdown for rendering.
+type Comment struct {
+	ID        string
+	ActorID   string
+	HTML      string
+	CreatedAt time.Time
 }
 
 // Activity is a raw Plane timeline entry; only some map to heat (see Meaningful).
@@ -484,18 +526,90 @@ func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]Wo
 			Name        string     `json:"name"`
 			CreatedAt   time.Time  `json:"created_at"`
 			CompletedAt *time.Time `json:"completed_at"`
+			SequenceID  int        `json:"sequence_id"`
+			SortOrder   float64    `json:"sort_order"`
+			Parent      *string    `json:"parent"`
+			Assignees   []string   `json:"assignees"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return err
 		}
 		for _, it := range page {
+			parent := ""
+			if it.Parent != nil {
+				parent = *it.Parent
+			}
 			out = append(out, WorkItem{
 				ID:          it.ID,
 				Name:        it.Name,
 				CreatedAt:   it.CreatedAt,
 				CompletedAt: it.CompletedAt,
 				Active:      it.CompletedAt == nil,
+				Sequence:    it.SequenceID,
+				SortOrder:   it.SortOrder,
+				Parent:      parent,
+				Assignees:   it.Assignees,
 			})
+		}
+		return nil
+	})
+	return out, err
+}
+
+// GetWorkItem fetches one work item with its rich-text body and metadata
+// (INTERIOR-PLAN.md Phase 8). Used for the thread interior and revisions.
+func (c *Client) GetWorkItem(ctx context.Context, workItemID string) (WorkItemDetail, error) {
+	var r struct {
+		ID              string     `json:"id"`
+		Name            string     `json:"name"`
+		DescriptionHTML string     `json:"description_html"`
+		SequenceID      int        `json:"sequence_id"`
+		Priority        string     `json:"priority"`
+		State           string     `json:"state"`
+		Parent          *string    `json:"parent"`
+		Assignees       []string   `json:"assignees"`
+		CreatedAt       time.Time  `json:"created_at"`
+		CompletedAt     *time.Time `json:"completed_at"`
+	}
+	if err := c.get(ctx, c.projectBase()+"/work-items/"+workItemID+"/", &r); err != nil {
+		return WorkItemDetail{}, err
+	}
+	d := WorkItemDetail{
+		ID: r.ID, Name: r.Name, DescriptionHTML: r.DescriptionHTML,
+		Sequence: r.SequenceID, Priority: r.Priority, StateID: r.State,
+		Assignees: r.Assignees, CreatedAt: r.CreatedAt, CompletedAt: r.CompletedAt,
+	}
+	if r.Parent != nil {
+		d.Parent = *r.Parent
+	}
+	return d, nil
+}
+
+// ListRelations returns a work item's typed relationships (INTERIOR-PLAN.md).
+func (c *Client) ListRelations(ctx context.Context, workItemID string) (Relations, error) {
+	var r Relations
+	if err := c.get(ctx, c.projectBase()+"/work-items/"+workItemID+"/relations/", &r); err != nil {
+		return Relations{}, err
+	}
+	return r, nil
+}
+
+// ListComments returns a work item's comments oldest-first as Plane paginates
+// them (INTERIOR-PLAN.md Phase 12).
+func (c *Client) ListComments(ctx context.Context, workItemID string) ([]Comment, error) {
+	var out []Comment
+	err := c.getPaged(ctx, c.projectBase()+"/work-items/"+workItemID+"/comments/", func(raw json.RawMessage) error {
+		var page []struct {
+			ID          string    `json:"id"`
+			Actor       string    `json:"actor"`
+			CommentHTML string    `json:"comment_html"`
+			CreatedAt   time.Time `json:"created_at"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		for _, cm := range page {
+			out = append(out, Comment{ID: cm.ID, ActorID: cm.Actor, HTML: cm.CommentHTML, CreatedAt: cm.CreatedAt})
 		}
 		return nil
 	})

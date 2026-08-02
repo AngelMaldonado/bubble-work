@@ -37,6 +37,10 @@ func main() {
 		cmdLs(os.Args[2:])
 	case "heat":
 		cmdHeat(os.Args[2:])
+	case "show":
+		cmdShow(os.Args[2:])
+	case "thread":
+		cmdThread(os.Args[2:])
 	case "search":
 		cmdSearch(os.Args[2:])
 	case "whoami":
@@ -76,6 +80,8 @@ Usage:
   bubble serve [--addr :4006]      run the server (REST + MCP brain)
   bubble ls                        list bubbles, hottest first (buoyancy view)
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
+  bubble show <id>                 a bubble's thread timeline (git-log-oneline)
+  bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
   bubble search <query>            fuzzy-search threads (tasks) across your instances
   bubble whoami                    show the identity resolved from your credential
   bubble notifications             your inbox of cooling/dormant alerts (alias: inbox)
@@ -757,6 +763,46 @@ func cmdHeat(args []string) {
 	}
 	if err := client.Heat(cfg, args[0]); err != nil {
 		log.Fatalf("heat: %v", err)
+	}
+}
+
+func cmdShow(args []string) {
+	if len(args) < 1 {
+		log.Fatal("usage: bubble show <bubble-id>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Show(cfg, args[0]); err != nil {
+		log.Fatalf("show: %v", err)
+	}
+}
+
+func cmdThread(args []string) {
+	// Accept --comments before or after the id (the stdlib flag parser would
+	// otherwise stop at the first positional arg).
+	comments := false
+	var id string
+	for _, a := range args {
+		switch a {
+		case "--comments", "-comments", "-c":
+			comments = true
+		default:
+			if id == "" && !strings.HasPrefix(a, "-") {
+				id = a
+			}
+		}
+	}
+	if id == "" {
+		log.Fatal("usage: bubble thread <id> [--comments]   (id from `bubble show`)")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Thread(cfg, id, comments); err != nil {
+		log.Fatalf("thread: %v", err)
 	}
 }
 

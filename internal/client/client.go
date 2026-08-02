@@ -17,6 +17,7 @@ import (
 
 	"github.com/AngelMaldonado/bubble-work/internal/config"
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 )
 
 // termWidth returns the terminal width, or a very large value when stdout is
@@ -499,6 +500,156 @@ func Whoami(cfg config.Config) error {
 		fmt.Printf("instances : %s\n", strings.Join(a.Instances, ", "))
 	}
 	return nil
+}
+
+// Show renders a bubble's thread timeline newest-first — the git-log-oneline
+// view of how the bubble has progressed (INTERIOR-PLAN.md Phase 10). The id may
+// be short or full, like `heat`.
+func Show(cfg config.Config, bubble string) error {
+	var nodes []domain.ThreadNode
+	if err := getJSON(cfg.ActiveServer()+"/api/bubbles/"+url.PathEscape(bubble)+"/threads", cfg.ActiveToken(), &nodes); err != nil {
+		return err
+	}
+	if len(nodes) == 0 {
+		fmt.Println("no threads in this bubble yet — birth one with `bubble birth <bubble>`")
+		return nil
+	}
+
+	sw, ow := 1, 0
+	for _, n := range nodes {
+		sw = max(sw, len(fmt.Sprintf("%d", n.Seq)))
+		ow = max(ow, utf8.RuneCountInString(n.Owner))
+	}
+	ow = min(ow, 16)
+	used := 8 + 2 + 2 + sw + 2 + 2 + ow + 2 + 8 // hash + mark + '#'+seq + gaps + owner + age
+	tw := max(termWidth()-used, 16)
+
+	for _, n := range nodes {
+		mark := "•"
+		if !n.Active {
+			mark = "✓"
+		}
+		hash := shortID(n.ID)
+		if len(hash) > 8 {
+			hash = hash[:8]
+		}
+		fmt.Printf("%-8s  %s #%-*d  %s  %s  %s\n",
+			hash, mark, sw, n.Seq, pad(trunc(n.Title, tw), tw), pad(trunc(n.Owner, ow), ow), relAge(n.CreatedAt))
+	}
+	fmt.Printf("\n%d thread(s) · open one: bubble thread <id>\n", len(nodes))
+	return nil
+}
+
+// Thread prints a thread's interior — its work artifacts, logbook (with DoD),
+// and revisions (INTERIOR-PLAN.md Phase 11). With comments, it appends the feed.
+func Thread(cfg config.Config, id string, comments bool) error {
+	var d domain.ThreadDetail
+	if err := getJSON(cfg.ActiveServer()+"/api/threads/"+url.PathEscape(id), cfg.ActiveToken(), &d); err != nil {
+		return err
+	}
+
+	state := "open"
+	if !d.Active {
+		state = "done"
+	}
+	fmt.Printf("#%d  %s  [%s · %s]\n", d.Seq, d.Title, d.Kind, state)
+	if len(d.Assignees) > 0 {
+		fmt.Printf("assignees : %s\n", strings.Join(d.Assignees, ", "))
+	}
+	if d.Priority != "" && d.Priority != "none" {
+		fmt.Printf("priority  : %s\n", d.Priority)
+	}
+
+	for _, a := range d.Artifacts {
+		fmt.Printf("\n%s\n%s\n", heading(a.Title), a.Markdown)
+	}
+
+	if d.Logbook != nil {
+		fmt.Printf("\n%s\n", heading("Logbook"))
+		printTodos(d.Logbook.Todos)
+		if len(d.Logbook.DoD) > 0 {
+			fmt.Printf("\n%s\n", heading("Definition of Done"))
+			printTodos(d.Logbook.DoD)
+		}
+	}
+
+	if len(d.Revisions) > 0 {
+		fmt.Printf("\n%s\n", heading("Revisions"))
+		for _, rv := range d.Revisions {
+			fmt.Printf("\n• %s\n%s\n", rv.Title, indent(rv.Markdown, "  "))
+		}
+	}
+
+	if comments {
+		return threadComments(cfg, d.ID)
+	}
+	fmt.Printf("\n(see the discussion with `bubble thread %s --comments`)\n", id)
+	return nil
+}
+
+func threadComments(cfg config.Config, id string) error {
+	var cs []domain.Comment
+	if err := getJSON(cfg.ActiveServer()+"/api/threads/"+url.PathEscape(id)+"/comments", cfg.ActiveToken(), &cs); err != nil {
+		return err
+	}
+	fmt.Printf("\n%s\n", heading("Comments"))
+	if len(cs) == 0 {
+		fmt.Println("  (none)")
+		return nil
+	}
+	for _, c := range cs {
+		who := c.Author
+		if who == "" {
+			who = "someone"
+		}
+		fmt.Printf("\n%s · %s\n%s\n", who, relAge(c.CreatedAt), indent(c.Markdown, "  "))
+	}
+	return nil
+}
+
+func printTodos(todos []md.Todo) {
+	for _, t := range todos {
+		box := "[ ]"
+		if t.Done {
+			box = "[x]"
+		}
+		fmt.Printf("  %s %s\n", box, t.Text)
+	}
+}
+
+// heading underlines a section title with a box-drawing rule.
+func heading(s string) string {
+	return s + "\n" + strings.Repeat("─", utf8.RuneCountInString(s))
+}
+
+// indent prefixes every line of s with prefix.
+func indent(s, prefix string) string {
+	if s == "" {
+		return s
+	}
+	lines := strings.Split(s, "\n")
+	for i := range lines {
+		lines[i] = prefix + lines[i]
+	}
+	return strings.Join(lines, "\n")
+}
+
+// relAge renders a coarse "2d ago"-style age.
+func relAge(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	d := time.Since(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return fmt.Sprintf("%dm ago", int(d.Minutes()))
+	case d < 24*time.Hour:
+		return fmt.Sprintf("%dh ago", int(d.Hours()))
+	default:
+		return fmt.Sprintf("%dd ago", int(d.Hours()/24))
+	}
 }
 
 // Heat explains a single bubble's temperature.

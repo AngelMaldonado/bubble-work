@@ -3,14 +3,55 @@ package server
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
+	"regexp"
 	"sort"
 	"strings"
+
+	"golang.org/x/sync/errgroup"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 )
+
+// planeAssetImgRe matches the <img> tags md emits for Plane image-components
+// (their src carries the plane-asset: marker). Regular <img>/![](url) with real
+// URLs are left untouched so they render normally.
+var planeAssetImgRe = regexp.MustCompile(`<img\b[^>]*\bsrc="` + regexp.QuoteMeta(md.AssetScheme) + `[^"]*"[^>]*>`)
+
+// rewriteAssets replaces Plane description-image markers with an "open in Plane"
+// link. Plane serves these assets only to a web session (the API key is rejected
+// on every asset endpoint), so we can't render them inline; the link opens the
+// item in Plane where they display. Real image URLs are left as <img>.
+func rewriteAssets(htmlStr, itemURL string) string {
+	if !strings.Contains(htmlStr, md.AssetScheme) {
+		return htmlStr
+	}
+	link := `<a class="plane-img" href="` + itemURL + `" target="_blank" rel="noopener">🖼 image — open in Plane</a>`
+	return planeAssetImgRe.ReplaceAllStringFunc(htmlStr, func(string) string { return link })
+}
+
+// planeItemURL builds the Plane web URL for a work item.
+func planeItemURL(base, ws, proj, id string) string {
+	return strings.TrimRight(base, "/") + "/" + ws + "/projects/" + proj + "/issues/" + id
+}
+
+// guard wraps a task run in an errgroup goroutine so a panic becomes an error
+// instead of crashing the whole process (a panic in a spawned goroutine is NOT
+// recovered by net/http).
+func guard(name string, fn func() error) func() error {
+	return func() (err error) {
+		defer func() {
+			if r := recover(); r != nil {
+				log.Printf("interior: %s panicked: %v", name, r)
+				err = fmt.Errorf("%s failed", name)
+			}
+		}()
+		return fn()
+	}
+}
 
 // interiorClient parses a namespaced id (slug:project:objectid), authorizes the
 // actor for that instance (read = workspace membership), and returns a Plane
@@ -38,14 +79,28 @@ func (s *Server) interiorClient(ctx context.Context, nsID string) (cl *plane.Cli
 }
 
 // memberNames maps an instance's member ids to display names for resolving
-// assignees and comment authors. Best-effort: an error yields an empty map so
-// the interior still renders (just without names).
+// assignees and comment authors, cached for membersTTL (members change rarely
+// and this call otherwise runs on every timeline/thread open). Best-effort: an
+// error serves a stale map if we have one, else empty.
 func (s *Server) memberNames(ctx context.Context, inst domain.Instance) map[string]string {
-	names := map[string]string{}
+	now := s.now()
+	s.membersMu.Lock()
+	if c, ok := s.membersCache[inst.Slug]; ok && now.Before(c.exp) {
+		s.membersMu.Unlock()
+		return c.names
+	}
+	s.membersMu.Unlock()
+
 	members, err := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Members(ctx)
 	if err != nil {
-		return names
+		s.membersMu.Lock()
+		defer s.membersMu.Unlock()
+		if c, ok := s.membersCache[inst.Slug]; ok {
+			return c.names // stale is better than nameless
+		}
+		return map[string]string{}
 	}
+	names := make(map[string]string, len(members))
 	for _, m := range members {
 		if m.DisplayName != "" {
 			names[m.ID] = m.DisplayName
@@ -53,42 +108,47 @@ func (s *Server) memberNames(ctx context.Context, inst domain.Instance) map[stri
 			names[m.ID] = m.Email
 		}
 	}
+	s.membersMu.Lock()
+	s.membersCache[inst.Slug] = cachedMembers{names: names, exp: now.Add(membersTTL)}
+	s.membersMu.Unlock()
 	return names
 }
 
-// Timeline returns a bubble's threads newest-first (INTERIOR-PLAN.md Phase 10).
-// bubbleID may be a short id (module segment) or a full namespaced id — it is
-// resolved the same way as `heat`.
+// Timeline returns a bubble's threads newest-first (INTERIOR-PLAN.md Phase 10),
+// served straight from the in-memory snapshot — no Plane fetch on the request
+// path. bubbleID may be a short id or a full namespaced id (resolved like heat).
 func (s *Server) Timeline(ctx context.Context, bubbleID string) ([]domain.ThreadNode, error) {
 	full, err := s.resolveID(ctx, bubbleID)
 	if err != nil {
 		return nil, err
 	}
-	cl, inst, slug, projID, moduleID, err := s.interiorClient(ctx, full)
+	bubbles, err := s.collect(ctx)
 	if err != nil {
 		return nil, err
 	}
-	items, err := cl.ListModuleWorkItems(ctx, moduleID)
-	if err != nil {
-		return nil, err
-	}
-	names := s.memberNames(ctx, inst)
-
-	out := make([]domain.ThreadNode, 0, len(items))
-	for _, it := range items {
-		owner := ""
-		if len(it.Assignees) > 0 {
-			owner = names[it.Assignees[0]]
+	var b *domain.Bubble
+	for i := range bubbles {
+		if bubbles[i].ID == full {
+			b = &bubbles[i]
+			break
 		}
+	}
+	if b == nil {
+		return nil, errNotFound
+	}
+	slug, projID, _ := cut3(b.ID)
+
+	out := make([]domain.ThreadNode, 0, len(b.Threads))
+	for _, t := range b.Threads {
 		out = append(out, domain.ThreadNode{
-			ID:          slug + ":" + projID + ":" + it.ID,
-			Seq:         it.Sequence,
-			Title:       it.Name,
-			Active:      it.Active,
-			Owner:       owner,
-			Parent:      it.Parent,
-			CreatedAt:   it.CreatedAt,
-			CompletedAt: it.CompletedAt,
+			ID:          slug + ":" + projID + ":" + t.ID,
+			Seq:         t.Seq,
+			Title:       t.Name,
+			Active:      t.Active,
+			Owner:       t.Owner,
+			Parent:      t.Parent,
+			CreatedAt:   t.CreatedAt,
+			CompletedAt: t.CompletedAt,
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -103,12 +163,33 @@ func (s *Server) ThreadDetail(ctx context.Context, threadID string) (domain.Thre
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
-	cl, inst, _, _, wid, err := s.interiorClient(ctx, full)
+	cl, inst, _, projID, wid, err := s.interiorClient(ctx, full)
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
-	wi, err := cl.GetWorkItem(ctx, wid)
-	if err != nil {
+
+	// Fetch the body, revisions, and member names concurrently — each is a
+	// separate Plane round-trip (~0.3-1s), so serial would stack up.
+	var (
+		wi        plane.WorkItemDetail
+		revisions []md.Artifact
+		names     map[string]string
+	)
+	g, gctx := errgroup.WithContext(ctx)
+	g.Go(guard("get-work-item", func() error {
+		var e error
+		wi, e = cl.GetWorkItem(gctx, wid)
+		return e
+	}))
+	g.Go(guard("revisions", func() error {
+		revisions = s.revisions(gctx, cl, wid)
+		return nil
+	}))
+	g.Go(guard("members", func() error {
+		names = s.memberNames(gctx, inst)
+		return nil
+	}))
+	if err := g.Wait(); err != nil {
 		return domain.ThreadDetail{}, err
 	}
 
@@ -119,12 +200,30 @@ func (s *Server) ThreadDetail(ctx context.Context, threadID string) (domain.Thre
 		kind = "phased"
 	}
 
-	names := s.memberNames(ctx, inst)
 	var assignees []string
 	for _, a := range wi.Assignees {
 		if n := names[a]; n != "" {
 			assignees = append(assignees, n)
 		}
+	}
+
+	// Replace Plane image markers with an "open in Plane" link (revisions are
+	// rewritten in revisions() where each has its own item id).
+	itemURL := planeItemURL(inst.BaseURL, inst.Workspace, projID, wid)
+	for i := range arts {
+		arts[i].HTML = rewriteAssets(arts[i].HTML, itemURL)
+	}
+
+	// Normalize to non-nil slices so the JSON is arrays, never null (the web
+	// client indexes/`.length`s them).
+	if arts == nil {
+		arts = []md.Artifact{}
+	}
+	if revisions == nil {
+		revisions = []md.Artifact{}
+	}
+	if log != nil && log.Todos == nil {
+		log.Todos = []md.Todo{}
 	}
 
 	return domain.ThreadDetail{
@@ -137,7 +236,7 @@ func (s *Server) ThreadDetail(ctx context.Context, threadID string) (domain.Thre
 		Assignees:   assignees,
 		Artifacts:   arts,
 		Logbook:     log,
-		Revisions:   s.revisions(ctx, cl, wid),
+		Revisions:   revisions,
 		CreatedAt:   wi.CreatedAt,
 		CompletedAt: wi.CompletedAt,
 	}, nil
@@ -194,32 +293,27 @@ func cut3(id string) (slug, proj, obj string) {
 	return slug, proj, obj
 }
 
-// revisions collects the work items related via relates_to whose title is
-// prefixed "rev:" and renders each as a free-form artifact (INTERIOR-PLAN.md).
-// Best-effort: relation/fetch errors are skipped, never fatal.
+// revisions renders a thread's sub-work-items (children) as free-form revision
+// artifacts. Plane's relations API is unavailable on some self-hosted instances,
+// so revisions attach via the parent/child link instead; an optional "rev:" name
+// prefix is stripped for the label. The child list already carries
+// description_html, so no per-item fetch is needed. Best-effort: never fatal.
 func (s *Server) revisions(ctx context.Context, cl *plane.Client, wid string) []md.Artifact {
-	rel, err := cl.ListRelations(ctx, wid)
-	if err != nil {
+	children, err := cl.ListChildren(ctx, wid)
+	if err != nil || len(children) == 0 {
 		return nil
 	}
-	out := make([]md.Artifact, 0, len(rel.RelatesTo))
-	for _, rid := range rel.RelatesTo {
-		wi, err := cl.GetWorkItem(ctx, rid)
-		if err != nil {
-			continue
+	out := make([]md.Artifact, 0, len(children))
+	for _, ch := range children {
+		label := strings.TrimSpace(ch.Name)
+		if len(label) >= 4 && strings.EqualFold(label[:4], "rev:") {
+			if rest := strings.TrimSpace(label[4:]); rest != "" {
+				label = rest
+			}
 		}
-		title := strings.TrimSpace(wi.Name)
-		if !strings.HasPrefix(strings.ToLower(title), "rev:") {
-			continue
-		}
-		label := strings.TrimSpace(title[len("rev:"):])
-		if label == "" {
-			label = title
-		}
-		out = append(out, md.NewArtifact(label, md.FromHTML(wi.DescriptionHTML)))
-	}
-	if len(out) == 0 {
-		return nil
+		art := md.NewArtifact(label, md.FromHTML(ch.DescriptionHTML))
+		art.HTML = rewriteAssets(art.HTML, planeItemURL(cl.BaseURL, cl.Workspace, cl.Project, ch.ID))
+		out = append(out, art)
 	}
 	return out
 }

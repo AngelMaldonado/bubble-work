@@ -51,8 +51,9 @@ func fakePlane() *httptest.Server {
 			io.WriteString(w, `{"relates_to":["rev-1"],"blocking":[],"blocked_by":[]}`)
 		case strings.HasSuffix(p, "/comments/"):
 			io.WriteString(w, `{"results":[{"id":"c1","actor":"u1","comment_html":"<p>looks good</p>","created_at":"2026-04-01T00:00:00Z"}]}`)
-		case r.Method == http.MethodGet && strings.Contains(p, "/work-items/rev-1/"):
-			io.WriteString(w, `{"id":"rev-1","name":"rev: first pass","description_html":"<h2>Findings</h2><p>looks solid</p>","sequence_id":9}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			// sub-issue list: revisions attach as children (parent set to the thread)
+			io.WriteString(w, `{"results":[{"id":"rev-1","name":"rev: first pass","description_html":"<h2>Findings</h2><p>looks solid</p>","parent":"wi-1"}],"next_page_results":false}`)
 		case r.Method == http.MethodGet && strings.Contains(p, "/work-items/"):
 			io.WriteString(w, `{"id":"wi-1","name":"First thread","description_html":"<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul><li data-checked='true'>scaffold</li><li data-checked='false'>wire</li></ul>","sequence_id":1,"priority":"high","assignees":["u1"],"created_at":"2026-01-01T10:00:00Z"}`)
 		case strings.HasSuffix(p, "/projects/"):
@@ -267,7 +268,10 @@ func TestInteriorEndpoints(t *testing.T) {
 	if d.Logbook == nil || len(d.Logbook.Todos) != 2 || !d.Logbook.Todos[0].Done || d.Logbook.Todos[1].Done {
 		t.Errorf("logbook todos wrong: %+v", d.Logbook)
 	}
-	if len(d.Artifacts) == 0 || d.Artifacts[0].Title != "Brief" {
+	// The whole body renders as one document titled after the thread; the "Brief"
+	// H1 stays inline (no fragmenting on content headings).
+	if len(d.Artifacts) != 1 || d.Artifacts[0].Title != "First thread" ||
+		!strings.Contains(d.Artifacts[0].Markdown, "# Brief") {
 		t.Errorf("artifacts wrong: %+v", d.Artifacts)
 	}
 	if len(d.Revisions) != 1 || d.Revisions[0].Title != "first pass" {

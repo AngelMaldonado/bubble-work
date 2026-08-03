@@ -52,12 +52,16 @@ const (
 	// snapshotRefresh is how often the background refresher rebuilds each
 	// instance's bubble snapshot. Reads are served from the snapshot and never
 	// fetch Plane on the request path, so this cadence — not request latency —
-	// governs freshness.
-	snapshotRefresh = 45 * time.Second
-	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept modest
+	// governs freshness. Kept gentle: a full fan-out trips self-hosted Plane's
+	// rate limit, and webhooks cover real-time changes.
+	snapshotRefresh = 90 * time.Second
+	// membersTTL caches an instance's member id→name map. Members change rarely,
+	// and this call otherwise runs on every timeline/thread open (~0.5s each).
+	membersTTL = 10 * time.Minute
+	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept low
 	// so a full fetch (modules + work-items + cycles) doesn't burst past Plane's
 	// rate limit; get() also retries 429s with backoff.
-	fetchConcurrency = 4
+	fetchConcurrency = 2
 )
 
 // Server holds the overlay store and the cycle pulse. Plane clients are built
@@ -81,6 +85,10 @@ type Server struct {
 	// changes so connected boards update without polling.
 	subsMu sync.Mutex
 	subs   map[chan struct{}]struct{}
+
+	// membersCache caches each instance's member id→name map (see memberNames).
+	membersMu    sync.Mutex
+	membersCache map[string]cachedMembers
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
@@ -124,6 +132,11 @@ type cachedBubbles struct {
 	partial   bool
 }
 
+type cachedMembers struct {
+	names map[string]string
+	exp   time.Time
+}
+
 // New builds a server. With no instances configured (or none authorized for the
 // caller) it degrades gracefully to an empty world. Any persisted snapshot is
 // loaded so the board serves the last-known state instantly after a restart.
@@ -135,6 +148,7 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		cache:        map[string]cachedActor{},
 		bubblesCache: map[string]cachedBubbles{},
 		subs:         map[chan struct{}]struct{}{},
+		membersCache: map[string]cachedMembers{},
 		adminEmails:  map[string]bool{},
 		startedAt:    time.Now(),
 	}
@@ -375,6 +389,17 @@ func spaHandler() http.HandlerFunc {
 			// unknown path (or a directory) → hand the SPA its entry point
 			r = r.Clone(r.Context())
 			r.URL.Path = "/"
+			clean = "index.html"
+		}
+		// Vite fingerprints asset filenames, so they're safe to cache forever.
+		// The HTML entry MUST NOT be cached, or the browser keeps loading old
+		// hashed bundles after a rebuild (stale UI). embed.FS has a zero modtime,
+		// so without this browsers heuristically cache index.html.
+		if strings.HasPrefix(clean, "assets/") {
+			w.Header().Set("Cache-Control", "public, max-age=31536000, immutable")
+		} else {
+			w.Header().Set("Cache-Control", "no-cache, must-revalidate")
+			w.Header().Set("Pragma", "no-cache")
 		}
 		fileServer.ServeHTTP(w, r)
 	}
@@ -1076,6 +1101,10 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 		}
 	}
 
+	// Resolve assignee names once (cached) so the snapshot's threads carry owners
+	// for the timeline — served straight from memory, no per-open Plane fetch.
+	names := s.memberNames(ctx, inst)
+
 	var (
 		mu     sync.Mutex
 		out    []domain.Bubble
@@ -1109,7 +1138,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 					mu.Unlock()
 					return nil // one bad module shouldn't fail the whole fetch
 				}
-				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items)
+				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items, names)
 				b.CycleStart, b.CyclePrevStart = cycleStart, cyclePrev
 				mu.Lock()
 				out = append(out, b)
@@ -1177,7 +1206,7 @@ func cycleWindow(cycles []plane.Cycle, now time.Time) (curStart, prevStart time.
 // buildBubble assembles a bubble from a module + its work items, deriving heat
 // evidence from each item's created (thread born) and completed (todo done)
 // timestamps (§5.1), then merging the server-owned contract overlay (§4).
-func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, items []plane.WorkItem) domain.Bubble {
+func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, items []plane.WorkItem, names map[string]string) domain.Bubble {
 	// Namespaced id carries the project so writes/close can route.
 	id := slug + ":" + projID + ":" + m.ID
 	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug, Project: projID, ProjectName: projName}
@@ -1185,7 +1214,15 @@ func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, item
 		b.Outcome, b.Owner, b.Closure, b.Closed, b.Stage = c.Outcome, c.Owner, c.Closure, c.Closed, c.Stage
 	}
 	for _, it := range items {
-		b.Threads = append(b.Threads, domain.Thread{ID: it.ID, Name: it.Name, Active: it.Active})
+		owner := ""
+		if len(it.Assignees) > 0 {
+			owner = names[it.Assignees[0]]
+		}
+		b.Threads = append(b.Threads, domain.Thread{
+			ID: it.ID, Name: it.Name, Active: it.Active,
+			Seq: it.Sequence, Owner: owner, Parent: it.Parent,
+			CreatedAt: it.CreatedAt, CompletedAt: it.CompletedAt,
+		})
 		if !it.CreatedAt.IsZero() {
 			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: "thread-created", At: it.CreatedAt})
 		}

@@ -27,11 +27,18 @@ type EvidenceEvent struct {
 	At       time.Time
 }
 
-// Thread is an executable unit of work inside a bubble (maps to a Plane work item).
+// Thread is an executable unit of work inside a bubble (maps to a Plane work
+// item). The extra fields feed the timeline view straight from the snapshot, so
+// opening a bubble never has to fetch Plane (§ freshness).
 type Thread struct {
-	ID     string
-	Name   string
-	Active bool
+	ID          string
+	Name        string
+	Active      bool
+	Seq         int
+	Owner       string // resolved assignee display name (first assignee)
+	Parent      string // parent work-item id ("" if top-level)
+	CreatedAt   time.Time
+	CompletedAt *time.Time
 }
 
 // Instance is a configured Plane deployment the server federates over. Each maps

@@ -9,11 +9,16 @@
   import BirthForm from './BirthForm.svelte';
   import BubbleDetail from './BubbleDetail.svelte';
   import ProjectCombobox from './ProjectCombobox.svelte';
+  import ViewCombobox from './ViewCombobox.svelte';
 
   let omni = $state(false);
   let birthTarget = $state<BubbleView | null>(null);
 
+  // a kiosk display is a passive read-only screen: no ⌘K, no commands, no birth.
+  const kiosk = $derived(store.kiosk);
+
   function onKey(e: KeyboardEvent) {
+    if (kiosk) return;
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
       e.preventDefault();
       omni = true;
@@ -42,11 +47,20 @@
 <svelte:window onkeydown={onKey} />
 
 <div class="app">
-  <!-- the one fixed floating bubble, top-left; doubles as the ⌘K launcher -->
-  <button class="brand" onclick={() => (omni = true)} title="search · commands (⌘K)">
-    <span class="orb"></span>
-    <span class="wordmark">bubble.work</span>
-  </button>
+  <!-- the one fixed floating bubble, top-left; doubles as the ⌘K launcher
+       (a kiosk display is passive, so it's just a mark there) -->
+  {#if kiosk}
+    <div class="brand" aria-label="bubble.work kiosk">
+      <span class="orb"></span>
+      <span class="wordmark">bubble.work</span>
+      <span class="kiosk-tag">kiosk</span>
+    </div>
+  {:else}
+    <button class="brand" onclick={() => (omni = true)} title="search · commands (⌘K)">
+      <span class="orb"></span>
+      <span class="wordmark">bubble.work</span>
+    </button>
+  {/if}
 
   {#if store.error}
     <div class="banner">{store.error}</div>
@@ -99,6 +113,10 @@
         <span class="projwrap"><ProjectCombobox /></span>
       {/if}
 
+      <!-- view scope: Everyone · Mine · <assignee> (Phase 9), same combobox as
+           the project filter. "Mine" is hidden on a kiosk (no personal identity). -->
+      <span class="projwrap"><ViewCombobox /></span>
+
       <span class="who" title={store.actor?.email}>
         {store.actor?.name ?? store.actor?.email ?? '—'}
       </span>
@@ -115,7 +133,11 @@
     </div>
 
     <div class="side right">
-      <span class="hint">⌘K search · <b>&gt;</b> commands</span>
+      {#if kiosk}
+        <span class="hint">read-only display</span>
+      {:else}
+        <span class="hint">⌘K search · <b>&gt;</b> commands</span>
+      {/if}
       <button
         class="theme"
         onclick={() => theme.cycle()}
@@ -138,9 +160,11 @@
 </div>
 
 <Minimap />
-<Omnibar bind:open={omni} onbirth={startBirth} />
-{#if birthTarget}
-  <BirthForm bubble={birthTarget} onclose={() => (birthTarget = null)} />
+{#if !kiosk}
+  <Omnibar bind:open={omni} onbirth={startBirth} />
+  {#if birthTarget}
+    <BirthForm bubble={birthTarget} onclose={() => (birthTarget = null)} />
+  {/if}
 {/if}
 {#if store.detail}
   <BubbleDetail />
@@ -193,6 +217,16 @@
     font-weight: 750;
     letter-spacing: -0.01em;
     font-size: 0.88rem;
+  }
+  .kiosk-tag {
+    font-size: 0.62rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--wip);
+    border: 1px solid color-mix(in oklab, var(--wip) 40%, transparent);
+    border-radius: 999px;
+    padding: 0.05rem 0.4rem;
   }
 
   .banner {

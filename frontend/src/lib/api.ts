@@ -13,9 +13,13 @@ import type {
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
+const KIOSK_KEY = 'bubble.kiosk';
 
+// A kiosk display token (sessionStorage) takes precedence over a personal login
+// (localStorage) so opening a ?kiosk= URL never clobbers someone's own token and
+// is scoped to that browser tab.
 export function getToken(): string {
-  return localStorage.getItem(TOKEN_KEY) ?? '';
+  return sessionStorage.getItem(KIOSK_KEY) || localStorage.getItem(TOKEN_KEY) || '';
 }
 
 export function setToken(tok: string): void {
@@ -24,6 +28,14 @@ export function setToken(tok: string): void {
 
 export function clearToken(): void {
   localStorage.removeItem(TOKEN_KEY);
+}
+
+export function setKioskToken(tok: string): void {
+  sessionStorage.setItem(KIOSK_KEY, tok.trim());
+}
+
+export function isKiosk(): boolean {
+  return !!sessionStorage.getItem(KIOSK_KEY);
 }
 
 export class ApiError extends Error {

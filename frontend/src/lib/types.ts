@@ -11,6 +11,7 @@ export interface Actor {
   email?: string;
   admin: boolean;
   service_admin?: boolean;
+  read_only?: boolean; // kiosk display token
   instances: string[];
 }
 
@@ -26,6 +27,7 @@ export interface BubbleView {
   reason: string;
   outcome?: string;
   owner?: string;
+  members?: string[]; // thread assignees + contract owner (per-assignee boards)
   threads: number;
 }
 

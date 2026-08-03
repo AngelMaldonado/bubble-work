@@ -1,6 +1,6 @@
 // Central reactive state (Svelte 5 runes). One polling loop keeps bubbles fresh;
 // components read from here and call the action helpers.
-import { api, ApiError, getToken, setToken, clearToken } from './api';
+import { api, ApiError, getToken, setToken, clearToken, setKioskToken } from './api';
 import type { Actor, BubbleView, Inbox, Level } from './types';
 
 const SEC_MS = 30_000; // secondary timer: inbox freshness (+ cross-org when godmode)
@@ -25,6 +25,11 @@ class Store {
   project = $state<string>('');
   polling = $state(false);
 
+  // view scope (Phase 9): whose bubbles to show. "workspace" = everyone in
+  // scope; "mine" = bubbles I own; "member" = a chosen owner (viewMember).
+  scope = $state<'mine' | 'workspace' | 'member'>('workspace');
+  viewMember = $state<string>('');
+
   // the bubble whose timeline detail panel is open (null = closed).
   detail = $state<BubbleView | null>(null);
   // the namespaced thread id whose interior is open (null = closed).
@@ -38,11 +43,42 @@ class Store {
   }
 
   get visible(): BubbleView[] {
+    const me = this.actor?.name ?? '';
     return this.bubbles.filter(
       (b) =>
         (!this.instance || b.instance === this.instance) &&
-        (!this.project || b.project === this.project),
+        (!this.project || b.project === this.project) &&
+        (this.scope === 'workspace' ||
+          (this.scope === 'mine' && (b.members ?? []).includes(me)) ||
+          (this.scope === 'member' && (b.members ?? []).includes(this.viewMember))),
     );
+  }
+
+  // read-only kiosk display (no personal identity, no writes).
+  get kiosk(): boolean {
+    return this.actor?.kind === 'kiosk' || !!this.actor?.read_only;
+  }
+
+  // distinct assignees within the current instance/project filter — the options
+  // for the per-member view scope.
+  get members(): string[] {
+    const seen = new Set<string>();
+    for (const b of this.bubbles) {
+      if (this.instance && b.instance !== this.instance) continue;
+      if (this.project && b.project !== this.project) continue;
+      for (const m of b.members ?? []) seen.add(m);
+    }
+    return [...seen].sort((a, b) => a.localeCompare(b));
+  }
+
+  setScope(s: 'mine' | 'workspace' | 'member'): void {
+    this.scope = s;
+    if (s !== 'member') this.viewMember = '';
+  }
+
+  setViewMember(m: string): void {
+    this.viewMember = m;
+    this.scope = m ? 'member' : 'workspace';
   }
 
   // projects present within the current instance scope (id + display name)
@@ -88,6 +124,19 @@ class Store {
   }
 
   async boot(): Promise<void> {
+    // A ?kiosk=<token> URL boots a read-only display: adopt the token (in
+    // sessionStorage, so it never clobbers a personal login) and strip it from
+    // the visible URL so the credential isn't left in the address bar.
+    const params = new URLSearchParams(window.location.search);
+    const kioskTok = params.get('kiosk');
+    if (kioskTok) {
+      setKioskToken(kioskTok);
+      params.delete('kiosk');
+      const qs = params.toString();
+      const url = window.location.pathname + (qs ? '?' + qs : '') + window.location.hash;
+      window.history.replaceState(null, '', url);
+      this.authed = true;
+    }
     if (!getToken()) {
       this.authed = false;
       this.loading = false;

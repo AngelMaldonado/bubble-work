@@ -100,6 +100,7 @@
   // is opened. Your own comments are never marked. Reflect your eyes locally to
   // avoid a reload, which also clears the unread badge.
   async function markOthersRead(tid: string): Promise<void> {
+    if (store.kiosk) return; // a read-only display doesn't leave read-receipts
     const others = comments
       .filter((c) => !isMine(c) && !(c.readers ?? []).some((r) => r.id === myId))
       .map((c) => c.id);
@@ -428,6 +429,9 @@
             {/if}
           </div>
           {#if chatErr}<p class="err chat-err">{chatErr}</p>{/if}
+          {#if store.kiosk}
+            <p class="dim chat-readonly">Read-only display — sign in to comment.</p>
+          {:else}
           <div class="chat-compose">
             <div class="fmt-bar">
               <!-- onmousedown+preventDefault keeps the textarea selection intact -->
@@ -485,6 +489,7 @@
               </button>
             </div>
           </div>
+          {/if}
         </div>
       {:else}
         <button class="chat-fab" onclick={toggleChat} aria-label="open discussion">
@@ -1114,6 +1119,14 @@
     margin: 0;
     padding: 0.3rem 0.85rem;
     font-size: 0.72rem;
+  }
+  .chat-readonly {
+    flex: none;
+    margin: 0;
+    padding: 0.7rem 0.85rem;
+    border-top: 1px solid var(--line);
+    font-size: 0.78rem;
+    text-align: center;
   }
   .chat-compose {
     flex: none;

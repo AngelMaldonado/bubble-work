@@ -208,12 +208,21 @@ was derived from Plane's `completed_at`, which exists only once a thread is
 already closed. Every *open* thread therefore had an empty progress stream and
 could never be 🔥. Phase C is what makes an open thread able to produce.
 
-**Plane has no "a todo got ticked" event, so we diff.** Once per project per
+**Plane has no "the logbook changed" event, so we diff.** Once per project per
 sweep, `ListProjectItems` pages every work item (one call, carrying each body and
-parent link). For each thread we count what it has produced — ticked Logbook/DoD
-items via `md.CountDone`, and revision sub-items via how many items name it as
-parent — and compare against the last observation in the new `thread_progress`
-table. The moment a counter goes up is stamped.
+parent link). For each thread we fingerprint the Logbook + DoD
+(`md.LogbookFingerprint`) and count its revision sub-items (how many items name it
+as parent), then compare against the last observation in the new
+`thread_progress` table. The moment either changes is stamped.
+
+**Any Logbook change is progress, not just a tick.** The Logbook is the plan, and
+the working protocol says to update it when the plan materially changes — so
+re-phasing it, adding a todo or striking one is a recorded decision, which is
+changed reality. We still track the ticked count, but only to *label* the
+evidence: a tick is `completed-todo`, anything else is `logbook-updated`. Both
+warm the thread identically. Prose outside the Logbook (the Brief, the title) is
+not diffed, and whitespace is normalized first, so a reflow or re-indent is not a
+change — cosmetic edits must never generate heat (`AGENTS.md`).
 
 **The stamp is the durable part.** Heat is derived from that timestamp on every
 read, so one tick keeps the thread warm for a whole cycle rather than for the
@@ -227,16 +236,22 @@ Two rules keep this honest:
   work that may be a year old. So the first sweep after this ships records
   counters and emits nothing — the board warms up as real work happens, not on
   deploy.
-- **Counters going down is not evidence.** Unticking a todo or deleting a
-  revision moves the counter but never the timestamp. History isn't rewritten,
-  and heat can't be manufactured by toggling a checkbox back and forth.
+- **Only the plan and the revisions are diffed.** Renaming the thread, editing
+  the Brief, changing priority or dragging the card to another column produce no
+  heat. Deleting a revision moves the counter but never the timestamp — history
+  is not rewritten.
+
+Known trade-off: because *any* Logbook edit counts, heat can in principle be
+manufactured by editing the plan back and forth. That is the deliberate price of
+treating re-planning as real work; the anti-gaming guarantee now rests on the
+Logbook being the plan of record rather than on the edit being monotonic.
 
 Mechanics: the diff also *writes*, so it runs on the per-project goroutine —
 one writer per project, never inside the module fan-out. A failed listing logs
 and yields no evidence (threads simply don't warm, the safe direction) rather
 than dropping the project from the board. Evidence kinds are now explicit:
 `thread-created` (weak, never heats the thread itself), `completed-todo`,
-`revision-added`, `thread-completed`. The per-project lookups moved into a
+`logbook-updated`, `revision-added`, `thread-completed`. The per-project lookups moved into a
 `projectCtx` struct so `buildBubble` takes one argument instead of eight.
 
 **Still outstanding from C:** comment pulse (hold 😴, block 🪦, never wake).

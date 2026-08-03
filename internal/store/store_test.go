@@ -257,8 +257,9 @@ func TestThreadProgress(t *testing.T) {
 	at := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC)
 
 	if err := st.SaveThreadProgress([]ThreadProgress{
-		{ThreadID: "wi-1", DoneTodos: 2, Revisions: 1, TodosAt: at},
-		{ThreadID: "wi-2", DoneTodos: 0, Revisions: 0}, // baselined, never moved
+		{ThreadID: "wi-1", LogbookHash: "abc123", LogbookKind: "completed-todo",
+			DoneTodos: 2, Revisions: 1, LogbookAt: at},
+		{ThreadID: "wi-2", LogbookHash: "def456"}, // baselined, never moved
 	}); err != nil {
 		t.Fatalf("save: %v", err)
 	}
@@ -270,23 +271,24 @@ func TestThreadProgress(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("want 2 rows, got %d", len(got))
 	}
-	if p := got["wi-1"]; p.DoneTodos != 2 || p.Revisions != 1 || !p.TodosAt.Equal(at) {
+	if p := got["wi-1"]; p.DoneTodos != 2 || p.Revisions != 1 ||
+		p.LogbookHash != "abc123" || p.LogbookKind != "completed-todo" || !p.LogbookAt.Equal(at) {
 		t.Errorf("wi-1 round-trip wrong: %+v", p)
 	}
 	// The zero time survives as "never observed going up".
-	if p := got["wi-2"]; !p.TodosAt.IsZero() || !p.RevisionsAt.IsZero() {
+	if p := got["wi-2"]; !p.LogbookAt.IsZero() || !p.RevisionsAt.IsZero() {
 		t.Errorf("wi-2 should carry zero stamps: %+v", p)
 	}
 
 	// Saving again upserts rather than duplicating.
 	later := at.Add(time.Hour)
 	if err := st.SaveThreadProgress([]ThreadProgress{
-		{ThreadID: "wi-1", DoneTodos: 3, Revisions: 1, TodosAt: later},
+		{ThreadID: "wi-1", LogbookHash: "zzz999", DoneTodos: 3, Revisions: 1, LogbookAt: later},
 	}); err != nil {
 		t.Fatalf("resave: %v", err)
 	}
 	got, _ = st.ThreadProgressFor([]string{"wi-1"})
-	if p := got["wi-1"]; p.DoneTodos != 3 || !p.TodosAt.Equal(later) {
+	if p := got["wi-1"]; p.DoneTodos != 3 || p.LogbookHash != "zzz999" || !p.LogbookAt.Equal(later) {
 		t.Errorf("upsert wrong: %+v", p)
 	}
 }

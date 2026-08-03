@@ -70,10 +70,12 @@ CREATE TABLE IF NOT EXISTS comment_reads (
 );
 CREATE TABLE IF NOT EXISTS thread_progress (
   thread_id    TEXT PRIMARY KEY,  -- Plane work-item id
-  done_todos   INTEGER NOT NULL,  -- ticked logbook + DoD items last time we looked
+  logbook_hash TEXT NOT NULL DEFAULT '',  -- fingerprint of the Logbook + DoD text
+  logbook_kind TEXT NOT NULL DEFAULT '',  -- what the last change was (an Ev* kind)
+  done_todos   INTEGER NOT NULL,  -- ticked items last time we looked (tells a tick from a re-plan)
   revisions    INTEGER NOT NULL,  -- sub-work-items (revision artifacts) last time we looked
-  todos_at     TEXT NOT NULL,     -- RFC3339 of the last observed INCREASE ('' = never)
-  revisions_at TEXT NOT NULL      -- ditto for revisions
+  logbook_at   TEXT NOT NULL,     -- RFC3339 of the last observed Logbook CHANGE ('' = never)
+  revisions_at TEXT NOT NULL      -- RFC3339 of the last observed revision ADDED ('' = never)
 );
 CREATE TABLE IF NOT EXISTS server_settings (
   key   TEXT PRIMARY KEY,        -- e.g. "tuning" (the buoyancy calibration)
@@ -113,6 +115,11 @@ func Open(path string) (*Store, error) {
 	// DBs are expected and ignored).
 	_, _ = db.Exec(`ALTER TABLE plane_instances ADD COLUMN webhook_secret TEXT`)
 	_, _ = db.Exec(`ALTER TABLE bubble_contracts ADD COLUMN stage TEXT NOT NULL DEFAULT ''`)
+	// thread_progress once keyed progress off the ticked-todo count alone; it now
+	// fingerprints the whole Logbook, so any plan change counts (THREAD-LIFECYCLE.md).
+	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN logbook_hash TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN logbook_kind TEXT NOT NULL DEFAULT ''`)
+	_, _ = db.Exec(`ALTER TABLE thread_progress RENAME COLUMN todos_at TO logbook_at`)
 	return &Store{db: db}, nil
 }
 
@@ -397,16 +404,18 @@ func (s *Store) SetNotifyEnabled(email string, enabled bool) error {
 }
 
 // ThreadProgress is what a thread had produced the last time the refresher
-// looked, plus WHEN each counter last went up. The timestamps are the durable
-// part: heat is derived from them on every read, so a tick keeps warming the
-// thread long after the refresh that noticed it. A zero time means "never
-// observed going up" — including a thread we have only ever seen once.
+// looked, plus WHEN it last changed. The timestamps are the durable part: heat
+// is derived from them on every read, so one edit keeps warming the thread long
+// after the refresh that noticed it. A zero time means "never observed
+// changing" — including a thread we have only ever seen once.
 type ThreadProgress struct {
 	ThreadID    string
-	DoneTodos   int
-	Revisions   int
-	TodosAt     time.Time
-	RevisionsAt time.Time
+	LogbookHash string    // md.LogbookFingerprint of the Logbook + DoD
+	LogbookKind string    // the domain.Ev* kind of the last change
+	DoneTodos   int       // ticked items, so a tick can be told from a re-plan
+	Revisions   int       // sub-work-items
+	LogbookAt   time.Time // when the Logbook last changed
+	RevisionsAt time.Time // when a revision was last added
 }
 
 // ThreadProgressFor loads the last-observed progress for the given work items.
@@ -426,19 +435,20 @@ func (s *Store) ThreadProgressFor(ids []string) (map[string]ThreadProgress, erro
 			args[i] = id
 		}
 		rows, err := s.db.Query(
-			`SELECT thread_id, done_todos, revisions, todos_at, revisions_at
+			`SELECT thread_id, logbook_hash, logbook_kind, done_todos, revisions, logbook_at, revisions_at
 			 FROM thread_progress WHERE thread_id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			var p ThreadProgress
-			var todosAt, revAt string
-			if err := rows.Scan(&p.ThreadID, &p.DoneTodos, &p.Revisions, &todosAt, &revAt); err != nil {
+			var logAt, revAt string
+			if err := rows.Scan(&p.ThreadID, &p.LogbookHash, &p.LogbookKind,
+				&p.DoneTodos, &p.Revisions, &logAt, &revAt); err != nil {
 				rows.Close()
 				return nil, err
 			}
-			p.TodosAt, _ = time.Parse(time.RFC3339, todosAt)
+			p.LogbookAt, _ = time.Parse(time.RFC3339, logAt)
 			p.RevisionsAt, _ = time.Parse(time.RFC3339, revAt)
 			out[p.ThreadID] = p
 		}
@@ -462,18 +472,19 @@ func (s *Store) SaveThreadProgress(ps []ThreadProgress) error {
 	}
 	defer tx.Rollback()
 	stmt, err := tx.Prepare(
-		`INSERT INTO thread_progress(thread_id, done_todos, revisions, todos_at, revisions_at)
-		 VALUES(?, ?, ?, ?, ?)
+		`INSERT INTO thread_progress(thread_id, logbook_hash, logbook_kind, done_todos, revisions, logbook_at, revisions_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(thread_id) DO UPDATE SET
+		   logbook_hash = excluded.logbook_hash, logbook_kind = excluded.logbook_kind,
 		   done_todos = excluded.done_todos, revisions = excluded.revisions,
-		   todos_at = excluded.todos_at, revisions_at = excluded.revisions_at`)
+		   logbook_at = excluded.logbook_at, revisions_at = excluded.revisions_at`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, p := range ps {
-		if _, err := stmt.Exec(p.ThreadID, p.DoneTodos, p.Revisions,
-			stamp(p.TodosAt), stamp(p.RevisionsAt)); err != nil {
+		if _, err := stmt.Exec(p.ThreadID, p.LogbookHash, p.LogbookKind, p.DoneTodos, p.Revisions,
+			stamp(p.LogbookAt), stamp(p.RevisionsAt)); err != nil {
 			return err
 		}
 	}

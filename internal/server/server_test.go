@@ -1189,11 +1189,17 @@ func TestProgressEvidence(t *testing.T) {
 		t.Fatalf("first sighting should baseline silently, got %s", lv)
 	}
 
-	// Someone ticks another one. The next sweep notices the increase and stamps it.
+	// Someone ticks another one. The next sweep notices and stamps it, labelling
+	// the change as a tick rather than a re-plan.
 	doneTodos.Store(2)
 	srv.flushCaches()
 	if lv := level(); lv != "in_progress" {
 		t.Fatalf("after a todo was ticked: want in_progress, got %s", lv)
+	}
+	if prog, err := st.ThreadProgressFor([]string{"wi-1"}); err != nil {
+		t.Fatalf("load progress: %v", err)
+	} else if p := prog["wi-1"]; p.LogbookKind != domain.EvCompletedTodo {
+		t.Errorf("a tick should be labelled completed-todo, got %+v", p)
 	}
 
 	// A later sweep sees no change at all — the thread must STAY warm, because
@@ -1203,19 +1209,20 @@ func TestProgressEvidence(t *testing.T) {
 		t.Fatalf("warmth must survive a no-change sweep, got %s", lv)
 	}
 
-	// Unticking is not evidence of anything: the counter follows, the timestamp
-	// does not move, so the thread stays warm on its earlier real progress.
+	// Any logbook change is progress — the Logbook is the plan, so revising it
+	// (here, striking an item) is a recorded decision, not motion.
 	doneTodos.Store(0)
 	srv.flushCaches()
 	if lv := level(); lv != "in_progress" {
-		t.Fatalf("unticking must not rewrite history, got %s", lv)
+		t.Fatalf("re-planning is progress too, got %s", lv)
 	}
 	prog, err := st.ThreadProgressFor([]string{"wi-1"})
 	if err != nil {
 		t.Fatalf("load progress: %v", err)
 	}
-	if p := prog["wi-1"]; p.DoneTodos != 0 || p.TodosAt.IsZero() {
-		t.Errorf("counter should follow but the stamp should hold: %+v", p)
+	// ...and the kind distinguishes a tick from a re-plan, even though both warm.
+	if p := prog["wi-1"]; p.LogbookKind != domain.EvLogbookUpdated || p.LogbookAt.IsZero() {
+		t.Errorf("want a logbook-updated stamp, got %+v", p)
 	}
 
 	// A revision artifact landing is progress too, counted from the sub-items

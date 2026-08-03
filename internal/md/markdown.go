@@ -2,6 +2,8 @@ package md
 
 import (
 	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
 	"regexp"
 	"strings"
 
@@ -109,6 +111,34 @@ func ParseThread(body, threadName string) (artifacts []Artifact, logbook *Logboo
 		}
 	}
 	return artifacts, logbook
+}
+
+// LogbookFingerprint returns a stable hash of a thread's Logbook and Definition
+// of Done sections — the plan, not the prose around it. Whitespace is normalized
+// first, so a reflow or a trailing space is not a change; anything else (a todo
+// ticked or unticked, an item added, a phase reworded) is.
+//
+// Returns "" when the thread has no Logbook at all, which reads naturally as
+// "no plan yet" and becomes a change the moment one is written.
+func LogbookFingerprint(body string) string {
+	logMD, rest, hasLog := ExtractSection(strings.TrimSpace(body), "logbook")
+	dodMD, _, hasDoD := ExtractSection(rest, "definition of done", "dod")
+	if !hasLog && !hasDoD {
+		return ""
+	}
+	var norm []string
+	for _, section := range []string{logMD, dodMD} {
+		for _, ln := range strings.Split(section, "\n") {
+			// Collapse every run of whitespace: indentation and spacing are cosmetic,
+			// and cosmetic edits must not generate heat (AGENTS.md).
+			if ln = strings.Join(strings.Fields(ln), " "); ln != "" {
+				norm = append(norm, ln)
+			}
+		}
+		norm = append(norm, "\x00") // keep the section boundary significant
+	}
+	sum := sha256.Sum256([]byte(strings.Join(norm, "\n")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // CountDone reports how many checklist items in a thread body are ticked, across

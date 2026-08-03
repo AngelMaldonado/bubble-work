@@ -25,6 +25,7 @@ const (
 const (
 	EvThreadCreated   = "thread-created"   // the work item came into being (weak)
 	EvCompletedTodo   = "completed-todo"   // a logbook/DoD item got ticked
+	EvLogbookUpdated  = "logbook-updated"  // the plan itself changed (§ working protocol)
 	EvRevisionAdded   = "revision-added"   // a revision artifact (sub-item) landed
 	EvThreadCompleted = "thread-completed" // the work item reached a completed state
 )

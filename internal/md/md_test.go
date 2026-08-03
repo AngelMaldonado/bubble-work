@@ -229,3 +229,36 @@ Do the thing.
 		t.Fatalf("want 0, got %d", got)
 	}
 }
+
+// LogbookFingerprint changes when the PLAN changes — a tick, an added item, a
+// reworded phase — but not when the prose around it moves or is reflowed.
+func TestLogbookFingerprint(t *testing.T) {
+	base := "# Brief\nDo the thing.\n\n## Logbook\n- [x] scaffold\n- [ ] wire it up\n"
+
+	if LogbookFingerprint("# Brief\nNo plan here.") != "" {
+		t.Fatal("a thread with no logbook should have no fingerprint")
+	}
+	h := LogbookFingerprint(base)
+	if h == "" {
+		t.Fatal("a logbook should fingerprint")
+	}
+	// Whitespace and the surrounding prose are noise.
+	if got := LogbookFingerprint("# Brief\nSomething else entirely.\n\n## Logbook\n-  [x]   scaffold  \n\n- [ ] wire it up\n"); got != h {
+		t.Errorf("reflow/prose changed the fingerprint: %s vs %s", got, h)
+	}
+	// Ticking, unticking and adding all count as changes to the plan.
+	for _, changed := range []string{
+		"## Logbook\n- [x] scaffold\n- [x] wire it up\n",
+		"## Logbook\n- [ ] scaffold\n- [ ] wire it up\n",
+		"## Logbook\n- [x] scaffold\n- [ ] wire it up\n- [ ] ship\n",
+		"## Logbook\n- [x] scaffold the server\n- [ ] wire it up\n",
+	} {
+		if LogbookFingerprint(changed) == h {
+			t.Errorf("plan change went unnoticed: %q", changed)
+		}
+	}
+	// The DoD is part of the plan too.
+	if LogbookFingerprint(base+"\n## Definition of Done\n- [ ] tests pass\n") == h {
+		t.Error("adding a Definition of Done should change the fingerprint")
+	}
+}

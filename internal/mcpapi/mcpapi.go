@@ -16,6 +16,7 @@ import (
 // interface avoids an import cycle and mirrors the HTTP surface exactly.
 type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
+	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
 	BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
 	SetContract(ctx context.Context, bubbleID string, in domain.ContractInput) (domain.Contract, error)
 	CloseBubble(ctx context.Context, bubbleID string) error
@@ -97,6 +98,16 @@ func Handler(b Backend) http.Handler {
 				return nil, listOut{}, err
 			}
 			return nil, listOut{Bubbles: vs}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "create_bubble", Description: "Create a bubble (a Plane module) in a project. Optionally set its §4 outcome and owner. A bubble is the unit of attention; birth threads into it afterward."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in domain.CreateBubbleRequest) (*sdk.CallToolResult, domain.NewBubble, error) {
+			nb, err := b.CreateBubble(withActor(ctx, req), in)
+			if err != nil {
+				return nil, domain.NewBubble{}, err
+			}
+			return nil, nb, nil
 		})
 
 	sdk.AddTool(srv,

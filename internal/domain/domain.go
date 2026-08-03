@@ -302,6 +302,8 @@ type CreateBubbleRequest struct {
 	Instance string `json:"instance"`
 	Project  string `json:"project"`
 	Name     string `json:"name"`
+	Outcome  string `json:"outcome,omitempty"` // optional §4 contract set at creation
+	Owner    string `json:"owner,omitempty"`
 }
 
 // NewBubble is a freshly created bubble with its namespaced id.

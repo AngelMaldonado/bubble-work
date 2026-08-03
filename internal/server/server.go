@@ -843,8 +843,17 @@ func (s *Server) CreateBubble(ctx context.Context, req domain.CreateBubbleReques
 	if err != nil {
 		return domain.NewBubble{}, fmt.Errorf("create module: %w", err)
 	}
-	s.dropInstanceCache(req.Instance)
 	id := req.Instance + ":" + req.Project + ":" + m.ID
+	// Optional §4 contract at creation. Write straight to the store by id — the
+	// new bubble isn't in the snapshot yet, so resolveID-based SetContract can't
+	// find it. Best-effort: a failed contract write shouldn't undo the bubble.
+	outcome, owner := strings.TrimSpace(req.Outcome), strings.TrimSpace(req.Owner)
+	if outcome != "" || owner != "" {
+		if err := s.store.SetContract(id, store.Contract{Outcome: outcome, Owner: owner}); err != nil {
+			log.Printf("create_bubble: contract set failed for %s: %v", id, err)
+		}
+	}
+	s.dropInstanceCache(req.Instance)
 	log.Printf("create_bubble by %s: %s", actor.Label(), id)
 	return domain.NewBubble{ID: id, Name: m.Name}, nil
 }

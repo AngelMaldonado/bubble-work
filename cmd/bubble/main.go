@@ -266,6 +266,8 @@ func cmdBubble(args []string) {
 		fs := flag.NewFlagSet("bubble new", flag.ExitOnError)
 		ws := fs.String("workspace", "", "<instance>:<project-id>")
 		name := fs.String("name", "", "bubble name")
+		outcome := fs.String("outcome", "", "§4 contract: what \"done\" looks like (optional)")
+		owner := fs.String("owner", "", "§4 contract: who is accountable (optional)")
 		_ = fs.Parse(args[1:])
 		if *ws == "" || *name == "" {
 			log.Fatal("bubble new: --workspace <instance>:<project> and --name are required")
@@ -274,7 +276,9 @@ func cmdBubble(args []string) {
 		if !found || inst == "" || proj == "" {
 			log.Fatal("bubble new: --workspace must be <instance>:<project-id>")
 		}
-		if err := client.CreateBubble(cfg, domain.CreateBubbleRequest{Instance: inst, Project: proj, Name: *name}); err != nil {
+		if err := client.CreateBubble(cfg, domain.CreateBubbleRequest{
+			Instance: inst, Project: proj, Name: *name, Outcome: *outcome, Owner: *owner,
+		}); err != nil {
 			log.Fatalf("bubble new: %v", err)
 		}
 		return

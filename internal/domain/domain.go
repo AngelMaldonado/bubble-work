@@ -235,6 +235,10 @@ type Instance struct {
 	Workspace     string // Plane workspace slug
 	Project       string // pinned Plane project id = our Workspace (§7.1)
 	WebhookSecret string // HMAC secret for verifying inbound Plane webhooks (§6)
+	// AutoState opts this instance into writing derived thread levels back to
+	// Plane (THREAD-LIFECYCLE.md Phase B). Off by default — until an operator
+	// turns it on, Bubble never changes a card's state.
+	AutoState bool
 }
 
 // Bubble is a durable grouping of threads (maps to a Plane Module) plus its
@@ -514,6 +518,7 @@ type AdminInstance struct {
 	Project    string `json:"project"`
 	HasWebhook bool   `json:"has_webhook"`
 	Cached     bool   `json:"cached"`
+	AutoState  bool   `json:"auto_state"` // writes derived levels back to Plane (Phase B)
 }
 
 // AdminStats is a service-admin health snapshot.

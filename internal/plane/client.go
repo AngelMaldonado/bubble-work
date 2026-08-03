@@ -265,6 +265,15 @@ func (c *Client) CreateWorkItem(ctx context.Context, name, descriptionHTML, stat
 	return out.ID, nil
 }
 
+// SetWorkItemState moves a work item to a state. This is the ONLY call that
+// changes a card's position in Plane's pipeline, and it is made solely by the
+// opt-in auto-state sweep (THREAD-LIFECYCLE.md Phase B) — never on a read path.
+// Pass a state id resolved by GROUP: state names are project-configured and
+// localized, so matching on them would break on any non-English project.
+func (c *Client) SetWorkItemState(ctx context.Context, workItemID, stateID string) error {
+	return c.patch(ctx, c.projectBase()+"/work-items/"+workItemID+"/", map[string]any{"state": stateID}, nil)
+}
+
 // AddIssuesToModule links work items to a module (bubble).
 func (c *Client) AddIssuesToModule(ctx context.Context, moduleID string, issueIDs []string) error {
 	return c.post(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", map[string]any{"issues": issueIDs}, nil)

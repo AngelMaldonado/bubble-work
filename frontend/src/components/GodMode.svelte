@@ -124,6 +124,24 @@
       flash('kiosk token revoked');
     });
 
+  // Turning this on lets the cooling sweep move cards in Plane: 😴 → Backlog,
+  // 🪦 → Cancelled, 🔥 → In Progress. A thread a human moves is handed off and
+  // never auto-managed again (THREAD-LIFECYCLE.md Phase B).
+  const toggleAutoState = (i: AdminInstance) =>
+    run('autostate:' + i.slug, async () => {
+      if (!i.auto_state) {
+        const ok = confirm(
+          `Let Bubble move cards in Plane for "${i.slug}"?\n\n` +
+            `The cooling sweep will move work items between Backlog, In Progress and Cancelled ` +
+            `to match their derived level. Threads someone moves by hand are left alone from then on.`,
+        );
+        if (!ok) return;
+      }
+      const res = await api.adminAutoState(i.slug, !i.auto_state);
+      instances = instances.map((x) => (x.slug === i.slug ? { ...x, auto_state: res.auto_state } : x));
+      flash(res.auto_state ? `${i.slug}: now writing state to Plane` : `${i.slug}: read-only again`);
+    });
+
   // ---- buoyancy tuning (THREAD-LIFECYCLE.md) ----
 
   const fieldsIn = (group: TuningField['group']): TuningField[] =>
@@ -245,7 +263,7 @@
         <div class="tablewrap">
           <table>
             <thead>
-              <tr><th>slug</th><th>base url</th><th>workspace</th><th>project</th><th>webhook</th><th>cached</th></tr>
+              <tr><th>slug</th><th>base url</th><th>workspace</th><th>project</th><th>webhook</th><th>cached</th><th>writes to Plane</th></tr>
             </thead>
             <tbody>
               {#each instances as i (i.slug)}
@@ -256,6 +274,19 @@
                   <td class="mono">{i.project || '—'}</td>
                   <td>{i.has_webhook ? '✓' : '—'}</td>
                   <td>{i.cached ? '✓' : '—'}</td>
+                  <td>
+                    <button
+                      class="mini"
+                      class:on={i.auto_state}
+                      onclick={() => toggleAutoState(i)}
+                      disabled={busy === 'autostate:' + i.slug}
+                      title={i.auto_state
+                        ? 'the cooling sweep moves cards in Plane — click to stop'
+                        : 'Bubble only reads Plane — click to let it move cards'}
+                    >
+                      {busy === 'autostate:' + i.slug ? '…' : i.auto_state ? 'auto-state on' : 'read-only'}
+                    </button>
+                  </td>
                 </tr>
               {/each}
             </tbody>
@@ -758,6 +789,11 @@
     flex: none;
     padding: 0.3rem 0.6rem;
     font-size: 0.74rem;
+  }
+  .mini.on {
+    color: var(--wip);
+    border-color: color-mix(in oklab, var(--wip) 50%, transparent);
+    font-weight: 700;
   }
   .mini.danger {
     color: oklch(0.62 0.2 25);

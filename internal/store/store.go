@@ -30,7 +30,8 @@ CREATE TABLE IF NOT EXISTS plane_instances (
   api_key        TEXT NOT NULL,
   workspace      TEXT NOT NULL,     -- workspace slug
   project        TEXT NOT NULL,     -- pinned project id, or '' for the whole workspace
-  webhook_secret TEXT               -- HMAC secret for inbound Plane webhooks (§6)
+  webhook_secret TEXT,              -- HMAC secret for inbound Plane webhooks (§6)
+  auto_state     INTEGER NOT NULL DEFAULT 0  -- write derived levels back to Plane? (Phase B, off)
 );
 CREATE TABLE IF NOT EXISTS bubble_state (
   bubble_id  TEXT PRIMARY KEY,     -- last-known lifecycle, for transition detection
@@ -78,6 +79,12 @@ CREATE TABLE IF NOT EXISTS thread_progress (
   logbook_at   TEXT NOT NULL,     -- RFC3339 of the last observed Logbook CHANGE ('' = never)
   revisions_at TEXT NOT NULL      -- RFC3339 of the last observed revision ADDED ('' = never)
 );
+CREATE TABLE IF NOT EXISTS thread_autostate (
+  thread_id  TEXT PRIMARY KEY,  -- Plane work-item id
+  state_id   TEXT NOT NULL,     -- the state WE last wrote (provenance, Phase B)
+  written_at TEXT NOT NULL,     -- RFC3339
+  handed_off INTEGER NOT NULL DEFAULT 0  -- 1 = a human overrode us; never touch it again
+);
 CREATE TABLE IF NOT EXISTS thread_pulse (
   thread_id       TEXT PRIMARY KEY,  -- Plane work-item id
   last_comment_at TEXT NOT NULL,     -- RFC3339 of the newest comment we have seen
@@ -120,6 +127,7 @@ func Open(path string) (*Store, error) {
 	// Best-effort migrations for pre-existing DBs (errors on already-migrated
 	// DBs are expected and ignored).
 	_, _ = db.Exec(`ALTER TABLE plane_instances ADD COLUMN webhook_secret TEXT`)
+	_, _ = db.Exec(`ALTER TABLE plane_instances ADD COLUMN auto_state INTEGER NOT NULL DEFAULT 0`)
 	_, _ = db.Exec(`ALTER TABLE bubble_contracts ADD COLUMN stage TEXT NOT NULL DEFAULT ''`)
 	// thread_progress once keyed progress off the ticked-todo count alone; it now
 	// fingerprints the whole Logbook, so any plan change counts (THREAD-LIFECYCLE.md).
@@ -211,9 +219,11 @@ func scanInstances(rows *sql.Rows) ([]domain.Instance, error) {
 	var out []domain.Instance
 	for rows.Next() {
 		var i domain.Instance
-		if err := rows.Scan(&i.Slug, &i.Name, &i.BaseURL, &i.APIKey, &i.Workspace, &i.Project, &i.WebhookSecret); err != nil {
+		var auto int
+		if err := rows.Scan(&i.Slug, &i.Name, &i.BaseURL, &i.APIKey, &i.Workspace, &i.Project, &i.WebhookSecret, &auto); err != nil {
 			return nil, err
 		}
+		i.AutoState = auto == 1
 		out = append(out, i)
 	}
 	return out, rows.Err()
@@ -222,12 +232,29 @@ func scanInstances(rows *sql.Rows) ([]domain.Instance, error) {
 // ListInstances returns every registered instance (admin view; includes keys).
 func (s *Store) ListInstances() ([]domain.Instance, error) {
 	rows, err := s.db.Query(
-		`SELECT slug, COALESCE(name,''), base_url, api_key, workspace, project, COALESCE(webhook_secret,'')
+		`SELECT slug, COALESCE(name,''), base_url, api_key, workspace, project, COALESCE(webhook_secret,''),
+		        COALESCE(auto_state, 0)
 		 FROM plane_instances ORDER BY slug`)
 	if err != nil {
 		return nil, err
 	}
 	return scanInstances(rows)
+}
+
+// SetAutoState turns Plane state write-back on or off for one instance
+// (THREAD-LIFECYCLE.md Phase B). Off by default; nothing writes to Plane until
+// an operator opts that instance in.
+func (s *Store) SetAutoState(slug string, enabled bool) (bool, error) {
+	v := 0
+	if enabled {
+		v = 1
+	}
+	res, err := s.db.Exec(`UPDATE plane_instances SET auto_state = ? WHERE slug = ?`, v, slug)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // SetWebhookSecret stores the HMAC secret for an instance's inbound webhooks.
@@ -503,6 +530,77 @@ func stamp(t time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+// AutoState records the Plane state WE last wrote for a thread, so the sweep can
+// tell its own handiwork from a human's. HandedOff latches: once someone moves a
+// card we auto-managed, we back off from that thread permanently
+// (THREAD-LIFECYCLE.md Phase B).
+type AutoState struct {
+	ThreadID  string
+	StateID   string
+	WrittenAt time.Time
+	HandedOff bool
+}
+
+// AutoStateFor loads what we last wrote for the given work items.
+func (s *Store) AutoStateFor(ids []string) (map[string]AutoState, error) {
+	out := make(map[string]AutoState, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(ids); start += chunk {
+		end := min(start+chunk, len(ids))
+		part := ids[start:end]
+		args := make([]any, len(part))
+		for i, id := range part {
+			args[i] = id
+		}
+		rows, err := s.db.Query(
+			`SELECT thread_id, state_id, written_at, handed_off FROM thread_autostate
+			 WHERE thread_id IN (`+placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var a AutoState
+			var at string
+			var handed int
+			if err := rows.Scan(&a.ThreadID, &a.StateID, &at, &handed); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			a.WrittenAt, _ = time.Parse(time.RFC3339, at)
+			a.HandedOff = handed == 1
+			out[a.ThreadID] = a
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// RecordAutoState remembers the state we just wrote for a thread.
+func (s *Store) RecordAutoState(threadID, stateID string, at time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT INTO thread_autostate(thread_id, state_id, written_at, handed_off) VALUES(?, ?, ?, 0)
+		 ON CONFLICT(thread_id) DO UPDATE SET
+		   state_id = excluded.state_id, written_at = excluded.written_at`,
+		threadID, stateID, stamp(at))
+	return err
+}
+
+// HandOffAutoState latches a thread as human-owned: we noticed its state is no
+// longer what we left it as, so we stop auto-managing it for good.
+func (s *Store) HandOffAutoState(threadID string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO thread_autostate(thread_id, state_id, written_at, handed_off) VALUES(?, '', '', 1)
+		 ON CONFLICT(thread_id) DO UPDATE SET handed_off = 1`, threadID)
+	return err
 }
 
 // Pulse is the presence signal for a thread: when someone last commented, and

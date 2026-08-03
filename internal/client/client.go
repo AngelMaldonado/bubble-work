@@ -319,6 +319,27 @@ func AdminKioskRevoke(cfg config.Config, token, kiosk string) error {
 	return nil
 }
 
+// AdminAutoState turns Plane state write-back on or off for an instance. This is
+// the switch that lets Bubble edit your tracker, so it says so out loud.
+func AdminAutoState(cfg config.Config, token, slug string, enabled bool) error {
+	var out struct {
+		Instance  string `json:"instance"`
+		AutoState bool   `json:"auto_state"`
+	}
+	if err := adminSend(cfg, http.MethodPost, "/api/admin/instances/"+url.PathEscape(slug)+"/autostate",
+		token, map[string]bool{"enabled": enabled}, &out); err != nil {
+		return err
+	}
+	if out.AutoState {
+		fmt.Printf("auto-state ON for %s — the cooling sweep will now move cards in Plane:\n"+
+			"  😴 → Backlog · 🪦 → Cancelled · 🔥 → In Progress\n"+
+			"Threads a human moves are handed off and never touched again.\n", out.Instance)
+	} else {
+		fmt.Printf("auto-state OFF for %s — Bubble reads Plane but never writes state.\n", out.Instance)
+	}
+	return nil
+}
+
 // AdminTuning prints the live buoyancy calibration, grouped, with each knob's
 // help text and a marker on anything that drifts from the stock default.
 func AdminTuning(cfg config.Config, token string) error {
@@ -446,8 +467,8 @@ func AdminInstances(cfg config.Config, token string) error {
 		return err
 	}
 	for _, i := range is {
-		fmt.Printf("%-12s  %-30s  ws=%s  project=%s  webhook=%v  cached=%v\n",
-			i.Slug, i.BaseURL, i.Workspace, orDash(i.Project), i.HasWebhook, i.Cached)
+		fmt.Printf("%-12s  %-30s  ws=%s  project=%s  webhook=%v  cached=%v  autostate=%v\n",
+			i.Slug, i.BaseURL, i.Workspace, orDash(i.Project), i.HasWebhook, i.Cached, i.AutoState)
 	}
 	return nil
 }

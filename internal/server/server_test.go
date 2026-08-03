@@ -13,6 +13,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -1326,5 +1327,135 @@ func TestPulseRecordedFromComments(t *testing.T) {
 	got, _ = st.PulseFor([]string{"wi-1"})
 	if p := got["wi-1"]; !p.LastCommentAt.After(want) {
 		t.Fatalf("posting should advance the pulse: %+v", p)
+	}
+}
+
+// Phase B: the sweep reflects derived levels back onto Plane — but only for
+// instances that opted in, and never over a human's own edit.
+func TestAutoStateWriteBack(t *testing.T) {
+	var (
+		mu      sync.Mutex
+		state   = "state-1" // wi-1's current state in the fake ("Todo", unstarted)
+		patched []string    // state ids we were asked to write, in order
+	)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		defer mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[
+				{"id":"state-1","name":"Todo","group":"unstarted","default":true},
+				{"id":"state-2","name":"En Progreso","group":"started"},
+				{"id":"state-3","name":"Cancelado","group":"cancelled"}
+			]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"Old thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"assignees":["u1"],"state":%q}]}`, state)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var body struct {
+				State string `json:"state"`
+			}
+			json.NewDecoder(r.Body).Decode(&body)
+			patched = append(patched, body.State)
+			state = body.State // Plane now reflects our write
+			io.WriteString(w, `{}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+
+	writes := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		return append([]string(nil), patched...)
+	}
+
+	// Off by default: Bubble is a lens. The thread is long dormant and never
+	// produced anything (🪦), but nothing is written.
+	if _, err := srv.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	if got := writes(); len(got) != 0 {
+		t.Fatalf("auto-state must be opt-in, but wrote %v", got)
+	}
+
+	// Opt in. Now the 🪦 thread is moved to the cancelled group — by GROUP, not by
+	// name, so the localized "Cancelado" is found correctly.
+	if ok, err := st.SetAutoState("ws", true); err != nil || !ok {
+		t.Fatalf("enable: %v %v", ok, err)
+	}
+	srv.flushCaches()
+	if _, err := srv.Tick(context.Background()); err != nil {
+		t.Fatalf("tick: %v", err)
+	}
+	got := writes()
+	if len(got) != 1 || got[0] != "state-3" {
+		t.Fatalf("want one write to the cancelled state, got %v", got)
+	}
+
+	// It records what it wrote, and doesn't write again on the next sweep — the
+	// card is already where it belongs.
+	prov, err := st.AutoStateFor([]string{"wi-1"})
+	if err != nil {
+		t.Fatalf("provenance: %v", err)
+	}
+	if p := prov["wi-1"]; p.StateID != "state-3" || p.HandedOff {
+		t.Fatalf("provenance wrong: %+v", p)
+	}
+	srv.flushCaches()
+	srv.Tick(context.Background())
+	if got := writes(); len(got) != 1 {
+		t.Fatalf("a settled card should not be rewritten, got %v", got)
+	}
+
+	// A human drags it somewhere else. We must notice, hand the thread off, and
+	// never touch it again — even though our rules still say 🪦.
+	mu.Lock()
+	state = "state-2" // moved to "En Progreso" by hand
+	mu.Unlock()
+	srv.flushCaches()
+	srv.Tick(context.Background())
+	if got := writes(); len(got) != 1 {
+		t.Fatalf("we must not fight a human edit, but wrote %v", got)
+	}
+	if prov, _ := st.AutoStateFor([]string{"wi-1"}); !prov["wi-1"].HandedOff {
+		t.Fatal("the thread should be latched as human-owned")
+	}
+	// ...and the hand-off is permanent, not just for this sweep.
+	srv.flushCaches()
+	srv.Tick(context.Background())
+	if got := writes(); len(got) != 1 {
+		t.Fatalf("hand-off must latch, but wrote %v", got)
+	}
+}
+
+// The level → Plane group mapping, including what we deliberately never touch.
+func TestAutoTarget(t *testing.T) {
+	for level, want := range map[string]string{
+		"in_progress": "started",
+		"zzzz":        "backlog",
+		"rip":         "cancelled",
+		"done":        "", // finishing is Plane's business
+		"reviewed":    "",
+		"":            "",
+	} {
+		if got := autoTarget(level); got != want {
+			t.Errorf("autoTarget(%q) = %q, want %q", level, got, want)
+		}
 	}
 }

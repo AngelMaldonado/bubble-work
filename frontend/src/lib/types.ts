@@ -160,6 +160,7 @@ export interface AdminInstance {
   project: string;
   has_webhook: boolean;
   cached: boolean;
+  auto_state: boolean; // writes derived levels back to Plane (Phase B)
 }
 
 export interface KioskToken {

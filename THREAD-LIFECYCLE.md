@@ -1,8 +1,7 @@
 # Thread Lifecycle — automatic buoyancy for work items
 
-Status: **Phase A + C shipped · Phase B pending** · Drafted 2026-08-03 ·
-Companion to [`AGENTS.md`](./AGENTS.md) and
-[`INTERIOR-PLAN.md`](./INTERIOR-PLAN.md).
+Status: **Phases A, B and C shipped** · Drafted 2026-08-03 · Companion to
+[`AGENTS.md`](./AGENTS.md) and [`INTERIOR-PLAN.md`](./INTERIOR-PLAN.md).
 
 ## Why
 
@@ -107,9 +106,10 @@ degrade gracefully to overlay-only (compute + display, no writes).
   render a thread level chip in the timeline + interior. Read each thread's real
   Plane group for display. Zero risk; independently useful. See *Phase A as
   built* below.
-- **Phase B — auto-write policy (behind the per-instance toggle).** Extend the
-  cooling `tick`: Zzzz→Backlog, RIP→Cancelled, resurrect→In Progress, provenance
-  guardrail, group resolution, inbox notifications. Depends on A.
+- **Phase B — auto-write policy (behind the per-instance toggle).** ✅
+  **Shipped** — see *Phase B as built*. Extends the cooling `tick`:
+  Zzzz→Backlog, RIP→Cancelled, resurrect→In Progress, provenance guardrail,
+  group resolution, inbox notifications.
 - **Phase C — evidence sharpening.** ✅ **Shipped** (pulled ahead of B, which
   needs it — see *Phase C as built*). Logbook diffing and revision-added
   detection so an OPEN thread can produce evidence at all, plus comment pulse
@@ -295,6 +295,44 @@ deleting a comment doesn't erase the fact that someone was paying attention.
 redundant — the handler currently ignores the payload and just triggers a
 refresh. Worth wiring once the event shape can be verified against a live
 instance.
+
+## Phase B as built
+
+`Server.autoState` runs at the end of every `tick`, after the pulse probe, over
+the same snapshot the notifications were computed from. `plane.SetWorkItemState`
+is the only call in the codebase that moves a card, and it exists on no read
+path.
+
+- **Opt-in per instance, off by default** (`plane_instances.auto_state`).
+  Until an operator flips it, Bubble reads Plane and never writes state. The
+  switch is service-admin only, audited, and lives on all three admin surfaces:
+  `POST /api/admin/instances/{slug}/autostate`, `bubble admin autostate <inst>
+  on|off`, and a per-row toggle in God Mode's instance table (with a confirm,
+  since it changes someone's tracker).
+- **Targets resolved by group.** `defaultStateOf` picks the target group's
+  default state per project, else its first by name for stability. A project
+  with no state in the target group is skipped rather than guessed at.
+- **The provenance guardrail.** `thread_autostate` records the state id *we*
+  wrote. Before each move: a thread we have never written to is fair game; one
+  whose current state still matches our last write is still ours; one whose state
+  differs has been moved by a person, so it is latched `handed_off` and **never
+  auto-managed again**. The latch is permanent by design — the alternative is a
+  tug-of-war with whoever is actually doing the work.
+- **No-ops are free.** A card already in the target group is skipped, so a
+  settled board writes nothing at all after its first pass.
+- **Bounded.** At most `autoWriteLimit` (50) cards move per tick. A calibration
+  change can reclassify a whole board at once, and without a cap the next sweep
+  would rewrite hundreds of items in one burst.
+- **Attribution and audit.** Writes use the instance key (there is no human
+  caller), are logged per card, and post a per-bubble inbox notification —
+  *"Bubble A: moved 2 → Backlog and 1 → Cancelled in Plane"*. They are
+  housekeeping, **not evidence**: they touch no progress row and warm nothing.
+- **Closed bubbles are left alone** entirely, as is anything computing to 🏆.
+
+Note the loop this closes with the resurrection rule: if we auto-cancel a thread
+and someone later edits its Logbook, the thread recomputes to 🔥, our provenance
+still matches (we wrote that Cancelado), and the next tick moves it to In
+Progress. The card follows the work back.
 
 ## Decisions locked
 

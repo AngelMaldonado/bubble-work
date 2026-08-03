@@ -128,6 +128,12 @@ export const api = {
     req<KioskToken>('POST', '/api/admin/kiosk', { instance, name }),
   adminKioskRevoke: (token: string) =>
     req<void>('DELETE', `/api/admin/kiosk/${encodeURIComponent(token)}`),
+  adminAutoState: (slug: string, enabled: boolean) =>
+    req<{ instance: string; auto_state: boolean }>(
+      'POST',
+      `/api/admin/instances/${encodeURIComponent(slug)}/autostate`,
+      { enabled },
+    ),
   adminTuning: () => req<TuningView>('GET', '/api/admin/tuning'),
   // a partial body patches only the keys it names; the server clamps and persists
   adminTuningSet: (patch: Record<string, number | boolean>) =>

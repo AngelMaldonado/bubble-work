@@ -491,6 +491,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/refresh", s.adminOnly(s.handleAdminRefresh))
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
 	mux.HandleFunc("GET /api/admin/members", s.adminOnly(s.handleAdminMembers))
+	mux.HandleFunc("POST /api/admin/instances/{slug}/autostate", s.adminOnly(s.handleSetAutoState))
 	mux.HandleFunc("GET /api/admin/tuning", s.adminOnly(s.handleGetTuning))
 	mux.HandleFunc("PUT /api/admin/tuning", s.adminOnly(s.handleSetTuning))
 	mux.HandleFunc("GET /api/admin/kiosk", s.adminOnly(s.handleListKiosk))
@@ -1627,6 +1628,11 @@ func (s *Server) Tick(ctx context.Context) (int, error) {
 	// Before anything acts on a 🪦, check whether people are still talking about
 	// it (THREAD-LIFECYCLE.md). Bounded, and only for threads actually at risk.
 	s.probePulse(ctx, bubbles)
+	// Then reflect the derived levels back onto Plane — but only for instances
+	// that opted in, and never over a human's own edit (Phase B).
+	if w := s.autoState(ctx, bubbles); w > 0 {
+		log.Printf("autostate: moved %d card(s) in Plane", w)
+	}
 	return n, nil
 }
 
@@ -1917,6 +1923,7 @@ func (s *Server) handleAdminInstances(w http.ResponseWriter, r *http.Request) {
 		out = append(out, domain.AdminInstance{
 			Slug: i.Slug, Name: i.Name, BaseURL: i.BaseURL, Workspace: i.Workspace,
 			Project: i.Project, HasWebhook: i.WebhookSecret != "", Cached: cached,
+			AutoState: i.AutoState,
 		})
 	}
 	s.bubblesMu.Unlock()
@@ -1963,6 +1970,32 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 // doesn't own membership — Plane does — so this is a viewer, not a manager. An
 // instance whose member fetch fails is included with an error rather than
 // failing the whole call.
+// handleSetAutoState opts one instance in or out of writing derived levels back
+// to Plane (Phase B). This is the switch that turns Bubble from a lens into
+// something that edits your tracker, so it is service-admin only and audited.
+func (s *Server) handleSetAutoState(w http.ResponseWriter, r *http.Request) {
+	slug := r.PathValue("slug")
+	var req struct {
+		Enabled bool `json:"enabled"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeErr(w, fmt.Errorf("%w: %v", errBadRequest, err))
+		return
+	}
+	ok, err := s.store.SetAutoState(slug, req.Enabled)
+	if writeErr(w, err) {
+		return
+	}
+	if !ok {
+		writeErr(w, errNotFound)
+		return
+	}
+	s.dropInstanceCache(slug)
+	actor, _ := domain.ActorFrom(r.Context())
+	log.Printf("ADMIN %s set auto-state for %s = %v", actor.Label(), slug, req.Enabled)
+	writeJSON(w, http.StatusOK, map[string]any{"instance": slug, "auto_state": req.Enabled})
+}
+
 // handleGetTuning returns the live buoyancy calibration, alongside the defaults
 // so a client can show what "stock" looks like and offer a reset.
 func (s *Server) handleGetTuning(w http.ResponseWriter, r *http.Request) {

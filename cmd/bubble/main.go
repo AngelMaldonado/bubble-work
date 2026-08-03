@@ -496,6 +496,19 @@ func cmdAdmin(args []string) {
 		err = cmdAdminKiosk(cfg, token, args[1:])
 	case "tuning":
 		err = cmdAdminTuning(cfg, token, args[1:])
+	case "autostate":
+		if len(args) < 3 {
+			err = fmt.Errorf("usage: bubble admin autostate <instance> <on|off>")
+			break
+		}
+		switch args[2] {
+		case "on", "true", "yes":
+			err = client.AdminAutoState(cfg, token, args[1], true)
+		case "off", "false", "no":
+			err = client.AdminAutoState(cfg, token, args[1], false)
+		default:
+			err = fmt.Errorf("expected on or off, got %q", args[2])
+		}
 	default:
 		adminUsage()
 		os.Exit(2)
@@ -566,6 +579,8 @@ Usage:
   bubble admin tuning                show the buoyancy calibration
   bubble admin tuning set k=v [k=v]  tweak lifecycle thresholds
   bubble admin tuning reset          restore the stock calibration
+  bubble admin autostate <inst> on   write derived levels back to Plane (Phase B)
+  bubble admin autostate <inst> off  stop writing to Plane (default)
 
 `)
 }

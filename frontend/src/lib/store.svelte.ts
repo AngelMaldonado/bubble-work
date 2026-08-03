@@ -3,6 +3,14 @@
 import { api, ApiError, getToken, setToken, clearToken, setKioskToken } from './api';
 import type { Actor, BubbleView, Inbox, Level } from './types';
 
+// ArtSel identifies one artifact within a thread's interior (work file, the
+// logbook, or a revision), used by the route, pins, and scroll restoration.
+export type ArtKind = 'artifact' | 'logbook' | 'revision';
+export interface ArtSel {
+  kind: ArtKind;
+  idx: number;
+}
+
 const SEC_MS = 30_000; // secondary timer: inbox freshness (+ cross-org when godmode)
 const RECONNECT_MS = 3_000; // SSE reconnect backoff
 const FOCUS_CAP = 5; // soft warning threshold for the In-progress band
@@ -34,6 +42,9 @@ class Store {
   detail = $state<BubbleView | null>(null);
   // the namespaced thread id whose interior is open (null = closed).
   threadId = $state<string | null>(null);
+  // which artifact within the open thread is selected (from the route, so it's
+  // deep-linkable and pin-able). null → the thread view picks its default.
+  threadSel = $state<ArtSel | null>(null);
 
   private secTimer: ReturnType<typeof setInterval> | null = null;
   private stream: AbortController | null = null;
@@ -308,14 +319,27 @@ class Store {
     this.detail = null;
   }
 
-  openThread(id: string): void {
+  openThread(id: string, sel?: ArtSel): void {
     this.threadId = id;
-    this.setHash(`thread/${encodeURIComponent(id)}`);
+    this.threadSel = sel ?? null;
+    this.setHash(threadHash(id, sel));
   }
 
   closeThread(): void {
     this.threadId = null;
+    this.threadSel = null;
     this.setHash('');
+  }
+
+  // setThreadSel updates the selected artifact WITHOUT a history push (so
+  // flipping between artifacts doesn't spam back/forward), keeping the route
+  // deep-linkable and pin-able.
+  setThreadSel(sel: ArtSel): void {
+    this.threadSel = sel;
+    if (this.threadId && typeof location !== 'undefined') {
+      const h = '#' + threadHash(this.threadId, sel);
+      history.replaceState(null, '', location.pathname + location.search + h);
+    }
   }
 
   // ---- hash routing for the dedicated thread screen ----
@@ -330,8 +354,35 @@ class Store {
   syncFromHash(): void {
     if (typeof location === 'undefined') return;
     const h = location.hash.replace(/^#/, '');
-    this.threadId = h.startsWith('thread/') ? decodeURIComponent(h.slice('thread/'.length)) : null;
+    if (!h.startsWith('thread/')) {
+      this.threadId = null;
+      this.threadSel = null;
+      return;
+    }
+    // "thread/<encId>" or "thread/<encId>/<kindChar><idx>" (a0 | l0 | r1)
+    const rest = h.slice('thread/'.length);
+    const slash = rest.indexOf('/');
+    if (slash < 0) {
+      this.threadId = decodeURIComponent(rest);
+      this.threadSel = null;
+      return;
+    }
+    this.threadId = decodeURIComponent(rest.slice(0, slash));
+    this.threadSel = parseArtSel(rest.slice(slash + 1));
   }
+}
+
+function threadHash(id: string, sel?: ArtSel | null): string {
+  let h = `thread/${encodeURIComponent(id)}`;
+  if (sel) h += `/${sel.kind[0]}${sel.idx}`; // a0 | l0 | r1
+  return h;
+}
+
+function parseArtSel(s: string): ArtSel | null {
+  const m = /^([alr])(\d+)$/.exec(s);
+  if (!m) return null;
+  const kind = m[1] === 'l' ? 'logbook' : m[1] === 'r' ? 'revision' : 'artifact';
+  return { kind, idx: Number(m[2]) };
 }
 
 export const store = new Store();

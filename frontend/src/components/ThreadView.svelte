@@ -1,16 +1,36 @@
 <script lang="ts">
   import { slide } from 'svelte/transition';
-  import { store } from '../lib/store.svelte';
+  import { store, type ArtSel } from '../lib/store.svelte';
+  import { pins, type Pin } from '../lib/pins.svelte';
   import { api, ApiError } from '../lib/api';
   import type { ThreadDetail, Comment } from '../lib/types';
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
 
-  type Sel = { kind: 'artifact' | 'logbook' | 'revision'; idx: number };
+  type Sel = ArtSel;
 
   let detail = $state<ThreadDetail | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
-  let sel = $state<Sel>({ kind: 'artifact', idx: 0 });
+
+  // The selected artifact is derived from the route (store.threadSel) so it's
+  // deep-linkable and pin-able; a missing/stale selection falls back to the
+  // thread's default. All changes go through store.setThreadSel.
+  const sel = $derived.by<Sel>(() => {
+    const d = detail;
+    if (!d) return { kind: 'artifact', idx: 0 };
+    const want = store.threadSel;
+    if (want) {
+      if (want.kind === 'artifact' && d.artifacts?.[want.idx]) return want;
+      if (want.kind === 'logbook' && d.logbook) return want;
+      if (want.kind === 'revision' && d.revisions?.[want.idx]) return want;
+    }
+    return firstSel(d);
+  });
+
+  function select(s: Sel): void {
+    saveScroll(); // remember where we were before leaving this artifact
+    store.setThreadSel(s);
+  }
 
   let contentEl = $state<HTMLElement | null>(null);
   let headings = $state<Heading[]>([]);
@@ -245,7 +265,6 @@
       .thread(tid)
       .then((d) => {
         detail = d;
-        sel = firstSel(d);
       })
       .catch((e) => (error = e instanceof ApiError ? e.message : String(e)))
       .finally(() => (loading = false));
@@ -258,23 +277,78 @@
     return null;
   });
 
-  // On content switch: reset scroll, render mermaid, rebuild the minimap headings.
+  // ---- per-artifact scroll restoration (ported from the mds tool) ----
+  // Remember the reading position per (thread, artifact) so switching artifacts
+  // or returning to a thread lands where you left off. sessionStorage keeps it
+  // across reloads in the same tab. Restored AFTER render settles (mermaid /
+  // images) so the target offset is accurate.
+  function scrollKey(): string | null {
+    if (!store.threadId) return null;
+    return `bubble.scroll|${store.threadId}|${sel.kind}${sel.idx}`;
+  }
+  function saveScroll(): void {
+    const k = scrollKey();
+    if (!k) return;
+    try {
+      sessionStorage.setItem(k, String(Math.round(window.scrollY)));
+    } catch {
+      /* best-effort */
+    }
+  }
+  function savedScroll(): number {
+    const k = scrollKey();
+    if (!k) return 0;
+    const raw = sessionStorage.getItem(k);
+    const y = raw ? parseInt(raw, 10) : 0;
+    return Number.isFinite(y) ? y : 0;
+  }
+  let scrollTimer: ReturnType<typeof setTimeout> | null = null;
+  function onScroll(): void {
+    if (scrollTimer) return; // throttle writes
+    scrollTimer = setTimeout(() => {
+      scrollTimer = null;
+      saveScroll();
+    }, 120);
+  }
+
+  // On content switch: render mermaid + rebuild the minimap, then restore the
+  // saved scroll position for this artifact (default: top).
   $effect(() => {
     const html = current?.html; // dependency: re-run when the shown doc changes
     const el = contentEl;
     if (!el) return;
+    const target = savedScroll(); // capture for THIS artifact before async work
     requestAnimationFrame(() => {
       if (!html) {
         headings = [];
         return;
       }
-      window.scrollTo({ top: 0 });
-      void renderMermaid(el);
-      extractHeadings(el);
+      void (async () => {
+        await renderMermaid(el);
+        extractHeadings(el);
+        // restore now that layout (diagrams/images) has settled
+        window.scrollTo({ top: target });
+      })();
     });
   });
 
+  // ---- pinned artifacts ----
+  const currentPin = $derived.by<Pin | null>(() => {
+    if (!detail) return null;
+    const title = sel.kind === 'logbook' ? 'Logbook' : (current?.title ?? '');
+    return { threadId: detail.id, threadTitle: detail.title, kind: sel.kind, idx: sel.idx, title };
+  });
+  const isPinned = $derived(currentPin ? pins.has(currentPin) : false);
+  function togglePin(): void {
+    if (currentPin) pins.toggle(currentPin);
+  }
+  function openPin(p: Pin): void {
+    saveScroll();
+    store.openThread(p.threadId, { kind: p.kind, idx: p.idx });
+  }
+
   function close() {
+    saveScroll();
     store.closeThread();
   }
   function onKey(e: KeyboardEvent) {
@@ -282,7 +356,7 @@
   }
 </script>
 
-<svelte:window onkeydown={onKey} />
+<svelte:window onkeydown={onKey} onscroll={onScroll} />
 
 <div class="screen" aria-label="thread">
   <div class="topbar">
@@ -302,6 +376,16 @@
           <span class="chip who">{detail.assignees.join(', ')}</span>
         {/if}
       </div>
+      <button
+        class="pin-btn"
+        class:on={isPinned}
+        onclick={togglePin}
+        title={isPinned ? 'unpin this artifact' : 'pin this artifact'}
+        aria-label={isPinned ? 'unpin this artifact' : 'pin this artifact'}
+        aria-pressed={isPinned}
+      >
+        <span aria-hidden="true">📌</span>
+      </button>
     {/if}
   </div>
 
@@ -326,13 +410,41 @@
 
         {#if !sideCollapsed}
           <div class="side-scroll" transition:slide={{ duration: 220, axis: 'y' }}>
+            {#if pins.items.length}
+              <div class="sect">📌 Pinned</div>
+              {#each pins.items as p (p.threadId + p.kind + p.idx)}
+                <div class="pin-row">
+                  <button
+                    class="item pin-item"
+                    class:active={p.threadId === detail.id &&
+                      p.kind === sel.kind &&
+                      p.idx === sel.idx}
+                    onclick={() => openPin(p)}
+                    title={p.threadTitle + ' · ' + p.title}
+                  >
+                    <span class="ico">{p.kind === 'logbook' ? '✅' : p.kind === 'revision' ? '📝' : '📄'}</span>
+                    <span class="pin-label">
+                      {p.title || 'Untitled'}
+                      {#if p.threadId !== detail.id}<span class="pin-thread">· {p.threadTitle}</span>{/if}
+                    </span>
+                  </button>
+                  <button
+                    class="pin-x"
+                    onclick={() => pins.remove(p)}
+                    title="unpin"
+                    aria-label="unpin {p.title}">×</button
+                  >
+                </div>
+              {/each}
+            {/if}
+
             {#if detail.artifacts?.length}
               <div class="sect">Work</div>
               {#each detail.artifacts as a, i (i)}
                 <button
                   class="item"
                   class:active={sel.kind === 'artifact' && sel.idx === i}
-                  onclick={() => (sel = { kind: 'artifact', idx: i })}
+                  onclick={() => select({ kind: 'artifact', idx: i })}
                 >
                   <span class="ico">📄</span>{a.title}
                 </button>
@@ -344,7 +456,7 @@
               <button
                 class="item"
                 class:active={sel.kind === 'logbook'}
-                onclick={() => (sel = { kind: 'logbook', idx: 0 })}
+                onclick={() => select({ kind: 'logbook', idx: 0 })}
               >
                 <span class="ico">✅</span>Tasks{detail.kind === 'phased' ? ' · phased' : ''}
               </button>
@@ -356,7 +468,7 @@
                 <button
                   class="item"
                   class:active={sel.kind === 'revision' && sel.idx === i}
-                  onclick={() => (sel = { kind: 'revision', idx: i })}
+                  onclick={() => select({ kind: 'revision', idx: i })}
                 >
                   <span class="ico">📝</span>{r.title}
                 </button>
@@ -543,6 +655,28 @@
     color: var(--text);
     background: var(--hover);
   }
+  .pin-btn {
+    flex: none;
+    display: inline-grid;
+    place-content: center;
+    width: 1.9rem;
+    height: 1.9rem;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    background: transparent;
+    cursor: pointer;
+    font-size: 0.9rem;
+    filter: grayscale(1) opacity(0.55);
+  }
+  .pin-btn:hover {
+    background: var(--hover);
+    filter: grayscale(0.4) opacity(0.9);
+  }
+  .pin-btn.on {
+    filter: none;
+    background: color-mix(in oklab, var(--wip) 18%, transparent);
+    border-color: color-mix(in oklab, var(--wip) 35%, transparent);
+  }
   .pad {
     padding: 2rem 1.5rem;
   }
@@ -714,6 +848,42 @@
   .ico {
     font-size: 0.8rem;
     flex: none;
+  }
+
+  /* pinned artifacts rail */
+  .pin-row {
+    display: flex;
+    align-items: center;
+  }
+  .pin-item {
+    min-width: 0;
+  }
+  .pin-label {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+  }
+  .pin-thread {
+    color: var(--faint);
+    font-weight: 400;
+  }
+  .pin-x {
+    flex: none;
+    border: none;
+    background: none;
+    color: var(--faint);
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.35rem;
+    opacity: 0;
+  }
+  .pin-row:hover .pin-x {
+    opacity: 1;
+  }
+  .pin-x:hover {
+    color: var(--text);
   }
 
   .content {

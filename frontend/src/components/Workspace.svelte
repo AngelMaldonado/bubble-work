@@ -7,12 +7,15 @@
   import Minimap from './Minimap.svelte';
   import Omnibar from './Omnibar.svelte';
   import BirthForm from './BirthForm.svelte';
+  import CreateBubbleForm from './CreateBubbleForm.svelte';
+  import BubbleContextMenu from './BubbleContextMenu.svelte';
   import BubbleDetail from './BubbleDetail.svelte';
   import ProjectCombobox from './ProjectCombobox.svelte';
   import ViewCombobox from './ViewCombobox.svelte';
 
   let omni = $state(false);
   let birthTarget = $state<BubbleView | null>(null);
+  let showCreate = $state(false);
 
   // a kiosk display is a passive read-only screen: no ⌘K, no commands, no birth.
   const kiosk = $derived(store.kiosk);
@@ -86,7 +89,7 @@
     {#if store.visible.length === 0}
       <div class="hollow">
         <p>No bubbles here yet.</p>
-        <p class="dim">Press <b>⌘K</b>, type <b>&gt;</b>, and birth a thread — or create a bubble from the CLI.</p>
+        <p class="dim">Press <b>⌘K</b>, type <b>&gt;</b>, and choose <b>new bubble</b> — then birth threads into it.</p>
       </div>
     {/if}
   </main>
@@ -169,14 +172,26 @@
 
 <Minimap />
 {#if !kiosk}
-  <Omnibar bind:open={omni} onbirth={startBirth} />
+  <Omnibar
+    bind:open={omni}
+    onbirth={startBirth}
+    onnewbubble={() => {
+      omni = false;
+      showCreate = true;
+    }}
+  />
   {#if birthTarget}
     <BirthForm bubble={birthTarget} onclose={() => (birthTarget = null)} />
+  {/if}
+  {#if showCreate}
+    <CreateBubbleForm onclose={() => (showCreate = false)} />
   {/if}
 {/if}
 {#if store.detail}
   <BubbleDetail />
 {/if}
+
+<BubbleContextMenu onbirth={startBirth} />
 
 <style>
   .app {

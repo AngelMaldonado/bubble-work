@@ -2,6 +2,7 @@
   import type { BubbleView } from '../lib/types';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
+  import { bubbleMenu } from '../lib/contextmenu.svelte';
 
   let { bubble, index = 0 }: { bubble: BubbleView; index?: number } = $props();
 
@@ -25,7 +26,16 @@
 
   const isReviewed = $derived(bubble.level === 'reviewed');
   const isDone = $derived(bubble.level === 'done');
-  const initial = $derived(bubble.owner ? bubble.owner[0]?.toUpperCase() : '');
+  // Everyone involved in the bubble (contract owner + every thread assignee),
+  // owner first. Drives the avatar stack on the orb.
+  const people = $derived.by<string[]>(() => {
+    const ms = bubble.members ?? [];
+    if (!bubble.owner) return ms;
+    return [bubble.owner, ...ms.filter((m) => m !== bubble.owner)];
+  });
+  const MAX_AVATARS = 3;
+  const shownPeople = $derived(people.slice(0, MAX_AVATARS));
+  const extraPeople = $derived(Math.max(0, people.length - shownPeople.length));
 </script>
 
 <div class="wrap lvl-{bubble.level}" class:pinned style="--d: {delay}s" id="bw-{bubble.id}">
@@ -33,11 +43,31 @@
     class="orb"
     class:busy
     onclick={() => store.openDetail(bubble)}
+    oncontextmenu={(e) => {
+      e.preventDefault();
+      bubbleMenu.show(bubble, e.clientX, e.clientY);
+    }}
     aria-label="open {bubble.name}"
   >
     <span class="sheen"></span>
     {#if bubble.threads > 0}<span class="badge">{bubble.threads}</span>{/if}
-    {#if initial}<span class="owner">{initial}</span>{/if}
+    {#if people.length}
+      <span class="people">
+        {#each shownPeople as p, i (p)}
+          <span
+            class="person"
+            class:owner={p === bubble.owner}
+            style="--i: {i}"
+            title={p === bubble.owner ? p + ' (owner)' : p}>{p[0]?.toUpperCase()}</span
+          >
+        {/each}
+        {#if extraPeople}
+          <span class="person more" style="--i: {shownPeople.length}" title={people.slice(MAX_AVATARS).join(', ')}
+            >+{extraPeople}</span
+          >
+        {/if}
+      </span>
+    {/if}
   </button>
 
   <span class="caption">{bubble.name}</span>
@@ -50,7 +80,10 @@
     <p class="why">{bubble.reason}</p>
     <div class="stats">
       <span>{bubble.threads} thread{bubble.threads === 1 ? '' : 's'}</span>
-      {#if bubble.owner}<span title={bubble.owner}>· {bubble.owner}</span>{/if}
+      {#if bubble.owner}<span title="owner">· 👤 {bubble.owner}</span>{/if}
+      {#if people.length}
+        <span class="dim" title="everyone involved">· {people.length} involved</span>
+      {/if}
     </div>
     {#if bubble.outcome}<p class="outcome">🎯 {bubble.outcome}</p>{/if}
 
@@ -183,20 +216,40 @@
     box-shadow: 0 2px 6px color-mix(in oklab, var(--glow) 50%, transparent);
     border: 1.5px solid var(--surface-solid);
   }
-  .owner {
+  /* avatar stack of everyone involved, bottom-left of the orb */
+  .people {
     position: absolute;
     bottom: -2px;
     left: -2px;
+    display: flex;
+  }
+  .person {
     width: 22px;
     height: 22px;
     border-radius: 999px;
     display: grid;
     place-content: center;
-    font-size: 0.64rem;
+    font-size: 0.6rem;
     font-weight: 800;
+    border: 1.5px solid var(--surface-solid);
+    margin-left: -8px;
+    /* owner (first) sits on top, then each subsequent avatar behind */
+    z-index: calc(20 - var(--i));
+    /* default = assignee: softer than the owner */
+    color: oklch(0.32 0.02 265);
+    background: color-mix(in oklab, oklch(0.96 0.02 265) 82%, var(--surface-solid));
+  }
+  .person:first-child {
+    margin-left: 0;
+  }
+  .person.owner {
     color: oklch(0.15 0.02 265);
     background: oklch(0.96 0.02 265);
-    border: 1.5px solid var(--surface-solid);
+  }
+  .person.more {
+    color: oklch(0.32 0.02 265);
+    background: color-mix(in oklab, var(--text) 12%, var(--surface-solid));
+    font-size: 0.58rem;
   }
 
   .caption {

@@ -92,8 +92,13 @@ export const api = {
       comment_ids: commentIds,
     }),
 
-  createBubble: (instance: string, workspace: string, name: string) =>
-    req<{ id: string }>('POST', '/api/bubbles', { instance, workspace, name }),
+  createBubble: (input: {
+    instance: string;
+    project: string;
+    name: string;
+    outcome?: string;
+    owner?: string;
+  }) => req<{ id: string; name: string }>('POST', '/api/bubbles', input),
   birth: (input: {
     instance: string;
     bubble_id: string;

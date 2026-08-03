@@ -7,7 +7,12 @@
   let {
     open = $bindable(false),
     onbirth,
-  }: { open?: boolean; onbirth: (b: BubbleView) => void } = $props();
+    onnewbubble,
+  }: {
+    open?: boolean;
+    onbirth: (b: BubbleView) => void;
+    onnewbubble: () => void;
+  } = $props();
 
   type Cmd = {
     id: string;
@@ -46,6 +51,12 @@
 
   const COMMANDS: Cmd[] = [
     { id: 'refresh', label: 'refresh', hint: 're-poll the server', run: () => store.refresh() },
+    {
+      id: 'newbubble',
+      label: 'new bubble…',
+      hint: 'create a bubble (Plane module)',
+      run: () => onnewbubble(),
+    },
     {
       id: 'birth',
       label: 'birth thread…',

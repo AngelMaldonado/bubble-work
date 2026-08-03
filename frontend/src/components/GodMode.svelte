@@ -2,7 +2,18 @@
   import { onMount } from 'svelte';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
-  import type { AdminStats, AdminInstance, InstanceMembers, KioskToken, Member } from '../lib/types';
+  import { TUNING_GROUPS } from '../lib/types';
+  import type {
+    AdminStats,
+    AdminInstance,
+    InstanceMembers,
+    KioskToken,
+    Member,
+    Tuning,
+    TuningField,
+    TuningKey,
+    TuningView,
+  } from '../lib/types';
 
   function roleLabel(m: Member): string {
     if (m.admin) return 'admin';
@@ -13,6 +24,10 @@
   let instances = $state<AdminInstance[]>([]);
   let memberGroups = $state<InstanceMembers[]>([]);
   let tokens = $state<KioskToken[]>([]);
+  let tuning = $state<TuningView | null>(null);
+  // the form's working copy: edits stay local until Apply, so a half-typed
+  // number never reaches the board.
+  let draft = $state<Tuning | null>(null);
   let loading = $state(true);
   let error = $state<string | null>(null);
   let toast = $state<string | null>(null);
@@ -35,12 +50,14 @@
     loading = true;
     error = null;
     try {
-      [stats, instances, memberGroups, tokens] = await Promise.all([
+      [stats, instances, memberGroups, tokens, tuning] = await Promise.all([
         api.adminStats(),
         api.adminInstances(),
         api.adminMembers(),
         api.adminKiosk(),
+        api.adminTuning(),
       ]);
+      draft = { ...tuning.tuning };
       if (!mintInstance && instances.length) mintInstance = instances[0].slug;
     } catch (e) {
       fail(e);
@@ -105,6 +122,49 @@
       await api.adminKioskRevoke(t.token);
       tokens = tokens.filter((x) => x.token !== t.token);
       flash('kiosk token revoked');
+    });
+
+  // ---- buoyancy tuning (THREAD-LIFECYCLE.md) ----
+
+  const fieldsIn = (group: TuningField['group']): TuningField[] =>
+    tuning?.fields.filter((f) => f.group === group) ?? [];
+
+  // only the knobs that actually differ get sent, so an Apply is a real diff.
+  const changed = $derived.by<TuningKey[]>(() => {
+    if (!tuning || !draft) return [];
+    return (Object.keys(draft) as TuningKey[]).filter((k) => draft![k] !== tuning!.tuning[k]);
+  });
+
+  function isDefault(k: TuningKey): boolean {
+    return !!tuning && !!draft && draft[k] === tuning.defaults[k];
+  }
+
+  function setKnob(k: TuningKey, v: number | boolean): void {
+    if (draft) draft = { ...draft, [k]: v };
+  }
+
+  function revertDraft(): void {
+    if (tuning) draft = { ...tuning.tuning };
+  }
+
+  const applyTuning = () =>
+    run('tuning', async () => {
+      if (!draft || changed.length === 0) return;
+      const patch: Record<string, number | boolean> = {};
+      for (const k of changed) patch[k] = draft[k];
+      tuning = await api.adminTuningSet(patch);
+      draft = { ...tuning.tuning }; // the server may have clamped a value
+      await store.refresh();
+      flash(`applied ${changed.length} change(s) — the board is already using them`);
+    });
+
+  const resetTuning = () =>
+    run('tuning-reset', async () => {
+      if (!tuning) return;
+      tuning = await api.adminTuningSet({ ...tuning.defaults });
+      draft = { ...tuning.tuning };
+      await store.refresh();
+      flash('calibration reset to defaults');
     });
 
   function kioskUrl(t: KioskToken): string {
@@ -241,6 +301,70 @@
             {/if}
           </div>
         {/each}
+      </section>
+
+      <!-- buoyancy calibration: the thresholds behind every band -->
+      <section class="card wide">
+        <h3>Buoyancy calibration</h3>
+        <p class="hint" style="margin-top:0">
+          The thresholds that decide how bubbles <em>and</em> individual threads move between 🔥 😴 🪦 🏆.
+          Everything is derived at read time, so a change lands on the board immediately — nothing is
+          recomputed or migrated. Values are clamped server-side.
+        </p>
+
+        {#if tuning && draft}
+          {#each TUNING_GROUPS as g (g.key)}
+            <div class="tgroup">
+              <div class="tgroup-head">
+                <span class="tgroup-name">{g.label}</span>
+                <span class="dim">{g.hint}</span>
+              </div>
+              {#each fieldsIn(g.key) as f (f.key)}
+                <div class="knob" class:dirty={draft[f.key] !== tuning.tuning[f.key]}>
+                  <div class="knob-main">
+                    {#if f.kind === 'toggle'}
+                      <label class="tgl">
+                        <input
+                          type="checkbox"
+                          checked={draft[f.key] as boolean}
+                          onchange={(e) => setKnob(f.key, e.currentTarget.checked)}
+                        />
+                        <span>{f.label}</span>
+                      </label>
+                    {:else}
+                      <label class="num">
+                        <span>{f.label}</span>
+                        <input
+                          type="number"
+                          min={f.min}
+                          max={f.max}
+                          step={f.step}
+                          value={draft[f.key] as number}
+                          onchange={(e) => setKnob(f.key, Number(e.currentTarget.value))}
+                        />
+                      </label>
+                    {/if}
+                    {#if !isDefault(f.key)}
+                      <span class="chip" title="differs from the stock default">modified</span>
+                    {/if}
+                  </div>
+                  <p class="knob-help">{f.help}</p>
+                  <code class="knob-key">{f.key}</code>
+                </div>
+              {/each}
+            </div>
+          {/each}
+
+          <div class="actions tune-actions">
+            <button onclick={applyTuning} disabled={busy === 'tuning' || changed.length === 0}>
+              {busy === 'tuning' ? '…' : changed.length ? `Apply ${changed.length} change(s)` : 'No changes'}
+            </button>
+            <button onclick={revertDraft} disabled={changed.length === 0}>Discard edits</button>
+            <button class="mini danger" onclick={resetTuning} disabled={busy === 'tuning-reset'}>
+              {busy === 'tuning-reset' ? '…' : 'Reset to defaults'}
+            </button>
+          </div>
+        {/if}
       </section>
 
       <!-- kiosk tokens -->
@@ -478,6 +602,92 @@
     gap: 0.5rem;
     margin-bottom: 0.3rem;
     font-size: 0.82rem;
+  }
+
+  /* ---- buoyancy calibration ---- */
+  .tgroup {
+    margin-top: 1rem;
+  }
+  .tgroup-head {
+    display: flex;
+    align-items: baseline;
+    gap: 0.5rem;
+    flex-wrap: wrap;
+    padding-bottom: 0.3rem;
+    border-bottom: 1px solid var(--line);
+    font-size: 0.82rem;
+  }
+  .tgroup-name {
+    font-weight: 700;
+    color: var(--text);
+  }
+  .knob {
+    display: grid;
+    grid-template-columns: 1fr auto;
+    gap: 0.15rem 0.75rem;
+    padding: 0.6rem 0.6rem 0.6rem 0.7rem;
+    border-left: 2px solid transparent;
+    border-radius: 0 9px 9px 0;
+  }
+  .knob:hover {
+    background: var(--hover);
+  }
+  /* an edit that hasn't been applied yet */
+  .knob.dirty {
+    border-left-color: var(--wip);
+    background: color-mix(in oklab, var(--wip) 8%, transparent);
+  }
+  .knob-main {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    flex-wrap: wrap;
+    font-size: 0.86rem;
+    color: var(--text);
+  }
+  .knob-help {
+    grid-column: 1 / -1;
+    margin: 0;
+    font-size: 0.76rem;
+    line-height: 1.4;
+    color: var(--faint);
+    max-width: 62ch;
+  }
+  .knob-key {
+    grid-row: 1;
+    grid-column: 2;
+    align-self: center;
+    font-size: 0.68rem;
+    color: var(--faint);
+    white-space: nowrap;
+  }
+  .tgl,
+  .num {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.5rem;
+    cursor: pointer;
+  }
+  .num input {
+    width: 6.5rem;
+    padding: 0.3rem 0.5rem;
+    border-radius: 8px;
+    border: 1px solid var(--line);
+    background: var(--surface-solid);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.82rem;
+  }
+  .tgl input {
+    width: 1rem;
+    height: 1rem;
+    accent-color: var(--wip);
+    cursor: pointer;
+  }
+  .tune-actions {
+    margin-top: 1rem;
+    padding-top: 0.85rem;
+    border-top: 1px solid var(--line);
   }
 
   .mint {

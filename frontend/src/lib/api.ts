@@ -12,6 +12,7 @@ import type {
   ThreadNode,
   ThreadDetail,
   Comment,
+  TuningView,
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
@@ -127,4 +128,8 @@ export const api = {
     req<KioskToken>('POST', '/api/admin/kiosk', { instance, name }),
   adminKioskRevoke: (token: string) =>
     req<void>('DELETE', `/api/admin/kiosk/${encodeURIComponent(token)}`),
+  adminTuning: () => req<TuningView>('GET', '/api/admin/tuning'),
+  // a partial body patches only the keys it names; the server clamps and persists
+  adminTuningSet: (patch: Record<string, number | boolean>) =>
+    req<TuningView>('PUT', '/api/admin/tuning', patch),
 };

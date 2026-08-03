@@ -184,6 +184,48 @@ export interface InstanceMembers {
   error?: string;
 }
 
+/** The buoyancy calibration — every threshold the lifecycle rules use, at both
+ *  grains. Keys match the server's JSON tags, so a partial patch is just
+ *  `{key: value}` (internal/domain/domain.go). */
+export interface Tuning {
+  cycle_hours: number;
+  dormant_cycles: number;
+  decay_cycles: number;
+  ownerless_is_dormant: boolean;
+  bubble_rip_needs_owner: boolean;
+  thread_birth_heats: boolean;
+  thread_grace_cycles: number;
+  thread_rip_needs_owner: boolean;
+  thread_terminal_state_wins: boolean;
+}
+
+export type TuningKey = keyof Tuning;
+
+/** Self-describing schema for one knob — the server owns the labels and help so
+ *  the CLI and God Mode never drift. */
+export interface TuningField {
+  key: TuningKey;
+  label: string;
+  help: string;
+  kind: 'number' | 'toggle';
+  group: 'pulse' | 'bubble' | 'thread';
+  min?: number;
+  max?: number;
+  step?: number;
+}
+
+export interface TuningView {
+  tuning: Tuning;
+  defaults: Tuning;
+  fields: TuningField[];
+}
+
+export const TUNING_GROUPS: { key: TuningField['group']; label: string; hint: string }[] = [
+  { key: 'pulse', label: 'Pulse', hint: 'the rhythm both grains are measured against' },
+  { key: 'bubble', label: 'Bubbles', hint: 'how a bubble reaches 🪦 vs 😴' },
+  { key: 'thread', label: 'Threads', hint: 'how a single work item moves between bands' },
+];
+
 export const LEVELS: { key: Level; label: string; icon: string }[] = [
   { key: 'in_progress', label: 'In progress', icon: '🔥' },
   { key: 'reviewed', label: 'Reviewed', icon: '👀' },

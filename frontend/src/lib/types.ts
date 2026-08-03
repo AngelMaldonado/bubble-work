@@ -29,6 +29,8 @@ export interface BubbleView {
   owner?: string;
   members?: string[]; // thread assignees + contract owner (per-assignee boards)
   threads: number;
+  /** per-thread levels rolled up, e.g. {in_progress: 2, zzzz: 1} (THREAD-LIFECYCLE.md) */
+  thread_levels?: Partial<Record<Level, number>>;
 }
 
 export interface ThreadHit {
@@ -42,13 +44,24 @@ export interface ThreadHit {
 
 // ---- Thread interior (INTERIOR-PLAN.md) ----
 
-export interface ThreadNode {
+/** A thread's own derived lifecycle (THREAD-LIFECYCLE.md Phase A), flattened
+ *  into the thread DTOs by the server. */
+export interface Buoyancy {
+  lifecycle: Lifecycle;
+  level: Level;
+  score: number;
+  reason: string;
+}
+
+export interface ThreadNode extends Buoyancy {
   id: string; // namespaced slug:project:workitem
   seq: number;
   title: string;
   active: boolean;
   owner?: string;
   parent?: string;
+  state?: string; // Plane state name (localized — display only)
+  state_group?: string; // backlog|unstarted|started|completed|cancelled
   created_at: string;
   completed_at?: string;
 }
@@ -80,7 +93,7 @@ export interface Logbook {
   phased: boolean;
 }
 
-export interface ThreadDetail {
+export interface ThreadDetail extends Buoyancy {
   id: string;
   seq: number;
   title: string;
@@ -88,6 +101,8 @@ export interface ThreadDetail {
   active: boolean;
   priority?: string;
   assignees?: string[];
+  state?: string; // Plane state name (localized — display only)
+  state_group?: string; // backlog|unstarted|started|completed|cancelled
   artifacts: Artifact[];
   logbook?: Logbook;
   revisions: Artifact[];
@@ -176,3 +191,21 @@ export const LEVELS: { key: Level; label: string; icon: string }[] = [
   { key: 'rip', label: 'RIP', icon: '🪦' },
   { key: 'done', label: 'Done', icon: '🏆' },
 ];
+
+const BY_LEVEL = new Map(LEVELS.map((l) => [l.key as string, l]));
+
+/** Band icon for a level — used for bubbles AND for a single thread's own
+ *  buoyancy (THREAD-LIFECYCLE.md). Unknown/absent → a neutral dot. */
+export function levelIcon(level?: string): string {
+  return BY_LEVEL.get(level ?? '')?.icon ?? '•';
+}
+
+export function levelLabel(level?: string): string {
+  return BY_LEVEL.get(level ?? '')?.label ?? '—';
+}
+
+/** Ordered [level, count] pairs from a thread-level roll-up, hottest first. */
+export function rollup(levels?: Partial<Record<Level, number>>): [Level, number][] {
+  if (!levels) return [];
+  return LEVELS.map((l) => [l.key, levels[l.key] ?? 0] as [Level, number]).filter(([, n]) => n > 0);
+}

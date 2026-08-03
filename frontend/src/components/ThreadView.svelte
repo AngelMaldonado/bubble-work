@@ -3,6 +3,7 @@
   import { store, type ArtSel } from '../lib/store.svelte';
   import { pins, type Pin } from '../lib/pins.svelte';
   import { api, ApiError } from '../lib/api';
+  import { levelIcon, levelLabel } from '../lib/types';
   import type { ThreadDetail, Comment } from '../lib/types';
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
 
@@ -368,7 +369,13 @@
       <h2 class="ttl">{detail.title}</h2>
       <div class="chips">
         <span class="chip {detail.kind}">{detail.kind}</span>
-        <span class="chip {detail.active ? 'open' : 'done'}">{detail.active ? 'open' : 'done'}</span>
+        <!-- the thread's own buoyancy (THREAD-LIFECYCLE.md): subsumes open/done -->
+        <span class="chip lvl lvl-{detail.level}" title={detail.reason}>
+          {levelIcon(detail.level)} {levelLabel(detail.level)}
+        </span>
+        {#if detail.state}
+          <span class="chip who" title="Plane state ({detail.state_group})">{detail.state}</span>
+        {/if}
         {#if detail.priority && detail.priority !== 'none'}
           <span class="chip">{detail.priority}</span>
         {/if}
@@ -719,10 +726,26 @@
     color: var(--wip);
     border-color: color-mix(in oklab, var(--wip) 45%, transparent);
   }
-  .chip.open {
-    color: var(--wip);
+  .chip.lvl {
+    text-transform: none;
+    font-weight: 600;
   }
-  .chip.done {
+  .chip.lvl-in_progress {
+    color: var(--wip);
+    border-color: color-mix(in oklab, var(--wip) 45%, transparent);
+  }
+  .chip.lvl-reviewed {
+    color: var(--reviewed);
+    border-color: color-mix(in oklab, var(--reviewed) 45%, transparent);
+  }
+  .chip.lvl-zzzz {
+    color: var(--zzzz);
+    border-color: color-mix(in oklab, var(--zzzz) 45%, transparent);
+  }
+  .chip.lvl-rip {
+    color: var(--rip);
+  }
+  .chip.lvl-done {
     color: var(--done);
     border-color: color-mix(in oklab, var(--done) 45%, transparent);
   }

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { levelIcon, levelLabel, rollup } from '../lib/types';
   import type { BubbleView } from '../lib/types';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
@@ -80,6 +81,10 @@
     <p class="why">{bubble.reason}</p>
     <div class="stats">
       <span>{bubble.threads} thread{bubble.threads === 1 ? '' : 's'}</span>
+      <!-- how those threads are doing individually (THREAD-LIFECYCLE.md) -->
+      {#each rollup(bubble.thread_levels) as [lv, n] (lv)}
+        <span class="tally" title="{n} {levelLabel(lv)}">{levelIcon(lv)}{n}</span>
+      {/each}
       {#if bubble.owner}<span title="owner">· 👤 {bubble.owner}</span>{/if}
       {#if people.length}
         <span class="dim" title="everyone involved">· {people.length} involved</span>
@@ -326,9 +331,13 @@
   }
   .stats {
     display: flex;
+    flex-wrap: wrap;
     gap: 0.4rem;
     font-size: 0.72rem;
     color: var(--faint);
+  }
+  .tally {
+    color: var(--muted);
   }
   .outcome {
     margin: 0;

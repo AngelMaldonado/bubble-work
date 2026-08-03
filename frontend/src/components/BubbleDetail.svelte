@@ -1,6 +1,7 @@
 <script lang="ts">
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
+  import { levelIcon, levelLabel, rollup } from '../lib/types';
   import type { ThreadNode } from '../lib/types';
 
   // store.detail is guaranteed non-null while this component is mounted.
@@ -64,7 +65,12 @@
   {:else if nodes.length === 0}
     <p class="dim">No threads in this bubble yet.</p>
   {:else}
-    <p class="count">{nodes.length} thread{nodes.length === 1 ? '' : 's'} · newest first</p>
+    <p class="count">
+      {nodes.length} thread{nodes.length === 1 ? '' : 's'} · newest first
+      {#each rollup(bubble.thread_levels) as [lv, n] (lv)}
+        <span class="tally lvl-{lv}" title="{n} {levelLabel(lv)}">{levelIcon(lv)} {n}</span>
+      {/each}
+    </p>
     <ol class="rail">
       {#each nodes as n (n.id)}
         <li class="node" class:done={!n.active}>
@@ -75,7 +81,11 @@
               <span class="title">{n.title}</span>
             </div>
             <div class="line2">
-              <span class="state">{n.active ? 'open' : 'done'}</span>
+              <!-- the thread's OWN buoyancy, not just open/closed -->
+              <span class="lvl lvl-{n.level}" title={n.reason}>
+                {levelIcon(n.level)} {levelLabel(n.level)}
+              </span>
+              {#if n.state}<span class="meta" title="Plane state">· {n.state}</span>{/if}
               {#if n.owner}<span class="meta">· {n.owner}</span>{/if}
               <span class="meta">· {age(n.created_at)}</span>
             </div>
@@ -250,11 +260,28 @@
     font-size: 0.72rem;
     color: var(--faint);
   }
-  .state {
-    color: var(--wip);
+  /* a thread's own buoyancy chip — same palette as the bands */
+  .lvl {
     font-weight: 600;
+    color: var(--muted);
   }
-  .node.done .state {
+  .lvl-in_progress {
+    color: var(--wip);
+  }
+  .lvl-reviewed {
+    color: var(--reviewed);
+  }
+  .lvl-zzzz {
+    color: var(--zzzz);
+  }
+  .lvl-rip {
+    color: var(--rip);
+  }
+  .lvl-done {
     color: var(--done);
+  }
+  .tally {
+    margin-left: 0.45rem;
+    font-weight: 600;
   }
 </style>

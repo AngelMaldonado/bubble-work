@@ -56,23 +56,25 @@
 
 <aside class="minimap" aria-label="Navigate bubbles">
   <div class="inner">
-    {#each groups as g (g.key)}
-      <div class="sec lvl-{g.key}" class:active={activeLevel === g.key}>
+    <div class="list">
+      {#each groups as g (g.key)}
+        <div class="sec lvl-{g.key}" class:active={activeLevel === g.key}>
         <button class="sechead" onclick={() => goBand(g.key)} title="{g.label} ({g.bubbles.length})">
           <span class="ico">{g.icon}</span>
           <span class="lbl">{g.label}</span>
           <span class="cnt">{g.bubbles.length}</span>
         </button>
-        <div class="items">
-          {#each g.bubbles as b (b.id)}
-            <button class="item" onclick={() => go('bw-' + b.id)} title={b.name}>
-              <span class="dash"></span>
-              <span class="iname">{b.name}</span>
-            </button>
-          {/each}
+          <div class="items">
+            {#each g.bubbles as b (b.id)}
+              <button class="item" onclick={() => go('bw-' + b.id)} title={b.name}>
+                <span class="dash"></span>
+                <span class="iname">{b.name}</span>
+              </button>
+            {/each}
+          </div>
         </div>
-      </div>
-    {/each}
+      {/each}
+    </div>
   </div>
 </aside>
 
@@ -93,32 +95,46 @@
     --dot: var(--done);
   }
 
+  /* full-height fixed rail, flex-centered — NO transform (a transformed ancestor
+     becomes a backdrop root and would kill the child's backdrop-filter) */
+  /* frost lives on the FIXED rail itself (backdrop-filter on a child of a fixed
+     element samples an empty backdrop); no transform (it would kill the blur) */
   .minimap {
     position: fixed;
     z-index: 28;
     right: 0;
-    top: 50%;
-    transform: translateY(-50%);
-    max-height: 82vh;
+    top: 0;
+    bottom: 0;
+    height: fit-content;
+    margin-block: auto;
     display: flex;
     align-items: center;
     padding: 0.5rem 0.6rem;
-  }
-  .inner {
-    display: flex;
-    flex-direction: column;
-    gap: 0.5rem;
-    max-height: 82vh;
-    overflow: hidden;
-    padding: 0.6rem 0.5rem;
-    border-radius: 16px;
     border: 1px solid transparent;
+    border-radius: 16px;
     background: transparent;
+    /* Note: no backdrop-filter — a position:fixed rail nested under #app's stacking
+       context can't blur its backdrop (Chromium limitation); solid fill instead. */
     transition:
       background 0.18s ease,
       border-color 0.18s ease,
       box-shadow 0.18s ease,
       padding 0.18s ease;
+  }
+  .inner {
+    display: flex;
+    flex-direction: column;
+    max-height: 82vh;
+  }
+  /* scroll layer — clipping lives here, not on the frosted .inner */
+  .list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+    min-height: 0;
+    max-height: 78vh;
+    overflow: hidden;
+    transition: gap 0.18s ease;
   }
   /* collapsed → a slim minimap of coloured dashes */
   .sec {
@@ -219,15 +235,16 @@
     text-overflow: ellipsis;
   }
 
-  .minimap:hover .inner,
-  .minimap:focus-within .inner {
-    background: color-mix(in oklab, var(--surface-solid) 74%, transparent);
-    backdrop-filter: blur(16px);
-    -webkit-backdrop-filter: blur(16px);
+  .minimap:hover,
+  .minimap:focus-within {
+    background: var(--surface-solid);
     border-color: var(--line);
     box-shadow: 0 20px 50px var(--shadow-strong);
-    overflow-y: auto;
     padding: 0.8rem 0.8rem;
+  }
+  .minimap:hover .list,
+  .minimap:focus-within .list {
+    overflow-y: auto;
     gap: 0.7rem;
   }
   .minimap:hover .sec,

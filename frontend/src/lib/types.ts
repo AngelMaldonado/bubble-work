@@ -66,12 +66,15 @@ export interface Artifact {
   title: string;
   toc: TOCEntry[];
   markdown: string;
+  html: string;
 }
 
 export interface Logbook {
   markdown: string;
+  html: string;
   todos: Todo[];
   dod?: Todo[];
+  dod_html?: string;
   phased: boolean;
 }
 

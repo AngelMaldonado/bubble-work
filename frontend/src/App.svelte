@@ -3,10 +3,15 @@
   import { store } from './lib/store.svelte';
   import AuthGate from './components/AuthGate.svelte';
   import Workspace from './components/Workspace.svelte';
+  import ThreadView from './components/ThreadView.svelte';
 
   onMount(() => {
     void store.boot();
+    store.syncFromHash();
+    const onHash = () => store.syncFromHash();
+    window.addEventListener('hashchange', onHash);
     return () => {
+      window.removeEventListener('hashchange', onHash);
       store.stopStream();
       store.stopSecondary();
     };
@@ -15,6 +20,8 @@
 
 {#if !store.authed}
   <AuthGate />
+{:else if store.threadId}
+  <ThreadView />
 {:else if store.loading && store.bubbles.length === 0}
   <div class="splash">
     <span class="orb"></span>

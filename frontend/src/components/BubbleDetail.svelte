@@ -69,7 +69,7 @@
       {#each nodes as n (n.id)}
         <li class="node" class:done={!n.active}>
           <span class="dot"></span>
-          <div class="body">
+          <button class="body" onclick={() => store.openThread(n.id)} title="open thread">
             <div class="line1">
               <span class="seq">#{n.seq}</span>
               <span class="title">{n.title}</span>
@@ -79,7 +79,7 @@
               {#if n.owner}<span class="meta">· {n.owner}</span>{/if}
               <span class="meta">· {age(n.created_at)}</span>
             </div>
-          </div>
+          </button>
         </li>
       {/each}
     </ol>
@@ -212,6 +212,19 @@
   .body {
     display: grid;
     gap: 0.15rem;
+    width: 100%;
+    text-align: left;
+    border: none;
+    background: transparent;
+    color: inherit;
+    cursor: pointer;
+    padding: 0.15rem 0.4rem;
+    margin: -0.15rem -0.4rem;
+    border-radius: 8px;
+    transition: background 0.14s ease;
+  }
+  .body:hover {
+    background: var(--hover);
   }
   .line1 {
     display: flex;

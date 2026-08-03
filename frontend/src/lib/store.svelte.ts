@@ -27,6 +27,8 @@ class Store {
 
   // the bubble whose timeline detail panel is open (null = closed).
   detail = $state<BubbleView | null>(null);
+  // the namespaced thread id whose interior is open (null = closed).
+  threadId = $state<string | null>(null);
 
   private secTimer: ReturnType<typeof setInterval> | null = null;
   private stream: AbortController | null = null;
@@ -255,6 +257,31 @@ class Store {
 
   closeDetail(): void {
     this.detail = null;
+  }
+
+  openThread(id: string): void {
+    this.threadId = id;
+    this.setHash(`thread/${encodeURIComponent(id)}`);
+  }
+
+  closeThread(): void {
+    this.threadId = null;
+    this.setHash('');
+  }
+
+  // ---- hash routing for the dedicated thread screen ----
+
+  private setHash(h: string): void {
+    if (typeof location === 'undefined') return;
+    if (location.hash.replace(/^#/, '') !== h) location.hash = h;
+  }
+
+  // syncFromHash makes the URL the source of truth (back/forward, refresh,
+  // deep links). Called on boot and on every hashchange.
+  syncFromHash(): void {
+    if (typeof location === 'undefined') return;
+    const h = location.hash.replace(/^#/, '');
+    this.threadId = h.startsWith('thread/') ? decodeURIComponent(h.slice('thread/'.length)) : null;
   }
 }
 

@@ -176,3 +176,44 @@ func TestClassifyCycleAware(t *testing.T) {
 		t.Fatalf("stale evidence: want Dormant, got %s", r.Lifecycle)
 	}
 }
+
+// A comment is PRESENCE, not production: it must never warm anything, at either
+// grain, but it does keep a thread out of the grave (THREAD-LIFECYCLE.md).
+func TestPulseNeverWarms(t *testing.T) {
+	tun := tuning(time.Hour)
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	fresh := now.Add(-5 * time.Minute)
+
+	thread := domain.Thread{ID: "a", Active: true, Owner: "me", CreatedAt: now.AddDate(0, -6, 0)}
+	chatter := []domain.EvidenceEvent{{ThreadID: "a", Kind: domain.EvComment, At: fresh}}
+
+	b := domain.Bubble{Owner: "me", Threads: []domain.Thread{thread}, Evidence: chatter}
+	// The bubble stays cold: a busy comment thread is not output.
+	if r := Classify(b, tun, now); r.Lifecycle != domain.Dormant {
+		t.Fatalf("comments warmed a bubble: %s", r.Lifecycle)
+	}
+	win := WindowFor(b, tun, now)
+	if r := ClassifyThread(thread, chatter, win, tun, now); r.Lifecycle != domain.Dormant {
+		t.Fatalf("comments warmed a thread: %s", r.Lifecycle)
+	}
+	// But the pulse is detectable, which is what blocks the grave.
+	if !HasPulse(chatter, win, tun, now) {
+		t.Error("a comment 5 minutes ago should register as a pulse")
+	}
+	// Old chatter is no pulse at all.
+	stale := []domain.EvidenceEvent{{ThreadID: "a", Kind: domain.EvComment, At: now.Add(-300 * time.Minute)}}
+	if HasPulse(stale, win, tun, now) {
+		t.Error("a 5-hour-old comment should not register against a 1h pulse window")
+	}
+	// And it can be switched off entirely.
+	off := tun
+	off.PulseCycles = 0
+	if HasPulse(chatter, win, off, now) {
+		t.Error("pulse_cycles=0 should disable the pulse")
+	}
+	// Real progress still warms normally, so the pulse filter isn't over-eager.
+	work := append(chatter, domain.EvidenceEvent{ThreadID: "a", Kind: domain.EvLogbookUpdated, At: fresh})
+	if r := ClassifyThread(thread, work, win, tun, now); r.Lifecycle != domain.Hot {
+		t.Fatalf("progress alongside chatter should be Hot, got %s", r.Lifecycle)
+	}
+}

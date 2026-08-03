@@ -5,6 +5,7 @@ package store
 
 import (
 	"database/sql"
+	"sort"
 	"strings"
 	"time"
 
@@ -76,6 +77,11 @@ CREATE TABLE IF NOT EXISTS thread_progress (
   revisions    INTEGER NOT NULL,  -- sub-work-items (revision artifacts) last time we looked
   logbook_at   TEXT NOT NULL,     -- RFC3339 of the last observed Logbook CHANGE ('' = never)
   revisions_at TEXT NOT NULL      -- RFC3339 of the last observed revision ADDED ('' = never)
+);
+CREATE TABLE IF NOT EXISTS thread_pulse (
+  thread_id       TEXT PRIMARY KEY,  -- Plane work-item id
+  last_comment_at TEXT NOT NULL,     -- RFC3339 of the newest comment we have seen
+  checked_at      TEXT NOT NULL      -- RFC3339 of the last time we looked (probe budgeting)
 );
 CREATE TABLE IF NOT EXISTS server_settings (
   key   TEXT PRIMARY KEY,        -- e.g. "tuning" (the buoyancy calibration)
@@ -497,6 +503,85 @@ func stamp(t time.Time) string {
 		return ""
 	}
 	return t.Format(time.RFC3339)
+}
+
+// Pulse is the presence signal for a thread: when someone last commented, and
+// when we last checked. Comments never warm a thread — the timestamp only keeps
+// it out of the grave (THREAD-LIFECYCLE.md).
+type Pulse struct {
+	ThreadID      string
+	LastCommentAt time.Time
+	CheckedAt     time.Time
+}
+
+// PulseFor loads the recorded pulse for the given work items.
+func (s *Store) PulseFor(ids []string) (map[string]Pulse, error) {
+	out := make(map[string]Pulse, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	const chunk = 400
+	for start := 0; start < len(ids); start += chunk {
+		end := min(start+chunk, len(ids))
+		part := ids[start:end]
+		args := make([]any, len(part))
+		for i, id := range part {
+			args[i] = id
+		}
+		rows, err := s.db.Query(
+			`SELECT thread_id, last_comment_at, checked_at FROM thread_pulse
+			 WHERE thread_id IN (`+placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var p Pulse
+			var last, checked string
+			if err := rows.Scan(&p.ThreadID, &last, &checked); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			p.LastCommentAt, _ = time.Parse(time.RFC3339, last)
+			p.CheckedAt, _ = time.Parse(time.RFC3339, checked)
+			out[p.ThreadID] = p
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// RecordPulse notes that we looked at a thread's comments, and when the newest
+// one was. lastComment never moves backwards: a deleted comment doesn't erase
+// the fact that someone WAS paying attention.
+func (s *Store) RecordPulse(threadID string, lastComment, checkedAt time.Time) error {
+	_, err := s.db.Exec(
+		`INSERT INTO thread_pulse(thread_id, last_comment_at, checked_at) VALUES(?, ?, ?)
+		 ON CONFLICT(thread_id) DO UPDATE SET
+		   last_comment_at = MAX(thread_pulse.last_comment_at, excluded.last_comment_at),
+		   checked_at = excluded.checked_at`,
+		threadID, stamp(lastComment), stamp(checkedAt))
+	return err
+}
+
+// StalePulseCheck returns which of the given threads we have checked least
+// recently (never-checked first), capped at limit — the probe budget.
+func (s *Store) StalePulseCheck(ids []string, limit int) ([]string, error) {
+	if len(ids) == 0 || limit <= 0 {
+		return nil, nil
+	}
+	checked, err := s.PulseFor(ids)
+	if err != nil {
+		return nil, err
+	}
+	ordered := append([]string(nil), ids...)
+	sort.Slice(ordered, func(i, j int) bool {
+		return checked[ordered[i]].CheckedAt.Before(checked[ordered[j]].CheckedAt)
+	})
+	return ordered[:min(limit, len(ordered))], nil
 }
 
 // GetSetting reads a server-wide setting. The value is opaque JSON to the store

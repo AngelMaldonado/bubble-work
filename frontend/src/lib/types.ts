@@ -196,6 +196,7 @@ export interface Tuning {
   thread_birth_heats: boolean;
   thread_grace_cycles: number;
   thread_rip_needs_owner: boolean;
+  pulse_cycles: number;
   thread_terminal_state_wins: boolean;
 }
 

@@ -116,6 +116,22 @@ func (s *Server) memberNames(ctx context.Context, inst domain.Instance) map[stri
 	return names
 }
 
+// recordPulse stores when a thread's discussion was last alive. Comments are
+// presence, never production: this only keeps a thread out of 🪦
+// (THREAD-LIFECYCLE.md). Called wherever comments are already being fetched, so
+// it costs no extra Plane traffic.
+func (s *Server) recordPulse(wid string, cs []domain.Comment) {
+	var latest time.Time
+	for _, c := range cs {
+		if c.CreatedAt.After(latest) {
+			latest = c.CreatedAt
+		}
+	}
+	if err := s.store.RecordPulse(wid, latest, s.now()); err != nil {
+		log.Printf("pulse: record %s: %v", wid, err)
+	}
+}
+
 // projectStates maps a project's workflow-state ids to their state (group +
 // localized name), cached for statesTTL. Only the GROUP is safe to reason about
 // — names are project-configured and localized (THREAD-LIFECYCLE.md).
@@ -485,6 +501,8 @@ func (s *Server) commentsFor(ctx context.Context, cl *plane.Client, inst domain.
 		s.commentsMu.Lock()
 		s.commentsCache[wid] = cachedComments{comments: out, exp: s.now().Add(commentsTTL)}
 		s.commentsMu.Unlock()
+		// Anyone opening the discussion tells us for free when it was last alive.
+		s.recordPulse(wid, out)
 		return out, nil
 	})
 	if err != nil {
@@ -590,6 +608,10 @@ func (s *Server) PostComment(ctx context.Context, threadID, body string) (domain
 		return domain.Comment{}, err
 	}
 	s.invalidateComments(wid) // next read includes the new comment
+	// A fresh comment is the strongest possible pulse: someone is here now.
+	if err := s.store.RecordPulse(wid, cm.CreatedAt, s.now()); err != nil {
+		log.Printf("pulse: record on post %s: %v", wid, err)
+	}
 	me, _ := domain.ActorFrom(ctx)
 	names := s.memberNames(ctx, inst)
 	out := renderComment(cm, names, me.ID)

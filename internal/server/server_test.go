@@ -1237,3 +1237,81 @@ func TestProgressEvidence(t *testing.T) {
 		t.Errorf("revision not counted/stamped: %+v", p)
 	}
 }
+
+// A recent comment blocks the grave without warming the thread: it stays 😴
+// rather than 🪦, and never reaches 🔥 (THREAD-LIFECYCLE.md).
+func TestCommentPulseBlocksTheGrave(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	week := 7 * 24 * time.Hour
+	win := heat.Window{CurStart: now.Add(-week), PrevStart: now.Add(-2 * week), Length: week, Decay: week}
+	tun := domain.DefaultTuning()
+
+	// Old, assigned, never produced anything → normally abandoned.
+	abandoned := domain.Thread{Active: true, Owner: "me", CreatedAt: now.AddDate(0, -6, 0)}
+	birth := []domain.EvidenceEvent{{Kind: domain.EvThreadCreated, At: abandoned.CreatedAt}}
+
+	if got := threadLevel(abandoned, birth, domain.Dormant, win, tun, now); got != "rip" {
+		t.Fatalf("baseline: want rip, got %s", got)
+	}
+
+	// Someone commented yesterday — still being discussed, so not a grave.
+	chattered := append(birth, domain.EvidenceEvent{Kind: domain.EvComment, At: now.AddDate(0, 0, -1)})
+	if got := threadLevel(abandoned, chattered, domain.Dormant, win, tun, now); got != "zzzz" {
+		t.Fatalf("a recent comment should hold it at zzzz, got %s", got)
+	}
+
+	// Chatter from months ago doesn't save it.
+	stale := append(birth, domain.EvidenceEvent{Kind: domain.EvComment, At: now.AddDate(0, -3, 0)})
+	if got := threadLevel(abandoned, stale, domain.Dormant, win, tun, now); got != "rip" {
+		t.Fatalf("stale chatter should not block the grave, got %s", got)
+	}
+
+	// With the pulse switched off, discussion carries no weight at all.
+	off := tun
+	off.PulseCycles = 0
+	if got := threadLevel(abandoned, chattered, domain.Dormant, win, off, now); got != "rip" {
+		t.Fatalf("pulse_cycles=0: want rip, got %s", got)
+	}
+}
+
+// Reading or posting a discussion records the pulse for free — no extra Plane
+// traffic, and no dependence on the tick probe having run.
+func TestPulseRecordedFromComments(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	if p, _ := st.PulseFor([]string{"wi-1"}); len(p) != 0 {
+		t.Fatalf("no pulse should exist before anyone looks: %+v", p)
+	}
+
+	// Simply opening the discussion tells us when it was last alive.
+	if code, body := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, ""); code != http.StatusOK {
+		t.Fatalf("comments status %d: %s", code, body)
+	}
+	got, err := st.PulseFor([]string{"wi-1"})
+	if err != nil {
+		t.Fatalf("pulse: %v", err)
+	}
+	want := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) // the fixture's only comment
+	if p := got["wi-1"]; !p.LastCommentAt.Equal(want) || p.CheckedAt.IsZero() {
+		t.Fatalf("pulse from read wrong: %+v", p)
+	}
+
+	// Posting one is the strongest pulse: someone is here now.
+	if code, body := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, `{"body":"still on it"}`); code != http.StatusCreated {
+		t.Fatalf("post status %d: %s", code, body)
+	}
+	got, _ = st.PulseFor([]string{"wi-1"})
+	if p := got["wi-1"]; !p.LastCommentAt.After(want) {
+		t.Fatalf("posting should advance the pulse: %+v", p)
+	}
+}

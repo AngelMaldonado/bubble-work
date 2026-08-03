@@ -28,6 +28,7 @@ const (
 	EvLogbookUpdated  = "logbook-updated"  // the plan itself changed (§ working protocol)
 	EvRevisionAdded   = "revision-added"   // a revision artifact (sub-item) landed
 	EvThreadCompleted = "thread-completed" // the work item reached a completed state
+	EvComment         = "comment"          // PULSE, not progress — see Pulse()
 )
 
 // EvidenceEvent is a meaningful output that generates heat (§5.1).
@@ -38,9 +39,18 @@ type EvidenceEvent struct {
 	At       time.Time
 }
 
-// Progress reports whether an event is evidence of *production* rather than mere
-// existence. Only progress can resurrect a thread (THREAD-LIFECYCLE.md).
-func (e EvidenceEvent) Progress() bool { return e.Kind != EvThreadCreated }
+// Pulse reports whether an event is mere PRESENCE — someone is paying attention,
+// but nothing changed. A pulse never heats anything at either grain; it only
+// keeps a thread out of the grave (THREAD-LIFECYCLE.md).
+func (e EvidenceEvent) Pulse() bool { return e.Kind == EvComment }
+
+// Progress reports whether an event is evidence of *production* by the thread
+// itself. Being born is not producing (that heats the BUBBLE that gained the
+// thread, not the thread), and presence is not producing. Only progress can
+// resurrect a thread (THREAD-LIFECYCLE.md).
+func (e EvidenceEvent) Progress() bool {
+	return e.Kind != EvThreadCreated && !e.Pulse()
+}
 
 // Thread is an executable unit of work inside a bubble (maps to a Plane work
 // item). The extra fields feed the timeline view straight from the snapshot, so
@@ -99,6 +109,11 @@ type Tuning struct {
 	ThreadGraceCycles float64 `json:"thread_grace_cycles"`
 	// ThreadRipNeedsOwner sends a dormant, unassigned thread to 🪦 instead of 😴.
 	ThreadRipNeedsOwner bool `json:"thread_rip_needs_owner"`
+	// PulseCycles is how long a comment keeps a thread out of the grave. A comment
+	// is presence, not production: it NEVER warms a thread to 🔥, but while
+	// someone is still talking about a thread we don't declare it abandoned.
+	// 0 disables the pulse entirely.
+	PulseCycles float64 `json:"pulse_cycles"`
 	// ThreadTerminalStateWins lets Plane's terminal columns override the computed
 	// level: `completed` → 🏆, `cancelled` → 🪦. Those are statements of fact;
 	// every other column is status theatre and is ignored either way.
@@ -116,6 +131,7 @@ func DefaultTuning() Tuning {
 		ThreadBirthHeats:        false,
 		ThreadGraceCycles:       1,
 		ThreadRipNeedsOwner:     true,
+		PulseCycles:             1,
 		ThreadTerminalStateWins: true,
 	}
 }
@@ -127,6 +143,7 @@ func (t Tuning) Sanitize() Tuning {
 	t.DormantCycles = clampF(t.DormantCycles, 1, 52)
 	t.DecayCycles = clampF(t.DecayCycles, 0.1, 52)
 	t.ThreadGraceCycles = clampF(t.ThreadGraceCycles, 0, 52)
+	t.PulseCycles = clampF(t.PulseCycles, 0, 52)
 	return t
 }
 
@@ -180,6 +197,8 @@ func TuningFields() []TuningField {
 			Help: "How long a new thread that has produced nothing stays 😴 before it is called 🪦. 0 = no grace."},
 		{Key: "thread_rip_needs_owner", Label: "Unassigned thread is RIP", Kind: "toggle", Group: "thread",
 			Help: "A dormant thread with no assignee reads 🪦 instead of 😴."},
+		{Key: "pulse_cycles", Label: "Comment pulse (cycles)", Kind: "number", Group: "thread", Min: 0, Max: 52, Step: 0.5,
+			Help: "How long a comment keeps a thread out of 🪦. Comments are presence, not production — they never warm a thread to 🔥, but we don't declare something abandoned while people are still discussing it. 0 turns the pulse off."},
 		{Key: "thread_terminal_state_wins", Label: "Plane's terminal columns win", Kind: "toggle", Group: "thread",
 			Help: "Let Plane decide the two terminal states: completed → 🏆, cancelled → 🪦. Every other column is ignored either way — moving a card is motion, not evidence."},
 	}

@@ -679,6 +679,11 @@ func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle
 		if heat.Newborn(t, w, tun, now) {
 			return "zzzz"
 		}
+		// Someone is still talking about it. Presence doesn't warm a thread, but
+		// we don't bury something people are actively discussing.
+		if heat.HasPulse(ev, w, tun, now) {
+			return "zzzz"
+		}
 		return "rip" // never got going / abandoned
 	default:
 		return "zzzz"
@@ -1587,7 +1592,8 @@ func (s *Server) Tick(ctx context.Context) (int, error) {
 	now, tun := s.now(), s.Tuning()
 	stamp := now.Format(time.RFC3339)
 	n := 0
-	for _, b := range s.collectAll(ctx) {
+	bubbles := s.collectAll(ctx)
+	for _, b := range bubbles {
 		cur := heat.Classify(b, tun, now).Lifecycle
 		prev, had, err := s.store.GetLifecycle(b.ID)
 		if err != nil {
@@ -1609,6 +1615,9 @@ func (s *Server) Tick(ctx context.Context) (int, error) {
 			_ = s.store.SetLifecycle(b.ID, string(cur), stamp)
 		}
 	}
+	// Before anything acts on a 🪦, check whether people are still talking about
+	// it (THREAD-LIFECYCLE.md). Bounded, and only for threads actually at risk.
+	s.probePulse(ctx, bubbles)
 	return n, nil
 }
 

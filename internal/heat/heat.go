@@ -84,7 +84,8 @@ func Classify(b domain.Bubble, tun domain.Tuning, now time.Time) Result {
 		}
 	}
 	ownerless := tun.OwnerlessIsDormant && b.Owner == ""
-	return classify(b.Evidence, WindowFor(b, tun, now), ownerless, active, tun, now)
+	// Pulse (comments) is presence, not output — it must not warm a bubble either.
+	return classify(without(b.Evidence, pulseOnly), WindowFor(b, tun, now), ownerless, active, tun, now)
 }
 
 // ClassifyThread computes ONE thread's lifecycle from its own evidence stream,
@@ -102,13 +103,16 @@ func ClassifyThread(t domain.Thread, ev []domain.EvidenceEvent, w Window, tun do
 	if !t.Active || t.CompletedAt != nil {
 		return Result{domain.Closed, 0, "thread completed"}
 	}
-	progress := ev
-	if !tun.ThreadBirthHeats {
-		progress = make([]domain.EvidenceEvent, 0, len(ev))
-		for _, e := range ev {
-			if e.Progress() {
-				progress = append(progress, e)
-			}
+	// Only production heats a thread. Comments are stripped always (presence), and
+	// the thread's own birth unless the calibration says otherwise.
+	keep := func(e domain.EvidenceEvent) bool { return e.Progress() }
+	if tun.ThreadBirthHeats {
+		keep = func(e domain.EvidenceEvent) bool { return !e.Pulse() }
+	}
+	progress := make([]domain.EvidenceEvent, 0, len(ev))
+	for _, e := range ev {
+		if keep(e) {
+			progress = append(progress, e)
 		}
 	}
 	ownerless := tun.OwnerlessIsDormant && t.Owner == ""
@@ -130,6 +134,46 @@ func Newborn(t domain.Thread, w Window, tun domain.Tuning, now time.Time) bool {
 		return false
 	}
 	return t.CreatedAt.After(now.Add(-time.Duration(float64(w.Length) * tun.ThreadGraceCycles)))
+}
+
+// HasPulse reports whether someone has commented on a thread recently enough to
+// keep it out of the grave. A pulse never warms anything — it only says a human
+// is still paying attention, so declaring the thread abandoned would be wrong
+// (THREAD-LIFECYCLE.md).
+func HasPulse(ev []domain.EvidenceEvent, w Window, tun domain.Tuning, now time.Time) bool {
+	if tun.PulseCycles <= 0 {
+		return false
+	}
+	cutoff := now.Add(-time.Duration(float64(w.Length) * tun.PulseCycles))
+	for _, e := range ev {
+		if e.Pulse() && e.At.After(cutoff) {
+			return true
+		}
+	}
+	return false
+}
+
+func pulseOnly(e domain.EvidenceEvent) bool { return e.Pulse() }
+
+// without returns the events that do NOT match drop, sharing the input when
+// nothing matches (the common case: most threads have no comments).
+func without(ev []domain.EvidenceEvent, drop func(domain.EvidenceEvent) bool) []domain.EvidenceEvent {
+	n := 0
+	for _, e := range ev {
+		if drop(e) {
+			n++
+		}
+	}
+	if n == 0 {
+		return ev
+	}
+	out := make([]domain.EvidenceEvent, 0, len(ev)-n)
+	for _, e := range ev {
+		if !drop(e) {
+			out = append(out, e)
+		}
+	}
+	return out
 }
 
 // Attribute buckets a bubble's evidence by the thread that produced it, so each

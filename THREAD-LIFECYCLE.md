@@ -111,9 +111,9 @@ degrade gracefully to overlay-only (compute + display, no writes).
   cooling `tick`: Zzzz→Backlog, RIP→Cancelled, resurrect→In Progress, provenance
   guardrail, group resolution, inbox notifications. Depends on A.
 - **Phase C — evidence sharpening.** ✅ **Shipped** (pulled ahead of B, which
-  needs it — see *Phase C as built*). Logbook-todo diffing and revision-added
-  detection, so an OPEN thread can produce evidence at all. Comment-pulse
-  tracking (hold 😴 / block 🪦) is still outstanding.
+  needs it — see *Phase C as built*). Logbook diffing and revision-added
+  detection so an OPEN thread can produce evidence at all, plus comment pulse
+  (hold 😴 / block 🪦, never wake).
 
 ## Phase A as built
 
@@ -178,6 +178,7 @@ model changes unless someone turns a knob.
 | `thread_birth_heats` | thread | whether a work item's creation heats the item itself |
 | `thread_grace_cycles` | thread | how long a newborn that produced nothing stays 😴 before 🪦 |
 | `thread_rip_needs_owner` | thread | dormant + unassigned → 🪦 instead of 😴 |
+| `pulse_cycles` | thread | how long a comment blocks 🪦 (0 = comments carry no weight) |
 | `thread_terminal_state_wins` | thread | Plane's `completed`/`cancelled` columns override the computed level |
 
 `domain.TuningFields()` publishes the label, help text, kind and range for each
@@ -254,11 +255,37 @@ than dropping the project from the board. Evidence kinds are now explicit:
 `logbook-updated`, `revision-added`, `thread-completed`. The per-project lookups moved into a
 `projectCtx` struct so `buildBubble` takes one argument instead of eight.
 
-**Still outstanding from C:** comment pulse (hold 😴, block 🪦, never wake).
-Comments are fetched per thread on demand, so tracking them in a sweep would be
-one Plane call per thread. It needs either a cheaper feed or a narrower trigger —
-worth resolving before Phase B relies on the pulse check to avoid cancelling a
-thread people are actively discussing.
+### Comment pulse
+
+A comment is **presence, not production**. `EvidenceEvent.Pulse()` marks it, and
+both classifiers strip it: it never warms a bubble, never warms a thread, never
+reaches 🔥. Its only job is to block the grave — `heat.HasPulse` holds a thread at
+😴 when someone commented within `pulse_cycles` (default 1, 0 disables). The
+pulse rides the same evidence stream as everything else, so nothing needed a new
+plumbing path.
+
+The hard part was cost: Plane has no project-wide comment feed, so reading
+comments is **one call per thread** — unaffordable as a sweep. The resolution is
+that the pulse is load-bearing in exactly ONE place, blocking 🪦, so it only has
+to be accurate for threads that are actually dying:
+
+- **Free, exact, everywhere:** any time comments are fetched or posted
+  (`commentsFor`, `PostComment`), the newest comment's real timestamp is
+  recorded. No extra traffic.
+- **Bounded probe for the rest:** each `tick` computes which threads currently
+  read 🪦 and fetches comments for at most `pulseProbeLimit` (20) of them,
+  least-recently-checked first. Cost scales with the number of *dying* threads,
+  not with the size of the board, and it is skipped entirely when
+  `pulse_cycles` is 0.
+
+A recorded pulse reaches the board via the next snapshot refresh, which emits it
+as a non-progress evidence event. `last_comment_at` never moves backwards, so
+deleting a comment doesn't erase the fact that someone was paying attention.
+
+**Not built:** Plane's `issue_comment` webhook would make the probe nearly
+redundant — the handler currently ignores the payload and just triggers a
+refresh. Worth wiring once the event shape can be verified against a live
+instance.
 
 ## Decisions locked
 

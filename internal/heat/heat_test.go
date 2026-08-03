@@ -7,8 +7,16 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 )
 
+// tuning returns the default calibration with a given cycle length, so the
+// tests read as "default model, short cycle".
+func tuning(cycle time.Duration) domain.Tuning {
+	t := domain.DefaultTuning()
+	t.CycleHours = cycle.Hours()
+	return t
+}
+
 func TestClassify(t *testing.T) {
-	cycle := time.Hour
+	tun := tuning(time.Hour)
 	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 
 	// evidence at `mins` minutes before now.
@@ -36,7 +44,7 @@ func TestClassify(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := Classify(c.b, cycle, now)
+			got := Classify(c.b, tun, now)
 			if got.Lifecycle != c.want {
 				t.Fatalf("want %s, got %s (%s)", c.want, got.Lifecycle, got.Reason)
 			}
@@ -48,7 +56,7 @@ func TestClassify(t *testing.T) {
 // two threads in one bubble can sit at different temperatures
 // (THREAD-LIFECYCLE.md Phase A).
 func TestClassifyThread(t *testing.T) {
-	cycle := time.Hour
+	tun := tuning(time.Hour)
 	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
 	at := func(mins int) time.Time { return now.Add(-time.Duration(mins) * time.Minute) }
 
@@ -66,20 +74,20 @@ func TestClassifyThread(t *testing.T) {
 			{ThreadID: "c", Kind: domain.EvCompletedTodo, At: shipped},
 		},
 	}
-	win := WindowFor(b, cycle, now)
+	win := WindowFor(b, tun, now)
 	byThread := Attribute(b.Evidence)
 
 	// The bubble as a whole is Hot — but only one of its threads is.
-	if r := Classify(b, cycle, now); r.Lifecycle != domain.Hot {
+	if r := Classify(b, tun, now); r.Lifecycle != domain.Hot {
 		t.Fatalf("bubble: want Hot, got %s", r.Lifecycle)
 	}
-	if r := ClassifyThread(hot, byThread["a"], win, now); r.Lifecycle != domain.Hot {
+	if r := ClassifyThread(hot, byThread["a"], win, tun, now); r.Lifecycle != domain.Hot {
 		t.Fatalf("thread a: want Hot, got %s", r.Lifecycle)
 	}
-	if r := ClassifyThread(cold, byThread["b"], win, now); r.Lifecycle != domain.Dormant {
+	if r := ClassifyThread(cold, byThread["b"], win, tun, now); r.Lifecycle != domain.Dormant {
 		t.Fatalf("thread b: want Dormant, got %s", r.Lifecycle)
 	}
-	if r := ClassifyThread(done, byThread["c"], win, now); r.Lifecycle != domain.Closed {
+	if r := ClassifyThread(done, byThread["c"], win, tun, now); r.Lifecycle != domain.Closed {
 		t.Fatalf("thread c: want Closed, got %s", r.Lifecycle)
 	}
 	// Birth does not heat a thread: a work item created minutes ago that has
@@ -87,23 +95,23 @@ func TestClassifyThread(t *testing.T) {
 	// in-progress for a whole cycle just for existing.
 	newborn := domain.Thread{ID: "e", Active: true, Owner: "me", CreatedAt: at(2)}
 	birthOnly := []domain.EvidenceEvent{{ThreadID: "e", Kind: domain.EvThreadCreated, At: at(2)}}
-	if r := ClassifyThread(newborn, birthOnly, win, now); r.Lifecycle != domain.Dormant {
+	if r := ClassifyThread(newborn, birthOnly, win, tun, now); r.Lifecycle != domain.Dormant {
 		t.Fatalf("newborn thread: want Dormant, got %s (%s)", r.Lifecycle, r.Reason)
-	} else if r.Reason != "born this cycle; nothing produced yet" {
+	} else if r.Reason != "born recently; nothing produced yet" {
 		t.Errorf("newborn reason = %q", r.Reason)
 	}
 	// The bubble that gained it, however, IS warmed by the birth (§5.1).
 	nb := domain.Bubble{Owner: "me", Threads: []domain.Thread{newborn}, Evidence: birthOnly}
-	if r := Classify(nb, cycle, now); r.Lifecycle != domain.Hot {
+	if r := Classify(nb, tun, now); r.Lifecycle != domain.Hot {
 		t.Fatalf("bubble gaining a thread: want Hot, got %s", r.Lifecycle)
 	}
 
 	// An unassigned open thread has nobody accountable → Dormant, like a bubble.
 	orphan := domain.Thread{ID: "d", Active: true}
-	if r := ClassifyThread(orphan, []domain.EvidenceEvent{{At: at(5)}}, win, now); r.Lifecycle != domain.Hot {
+	if r := ClassifyThread(orphan, []domain.EvidenceEvent{{At: at(5)}}, win, tun, now); r.Lifecycle != domain.Hot {
 		t.Fatalf("orphan with fresh output should still be Hot, got %s", r.Lifecycle)
 	}
-	if r := ClassifyThread(orphan, nil, win, now); r.Lifecycle != domain.Dormant {
+	if r := ClassifyThread(orphan, nil, win, tun, now); r.Lifecycle != domain.Dormant {
 		t.Fatalf("orphan with no output: want Dormant, got %s", r.Lifecycle)
 	}
 }
@@ -124,10 +132,10 @@ func TestAttribute(t *testing.T) {
 
 // Fresh evidence must score higher than stale evidence (buoyancy ordering).
 func TestScoreDecay(t *testing.T) {
-	cycle := time.Hour
+	tun := tuning(time.Hour)
 	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
-	fresh := Classify(domain.Bubble{Owner: "me", Evidence: []domain.EvidenceEvent{{At: now.Add(-1 * time.Minute)}}}, cycle, now)
-	stale := Classify(domain.Bubble{Owner: "me", Evidence: []domain.EvidenceEvent{{At: now.Add(-50 * time.Minute)}}}, cycle, now)
+	fresh := Classify(domain.Bubble{Owner: "me", Evidence: []domain.EvidenceEvent{{At: now.Add(-1 * time.Minute)}}}, tun, now)
+	stale := Classify(domain.Bubble{Owner: "me", Evidence: []domain.EvidenceEvent{{At: now.Add(-50 * time.Minute)}}}, tun, now)
 	if !(fresh.Score > stale.Score) {
 		t.Fatalf("fresh (%.3f) should outscore stale (%.3f)", fresh.Score, stale.Score)
 	}
@@ -150,21 +158,21 @@ func TestClassifyCycleAware(t *testing.T) {
 		}
 	}
 
-	// The rolling `cycle` arg is deliberately tiny (1h) — if it were used instead
-	// of the window, everything would read as ancient. Cycle-aware must win.
-	cycle := time.Hour
+	// The rolling cycle is deliberately tiny (1h) — if it were used instead of the
+	// window, everything would read as ancient. Cycle-aware must win.
+	tun := tuning(time.Hour)
 
 	// Evidence inside the active cycle → Hot, even though it's 3 days old
 	// (far older than the 1h rolling window).
-	if r := Classify(base(now.Add(-72*time.Hour)), cycle, now); r.Lifecycle != domain.Hot {
+	if r := Classify(base(now.Add(-72*time.Hour)), tun, now); r.Lifecycle != domain.Hot {
 		t.Fatalf("in-cycle evidence: want Hot, got %s", r.Lifecycle)
 	}
 	// Evidence in the previous cycle (with active threads) → Warm.
-	if r := Classify(base(time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)), cycle, now); r.Lifecycle != domain.Warm {
+	if r := Classify(base(time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)), tun, now); r.Lifecycle != domain.Warm {
 		t.Fatalf("prev-cycle evidence: want Warm, got %s", r.Lifecycle)
 	}
 	// Evidence before the previous cycle → Dormant (silent 2+ cycles).
-	if r := Classify(base(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)), cycle, now); r.Lifecycle != domain.Dormant {
+	if r := Classify(base(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)), tun, now); r.Lifecycle != domain.Dormant {
 		t.Fatalf("stale evidence: want Dormant, got %s", r.Lifecycle)
 	}
 }

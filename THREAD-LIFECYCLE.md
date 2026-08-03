@@ -159,6 +159,38 @@ evidence with no thread is dropped rather than smeared across threads.
 - **Roll-up.** `BubbleView.thread_levels` is a histogram of its threads' levels
   (`{"in_progress":2,"zzzz":1}`).
 
+### Calibration (the knobs)
+
+Every threshold the two grains use is a field on `domain.Tuning`, persisted in
+`server_settings` and editable at runtime by a service admin. The defaults
+reproduce the behaviour described in this document exactly; nothing about the
+model changes unless someone turns a knob.
+
+| Key | Grain | What moves |
+|-----|-------|-----------|
+| `cycle_hours` | both | the rolling pulse, used only when a project has no active Plane cycle |
+| `dormant_cycles` | both | cycles of silence before Dormant (2 = "not this cycle or last") |
+| `decay_cycles` | both | scales the buoyancy score used for ordering (not the bands) |
+| `ownerless_is_dormant` | both | nobody accountable → sinks once quiet |
+| `bubble_rip_needs_owner` | bubble | dormant + ownerless → 🪦 instead of 😴 |
+| `thread_birth_heats` | thread | whether a work item's creation heats the item itself |
+| `thread_grace_cycles` | thread | how long a newborn that produced nothing stays 😴 before 🪦 |
+| `thread_rip_needs_owner` | thread | dormant + unassigned → 🪦 instead of 😴 |
+| `thread_terminal_state_wins` | thread | Plane's `completed`/`cancelled` columns override the computed level |
+
+`domain.TuningFields()` publishes the label, help text, kind and range for each
+knob, so the **CLI listing and the God Mode form render from the same schema**
+and cannot drift. Reads go through `Server.Tuning()`, and because everything is
+derived at read time, an edit lands on the very next read — no recompute, no
+cache flush, no migration. Values are clamped by `Tuning.Sanitize()` before they
+are stored, so a bad edit can't produce a nonsensical board.
+
+Surfaces: `GET|PUT /api/admin/tuning` (service admin), `bubble admin tuning
+[set k=v… | reset]`, and the **Buoyancy calibration** card in `/god-mode`. Not on
+MCP — like the other admin capabilities (instances, members, kiosk), calibrating
+the model is an operator action, not an agent one. A PUT body is decoded ONTO the
+live values, so a partial patch only changes the keys it names.
+
 **Deliberately NOT done in A:** the bubble's own band is still computed from the
 union of its evidence, not as `max(thread levels)`. The two agree in the common
 case; they diverge when a bubble's only recent evidence belongs to a thread that
@@ -182,9 +214,13 @@ display work.
 
 ## Open / deferred
 
-- Exact thresholds (how many dormant cycles before Backlog vs Cancel) — likely
-  driven by the computed level itself (Zzzz vs RIP) plus the pulse check, rather
-  than new counters.
+- Exact thresholds (how many dormant cycles before Backlog vs Cancel) — driven
+  by the computed level itself (Zzzz vs RIP) plus the pulse check, now that the
+  thresholds behind those levels are admin-tunable (see *Calibration*).
+- Whether the calibration should ever be **per instance** rather than
+  server-wide. Today one calibration governs every federated instance; a
+  workspace on a two-week cadence and one on a daily cadence would want their
+  own. Deferred until a second rhythm actually exists.
 - Commit/PR linkage as progress evidence (needs description-link parsing).
 - Whether a structured "decision" comment should ever count as progress (kept as
   pulse for now).

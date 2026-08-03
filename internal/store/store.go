@@ -67,6 +67,10 @@ CREATE TABLE IF NOT EXISTS comment_reads (
   read_at     TEXT NOT NULL,     -- RFC3339
   PRIMARY KEY (instance, comment_id, reader_id)
 );
+CREATE TABLE IF NOT EXISTS server_settings (
+  key   TEXT PRIMARY KEY,        -- e.g. "tuning" (the buoyancy calibration)
+  value TEXT NOT NULL            -- opaque JSON, owned by the caller
+);
 CREATE TABLE IF NOT EXISTS kiosk_tokens (
   token      TEXT PRIMARY KEY,   -- server-issued read-only display credential (§9 Phase 9)
   instance   TEXT NOT NULL,      -- the instance slug this token may view
@@ -381,6 +385,27 @@ func (s *Store) SetNotifyEnabled(email string, enabled bool) error {
 		`INSERT INTO member_prefs(email, notify_enabled) VALUES(?, ?)
 		 ON CONFLICT(email) DO UPDATE SET notify_enabled = excluded.notify_enabled`,
 		email, v)
+	return err
+}
+
+// GetSetting reads a server-wide setting. The value is opaque JSON to the store
+// — the server owns its shape. ok is false when the key has never been written.
+func (s *Store) GetSetting(key string) (value string, ok bool, err error) {
+	err = s.db.QueryRow(`SELECT value FROM server_settings WHERE key = ?`, key).Scan(&value)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return value, true, nil
+}
+
+// SetSetting upserts a server-wide setting.
+func (s *Store) SetSetting(key, value string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO server_settings(key, value) VALUES(?, ?)
+		 ON CONFLICT(key) DO UPDATE SET value = excluded.value`, key, value)
 	return err
 }
 

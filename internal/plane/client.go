@@ -606,10 +606,10 @@ func (c *Client) ListChildren(ctx context.Context, parentID string) ([]WorkItemD
 	var out []WorkItemDetail
 	err := c.getPaged(ctx, c.projectBase()+"/work-items/", func(raw json.RawMessage) error {
 		var page []struct {
-			ID              string  `json:"id"`
-			Name            string  `json:"name"`
-			DescriptionHTML string  `json:"description_html"`
-			Parent          *string `json:"parent"`
+			ID              string    `json:"id"`
+			Name            string    `json:"name"`
+			DescriptionHTML string    `json:"description_html"`
+			Parent          *string   `json:"parent"`
 			CreatedAt       time.Time `json:"created_at"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {

@@ -494,6 +494,8 @@ func cmdAdmin(args []string) {
 		err = client.AdminTick(cfg, token)
 	case "kiosk":
 		err = cmdAdminKiosk(cfg, token, args[1:])
+	case "tuning":
+		err = cmdAdminTuning(cfg, token, args[1:])
 	default:
 		adminUsage()
 		os.Exit(2)
@@ -527,6 +529,25 @@ func cmdAdminKiosk(cfg config.Config, token string, args []string) error {
 	}
 }
 
+// cmdAdminTuning shows or edits the buoyancy calibration — the thresholds that
+// govern how bubbles AND threads move between bands (THREAD-LIFECYCLE.md).
+func cmdAdminTuning(cfg config.Config, token string, args []string) error {
+	if len(args) == 0 {
+		return client.AdminTuning(cfg, token)
+	}
+	switch args[0] {
+	case "set":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: bubble admin tuning set <key>=<value> [<key>=<value>...]")
+		}
+		return client.AdminTuningSet(cfg, token, args[1:])
+	case "reset":
+		return client.AdminTuningReset(cfg, token)
+	default:
+		return fmt.Errorf("unknown tuning subcommand %q (want: set, reset)", args[0])
+	}
+}
+
 func adminUsage() {
 	fmt.Fprint(os.Stderr, `bubble admin — service-admin (godmode) operations
 
@@ -542,6 +563,9 @@ Usage:
   bubble admin kiosk ls              list read-only display tokens
   bubble admin kiosk new <inst> [n]  mint a kiosk token for an instance
   bubble admin kiosk rm <token>      revoke a kiosk token
+  bubble admin tuning                show the buoyancy calibration
+  bubble admin tuning set k=v [k=v]  tweak lifecycle thresholds
+  bubble admin tuning reset          restore the stock calibration
 
 `)
 }

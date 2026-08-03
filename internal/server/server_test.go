@@ -405,7 +405,9 @@ func TestThreadBuoyancy(t *testing.T) {
 // circuits the two terminal columns (THREAD-LIFECYCLE.md).
 func TestThreadLevel(t *testing.T) {
 	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
-	win := heat.Window{CurStart: now.Add(-7 * 24 * time.Hour), PrevStart: now.Add(-14 * 24 * time.Hour), Decay: 7 * 24 * time.Hour}
+	tun := domain.DefaultTuning()
+	week := 7 * 24 * time.Hour
+	win := heat.Window{CurStart: now.Add(-week), PrevStart: now.Add(-2 * week), Length: week, Decay: week}
 	born := func(daysAgo int) time.Time { return now.AddDate(0, 0, -daysAgo) }
 	birth := []domain.EvidenceEvent{{Kind: domain.EvThreadCreated, At: born(2)}}
 	work := []domain.EvidenceEvent{{Kind: domain.EvCompletedTodo, At: born(1)}}
@@ -432,7 +434,7 @@ func TestThreadLevel(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := threadLevel(c.t, c.ev, c.lc, win); got != c.want {
+			if got := threadLevel(c.t, c.ev, c.lc, win, tun, now); got != c.want {
 				t.Fatalf("want %s, got %s", c.want, got)
 			}
 		})
@@ -973,6 +975,105 @@ func TestKioskCredential(t *testing.T) {
 	if code, _ = do(t, http.MethodGet, ts.URL+"/api/whoami", "kiosk_bogus", ""); code != http.StatusUnauthorized {
 		t.Errorf("unknown kiosk token should be 401, got %d", code)
 	}
+}
+
+// The buoyancy thresholds are calibration, not constants: a service admin can
+// retune them at runtime and every derived read reflects it immediately.
+func TestAdminTuning(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	srv.SetAdmin("", []string{"owner@x"})
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	code, body := do(t, http.MethodGet, ts.URL+"/api/admin/tuning", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("get tuning status %d: %s", code, body)
+	}
+	var v domain.TuningView
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decode tuning: %v", err)
+	}
+	if v.Tuning.CycleHours != 1 { // seeded from New(st, time.Hour)
+		t.Errorf("cycle seeded from config: got %v", v.Tuning.CycleHours)
+	}
+	if v.Defaults.CycleHours != 168 || len(v.Fields) == 0 {
+		t.Errorf("defaults/schema missing: %+v", v)
+	}
+
+	// The fixture's evidence is months old, so against a 1h cycle the bubble has
+	// long gone dormant with no owner → 🪦.
+	if lv := bubbleLevelFor(t, ts, key, "ws:p1:m1"); lv != "rip" {
+		t.Fatalf("before retune: want rip, got %s", lv)
+	}
+
+	// Stretch the cycle to a year: the same evidence now lands inside the current
+	// window, so the very next read floats the bubble back up. No recompute, no
+	// cache flush — everything is derived.
+	code, body = do(t, http.MethodPut, ts.URL+"/api/admin/tuning", key, `{"cycle_hours": 8760}`)
+	if code != http.StatusOK {
+		t.Fatalf("put tuning status %d: %s", code, body)
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decode applied tuning: %v", err)
+	}
+	// A partial body patches only the keys it names.
+	if v.Tuning.CycleHours != 8760 || v.Tuning.DormantCycles != 2 || !v.Tuning.ThreadTerminalStateWins {
+		t.Fatalf("partial patch clobbered other knobs: %+v", v.Tuning)
+	}
+	if lv := bubbleLevelFor(t, ts, key, "ws:p1:m1"); lv != "in_progress" {
+		t.Fatalf("after retune: want in_progress, got %s", lv)
+	}
+
+	// Out-of-range values are clamped, never applied raw.
+	code, body = do(t, http.MethodPut, ts.URL+"/api/admin/tuning", key, `{"decay_cycles": 0, "cycle_hours": -5}`)
+	if code != http.StatusOK {
+		t.Fatalf("put clamp status %d: %s", code, body)
+	}
+	if err := json.Unmarshal(body, &v); err != nil {
+		t.Fatalf("decode clamped: %v", err)
+	}
+	if v.Tuning.DecayCycles != 0.1 || v.Tuning.CycleHours != 1 {
+		t.Errorf("values not clamped: %+v", v.Tuning)
+	}
+
+	// It survives a restart: the calibration is persisted, not in-memory.
+	if got := New(st, time.Hour).Tuning().DecayCycles; got != 0.1 {
+		t.Errorf("tuning did not persist across restart: %v", got)
+	}
+
+	// A garbage body is a 400, and leaves the calibration alone.
+	if code, _ = do(t, http.MethodPut, ts.URL+"/api/admin/tuning", key, `not json`); code != http.StatusBadRequest {
+		t.Errorf("bad tuning body: want 400, got %d", code)
+	}
+}
+
+// bubbleLevelFor reads one bubble's band off the board.
+func bubbleLevelFor(t *testing.T, ts *httptest.Server, key, id string) string {
+	t.Helper()
+	code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("bubbles status %d: %s", code, body)
+	}
+	var vs []domain.BubbleView
+	if err := json.Unmarshal(body, &vs); err != nil {
+		t.Fatalf("decode bubbles: %v", err)
+	}
+	for _, v := range vs {
+		if v.ID == id {
+			return v.Level
+		}
+	}
+	t.Fatalf("bubble %s not on the board: %s", id, body)
+	return ""
 }
 
 func TestAdminMembers(t *testing.T) {

@@ -85,8 +85,13 @@ const (
 // per-request from the acting identity's authorized instances (federation).
 type Server struct {
 	store *store.Store
-	cycle time.Duration
 	now   func() time.Time
+
+	// tuning is the live calibration of the buoyancy model (both grains).
+	// Persisted in the store and editable by a service admin at runtime; every
+	// derived read goes through Tuning(), so a change takes effect immediately.
+	tuningMu sync.RWMutex
+	tuning   domain.Tuning
 
 	mu    sync.Mutex
 	cache map[string]cachedActor
@@ -191,13 +196,23 @@ type cachedStates struct {
 	exp  time.Time
 }
 
+// tuningKey is where the buoyancy calibration lives in the settings table.
+const tuningKey = "tuning"
+
 // New builds a server. With no instances configured (or none authorized for the
 // caller) it degrades gracefully to an empty world. Any persisted snapshot is
 // loaded so the board serves the last-known state instantly after a restart.
+//
+// cycle seeds the default pulse from config; a persisted admin calibration
+// (God Mode) overrides it.
 func New(st *store.Store, cycle time.Duration) *Server {
+	tun := domain.DefaultTuning()
+	if cycle > 0 {
+		tun.CycleHours = cycle.Hours()
+	}
 	s := &Server{
 		store:         st,
-		cycle:         cycle,
+		tuning:        tun,
 		now:           time.Now,
 		cache:         map[string]cachedActor{},
 		bubblesCache:  map[string]cachedBubbles{},
@@ -209,8 +224,56 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		adminEmails:   map[string]bool{},
 		startedAt:     time.Now(),
 	}
+	s.loadTuning()
 	s.loadPersistedSnapshots()
 	return s
+}
+
+// Tuning returns the live buoyancy calibration.
+func (s *Server) Tuning() domain.Tuning {
+	s.tuningMu.RLock()
+	defer s.tuningMu.RUnlock()
+	return s.tuning
+}
+
+// SetTuning validates, persists and applies a new calibration. Everything is
+// derived at read time, so the board reflects it on the very next read — no
+// cache flush, no recompute. Subscribers are nudged so open screens repaint.
+func (s *Server) SetTuning(t domain.Tuning) (domain.Tuning, error) {
+	t = t.Sanitize()
+	blob, err := json.Marshal(t)
+	if err != nil {
+		return domain.Tuning{}, err
+	}
+	if err := s.store.SetSetting(tuningKey, string(blob)); err != nil {
+		return domain.Tuning{}, err
+	}
+	s.tuningMu.Lock()
+	s.tuning = t
+	s.tuningMu.Unlock()
+	s.broadcast()
+	return t, nil
+}
+
+// loadTuning restores the persisted calibration over the config-seeded default.
+// A corrupt row is logged and ignored rather than failing the boot.
+func (s *Server) loadTuning() {
+	raw, ok, err := s.store.GetSetting(tuningKey)
+	if err != nil {
+		log.Printf("tuning: load: %v", err)
+		return
+	}
+	if !ok {
+		return
+	}
+	// Start from the current default so a field added after the row was written
+	// keeps its default instead of decoding to a zero.
+	t := s.tuning
+	if err := json.Unmarshal([]byte(raw), &t); err != nil {
+		log.Printf("tuning: stored calibration is unreadable, using defaults: %v", err)
+		return
+	}
+	s.tuning = t.Sanitize()
 }
 
 // subscribe registers an SSE listener; unsubscribe removes it. broadcast nudges
@@ -428,6 +491,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/refresh", s.adminOnly(s.handleAdminRefresh))
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
 	mux.HandleFunc("GET /api/admin/members", s.adminOnly(s.handleAdminMembers))
+	mux.HandleFunc("GET /api/admin/tuning", s.adminOnly(s.handleGetTuning))
+	mux.HandleFunc("PUT /api/admin/tuning", s.adminOnly(s.handleSetTuning))
 	mux.HandleFunc("GET /api/admin/kiosk", s.adminOnly(s.handleListKiosk))
 	mux.HandleFunc("POST /api/admin/kiosk", s.adminOnly(s.handleCreateKiosk))
 	mux.HandleFunc("DELETE /api/admin/kiosk/{token}", s.adminOnly(s.handleRevokeKiosk))
@@ -554,7 +619,7 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 
 // bubbleLevel maps a bubble to its UI band (§ web-ui): explicit stage/closed win,
 // otherwise heat decides in-progress ↔ zzzz ↔ rip.
-func bubbleLevel(b domain.Bubble, lc domain.Lifecycle) string {
+func bubbleLevel(b domain.Bubble, lc domain.Lifecycle, tun domain.Tuning) string {
 	switch {
 	case b.Closed:
 		return "done"
@@ -567,7 +632,7 @@ func bubbleLevel(b domain.Bubble, lc domain.Lifecycle) string {
 	case domain.Cooling:
 		return "zzzz"
 	case domain.Dormant:
-		if b.Owner == "" || len(b.Evidence) == 0 {
+		if len(b.Evidence) == 0 || (tun.BubbleRipNeedsOwner && b.Owner == "") {
 			return "rip" // never got going / abandoned
 		}
 		return "zzzz" // had a life, went quiet
@@ -582,12 +647,14 @@ func bubbleLevel(b domain.Bubble, lc domain.Lifecycle) string {
 // rather than status theatre. A thread being dragged into "In Progress" is
 // motion, not evidence, so it does not by itself make the thread 🔥 — and a
 // thread sitting in Backlog while its todos get ticked genuinely is 🔥.
-func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle, w heat.Window) string {
-	switch t.StateGroup {
-	case "completed":
-		return "done"
-	case "cancelled":
-		return "rip"
+func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle, w heat.Window, tun domain.Tuning, now time.Time) string {
+	if tun.ThreadTerminalStateWins {
+		switch t.StateGroup {
+		case "completed":
+			return "done"
+		case "cancelled":
+			return "rip"
+		}
 	}
 	switch lc {
 	case domain.Closed:
@@ -604,12 +671,12 @@ func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle
 				break
 			}
 		}
-		if produced {
+		if produced && !(tun.ThreadRipNeedsOwner && t.Owner == "") {
 			return "zzzz" // had a life, went quiet
 		}
-		// Nothing produced yet. A thread born inside the current cycle is simply
-		// waiting its turn — it gets the cycle before we call it abandoned.
-		if !t.CreatedAt.IsZero() && t.CreatedAt.After(w.CurStart) {
+		// Nothing produced yet (or nobody to produce it). A thread still inside its
+		// grace period is simply waiting its turn, not abandoned.
+		if heat.Newborn(t, w, tun, now) {
 			return "zzzz"
 		}
 		return "rip" // never got going / abandoned
@@ -623,16 +690,16 @@ func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle
 // the single place per-thread lifecycle is derived; the timeline, the interior
 // and the bubble roll-up all read it.
 func (s *Server) threadBuoyancy(b domain.Bubble) map[string]domain.Buoyancy {
-	now := s.now()
-	win := heat.WindowFor(b, s.cycle, now)
+	now, tun := s.now(), s.Tuning()
+	win := heat.WindowFor(b, tun, now)
 	byThread := heat.Attribute(b.Evidence)
 	out := make(map[string]domain.Buoyancy, len(b.Threads))
 	for _, t := range b.Threads {
 		ev := byThread[t.ID]
-		r := heat.ClassifyThread(t, ev, win, now)
+		r := heat.ClassifyThread(t, ev, win, tun, now)
 		out[t.ID] = domain.Buoyancy{
 			Lifecycle: r.Lifecycle,
-			Level:     threadLevel(t, ev, r.Lifecycle, win),
+			Level:     threadLevel(t, ev, r.Lifecycle, win, tun, now),
 			Score:     r.Score,
 			Reason:    r.Reason,
 		}
@@ -642,14 +709,14 @@ func (s *Server) threadBuoyancy(b domain.Bubble) map[string]domain.Buoyancy {
 
 // toViews classifies bubbles into derived views, hottest first (buoyancy).
 func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
-	now := s.now()
+	now, tun := s.now(), s.Tuning()
 	out := make([]domain.BubbleView, 0, len(bubbles))
 	for _, b := range bubbles {
-		r := heat.Classify(b, s.cycle, now)
+		r := heat.Classify(b, tun, now)
 		out = append(out, domain.BubbleView{
 			ID: b.ID, Name: b.Name, Instance: b.Instance,
 			Project: b.Project, ProjectName: b.ProjectName,
-			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle),
+			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle, tun),
 			Score: r.Score, Reason: r.Reason,
 			Outcome: b.Outcome, Owner: b.Owner, Members: bubbleMembers(b),
 			Threads: len(b.Threads), ThreadLevels: levelCounts(s.threadBuoyancy(b)),
@@ -1492,11 +1559,11 @@ func notifyMessage(b domain.Bubble, cur domain.Lifecycle) string {
 // downward transition, and returns how many were created. First sighting of a
 // bubble is baselined silently (no notification flood on first run).
 func (s *Server) Tick(ctx context.Context) (int, error) {
-	now := s.now()
+	now, tun := s.now(), s.Tuning()
 	stamp := now.Format(time.RFC3339)
 	n := 0
 	for _, b := range s.collectAll(ctx) {
-		cur := heat.Classify(b, s.cycle, now).Lifecycle
+		cur := heat.Classify(b, tun, now).Lifecycle
 		prev, had, err := s.store.GetLifecycle(b.ID)
 		if err != nil {
 			log.Printf("tick: get lifecycle %s: %v", b.ID, err)
@@ -1853,6 +1920,37 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 // doesn't own membership — Plane does — so this is a viewer, not a manager. An
 // instance whose member fetch fails is included with an error rather than
 // failing the whole call.
+// handleGetTuning returns the live buoyancy calibration, alongside the defaults
+// so a client can show what "stock" looks like and offer a reset.
+func (s *Server) handleGetTuning(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, domain.TuningView{
+		Tuning:   s.Tuning(),
+		Defaults: domain.DefaultTuning(),
+		Fields:   domain.TuningFields(),
+	})
+}
+
+// handleSetTuning replaces the calibration. The body is decoded ONTO the current
+// values, so a partial edit only changes the fields it names.
+func (s *Server) handleSetTuning(w http.ResponseWriter, r *http.Request) {
+	t := s.Tuning()
+	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+		writeErr(w, fmt.Errorf("%w: %v", errBadRequest, err))
+		return
+	}
+	applied, err := s.SetTuning(t)
+	if writeErr(w, err) {
+		return
+	}
+	actor, _ := domain.ActorFrom(r.Context())
+	log.Printf("tuning updated by %s: %+v", actor.Label(), applied)
+	writeJSON(w, http.StatusOK, domain.TuningView{
+		Tuning:   applied,
+		Defaults: domain.DefaultTuning(),
+		Fields:   domain.TuningFields(),
+	})
+}
+
 func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
 	insts, err := s.store.ListInstances()
 	if writeErr(w, err) {

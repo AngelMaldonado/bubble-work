@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -316,6 +317,126 @@ func AdminKioskRevoke(cfg config.Config, token, kiosk string) error {
 	}
 	fmt.Println("revoked")
 	return nil
+}
+
+// AdminTuning prints the live buoyancy calibration, grouped, with each knob's
+// help text and a marker on anything that drifts from the stock default.
+func AdminTuning(cfg config.Config, token string) error {
+	var v domain.TuningView
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/tuning", token, &v); err != nil {
+		return err
+	}
+	printTuning(v)
+	return nil
+}
+
+// AdminTuningSet patches individual knobs: `bubble admin tuning set k=v [k=v…]`.
+// Keys and types are validated locally against the schema the server publishes,
+// so a typo fails before it reaches the board.
+func AdminTuningSet(cfg config.Config, token string, pairs []string) error {
+	var cur domain.TuningView
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/tuning", token, &cur); err != nil {
+		return err
+	}
+	kinds := map[string]string{}
+	for _, f := range cur.Fields {
+		kinds[f.Key] = f.Kind
+	}
+
+	patch := map[string]any{}
+	for _, p := range pairs {
+		k, raw, ok := strings.Cut(p, "=")
+		k, raw = strings.TrimSpace(k), strings.TrimSpace(raw)
+		if !ok || k == "" {
+			return fmt.Errorf("expected key=value, got %q", p)
+		}
+		switch kinds[k] {
+		case "toggle":
+			b, err := strconv.ParseBool(raw)
+			if err != nil {
+				return fmt.Errorf("%s wants true/false, got %q", k, raw)
+			}
+			patch[k] = b
+		case "number":
+			f, err := strconv.ParseFloat(raw, 64)
+			if err != nil {
+				return fmt.Errorf("%s wants a number, got %q", k, raw)
+			}
+			patch[k] = f
+		default:
+			return fmt.Errorf("unknown tuning key %q — run `bubble admin tuning` to list them", k)
+		}
+	}
+
+	var out domain.TuningView
+	if err := adminSend(cfg, http.MethodPut, "/api/admin/tuning", token, patch, &out); err != nil {
+		return err
+	}
+	fmt.Printf("updated %d setting(s)\n\n", len(patch))
+	printTuning(out)
+	return nil
+}
+
+// AdminTuningReset restores the stock calibration.
+func AdminTuningReset(cfg config.Config, token string) error {
+	var out domain.TuningView
+	if err := adminSend(cfg, http.MethodPut, "/api/admin/tuning", token, domain.DefaultTuning(), &out); err != nil {
+		return err
+	}
+	fmt.Print("reset to defaults\n\n")
+	printTuning(out)
+	return nil
+}
+
+func printTuning(v domain.TuningView) {
+	live, def := tuningMap(v.Tuning), tuningMap(v.Defaults)
+	group := ""
+	for _, f := range v.Fields {
+		if f.Group != group {
+			group = f.Group
+			fmt.Printf("\n%s\n", heading(tuningGroupLabel(group)))
+		}
+		mark := " "
+		if fmt.Sprint(live[f.Key]) != fmt.Sprint(def[f.Key]) {
+			mark = "*" // drifts from the stock default
+		}
+		fmt.Printf("%s %-28s %-8s  %s\n", mark, f.Key, tuningValue(live[f.Key]), f.Label)
+		if w := termWidth() - 42; w > 20 {
+			fmt.Printf("  %-28s %-8s  %s\n", "", "", trunc(f.Help, w))
+		}
+	}
+	fmt.Print("\n* = changed from default · set with `bubble admin tuning set <key>=<value>`\n")
+}
+
+func tuningGroupLabel(g string) string {
+	switch g {
+	case "pulse":
+		return "Pulse (both grains)"
+	case "bubble":
+		return "Bubbles"
+	case "thread":
+		return "Threads"
+	}
+	return g
+}
+
+// tuningMap round-trips a Tuning through JSON so knobs can be read by their
+// wire key — the same key the schema and the PUT body use.
+func tuningMap(t domain.Tuning) map[string]any {
+	b, err := json.Marshal(t)
+	if err != nil {
+		return map[string]any{}
+	}
+	m := map[string]any{}
+	json.Unmarshal(b, &m)
+	return m
+}
+
+func tuningValue(v any) string {
+	if f, ok := v.(float64); ok {
+		return strconv.FormatFloat(f, 'g', -1, 64)
+	}
+	return fmt.Sprint(v)
 }
 
 // AdminInstances lists all instances (service admin).

@@ -55,6 +55,143 @@ type Thread struct {
 	CompletedAt *time.Time
 }
 
+// Tuning is the calibration of the buoyancy model — every threshold the
+// lifecycle rules used to hardcode, at BOTH grains (bubbles and threads). It is
+// persisted server-side and editable by a service admin (God Mode) so a
+// workspace can match the model to its own rhythm without a redeploy.
+//
+// The defaults reproduce the behaviour documented in AGENTS.md and
+// THREAD-LIFECYCLE.md exactly; every field below states what moves when it does.
+type Tuning struct {
+	// ---- the pulse (shared by both grains) ----
+
+	// CycleHours is the rolling heat window used when a project has no active
+	// Plane cycle. When Plane has one, its real boundaries win (§3.6).
+	CycleHours float64 `json:"cycle_hours"`
+	// DormantCycles is how many cycles of silence make something Dormant. 2 means
+	// "nothing this cycle or last". Lowering it makes the board sink faster.
+	DormantCycles float64 `json:"dormant_cycles"`
+	// DecayCycles scales the buoyancy score's exponential decay, in cycles.
+	// Larger = things stay buoyant (ordered higher) for longer.
+	DecayCycles float64 `json:"decay_cycles"`
+	// OwnerlessIsDormant sinks anything with nobody accountable to Dormant once
+	// it has gone quiet (§4: a contract needs an owner). Something still actively
+	// producing stays Hot/Warm either way — output outranks paperwork.
+	OwnerlessIsDormant bool `json:"ownerless_is_dormant"`
+
+	// ---- bubble grain ----
+
+	// BubbleRipNeedsOwner sends a dormant, ownerless bubble to 🪦 instead of 😴.
+	// A bubble that never produced anything is 🪦 either way.
+	BubbleRipNeedsOwner bool `json:"bubble_rip_needs_owner"`
+
+	// ---- thread grain (THREAD-LIFECYCLE.md) ----
+
+	// ThreadBirthHeats makes a work item's own creation heat the thread itself.
+	// Off by default: being born is not producing, and turning it on makes every
+	// new Backlog item read 🔥 for a cycle. (A birth always heats its BUBBLE.)
+	ThreadBirthHeats bool `json:"thread_birth_heats"`
+	// ThreadGraceCycles is how long a newborn thread that has produced nothing
+	// stays 😴 before it is called 🪦. 0 = no grace.
+	ThreadGraceCycles float64 `json:"thread_grace_cycles"`
+	// ThreadRipNeedsOwner sends a dormant, unassigned thread to 🪦 instead of 😴.
+	ThreadRipNeedsOwner bool `json:"thread_rip_needs_owner"`
+	// ThreadTerminalStateWins lets Plane's terminal columns override the computed
+	// level: `completed` → 🏆, `cancelled` → 🪦. Those are statements of fact;
+	// every other column is status theatre and is ignored either way.
+	ThreadTerminalStateWins bool `json:"thread_terminal_state_wins"`
+}
+
+// DefaultTuning is the model's out-of-the-box calibration.
+func DefaultTuning() Tuning {
+	return Tuning{
+		CycleHours:              168, // one week
+		DormantCycles:           2,
+		DecayCycles:             1,
+		OwnerlessIsDormant:      true,
+		BubbleRipNeedsOwner:     true,
+		ThreadBirthHeats:        false,
+		ThreadGraceCycles:       1,
+		ThreadRipNeedsOwner:     true,
+		ThreadTerminalStateWins: true,
+	}
+}
+
+// Sanitize clamps the numeric knobs into a sane range, so a bad edit can't
+// produce a nonsensical board (or a zero-length decay).
+func (t Tuning) Sanitize() Tuning {
+	t.CycleHours = clampF(t.CycleHours, 1, 24*365)
+	t.DormantCycles = clampF(t.DormantCycles, 1, 52)
+	t.DecayCycles = clampF(t.DecayCycles, 0.1, 52)
+	t.ThreadGraceCycles = clampF(t.ThreadGraceCycles, 0, 52)
+	return t
+}
+
+// Cycle is the pulse length as a duration.
+func (t Tuning) Cycle() time.Duration {
+	return time.Duration(t.CycleHours * float64(time.Hour))
+}
+
+// TuningView is what the admin surfaces read: the live calibration, the stock
+// defaults (so a client can mark drift and offer a reset), and the self-
+// describing schema of the knobs.
+type TuningView struct {
+	Tuning   Tuning        `json:"tuning"`
+	Defaults Tuning        `json:"defaults"`
+	Fields   []TuningField `json:"fields"`
+}
+
+// TuningField describes one knob so every surface renders it the same way: the
+// CLI listing, the God Mode form, and any future client. Keys match the JSON
+// tags on Tuning, so a client can PATCH `{key: value}` blindly.
+type TuningField struct {
+	Key   string  `json:"key"`
+	Label string  `json:"label"`
+	Help  string  `json:"help"`
+	Kind  string  `json:"kind"`  // "number" | "toggle"
+	Group string  `json:"group"` // "pulse" | "bubble" | "thread"
+	Min   float64 `json:"min,omitempty"`
+	Max   float64 `json:"max,omitempty"`
+	Step  float64 `json:"step,omitempty"`
+}
+
+// TuningFields is the self-describing schema of the buoyancy calibration —
+// the single source of truth for how the knobs are presented.
+func TuningFields() []TuningField {
+	return []TuningField{
+		{Key: "cycle_hours", Label: "Cycle length (hours)", Kind: "number", Group: "pulse", Min: 1, Max: 8760, Step: 1,
+			Help: "The pulse recency is measured against. Only used when a project has no active Plane cycle — a real cycle always wins."},
+		{Key: "dormant_cycles", Label: "Cycles before dormant", Kind: "number", Group: "pulse", Min: 1, Max: 52, Step: 1,
+			Help: "How many cycles of silence make something dormant. 2 = \"nothing this cycle or last\". Lower sinks the board faster."},
+		{Key: "decay_cycles", Label: "Score decay (cycles)", Kind: "number", Group: "pulse", Min: 0.1, Max: 52, Step: 0.1,
+			Help: "Scales the buoyancy score used for ordering. Larger keeps things floating higher for longer; it does not change the bands."},
+		{Key: "ownerless_is_dormant", Label: "No owner sinks to dormant", Kind: "toggle", Group: "pulse",
+			Help: "Something with nobody accountable goes dormant once it has gone quiet. Anything still producing stays hot either way."},
+
+		{Key: "bubble_rip_needs_owner", Label: "Ownerless bubble is RIP", Kind: "toggle", Group: "bubble",
+			Help: "A dormant bubble with no owner reads 🪦 instead of 😴. A bubble that never produced anything is 🪦 regardless."},
+
+		{Key: "thread_birth_heats", Label: "Creating a thread heats it", Kind: "toggle", Group: "thread",
+			Help: "Off by default: being born is not producing. Turning this on makes every new work item read 🔥 for a whole cycle, even untouched in Backlog. A birth always heats its bubble."},
+		{Key: "thread_grace_cycles", Label: "Newborn grace (cycles)", Kind: "number", Group: "thread", Min: 0, Max: 52, Step: 0.5,
+			Help: "How long a new thread that has produced nothing stays 😴 before it is called 🪦. 0 = no grace."},
+		{Key: "thread_rip_needs_owner", Label: "Unassigned thread is RIP", Kind: "toggle", Group: "thread",
+			Help: "A dormant thread with no assignee reads 🪦 instead of 😴."},
+		{Key: "thread_terminal_state_wins", Label: "Plane's terminal columns win", Kind: "toggle", Group: "thread",
+			Help: "Let Plane decide the two terminal states: completed → 🏆, cancelled → 🪦. Every other column is ignored either way — moving a card is motion, not evidence."},
+	}
+}
+
+func clampF(v, lo, hi float64) float64 {
+	switch {
+	case v < lo:
+		return lo
+	case v > hi:
+		return hi
+	}
+	return v
+}
+
 // Buoyancy is a thread's derived lifecycle — the per-thread analogue of a
 // bubble's heat, computed against the bubble's cycle window
 // (THREAD-LIFECYCLE.md Phase A). Embedded flat into the thread DTOs.

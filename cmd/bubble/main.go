@@ -7,12 +7,15 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/client"
@@ -33,6 +36,10 @@ func main() {
 	switch os.Args[1] {
 	case "serve":
 		cmdServe(os.Args[2:])
+	case "stop":
+		cmdStop(os.Args[2:])
+	case "attach":
+		cmdAttach(os.Args[2:])
 	case "ls":
 		cmdLs(os.Args[2:])
 	case "heat":
@@ -78,6 +85,8 @@ func usage() {
 
 Usage:
   bubble serve [--addr :4006]      run the server (REST + MCP brain)
+  bubble stop                      stop the running server (graceful)
+  bubble attach                    follow the running server's log (Ctrl-C detaches)
   bubble ls                        list bubbles, hottest first (buoyancy view)
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble show <id>                 a bubble's thread timeline (git-log-oneline)
@@ -700,6 +709,7 @@ Usage:
 func cmdServe(args []string) {
 	fs := flag.NewFlagSet("serve", flag.ExitOnError)
 	addr := fs.String("addr", "", "listen address (overrides config)")
+	verbose := fs.Bool("verbose", false, "also print logs to the console (they always go to the log file — see `bubble attach`)")
 	_ = fs.Parse(args)
 
 	cfg, err := config.Load()
@@ -720,6 +730,31 @@ func cmdServe(args []string) {
 	if err := os.MkdirAll(filepath.Dir(dbPath), 0o755); err != nil {
 		log.Fatalf("mkdir: %v", err)
 	}
+
+	// Refuse to start a second server; point the user at stop/attach instead.
+	pidPath, _ := config.PidPath()
+	if pidPath != "" {
+		if data, err := os.ReadFile(pidPath); err == nil {
+			if old, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil &&
+				old != os.Getpid() && processAlive(old) {
+				log.Fatalf("a bubble server is already running (pid %d) — `bubble stop` it, or `bubble attach` to watch it", old)
+			}
+		}
+	}
+
+	// Logs always go to a file (so `bubble attach` can show them), but the console
+	// stays quiet by default — pass --verbose to also print them here.
+	if lp, err := config.LogPath(); err == nil {
+		if f, err := os.OpenFile(lp, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); err == nil {
+			if *verbose {
+				log.SetOutput(io.MultiWriter(os.Stderr, f))
+			} else {
+				log.SetOutput(f)
+			}
+			defer f.Close()
+		}
+	}
+
 	st, err := store.Open(dbPath)
 	if err != nil {
 		log.Fatalf("store: %v", err)
@@ -742,8 +777,112 @@ func cmdServe(args []string) {
 		go srv.RunTicker(context.Background(), iv)
 		log.Printf("cooling sweep every %s", iv)
 	}
+
+	// Record our pid so `bubble stop` can find us; clean it up on exit.
+	if pidPath != "" {
+		_ = os.WriteFile(pidPath, []byte(strconv.Itoa(os.Getpid())), 0o644)
+		defer os.Remove(pidPath)
+	}
+
+	httpSrv := &http.Server{Addr: cfg.Addr, Handler: srv.Handler()}
+	go func() {
+		sigc := make(chan os.Signal, 1)
+		signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+		<-sigc
+		log.Println("shutting down…")
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = httpSrv.Shutdown(ctx)
+	}()
+
+	if !*verbose {
+		fmt.Printf("bubble-work %s listening on %s — logs quiet (use `bubble attach`, or --verbose)\n", version, cfg.Addr)
+	}
 	log.Printf("bubble-work %s listening on %s (REST /api, MCP %s/mcp)", version, cfg.Addr, cfg.Addr)
-	log.Fatal(http.ListenAndServe(cfg.Addr, srv.Handler()))
+	if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+		log.Fatalf("serve: %v", err)
+	}
+	log.Println("stopped")
+}
+
+// processAlive reports whether a process with pid exists (signal 0 probe).
+func processAlive(pid int) bool {
+	p, err := os.FindProcess(pid)
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
+
+func cmdStop(args []string) {
+	pidPath, err := config.PidPath()
+	if err != nil {
+		log.Fatalf("pid path: %v", err)
+	}
+	data, err := os.ReadFile(pidPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			fmt.Println("no bubble server appears to be running (no pid file).")
+			return
+		}
+		log.Fatalf("read pid: %v", err)
+	}
+	pid, err := strconv.Atoi(strings.TrimSpace(string(data)))
+	if err != nil {
+		log.Fatalf("bad pid file %q: %v", pidPath, err)
+	}
+	if !processAlive(pid) {
+		_ = os.Remove(pidPath)
+		fmt.Printf("server (pid %d) was not running — cleaned up stale pid file.\n", pid)
+		return
+	}
+	p, _ := os.FindProcess(pid)
+	if err := p.Signal(syscall.SIGTERM); err != nil {
+		log.Fatalf("stop pid %d: %v", pid, err)
+	}
+	fmt.Printf("stopped bubble server (pid %d).\n", pid)
+}
+
+// cmdAttach follows the running server's log (Ctrl-C detaches; the server keeps
+// running). Shows the current session's output so far, then streams new lines.
+func cmdAttach(args []string) {
+	lp, err := config.LogPath()
+	if err != nil {
+		log.Fatalf("log path: %v", err)
+	}
+	f, err := os.Open(lp)
+	if err != nil {
+		if os.IsNotExist(err) {
+			log.Fatal("no server log found — start one with `bubble serve`.")
+		}
+		log.Fatalf("open log: %v", err)
+	}
+	defer f.Close()
+
+	if pidPath, err := config.PidPath(); err == nil {
+		if data, err := os.ReadFile(pidPath); err == nil {
+			if pid, err := strconv.Atoi(strings.TrimSpace(string(data))); err == nil && processAlive(pid) {
+				fmt.Fprintf(os.Stderr, "— attached to bubble server (pid %d); Ctrl-C to detach —\n", pid)
+			} else {
+				fmt.Fprintln(os.Stderr, "— server not running; showing last session's log —")
+			}
+		}
+	}
+
+	buf := make([]byte, 4096)
+	for {
+		n, err := f.Read(buf)
+		if n > 0 {
+			os.Stdout.Write(buf[:n])
+		}
+		if err == io.EOF {
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func cmdLs(args []string) {

@@ -145,6 +145,26 @@ func DBPath() (string, error) {
 	return filepath.Join(d, "bubble.db"), nil
 }
 
+// PidPath returns the file where `bubble serve` records its process id so
+// `bubble stop` can find it.
+func PidPath() (string, error) {
+	d, err := dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "server.pid"), nil
+}
+
+// LogPath returns the file the server tees its logs to, so `bubble attach` can
+// follow a backgrounded session.
+func LogPath() (string, error) {
+	d, err := dir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(d, "server.log"), nil
+}
+
 // Load reads the config, filling sensible defaults when the file is absent.
 func Load() (Config, error) {
 	c := Config{

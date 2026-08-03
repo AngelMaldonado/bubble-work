@@ -115,6 +115,12 @@
     store.godmode
       ? [
           {
+            id: 'god:panel',
+            label: 'godmode: open panel',
+            hint: 'all admin options (/god-mode)',
+            run: () => store.openGodMode(),
+          },
+          {
             id: 'god:allorgs',
             label: store.allOrgs ? 'godmode: my orgs only' : 'godmode: all orgs',
             hint: 'cross-org bubble view',
@@ -325,7 +331,7 @@
     onkeydown={(e) => e.key === 'Escape' && close()}
   ></div>
   <div class="palette" role="dialog" aria-modal="true">
-    <div class="input">
+    <div class="omnifield">
       {#if isCommand || stage !== 'root'}
         <span class="glyph cmd" aria-label="command mode">›</span>
       {:else}
@@ -422,10 +428,13 @@
     background: var(--surface-solid);
     border: 1px solid var(--line);
     box-shadow: 0 30px 80px var(--shadow-strong);
+    /* clip children to the rounded rect; the input's glow sits inside its
+       0.7rem margin, so it stays fully visible. */
+    overflow: hidden;
   }
   /* the input is its own inset field (margin, not padding) so its focus glow is
      fully rounded and never clipped by the palette's overflow. */
-  .input {
+  .omnifield {
     display: flex;
     align-items: center;
     gap: 0.75rem;
@@ -438,7 +447,7 @@
       border-color 0.15s ease,
       box-shadow 0.15s ease;
   }
-  .input:focus-within {
+  .omnifield:focus-within {
     border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
     box-shadow: 0 0 0 3px color-mix(in oklab, var(--wip) 20%, transparent);
   }
@@ -463,7 +472,7 @@
     color: var(--wip);
     border-color: color-mix(in oklab, var(--wip) 45%, var(--line));
   }
-  .input input {
+  .omnifield input {
     flex: 1;
     min-width: 0;
     background: transparent;
@@ -474,8 +483,8 @@
     font-size: 1rem;
   }
   /* defeat any framework focus ring on the bare input (the field glows instead) */
-  .input input:focus,
-  .input input:focus-visible {
+  .omnifield input:focus,
+  .omnifield input:focus-visible {
     outline: none;
     box-shadow: none;
     border: none;

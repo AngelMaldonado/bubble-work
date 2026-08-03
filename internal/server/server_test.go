@@ -854,3 +854,33 @@ func TestKioskCredential(t *testing.T) {
 		t.Errorf("unknown kiosk token should be 401, got %d", code)
 	}
 }
+
+func TestAdminMembers(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	srv.SetAdmin("", []string{"owner@x"}) // the fake /users/me email → service admin
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	code, body := do(t, http.MethodGet, ts.URL+"/api/admin/members", "plane_personal_key", "")
+	if code != http.StatusOK {
+		t.Fatalf("members status %d: %s", code, body)
+	}
+	var ims []domain.InstanceMembers
+	if err := json.Unmarshal(body, &ims); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(ims) != 1 || ims[0].Instance != "ws" || len(ims[0].Members) != 1 {
+		t.Fatalf("members wrong: %+v", ims)
+	}
+	if m := ims[0].Members[0]; m.Email != "owner@x" || !m.Admin {
+		t.Errorf("member mapping wrong: %+v", m)
+	}
+}

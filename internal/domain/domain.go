@@ -225,6 +225,24 @@ type Reader struct {
 	Name string `json:"name"`
 }
 
+// Member is a Plane workspace member, for the admin read-only member viewer.
+// Membership is owned by Plane (system of record); Bubble only reads it.
+type Member struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Email string `json:"email"`
+	Role  int    `json:"role"`
+	Admin bool   `json:"admin"` // Plane workspace admin (role ≥ 20)
+}
+
+// InstanceMembers groups an instance's members for the admin viewer.
+type InstanceMembers struct {
+	Instance string   `json:"instance"` // slug
+	Name     string   `json:"name"`     // instance display name
+	Members  []Member `json:"members"`
+	Error    string   `json:"error,omitempty"` // set if this instance's members couldn't be fetched
+}
+
 // BirthRequest carries the two birth artifacts the policy engine enforces (§3).
 type BirthRequest struct {
 	BubbleID    string `json:"bubble_id"`

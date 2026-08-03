@@ -411,6 +411,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/stats", s.adminOnly(s.handleAdminStats))
 	mux.HandleFunc("POST /api/admin/refresh", s.adminOnly(s.handleAdminRefresh))
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
+	mux.HandleFunc("GET /api/admin/members", s.adminOnly(s.handleAdminMembers))
 	mux.HandleFunc("GET /api/admin/kiosk", s.adminOnly(s.handleListKiosk))
 	mux.HandleFunc("POST /api/admin/kiosk", s.adminOnly(s.handleCreateKiosk))
 	mux.HandleFunc("DELETE /api/admin/kiosk/{token}", s.adminOnly(s.handleRevokeKiosk))
@@ -1738,6 +1739,38 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// handleAdminMembers returns each instance's Plane members (read-only). Bubble
+// doesn't own membership — Plane does — so this is a viewer, not a manager. An
+// instance whose member fetch fails is included with an error rather than
+// failing the whole call.
+func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
+	insts, err := s.store.ListInstances()
+	if writeErr(w, err) {
+		return
+	}
+	out := make([]domain.InstanceMembers, 0, len(insts))
+	for _, inst := range insts {
+		im := domain.InstanceMembers{Instance: inst.Slug, Name: inst.Name, Members: []domain.Member{}}
+		ms, err := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Members(r.Context())
+		if err != nil {
+			im.Error = err.Error()
+			out = append(out, im)
+			continue
+		}
+		for _, m := range ms {
+			name := m.DisplayName
+			if name == "" {
+				name = m.Email
+			}
+			im.Members = append(im.Members, domain.Member{
+				ID: m.ID, Name: name, Email: m.Email, Role: m.Role, Admin: m.Role >= plane.RoleAdmin,
+			})
+		}
+		out = append(out, im)
+	}
+	writeJSON(w, http.StatusOK, out)
 }
 
 // newKioskToken mints a random, URL-safe read-only display credential.

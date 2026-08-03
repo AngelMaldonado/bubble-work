@@ -48,6 +48,8 @@ func main() {
 		cmdShow(os.Args[2:])
 	case "thread":
 		cmdThread(os.Args[2:])
+	case "comment":
+		cmdComment(os.Args[2:])
 	case "search":
 		cmdSearch(os.Args[2:])
 	case "whoami":
@@ -91,6 +93,7 @@ Usage:
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble show <id>                 a bubble's thread timeline (git-log-oneline)
   bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
+  bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
   bubble search <query>            fuzzy-search threads (tasks) across your instances
   bubble whoami                    show the identity resolved from your credential
   bubble notifications             your inbox of cooling/dormant alerts (alias: inbox)
@@ -945,6 +948,21 @@ func cmdThread(args []string) {
 	}
 	if err := client.Thread(cfg, id, comments); err != nil {
 		log.Fatalf("thread: %v", err)
+	}
+}
+
+func cmdComment(args []string) {
+	if len(args) < 2 {
+		log.Fatal("usage: bubble comment <id> <text...>   (id from `bubble show`)")
+	}
+	id := args[0]
+	body := strings.Join(args[1:], " ")
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Comment(cfg, id, body); err != nil {
+		log.Fatalf("comment: %v", err)
 	}
 }
 

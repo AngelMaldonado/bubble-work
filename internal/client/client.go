@@ -597,13 +597,44 @@ func threadComments(cfg config.Config, id string) error {
 		fmt.Println("  (none)")
 		return nil
 	}
+	var toRead []string
 	for _, c := range cs {
 		who := c.Author
 		if who == "" {
 			who = "someone"
 		}
 		fmt.Printf("\n%s · %s\n%s\n", who, relAge(c.CreatedAt), indent(c.Markdown, "  "))
+		if len(c.Readers) > 0 {
+			names := make([]string, len(c.Readers))
+			for i, r := range c.Readers {
+				names[i] = r.Name
+			}
+			fmt.Printf("  👀 %s\n", strings.Join(names, ", "))
+		}
+		if !c.Mine {
+			toRead = append(toRead, c.ID)
+		}
 	}
+	// Viewing marks others' comments as read (best-effort — never block output).
+	if len(toRead) > 0 {
+		_ = postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/comments/read",
+			map[string][]string{"comment_ids": toRead}, nil)
+	}
+	return nil
+}
+
+// Comment posts a comment to a thread's discussion. It is written to Plane as
+// you (impersonation via your Plane key), and does not warm the bubble.
+func Comment(cfg config.Config, id, body string) error {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return fmt.Errorf("empty comment")
+	}
+	var c domain.Comment
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/comments", map[string]string{"body": body}, &c); err != nil {
+		return err
+	}
+	fmt.Printf("posted · %s · %s\n", c.Author, relAge(c.CreatedAt))
 	return nil
 }
 

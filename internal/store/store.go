@@ -67,6 +67,12 @@ CREATE TABLE IF NOT EXISTS comment_reads (
   read_at     TEXT NOT NULL,     -- RFC3339
   PRIMARY KEY (instance, comment_id, reader_id)
 );
+CREATE TABLE IF NOT EXISTS kiosk_tokens (
+  token      TEXT PRIMARY KEY,   -- server-issued read-only display credential (§9 Phase 9)
+  instance   TEXT NOT NULL,      -- the instance slug this token may view
+  name       TEXT NOT NULL,      -- human label (e.g. "lobby screen")
+  created_at TEXT NOT NULL
+);
 `
 
 // Store wraps the SQLite connection.
@@ -473,6 +479,65 @@ func (s *Store) CommentReaders(instance string, commentIDs []string) (map[string
 		out[cid] = append(out[cid], r)
 	}
 	return out, rows.Err()
+}
+
+// KioskToken is a read-only display credential bound to one instance.
+type KioskToken struct {
+	Token     string `json:"token"`
+	Instance  string `json:"instance"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+// AddKioskToken stores a new kiosk display token.
+func (s *Store) AddKioskToken(k KioskToken) error {
+	_, err := s.db.Exec(
+		`INSERT INTO kiosk_tokens (token, instance, name, created_at) VALUES (?, ?, ?, ?)`,
+		k.Token, k.Instance, k.Name, k.CreatedAt)
+	return err
+}
+
+// LookupKioskToken returns the token's binding, if it exists.
+func (s *Store) LookupKioskToken(token string) (KioskToken, bool, error) {
+	var k KioskToken
+	err := s.db.QueryRow(
+		`SELECT token, instance, name, created_at FROM kiosk_tokens WHERE token = ?`, token).
+		Scan(&k.Token, &k.Instance, &k.Name, &k.CreatedAt)
+	if err == sql.ErrNoRows {
+		return KioskToken{}, false, nil
+	}
+	if err != nil {
+		return KioskToken{}, false, err
+	}
+	return k, true, nil
+}
+
+// ListKioskTokens returns all kiosk tokens (admin view).
+func (s *Store) ListKioskTokens() ([]KioskToken, error) {
+	rows, err := s.db.Query(`SELECT token, instance, name, created_at FROM kiosk_tokens ORDER BY created_at`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []KioskToken
+	for rows.Next() {
+		var k KioskToken
+		if err := rows.Scan(&k.Token, &k.Instance, &k.Name, &k.CreatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, k)
+	}
+	return out, rows.Err()
+}
+
+// RemoveKioskToken revokes a token; reports whether one was deleted.
+func (s *Store) RemoveKioskToken(token string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM kiosk_tokens WHERE token = ?`, token)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
 }
 
 // placeholders returns "?, ?, ..." for an IN clause of n items.

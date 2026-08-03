@@ -223,3 +223,28 @@ func TestCommentReads(t *testing.T) {
 		t.Errorf("instance scope leaked: %+v", other)
 	}
 }
+
+func TestKioskTokens(t *testing.T) {
+	st := openTestStore(t)
+
+	if _, ok, err := st.LookupKioskToken("nope"); err != nil || ok {
+		t.Fatalf("empty lookup: ok=%v err=%v", ok, err)
+	}
+	k := KioskToken{Token: "kiosk_abc", Instance: "ws", Name: "lobby", CreatedAt: "2026-08-02T00:00:00Z"}
+	if err := st.AddKioskToken(k); err != nil {
+		t.Fatalf("add: %v", err)
+	}
+	got, ok, err := st.LookupKioskToken("kiosk_abc")
+	if err != nil || !ok || got.Instance != "ws" || got.Name != "lobby" {
+		t.Fatalf("lookup: %+v ok=%v err=%v", got, ok, err)
+	}
+	if list, _ := st.ListKioskTokens(); len(list) != 1 {
+		t.Fatalf("list: %+v", list)
+	}
+	if removed, _ := st.RemoveKioskToken("kiosk_abc"); !removed {
+		t.Error("expected removal")
+	}
+	if _, ok, _ := st.LookupKioskToken("kiosk_abc"); ok {
+		t.Error("token should be gone after revoke")
+	}
+}

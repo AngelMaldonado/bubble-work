@@ -806,3 +806,51 @@ func TestCycleWindow(t *testing.T) {
 		t.Fatalf("out-of-range: want zero window, got cur=%s prev=%s", cur, prev)
 	}
 }
+
+func TestKioskCredential(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	if err := st.AddKioskToken(store.KioskToken{
+		Token: "kiosk_test", Instance: "ws", Name: "lobby", CreatedAt: "2026-01-01T00:00:00Z",
+	}); err != nil {
+		t.Fatalf("add kiosk: %v", err)
+	}
+	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	t.Cleanup(ts.Close)
+	const kiosk = "kiosk_test"
+
+	// whoami: a read-only kiosk actor scoped to its instance.
+	code, body := do(t, http.MethodGet, ts.URL+"/api/whoami", kiosk, "")
+	if code != http.StatusOK {
+		t.Fatalf("whoami status %d: %s", code, body)
+	}
+	var who domain.Actor
+	if err := json.Unmarshal(body, &who); err != nil {
+		t.Fatalf("decode actor: %v", err)
+	}
+	if !who.ReadOnly || who.Kind != "kiosk" || len(who.Instances) != 1 || who.Instances[0] != "ws" {
+		t.Fatalf("kiosk actor wrong: %+v", who)
+	}
+
+	// reads are allowed.
+	if code, body = do(t, http.MethodGet, ts.URL+"/api/bubbles", kiosk, ""); code != http.StatusOK {
+		t.Fatalf("kiosk read bubbles: %d %s", code, body)
+	}
+
+	// writes are rejected with 403 (before reaching any handler).
+	code, body = do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", kiosk, `{"body":"hi"}`)
+	if code != http.StatusForbidden {
+		t.Errorf("kiosk write should be 403, got %d: %s", code, body)
+	}
+
+	// a kiosk-looking token that isn't registered is rejected.
+	if code, _ = do(t, http.MethodGet, ts.URL+"/api/whoami", "kiosk_bogus", ""); code != http.StatusUnauthorized {
+		t.Errorf("unknown kiosk token should be 401, got %d", code)
+	}
+}

@@ -7,7 +7,9 @@ package server
 import (
 	"context"
 	"crypto/hmac"
+	"crypto/rand"
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -67,6 +69,9 @@ const (
 	// detailTTL caches a thread's rendered interior. Longer than comments since a
 	// thread body changes far less often than its discussion.
 	detailTTL = 60 * time.Second
+	// kioskTokenPrefix marks a server-issued read-only display credential so
+	// resolve() can shortcut it before attempting Plane authentication (§9 Phase 9).
+	kioskTokenPrefix = "kiosk_"
 	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept low
 	// so a full fetch (modules + work-items + cycles) doesn't burst past Plane's
 	// rate limit; get() also retries 429s with backoff.
@@ -269,6 +274,24 @@ func (s *Server) resolve(ctx context.Context, cred string) (domain.Actor, error)
 	if s.adminToken != "" && hmac.Equal([]byte(cred), []byte(s.adminToken)) {
 		return s.godmodeActor(), nil
 	}
+	// Kiosk display token → a read-only actor scoped to one instance. Checked
+	// before the Plane round-trip: a kiosk token is not a Plane key, so it would
+	// otherwise fail /users/me. Cheap SQLite lookup, not cached.
+	if strings.HasPrefix(cred, kioskTokenPrefix) {
+		if k, ok, err := s.store.LookupKioskToken(cred); err != nil {
+			return domain.Actor{}, fmt.Errorf("%w: kiosk lookup: %v", errUpstream, err)
+		} else if ok {
+			name := k.Name
+			if name == "" {
+				name = "kiosk"
+			}
+			return domain.Actor{
+				ID: "kiosk:" + k.Instance, Name: name, Kind: "kiosk",
+				ReadOnly: true, Instances: []string{k.Instance},
+			}, nil
+		}
+		return domain.Actor{}, errUnauth // looks like a kiosk token but unknown/revoked
+	}
 	now := s.now()
 
 	s.mu.Lock()
@@ -388,6 +411,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/stats", s.adminOnly(s.handleAdminStats))
 	mux.HandleFunc("POST /api/admin/refresh", s.adminOnly(s.handleAdminRefresh))
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
+	mux.HandleFunc("GET /api/admin/kiosk", s.adminOnly(s.handleListKiosk))
+	mux.HandleFunc("POST /api/admin/kiosk", s.adminOnly(s.handleCreateKiosk))
+	mux.HandleFunc("DELETE /api/admin/kiosk/{token}", s.adminOnly(s.handleRevokeKiosk))
 
 	// Our own MCP front door (§9.5), behind the same member credential using the
 	// SDK's bearer middleware; the verified member reaches tool handlers via
@@ -470,6 +496,13 @@ func (s *Server) restAuth(next http.HandlerFunc) http.HandlerFunc {
 			})
 			return
 		}
+		// A read-only actor (kiosk display) may only read: reject any mutation.
+		if actor.ReadOnly && r.Method != http.MethodGet && r.Method != http.MethodHead {
+			writeJSON(w, http.StatusForbidden, map[string]string{
+				"error": "read-only kiosk credential — this view cannot make changes",
+			})
+			return
+		}
 		log.Printf("%s → %s %s", actor.Label(), r.Method, r.URL.Path)
 		ctx := domain.WithCred(domain.WithActor(r.Context(), actor), bearer(r))
 		next(w, r.WithContext(ctx))
@@ -482,6 +515,10 @@ func (s *Server) verifyToken(ctx context.Context, token string, r *http.Request)
 	actor, err := s.resolve(ctx, token)
 	if err != nil {
 		return nil, fmt.Errorf("credential rejected: %w", auth.ErrInvalidToken)
+	}
+	// Kiosk display tokens are read-only and must never reach MCP tools.
+	if actor.ReadOnly {
+		return nil, fmt.Errorf("read-only credential cannot use MCP: %w", auth.ErrInvalidToken)
 	}
 	return &auth.TokenInfo{
 		UserID: actor.ID,
@@ -533,10 +570,32 @@ func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 			Project: b.Project, ProjectName: b.ProjectName,
 			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle),
 			Score: r.Score, Reason: r.Reason,
-			Outcome: b.Outcome, Owner: b.Owner, Threads: len(b.Threads),
+			Outcome: b.Outcome, Owner: b.Owner, Members: bubbleMembers(b),
+			Threads: len(b.Threads),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+// bubbleMembers is the set of people with a stake in a bubble — every thread's
+// assignee plus the contract owner — powering the per-assignee view scope (§9).
+func bubbleMembers(b domain.Bubble) []string {
+	seen := map[string]bool{}
+	var out []string
+	add := func(n string) {
+		n = strings.TrimSpace(n)
+		if n == "" || seen[n] {
+			return
+		}
+		seen[n] = true
+		out = append(out, n)
+	}
+	add(b.Owner)
+	for _, t := range b.Threads {
+		add(t.Owner)
+	}
+	sort.Strings(out)
 	return out
 }
 
@@ -1679,6 +1738,74 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, st)
+}
+
+// newKioskToken mints a random, URL-safe read-only display credential.
+func newKioskToken() (string, error) {
+	b := make([]byte, 24)
+	if _, err := rand.Read(b); err != nil {
+		return "", err
+	}
+	return kioskTokenPrefix + base64.RawURLEncoding.EncodeToString(b), nil
+}
+
+func (s *Server) handleListKiosk(w http.ResponseWriter, r *http.Request) {
+	tokens, err := s.store.ListKioskTokens()
+	if writeErr(w, err) {
+		return
+	}
+	if tokens == nil {
+		tokens = []store.KioskToken{}
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+func (s *Server) handleCreateKiosk(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Instance string `json:"instance"`
+		Name     string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	in.Instance = strings.TrimSpace(in.Instance)
+	if in.Instance == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance is required"})
+		return
+	}
+	if ok, err := s.store.InstanceExists(in.Instance); writeErr(w, err) {
+		return
+	} else if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such instance: " + in.Instance})
+		return
+	}
+	token, err := newKioskToken()
+	if writeErr(w, err) {
+		return
+	}
+	k := store.KioskToken{
+		Token: token, Instance: in.Instance, Name: strings.TrimSpace(in.Name),
+		CreatedAt: s.now().Format(time.RFC3339),
+	}
+	if writeErr(w, s.store.AddKioskToken(k)) {
+		return
+	}
+	actor, _ := domain.ActorFrom(r.Context())
+	log.Printf("kiosk token minted for %s by %s", in.Instance, actor.Label())
+	writeJSON(w, http.StatusCreated, k)
+}
+
+func (s *Server) handleRevokeKiosk(w http.ResponseWriter, r *http.Request) {
+	ok, err := s.store.RemoveKioskToken(r.PathValue("token"))
+	if writeErr(w, err) {
+		return
+	}
+	if !ok {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such kiosk token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
 
 // writeErr maps a backend error to an HTTP response; returns true if it wrote one.

@@ -64,12 +64,12 @@ type Bubble struct {
 	Project     string // origin Plane project id (our Workspace)
 	ProjectName string // human name of that project, when known
 	Outcome     string // §4 contract: what "done" looks like
-	Owner    string // §4 contract: who is accountable now
-	Closure  string // §4 contract: the explicit close signal
-	Closed   bool
-	Stage    string // explicit overlay: "" | "reviewed"
-	Threads  []Thread
-	Evidence []EvidenceEvent
+	Owner       string // §4 contract: who is accountable now
+	Closure     string // §4 contract: the explicit close signal
+	Closed      bool
+	Stage       string // explicit overlay: "" | "reviewed"
+	Threads     []Thread
+	Evidence    []EvidenceEvent
 
 	// Cycle-aware heat window (§3.6): the active Plane cycle's start and the
 	// previous cycle's start. Zero means the project has no active cycle, so heat
@@ -89,6 +89,7 @@ type Actor struct {
 	Email        string   `json:"email,omitempty"`
 	Admin        bool     `json:"admin"`                   // Plane workspace admin (role ≥ 20)
 	ServiceAdmin bool     `json:"service_admin,omitempty"` // godmode — cross-org ops (§ admin)
+	ReadOnly     bool     `json:"read_only,omitempty"`     // kiosk display token: reads only, no MCP (§9 Phase 9)
 	Instances    []string `json:"instances"`
 }
 
@@ -151,14 +152,15 @@ type BubbleView struct {
 	ID          string    `json:"id"`
 	Name        string    `json:"name"`
 	Instance    string    `json:"instance"`
-	Project     string    `json:"project"`                 // Plane project id (our Workspace)
-	ProjectName string    `json:"project_name,omitempty"`  // human name, when known
+	Project     string    `json:"project"`                // Plane project id (our Workspace)
+	ProjectName string    `json:"project_name,omitempty"` // human name, when known
 	Lifecycle   Lifecycle `json:"lifecycle"`
 	Level       string    `json:"level"` // UI band: in_progress|zzzz|rip|reviewed|done
 	Score       float64   `json:"score"` // 0..1 buoyancy score, for ordering
 	Reason      string    `json:"reason"`
 	Outcome     string    `json:"outcome,omitempty"`
 	Owner       string    `json:"owner,omitempty"`
+	Members     []string  `json:"members,omitempty"` // distinct thread assignees + contract owner (Phase 9)
 	Threads     int       `json:"threads"`
 }
 

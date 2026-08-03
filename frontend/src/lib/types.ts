@@ -147,6 +147,28 @@ export interface AdminInstance {
   cached: boolean;
 }
 
+export interface KioskToken {
+  token: string;
+  instance: string;
+  name: string;
+  created_at: string;
+}
+
+export interface Member {
+  id: string;
+  name: string;
+  email: string;
+  role: number;
+  admin: boolean;
+}
+
+export interface InstanceMembers {
+  instance: string;
+  name: string;
+  members: Member[];
+  error?: string;
+}
+
 export const LEVELS: { key: Level; label: string; icon: string }[] = [
   { key: 'in_progress', label: 'In progress', icon: '🔥' },
   { key: 'reviewed', label: 'Reviewed', icon: '👀' },

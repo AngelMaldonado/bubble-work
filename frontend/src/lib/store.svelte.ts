@@ -1,6 +1,14 @@
 // Central reactive state (Svelte 5 runes). One polling loop keeps bubbles fresh;
 // components read from here and call the action helpers.
-import { api, ApiError, getToken, setToken, clearToken, setKioskToken } from './api';
+import {
+  api,
+  ApiError,
+  getToken,
+  setToken,
+  clearToken,
+  setKioskToken,
+  clearKioskToken,
+} from './api';
 import type { Actor, BubbleView, Inbox, Level } from './types';
 
 // ArtSel identifies one artifact within a thread's interior (work file, the
@@ -45,6 +53,8 @@ class Store {
   // which artifact within the open thread is selected (from the route, so it's
   // deep-linkable and pin-able). null → the thread view picks its default.
   threadSel = $state<ArtSel | null>(null);
+  // top-level route: the board (default) or the /god-mode admin view.
+  route = $state<'board' | 'god'>('board');
 
   private secTimer: ReturnType<typeof setInterval> | null = null;
   private stream: AbortController | null = null;
@@ -307,6 +317,14 @@ class Store {
     this.authed = false;
   }
 
+  // exitKiosk drops the kiosk display token (sessionStorage) and reloads, so the
+  // browser falls back to a personal login (or the auth gate on a dedicated
+  // device). A full reload is cleanest — it re-boots identity from scratch.
+  exitKiosk(): void {
+    clearKioskToken();
+    if (typeof location !== 'undefined') location.reload();
+  }
+
   bubble(id: string): BubbleView | undefined {
     return this.bubbles.find((b) => b.id === id);
   }
@@ -342,17 +360,40 @@ class Store {
     }
   }
 
-  // ---- hash routing for the dedicated thread screen ----
+  // ---- routing ----
+
+  get godView(): boolean {
+    return this.route === 'god';
+  }
+
+  // /god-mode is a real path so it's linkable and bookmarkable; the board and
+  // thread screens keep using the hash.
+  openGodMode(): void {
+    this.route = 'god';
+    if (typeof history !== 'undefined') history.pushState(null, '', '/god-mode');
+  }
+
+  closeGodMode(): void {
+    this.route = 'board';
+    if (typeof history !== 'undefined') {
+      history.pushState(null, '', '/' + (location.hash || ''));
+    }
+  }
 
   private setHash(h: string): void {
     if (typeof location === 'undefined') return;
     if (location.hash.replace(/^#/, '') !== h) location.hash = h;
   }
 
-  // syncFromHash makes the URL the source of truth (back/forward, refresh,
-  // deep links). Called on boot and on every hashchange.
-  syncFromHash(): void {
+  // syncFromLocation makes the URL the source of truth (back/forward, refresh,
+  // deep links). Called on boot, hashchange, and popstate.
+  syncFromLocation(): void {
     if (typeof location === 'undefined') return;
+    if (location.pathname.replace(/\/+$/, '') === '/god-mode') {
+      this.route = 'god';
+      return;
+    }
+    this.route = 'board';
     const h = location.hash.replace(/^#/, '');
     if (!h.startsWith('thread/')) {
       this.threadId = null;

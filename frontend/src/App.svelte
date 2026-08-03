@@ -4,14 +4,17 @@
   import AuthGate from './components/AuthGate.svelte';
   import Workspace from './components/Workspace.svelte';
   import ThreadView from './components/ThreadView.svelte';
+  import GodMode from './components/GodMode.svelte';
 
   onMount(() => {
     void store.boot();
-    store.syncFromHash();
-    const onHash = () => store.syncFromHash();
-    window.addEventListener('hashchange', onHash);
+    store.syncFromLocation();
+    const onNav = () => store.syncFromLocation();
+    window.addEventListener('hashchange', onNav);
+    window.addEventListener('popstate', onNav);
     return () => {
-      window.removeEventListener('hashchange', onHash);
+      window.removeEventListener('hashchange', onNav);
+      window.removeEventListener('popstate', onNav);
       store.stopStream();
       store.stopSecondary();
     };
@@ -20,6 +23,8 @@
 
 {#if !store.authed}
   <AuthGate />
+{:else if store.godView}
+  <GodMode />
 {:else if store.threadId}
   <ThreadView />
 {:else if store.loading && store.bubbles.length === 0}

@@ -126,15 +126,23 @@
       {/if}
 
       {#if store.godmode}
-        <span class="chip god" title="service-admin (godmode) — use ⌘K › godmode:">
-          ⚡ {store.allOrgs ? 'all orgs' : 'godmode'}
-        </span>
+        <button
+          class="god-enter"
+          onclick={() => store.openGodMode()}
+          title="open God Mode (/god-mode)"
+        >
+          ⚡ God Mode{store.allOrgs ? ' · all orgs' : ''}
+        </button>
       {/if}
     </div>
 
     <div class="side right">
       {#if kiosk}
         <span class="hint">read-only display</span>
+        <button class="theme" onclick={() => store.exitKiosk()} title="exit kiosk mode">
+          <span class="tico">⎋</span>
+          <span class="tlabel">exit kiosk</span>
+        </button>
       {:else}
         <span class="hint">⌘K search · <b>&gt;</b> commands</span>
       {/if}
@@ -311,10 +319,18 @@
     color: var(--done);
     border-color: color-mix(in oklab, var(--done) 40%, transparent);
   }
-  .chip.god {
+  .god-enter {
     color: var(--wip);
-    border-color: color-mix(in oklab, var(--wip) 45%, transparent);
+    border: 1px solid color-mix(in oklab, var(--wip) 45%, transparent);
+    border-radius: 999px;
+    padding: 0.15rem 0.6rem;
+    background: transparent;
     font-weight: 700;
+    font-size: inherit;
+    cursor: pointer;
+  }
+  .god-enter:hover {
+    background: color-mix(in oklab, var(--wip) 16%, transparent);
   }
   .flash {
     padding: 0.55rem 1.25rem;

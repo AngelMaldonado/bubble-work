@@ -7,6 +7,8 @@ import type {
   Inbox,
   AdminStats,
   AdminInstance,
+  InstanceMembers,
+  KioskToken,
   ThreadNode,
   ThreadDetail,
   Comment,
@@ -32,6 +34,10 @@ export function clearToken(): void {
 
 export function setKioskToken(tok: string): void {
   sessionStorage.setItem(KIOSK_KEY, tok.trim());
+}
+
+export function clearKioskToken(): void {
+  sessionStorage.removeItem(KIOSK_KEY);
 }
 
 export function isKiosk(): boolean {
@@ -110,4 +116,10 @@ export const api = {
   adminBubbles: () => req<BubbleView[]>('GET', '/api/admin/bubbles'),
   adminRefresh: () => req<void>('POST', '/api/admin/refresh'),
   adminTick: () => req<void>('POST', '/api/admin/tick'),
+  adminMembers: () => req<InstanceMembers[]>('GET', '/api/admin/members'),
+  adminKiosk: () => req<KioskToken[]>('GET', '/api/admin/kiosk'),
+  adminKioskCreate: (instance: string, name: string) =>
+    req<KioskToken>('POST', '/api/admin/kiosk', { instance, name }),
+  adminKioskRevoke: (token: string) =>
+    req<void>('DELETE', `/api/admin/kiosk/${encodeURIComponent(token)}`),
 };

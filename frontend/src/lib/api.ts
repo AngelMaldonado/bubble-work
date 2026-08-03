@@ -67,6 +67,12 @@ export const api = {
   thread: (id: string) => req<ThreadDetail>('GET', `/api/threads/${encodeURIComponent(id)}`),
   comments: (id: string) =>
     req<Comment[]>('GET', `/api/threads/${encodeURIComponent(id)}/comments`),
+  postComment: (id: string, body: string) =>
+    req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/comments`, { body }),
+  markCommentsRead: (id: string, commentIds: string[]) =>
+    req<{ ok: boolean }>('POST', `/api/threads/${encodeURIComponent(id)}/comments/read`, {
+      comment_ids: commentIds,
+    }),
 
   createBubble: (instance: string, workspace: string, name: string) =>
     req<{ id: string }>('POST', '/api/bubbles', { instance, workspace, name }),

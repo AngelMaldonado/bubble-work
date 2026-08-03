@@ -2,7 +2,7 @@
   import { slide } from 'svelte/transition';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
-  import type { ThreadDetail } from '../lib/types';
+  import type { ThreadDetail, Comment } from '../lib/types';
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
 
   type Sel = { kind: 'artifact' | 'logbook' | 'revision'; idx: number };
@@ -15,6 +15,168 @@
   let contentEl = $state<HTMLElement | null>(null);
   let headings = $state<Heading[]>([]);
   let sideCollapsed = $state(false);
+
+  // ---- discussion (comments) chat ----
+  let chatOpen = $state(false);
+  let comments = $state<Comment[]>([]);
+  let chatLoading = $state(false);
+  let chatErr = $state<string | null>(null);
+  let draft = $state('');
+  let posting = $state(false);
+  let chatScroll = $state<HTMLElement | null>(null);
+  let composeEl = $state<HTMLTextAreaElement | null>(null);
+  let commentsLoaded = $state(false);
+
+  // ---- lightweight markdown formatting for the composer ----
+  function restoreSel(el: HTMLTextAreaElement, start: number, end: number): void {
+    requestAnimationFrame(() => {
+      el.focus();
+      el.selectionStart = start;
+      el.selectionEnd = end;
+    });
+  }
+  // wrap the selection (or a placeholder) in a marker, e.g. ** for bold.
+  function wrapSel(marker: string, placeholder = 'text'): void {
+    const el = composeEl;
+    if (!el) return;
+    const s = el.selectionStart;
+    const e = el.selectionEnd;
+    const sel = draft.slice(s, e) || placeholder;
+    draft = draft.slice(0, s) + marker + sel + marker + draft.slice(e);
+    restoreSel(el, s + marker.length, s + marker.length + sel.length);
+  }
+  // prefix each selected line, e.g. "- " for a bullet list.
+  function prefixLines(prefix: string): void {
+    const el = composeEl;
+    if (!el) return;
+    const s = el.selectionStart;
+    const e = el.selectionEnd;
+    const lineStart = draft.lastIndexOf('\n', s - 1) + 1;
+    const block = draft.slice(lineStart, e);
+    const replaced = block
+      .split('\n')
+      .map((l) => prefix + l)
+      .join('\n');
+    draft = draft.slice(0, lineStart) + replaced + draft.slice(e);
+    restoreSel(el, lineStart, lineStart + replaced.length);
+  }
+  function insertLink(): void {
+    const el = composeEl;
+    if (!el) return;
+    const s = el.selectionStart;
+    const e = el.selectionEnd;
+    const label = draft.slice(s, e) || 'link text';
+    const snippet = `[${label}](url)`;
+    draft = draft.slice(0, s) + snippet + draft.slice(e);
+    const urlAt = s + snippet.indexOf('url');
+    restoreSel(el, urlAt, urlAt + 3);
+  }
+
+  function scrollChatToBottom(): void {
+    requestAnimationFrame(() => {
+      if (chatScroll) chatScroll.scrollTop = chatScroll.scrollHeight;
+    });
+  }
+
+  // Fetch only — no read-marking. Runs eagerly on thread open so the unread
+  // badge is accurate before the panel is ever opened.
+  async function loadComments(): Promise<void> {
+    const tid = store.threadId;
+    if (!tid) return;
+    chatLoading = true;
+    chatErr = null;
+    try {
+      comments = await api.comments(tid);
+      commentsLoaded = true;
+      if (chatOpen) scrollChatToBottom();
+    } catch (e) {
+      chatErr = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      chatLoading = false;
+    }
+  }
+
+  // Marks everyone else's *unread* comments as read (👀) — only when the panel
+  // is opened. Your own comments are never marked. Reflect your eyes locally to
+  // avoid a reload, which also clears the unread badge.
+  async function markOthersRead(tid: string): Promise<void> {
+    const others = comments
+      .filter((c) => !isMine(c) && !(c.readers ?? []).some((r) => r.id === myId))
+      .map((c) => c.id);
+    if (others.length === 0) return;
+    try {
+      await api.markCommentsRead(tid, others);
+    } catch {
+      return; // best-effort — a failed receipt shouldn't disrupt reading
+    }
+    const meName = store.actor?.name ?? 'me';
+    const seen = new Set(others);
+    comments = comments.map((c) =>
+      seen.has(c.id) ? { ...c, readers: [...(c.readers ?? []), { id: myId, name: meName }] } : c,
+    );
+  }
+
+  async function toggleChat(): Promise<void> {
+    chatOpen = !chatOpen;
+    if (!chatOpen) return;
+    if (!commentsLoaded && !chatLoading) await loadComments();
+    scrollChatToBottom();
+    const tid = store.threadId;
+    if (tid) void markOthersRead(tid);
+  }
+
+  async function postComment(): Promise<void> {
+    const tid = store.threadId;
+    const body = draft.trim();
+    if (!tid || !body || posting) return;
+    posting = true;
+    chatErr = null;
+    try {
+      const c = await api.postComment(tid, body);
+      comments = [...comments, c];
+      draft = '';
+      scrollChatToBottom();
+    } catch (e) {
+      chatErr = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      posting = false;
+    }
+  }
+
+  // Enter sends; Shift+Enter inserts a newline.
+  function onDraftKey(e: KeyboardEvent): void {
+    if (e.key === 'Enter' && !e.shiftKey) {
+      e.preventDefault();
+      void postComment();
+    }
+  }
+
+  // Compute ownership on the client from the logged-in identity so it's
+  // consistent for freshly-posted and reloaded comments alike (the server's
+  // per-comment flag can lag behind identity resolution).
+  const myId = $derived(store.actor?.id ?? '');
+  function isMine(c: Comment): boolean {
+    return (!!c.author_id && c.author_id === myId) || c.mine;
+  }
+  // unread = others' comments I haven't read yet; drives the FAB badge and
+  // clears to 0 (badge hidden) once opening the chat marks them read.
+  const unread = $derived(
+    comments.filter((c) => !isMine(c) && !(c.readers ?? []).some((r) => r.id === myId)).length,
+  );
+
+  function fmtTime(iso: string): string {
+    const t = new Date(iso).getTime();
+    if (!t) return '';
+    const s = Math.round((Date.now() - t) / 1000);
+    if (s < 60) return 'just now';
+    const m = Math.round(s / 60);
+    if (m < 60) return `${m}m`;
+    const h = Math.round(m / 60);
+    if (h < 24) return `${h}h`;
+    const d = Math.round(h / 24);
+    if (d < 7) return `${d}d`;
+    return new Date(iso).toLocaleDateString();
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   let mermaidAPI: any = null;
@@ -71,6 +233,13 @@
     loading = true;
     error = null;
     detail = null;
+    // reset the discussion for the new thread and eagerly fetch its comments so
+    // the unread badge is correct before the panel is opened. Fetching does NOT
+    // mark anything read — that happens only when the user opens the chat.
+    comments = [];
+    commentsLoaded = false;
+    chatErr = null;
+    void loadComments();
     api
       .thread(tid)
       .then((d) => {
@@ -223,6 +392,105 @@
 
       {#if headings.length}
         <ThreadToc {headings} />
+      {/if}
+    </div>
+
+    <!-- bottom-right discussion chat (Plane work-item comments) -->
+    <div class="chat">
+      {#if chatOpen}
+        <div class="chat-panel" transition:slide={{ duration: 180, axis: 'y' }}>
+          <header class="chat-head">
+            <span class="chat-title">Discussion</span>
+            <button class="chat-x" onclick={toggleChat} aria-label="close discussion">×</button>
+          </header>
+          <div class="chat-scroll" bind:this={chatScroll}>
+            {#if chatLoading}
+              <p class="dim chat-empty">Loading…</p>
+            {:else if comments.length === 0}
+              <p class="dim chat-empty">No comments yet — start the discussion.</p>
+            {:else}
+              {#each comments as c (c.id)}
+                <div class="msg" class:mine={isMine(c)}>
+                  <div class="msg-meta">
+                    <span class="msg-who">{c.author}</span>
+                    <span class="msg-age">{fmtTime(c.created_at)}</span>
+                  </div>
+                  <!-- server-rendered goldmark HTML (raw HTML escaped upstream) -->
+                  <div class="msg-body prose">{@html c.html}</div>
+                  {#if c.readers && c.readers.length}
+                    <div class="msg-seen" title={c.readers.map((r) => r.name).join(', ')}>
+                      <span aria-hidden="true">👀</span>
+                      {c.readers.map((r) => r.name).join(', ')}
+                    </div>
+                  {/if}
+                </div>
+              {/each}
+            {/if}
+          </div>
+          {#if chatErr}<p class="err chat-err">{chatErr}</p>{/if}
+          <div class="chat-compose">
+            <div class="fmt-bar">
+              <!-- onmousedown+preventDefault keeps the textarea selection intact -->
+              <button
+                type="button"
+                title="Bold (**)"
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  wrapSel('**');
+                }}><b>B</b></button
+              >
+              <button
+                type="button"
+                title="Italic (*)"
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  wrapSel('*');
+                }}><i>I</i></button
+              >
+              <button
+                type="button"
+                title="Inline code (`)"
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  wrapSel('`', 'code');
+                }}>{'</>'}</button
+              >
+              <button
+                type="button"
+                title="Link"
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  insertLink();
+                }}>🔗</button
+              >
+              <button
+                type="button"
+                title="Bullet list"
+                onmousedown={(e) => {
+                  e.preventDefault();
+                  prefixLines('- ');
+                }}>≡</button
+              >
+            </div>
+            <div class="compose-row">
+              <textarea
+                bind:this={composeEl}
+                bind:value={draft}
+                onkeydown={onDraftKey}
+                placeholder="Write a comment… (Markdown; Enter to send, Shift+Enter for newline)"
+                rows="2"
+              ></textarea>
+              <button class="chat-send" onclick={postComment} disabled={posting || !draft.trim()}>
+                {posting ? '…' : 'Send'}
+              </button>
+            </div>
+          </div>
+        </div>
+      {:else}
+        <button class="chat-fab" onclick={toggleChat} aria-label="open discussion">
+          <span aria-hidden="true">💬</span>
+          {#if unread}<span class="chat-badge">{unread}</span>{/if}
+        </button>
       {/if}
     </div>
   {/if}
@@ -668,5 +936,248 @@
     .prose {
       font-size: 16px;
     }
+  }
+
+  /* ---- discussion chat (bottom-right) ---- */
+  .chat {
+    position: fixed;
+    right: 1.25rem;
+    bottom: 1.25rem;
+    z-index: 40;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+  }
+  .chat-fab {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.35rem;
+    width: 3rem;
+    height: 3rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--surface-solid);
+    box-shadow: var(--shadow-strong, 0 6px 24px rgba(0, 0, 0, 0.18));
+    font-size: 1.25rem;
+    cursor: pointer;
+    position: relative;
+  }
+  .chat-fab:hover {
+    background: var(--hover);
+  }
+  .chat-badge {
+    position: absolute;
+    top: -4px;
+    right: -4px;
+    min-width: 1.1rem;
+    height: 1.1rem;
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--wip);
+    color: white;
+    font-size: 0.62rem;
+    font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .chat-panel {
+    display: flex;
+    flex-direction: column;
+    width: min(360px, calc(100vw - 2.5rem));
+    height: min(60vh, 560px);
+    /* solid fill: a fixed panel under the app stacking context can't sample the
+       page for backdrop-filter (same limitation as the minimaps) */
+    background: var(--surface-solid);
+    border: 1px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow-strong, 0 12px 40px rgba(0, 0, 0, 0.28));
+    overflow: hidden;
+  }
+  .chat-head {
+    flex: none;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.6rem 0.85rem;
+    border-bottom: 1px solid var(--line);
+  }
+  .chat-title {
+    font-family: var(--sans);
+    font-size: 0.82rem;
+    font-weight: 700;
+    color: var(--text);
+  }
+  .chat-x {
+    border: none;
+    background: none;
+    color: var(--faint);
+    font-size: 1.2rem;
+    line-height: 1;
+    cursor: pointer;
+    padding: 0 0.2rem;
+  }
+  .chat-x:hover {
+    color: var(--text);
+  }
+  .chat-scroll {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+    padding: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.7rem;
+  }
+  .chat-empty {
+    margin: auto;
+    text-align: center;
+    font-size: 0.82rem;
+  }
+  .msg {
+    max-width: 85%;
+    align-self: flex-start;
+    display: flex;
+    flex-direction: column;
+    gap: 0.15rem;
+  }
+  .msg.mine {
+    align-self: flex-end;
+    align-items: flex-end;
+  }
+  .msg-meta {
+    display: flex;
+    gap: 0.4rem;
+    font-size: 0.66rem;
+    color: var(--faint);
+  }
+  .msg-who {
+    font-weight: 700;
+    color: var(--muted);
+  }
+  .msg-body {
+    padding: 0.4rem 0.65rem;
+    border-radius: 12px;
+    background: var(--hover);
+    border: 1px solid var(--line);
+    font-size: 0.85rem;
+    /* break long unbreakable tokens (URLs) instead of overflowing */
+    overflow-wrap: anywhere;
+    word-break: break-word;
+    min-width: 0;
+  }
+  .msg-body :global(a) {
+    overflow-wrap: anywhere;
+  }
+  .msg-body :global(pre) {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
+  }
+  .msg-body :global(pre),
+  .msg-body :global(code) {
+    overflow-wrap: anywhere;
+    word-break: break-word;
+  }
+  .msg-body :global(img) {
+    max-width: 100%;
+    height: auto;
+  }
+  .msg.mine .msg-body {
+    background: color-mix(in oklab, var(--wip) 18%, var(--surface-solid));
+    border-color: color-mix(in oklab, var(--wip) 30%, transparent);
+  }
+  .msg-seen {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+    max-width: 100%;
+    font-size: 0.64rem;
+    color: var(--faint);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  /* tighten prose inside a chat bubble */
+  .msg-body :global(p) {
+    margin: 0.25rem 0;
+  }
+  .msg-body :global(p:first-child) {
+    margin-top: 0;
+  }
+  .msg-body :global(p:last-child) {
+    margin-bottom: 0;
+  }
+  .chat-err {
+    flex: none;
+    margin: 0;
+    padding: 0.3rem 0.85rem;
+    font-size: 0.72rem;
+  }
+  .chat-compose {
+    flex: none;
+    display: flex;
+    flex-direction: column;
+    gap: 0.4rem;
+    padding: 0.6rem;
+    border-top: 1px solid var(--line);
+  }
+  .fmt-bar {
+    display: flex;
+    gap: 0.15rem;
+  }
+  .fmt-bar button {
+    min-width: 1.9rem;
+    height: 1.9rem;
+    padding: 0 0.4rem;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: none;
+    color: var(--muted);
+    font-size: 0.82rem;
+    cursor: pointer;
+  }
+  .fmt-bar button:hover {
+    background: var(--hover);
+    color: var(--text);
+  }
+  .compose-row {
+    display: flex;
+    gap: 0.5rem;
+    align-items: flex-end;
+  }
+  .chat-compose textarea {
+    flex: 1;
+    resize: none;
+    max-height: 9rem;
+    min-height: 3.4rem;
+    padding: 0.5rem 0.65rem;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 0.9rem;
+    line-height: 1.4;
+  }
+  .chat-compose textarea:focus {
+    outline: none;
+    border-color: color-mix(in oklab, var(--wip) 45%, var(--line));
+  }
+  .chat-send {
+    flex: none;
+    padding: 0.45rem 0.9rem;
+    border-radius: 10px;
+    border: 1px solid transparent;
+    background: var(--wip);
+    color: white;
+    font-weight: 700;
+    font-size: 0.8rem;
+    cursor: pointer;
+  }
+  .chat-send:disabled {
+    opacity: 0.5;
+    cursor: default;
   }
 </style>

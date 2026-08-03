@@ -93,10 +93,19 @@ export interface ThreadDetail {
   completed_at?: string;
 }
 
+export interface Reader {
+  id: string;
+  name: string;
+}
+
 export interface Comment {
   id: string;
   author: string;
+  author_id?: string;
   markdown: string;
+  html: string;
+  mine: boolean;
+  readers?: Reader[];
   created_at: string;
 }
 

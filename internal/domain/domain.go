@@ -23,8 +23,10 @@ const (
 // it is deliberately weaker than the rest: a thread with nothing but its own
 // birth event never "got going" (THREAD-LIFECYCLE.md).
 const (
-	EvThreadCreated = "thread-created"
-	EvCompletedTodo = "completed-todo"
+	EvThreadCreated   = "thread-created"   // the work item came into being (weak)
+	EvCompletedTodo   = "completed-todo"   // a logbook/DoD item got ticked
+	EvRevisionAdded   = "revision-added"   // a revision artifact (sub-item) landed
+	EvThreadCompleted = "thread-completed" // the work item reached a completed state
 )
 
 // EvidenceEvent is a meaningful output that generates heat (§5.1).

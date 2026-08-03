@@ -3,6 +3,7 @@ package store
 import (
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 )
@@ -246,5 +247,46 @@ func TestKioskTokens(t *testing.T) {
 	}
 	if _, ok, _ := st.LookupKioskToken("kiosk_abc"); ok {
 		t.Error("token should be gone after revoke")
+	}
+}
+
+// Thread progress round-trips, and an unseen thread is simply absent (which is
+// how the refresher knows to baseline it silently).
+func TestThreadProgress(t *testing.T) {
+	st := openTestStore(t)
+	at := time.Date(2026, 8, 3, 9, 0, 0, 0, time.UTC)
+
+	if err := st.SaveThreadProgress([]ThreadProgress{
+		{ThreadID: "wi-1", DoneTodos: 2, Revisions: 1, TodosAt: at},
+		{ThreadID: "wi-2", DoneTodos: 0, Revisions: 0}, // baselined, never moved
+	}); err != nil {
+		t.Fatalf("save: %v", err)
+	}
+
+	got, err := st.ThreadProgressFor([]string{"wi-1", "wi-2", "wi-missing"})
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if len(got) != 2 {
+		t.Fatalf("want 2 rows, got %d", len(got))
+	}
+	if p := got["wi-1"]; p.DoneTodos != 2 || p.Revisions != 1 || !p.TodosAt.Equal(at) {
+		t.Errorf("wi-1 round-trip wrong: %+v", p)
+	}
+	// The zero time survives as "never observed going up".
+	if p := got["wi-2"]; !p.TodosAt.IsZero() || !p.RevisionsAt.IsZero() {
+		t.Errorf("wi-2 should carry zero stamps: %+v", p)
+	}
+
+	// Saving again upserts rather than duplicating.
+	later := at.Add(time.Hour)
+	if err := st.SaveThreadProgress([]ThreadProgress{
+		{ThreadID: "wi-1", DoneTodos: 3, Revisions: 1, TodosAt: later},
+	}); err != nil {
+		t.Fatalf("resave: %v", err)
+	}
+	got, _ = st.ThreadProgressFor([]string{"wi-1"})
+	if p := got["wi-1"]; p.DoneTodos != 3 || !p.TodosAt.Equal(later) {
+		t.Errorf("upsert wrong: %+v", p)
 	}
 }

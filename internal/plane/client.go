@@ -603,25 +603,46 @@ func (c *Client) GetWorkItem(ctx context.Context, workItemID string) (WorkItemDe
 // parent client-side. The list already carries description_html, so no per-item
 // fetch is needed.
 func (c *Client) ListChildren(ctx context.Context, parentID string) ([]WorkItemDetail, error) {
+	items, err := c.ListProjectItems(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var out []WorkItemDetail
+	for _, it := range items {
+		if it.Parent == parentID {
+			out = append(out, it)
+		}
+	}
+	return out, nil
+}
+
+// ListProjectItems pages every work item in the project, carrying each one's
+// body and parent link. One call answers two questions the refresher asks of
+// every thread: what its logbook says, and how many sub-items it has
+// (THREAD-LIFECYCLE.md Phase C).
+func (c *Client) ListProjectItems(ctx context.Context) ([]WorkItemDetail, error) {
 	var out []WorkItemDetail
 	err := c.getPaged(ctx, c.projectBase()+"/work-items/", func(raw json.RawMessage) error {
 		var page []struct {
-			ID              string    `json:"id"`
-			Name            string    `json:"name"`
-			DescriptionHTML string    `json:"description_html"`
-			Parent          *string   `json:"parent"`
-			CreatedAt       time.Time `json:"created_at"`
+			ID              string     `json:"id"`
+			Name            string     `json:"name"`
+			DescriptionHTML string     `json:"description_html"`
+			Parent          *string    `json:"parent"`
+			CreatedAt       time.Time  `json:"created_at"`
+			CompletedAt     *time.Time `json:"completed_at"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return err
 		}
 		for _, it := range page {
-			if it.Parent != nil && *it.Parent == parentID {
-				out = append(out, WorkItemDetail{
-					ID: it.ID, Name: it.Name, DescriptionHTML: it.DescriptionHTML,
-					CreatedAt: it.CreatedAt,
-				})
+			d := WorkItemDetail{
+				ID: it.ID, Name: it.Name, DescriptionHTML: it.DescriptionHTML,
+				CreatedAt: it.CreatedAt, CompletedAt: it.CompletedAt,
 			}
+			if it.Parent != nil {
+				d.Parent = *it.Parent
+			}
+			out = append(out, d)
 		}
 		return nil
 	})
@@ -700,13 +721,15 @@ func (c *Client) ListActivities(ctx context.Context, workItemID string) ([]Activ
 
 // Meaningful maps a raw Plane activity to a heat-generating evidence kind (§5.1).
 // Only outputs that changed reality count; comments/cosmetic edits return false.
-// TODO: broaden the allowlist as we observe real Plane activity shapes.
+// Kinds mirror the domain.Ev* constants. Currently unused — the snapshot derives
+// evidence from timestamps and diffing (THREAD-LIFECYCLE.md Phase C) rather than
+// paying an activity fetch per work item.
 func Meaningful(a Activity) (kind string, ok bool) {
 	switch {
 	case a.Verb == "created" && a.Field == "":
 		return "thread-created", true
 	case a.Field == "completed_at":
-		return "completed-todo", true
+		return "thread-completed", true
 	case a.Field == "state":
 		return "state-change", true
 	default:

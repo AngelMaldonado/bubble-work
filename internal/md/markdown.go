@@ -111,6 +111,25 @@ func ParseThread(body, threadName string) (artifacts []Artifact, logbook *Logboo
 	return artifacts, logbook
 }
 
+// CountDone reports how many checklist items in a thread body are ticked, across
+// both the Logbook and the Definition of Done. Deliberately cheap — it extracts
+// the sections and counts, rendering no HTML — because the snapshot refresher
+// runs it over every work item in a project on every sweep, only to notice when
+// the number goes up (THREAD-LIFECYCLE.md Phase C).
+func CountDone(body string) int {
+	logMD, rest, _ := ExtractSection(strings.TrimSpace(body), "logbook")
+	dodMD, _, _ := ExtractSection(rest, "definition of done", "dod")
+	n := 0
+	for _, section := range []string{logMD, dodMD} {
+		for _, t := range ParseTodos(section) {
+			if t.Done {
+				n++
+			}
+		}
+	}
+	return n
+}
+
 // ExtractSection finds the first heading whose (trimmed, lower-cased) text
 // matches any of titles and returns that section's body (everything after the
 // heading line up to the next heading of the same or higher level), the input

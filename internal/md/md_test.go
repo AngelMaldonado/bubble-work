@@ -201,3 +201,31 @@ func TestFromHTML_BirthPage(t *testing.T) {
 		t.Errorf("birth page:\n got %q\nwant %q", got, want)
 	}
 }
+
+// CountDone counts ticked items across the Logbook AND the Definition of Done —
+// it is what the refresher diffs to notice a thread produced something.
+func TestCountDone(t *testing.T) {
+	body := `# Brief
+Do the thing.
+
+## Logbook
+- [x] scaffold
+- [ ] wire it up
+- [x] ship
+
+## Definition of Done
+- [x] tests pass
+- [ ] reviewed
+`
+	if got := CountDone(body); got != 3 {
+		t.Fatalf("want 3 ticked items, got %d", got)
+	}
+	// Plain bullets are not checklist items, so they never count as done.
+	if got := CountDone("## Logbook\n- just a note\n- another"); got != 0 {
+		t.Fatalf("bullets counted as done: %d", got)
+	}
+	// A thread with no logbook at all has produced nothing.
+	if got := CountDone("# Brief\nNo logbook here."); got != 0 {
+		t.Fatalf("want 0, got %d", got)
+	}
+}

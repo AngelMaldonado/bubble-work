@@ -1,7 +1,8 @@
 # Thread Lifecycle — automatic buoyancy for work items
 
-Status: **Phase A shipped · Phase B/C pending** · Drafted 2026-08-03 · Companion
-to [`AGENTS.md`](./AGENTS.md) and [`INTERIOR-PLAN.md`](./INTERIOR-PLAN.md).
+Status: **Phase A + C shipped · Phase B pending** · Drafted 2026-08-03 ·
+Companion to [`AGENTS.md`](./AGENTS.md) and
+[`INTERIOR-PLAN.md`](./INTERIOR-PLAN.md).
 
 ## Why
 
@@ -109,9 +110,10 @@ degrade gracefully to overlay-only (compute + display, no writes).
 - **Phase B — auto-write policy (behind the per-instance toggle).** Extend the
   cooling `tick`: Zzzz→Backlog, RIP→Cancelled, resurrect→In Progress, provenance
   guardrail, group resolution, inbox notifications. Depends on A.
-- **Phase C — evidence sharpening.** Logbook-todo diffing + revision-added
-  detection for resurrection; comment-pulse tracking (hold 😴 / block 🪦).
-  Some of this is needed by A/B and will be pulled forward as required.
+- **Phase C — evidence sharpening.** ✅ **Shipped** (pulled ahead of B, which
+  needs it — see *Phase C as built*). Logbook-todo diffing and revision-added
+  detection, so an OPEN thread can produce evidence at all. Comment-pulse
+  tracking (hold 😴 / block 🪦) is still outstanding.
 
 ## Phase A as built
 
@@ -199,6 +201,50 @@ the roll-up changes which bubbles appear in which band on a live board, so it is
 a one-line change held for an explicit decision rather than smuggled in with the
 display work.
 
+## Phase C as built
+
+Phase A shipped the classifier but nothing fed it: the only progress evidence
+was derived from Plane's `completed_at`, which exists only once a thread is
+already closed. Every *open* thread therefore had an empty progress stream and
+could never be 🔥. Phase C is what makes an open thread able to produce.
+
+**Plane has no "a todo got ticked" event, so we diff.** Once per project per
+sweep, `ListProjectItems` pages every work item (one call, carrying each body and
+parent link). For each thread we count what it has produced — ticked Logbook/DoD
+items via `md.CountDone`, and revision sub-items via how many items name it as
+parent — and compare against the last observation in the new `thread_progress`
+table. The moment a counter goes up is stamped.
+
+**The stamp is the durable part.** Heat is derived from that timestamp on every
+read, so one tick keeps the thread warm for a whole cycle rather than for the
+single refresh that noticed it. The evidence is re-emitted at the stored time on
+every subsequent sweep; it survives restarts because it lives in SQLite.
+
+Two rules keep this honest:
+
+- **First sighting baselines silently.** We have no idea *when* a pre-existing
+  thread's todos were ticked, and stamping them "now" would fabricate heat for
+  work that may be a year old. So the first sweep after this ships records
+  counters and emits nothing — the board warms up as real work happens, not on
+  deploy.
+- **Counters going down is not evidence.** Unticking a todo or deleting a
+  revision moves the counter but never the timestamp. History isn't rewritten,
+  and heat can't be manufactured by toggling a checkbox back and forth.
+
+Mechanics: the diff also *writes*, so it runs on the per-project goroutine —
+one writer per project, never inside the module fan-out. A failed listing logs
+and yields no evidence (threads simply don't warm, the safe direction) rather
+than dropping the project from the board. Evidence kinds are now explicit:
+`thread-created` (weak, never heats the thread itself), `completed-todo`,
+`revision-added`, `thread-completed`. The per-project lookups moved into a
+`projectCtx` struct so `buildBubble` takes one argument instead of eight.
+
+**Still outstanding from C:** comment pulse (hold 😴, block 🪦, never wake).
+Comments are fetched per thread on demand, so tracking them in a sweep would be
+one Plane call per thread. It needs either a cheaper feed or a narrower trigger —
+worth resolving before Phase B relies on the pulse check to avoid cancelling a
+thread people are actively discussing.
+
 ## Decisions locked
 
 - Buoyancy is computed **per thread** and **rolls up** to the bubble.
@@ -222,6 +268,10 @@ display work.
   workspace on a two-week cadence and one on a daily cadence would want their
   own. Deferred until a second rhythm actually exists.
 - Commit/PR linkage as progress evidence (needs description-link parsing).
+- Comment pulse — see the end of *Phase C as built*. A prerequisite for B.
+- `thread_progress` rows are never pruned, so a deleted work item leaves one
+  behind. Harmless (they're keyed by id and simply never match again), but worth
+  a sweep if projects churn.
 - Whether a structured "decision" comment should ever count as progress (kept as
   pulse for now).
 - Whether a bubble's band should become `max(thread levels)` outright (see

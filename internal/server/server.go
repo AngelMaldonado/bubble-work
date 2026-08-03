@@ -1393,11 +1393,21 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 			mu.Unlock()
 			continue
 		}
+		// Per-project lookups, resolved once here rather than per module. The
+		// progress diff also PERSISTS, so it deliberately runs on this goroutine —
+		// one writer per project, never inside the module fan-out.
+		pc := projectCtx{
+			slug: inst.Slug, projID: projID, projName: projName[projID],
+			names: names,
+			// Resolve state uuid → group/name once (cached, ~never changes) so each
+			// thread carries its real Plane state (THREAD-LIFECYCLE.md).
+			states: s.projectStates(gctx, cl, inst.Slug, projID),
+		}
 		// Align heat to this project's active Plane cycle (§3.6); zero → rolling.
-		cycleStart, cyclePrev := s.projectCycleWindow(gctx, cl, now)
-		// Resolve state uuid → group/name once per project (cached, ~never changes)
-		// so each thread carries its real Plane state (THREAD-LIFECYCLE.md).
-		states := s.projectStates(gctx, cl, inst.Slug, projID)
+		pc.cycleStart, pc.cyclePrevStart = s.projectCycleWindow(gctx, cl, now)
+		// Notice what each thread has produced since the last sweep (Phase C).
+		pc.progress = s.progressEvidence(s.projectItems(gctx, cl, inst.Slug, projID))
+
 		for _, m := range mods {
 			m := m
 			g.Go(func() error {
@@ -1409,8 +1419,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 					mu.Unlock()
 					return nil // one bad module shouldn't fail the whole fetch
 				}
-				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items, names, states)
-				b.CycleStart, b.CyclePrevStart = cycleStart, cyclePrev
+				b := s.buildBubble(pc, m, items)
 				mu.Lock()
 				out = append(out, b)
 				mu.Unlock()
@@ -1474,22 +1483,36 @@ func cycleWindow(cycles []plane.Cycle, now time.Time) (curStart, prevStart time.
 	return curStart, prevStart
 }
 
+// projectCtx carries the per-project lookups the bubble builder needs, resolved
+// once per refresh instead of once per module.
+type projectCtx struct {
+	slug, projID, projName string
+	names                  map[string]string                 // assignee id → display name
+	states                 map[string]plane.State            // state id → group/name
+	progress               map[string][]domain.EvidenceEvent // thread id → produced-since evidence
+	cycleStart             time.Time
+	cyclePrevStart         time.Time
+}
+
 // buildBubble assembles a bubble from a module + its work items, deriving heat
 // evidence from each item's created (thread born) and completed (todo done)
 // timestamps (§5.1), then merging the server-owned contract overlay (§4).
-func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, items []plane.WorkItem, names map[string]string, states map[string]plane.State) domain.Bubble {
+func (s *Server) buildBubble(pc projectCtx, m plane.Module, items []plane.WorkItem) domain.Bubble {
 	// Namespaced id carries the project so writes/close can route.
-	id := slug + ":" + projID + ":" + m.ID
-	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug, Project: projID, ProjectName: projName}
+	id := pc.slug + ":" + pc.projID + ":" + m.ID
+	b := domain.Bubble{
+		ID: id, Name: m.Name, Instance: pc.slug, Project: pc.projID, ProjectName: pc.projName,
+		CycleStart: pc.cycleStart, CyclePrevStart: pc.cyclePrevStart,
+	}
 	if c, ok, _ := s.store.GetContract(id); ok {
 		b.Outcome, b.Owner, b.Closure, b.Closed, b.Stage = c.Outcome, c.Owner, c.Closure, c.Closed, c.Stage
 	}
 	for _, it := range items {
 		owner := ""
 		if len(it.Assignees) > 0 {
-			owner = names[it.Assignees[0]]
+			owner = pc.names[it.Assignees[0]]
 		}
-		st := states[it.StateID]
+		st := pc.states[it.StateID]
 		b.Threads = append(b.Threads, domain.Thread{
 			ID: it.ID, Name: it.Name, Active: it.Active,
 			Seq: it.Sequence, Owner: owner, Parent: it.Parent,
@@ -1500,8 +1523,10 @@ func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, item
 			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvThreadCreated, At: it.CreatedAt})
 		}
 		if it.CompletedAt != nil {
-			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvCompletedTodo, At: *it.CompletedAt})
+			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvThreadCompleted, At: *it.CompletedAt})
 		}
+		// Ticked todos and landed revisions, noticed by diffing (Phase C).
+		b.Evidence = append(b.Evidence, pc.progress[it.ID]...)
 	}
 	return b
 }

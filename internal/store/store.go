@@ -6,6 +6,7 @@ package store
 import (
 	"database/sql"
 	"strings"
+	"time"
 
 	_ "modernc.org/sqlite"
 
@@ -66,6 +67,13 @@ CREATE TABLE IF NOT EXISTS comment_reads (
   reader_name TEXT NOT NULL,     -- display name at read time
   read_at     TEXT NOT NULL,     -- RFC3339
   PRIMARY KEY (instance, comment_id, reader_id)
+);
+CREATE TABLE IF NOT EXISTS thread_progress (
+  thread_id    TEXT PRIMARY KEY,  -- Plane work-item id
+  done_todos   INTEGER NOT NULL,  -- ticked logbook + DoD items last time we looked
+  revisions    INTEGER NOT NULL,  -- sub-work-items (revision artifacts) last time we looked
+  todos_at     TEXT NOT NULL,     -- RFC3339 of the last observed INCREASE ('' = never)
+  revisions_at TEXT NOT NULL      -- ditto for revisions
 );
 CREATE TABLE IF NOT EXISTS server_settings (
   key   TEXT PRIMARY KEY,        -- e.g. "tuning" (the buoyancy calibration)
@@ -386,6 +394,98 @@ func (s *Store) SetNotifyEnabled(email string, enabled bool) error {
 		 ON CONFLICT(email) DO UPDATE SET notify_enabled = excluded.notify_enabled`,
 		email, v)
 	return err
+}
+
+// ThreadProgress is what a thread had produced the last time the refresher
+// looked, plus WHEN each counter last went up. The timestamps are the durable
+// part: heat is derived from them on every read, so a tick keeps warming the
+// thread long after the refresh that noticed it. A zero time means "never
+// observed going up" — including a thread we have only ever seen once.
+type ThreadProgress struct {
+	ThreadID    string
+	DoneTodos   int
+	Revisions   int
+	TodosAt     time.Time
+	RevisionsAt time.Time
+}
+
+// ThreadProgressFor loads the last-observed progress for the given work items.
+// Missing ids are simply absent from the map (first sighting).
+func (s *Store) ThreadProgressFor(ids []string) (map[string]ThreadProgress, error) {
+	out := make(map[string]ThreadProgress, len(ids))
+	if len(ids) == 0 {
+		return out, nil
+	}
+	// Chunked so a large project stays well under SQLite's variable limit.
+	const chunk = 400
+	for start := 0; start < len(ids); start += chunk {
+		end := min(start+chunk, len(ids))
+		part := ids[start:end]
+		args := make([]any, len(part))
+		for i, id := range part {
+			args[i] = id
+		}
+		rows, err := s.db.Query(
+			`SELECT thread_id, done_todos, revisions, todos_at, revisions_at
+			 FROM thread_progress WHERE thread_id IN (`+placeholders(len(part))+`)`, args...)
+		if err != nil {
+			return nil, err
+		}
+		for rows.Next() {
+			var p ThreadProgress
+			var todosAt, revAt string
+			if err := rows.Scan(&p.ThreadID, &p.DoneTodos, &p.Revisions, &todosAt, &revAt); err != nil {
+				rows.Close()
+				return nil, err
+			}
+			p.TodosAt, _ = time.Parse(time.RFC3339, todosAt)
+			p.RevisionsAt, _ = time.Parse(time.RFC3339, revAt)
+			out[p.ThreadID] = p
+		}
+		err = rows.Err()
+		rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
+}
+
+// SaveThreadProgress upserts the observed progress for a batch of threads.
+func (s *Store) SaveThreadProgress(ps []ThreadProgress) error {
+	if len(ps) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(
+		`INSERT INTO thread_progress(thread_id, done_todos, revisions, todos_at, revisions_at)
+		 VALUES(?, ?, ?, ?, ?)
+		 ON CONFLICT(thread_id) DO UPDATE SET
+		   done_todos = excluded.done_todos, revisions = excluded.revisions,
+		   todos_at = excluded.todos_at, revisions_at = excluded.revisions_at`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, p := range ps {
+		if _, err := stmt.Exec(p.ThreadID, p.DoneTodos, p.Revisions,
+			stamp(p.TodosAt), stamp(p.RevisionsAt)); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// stamp formats a time for storage; the zero time is stored as an empty string.
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.Format(time.RFC3339)
 }
 
 // GetSetting reads a server-wide setting. The value is opaque JSON to the store

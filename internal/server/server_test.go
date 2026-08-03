@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -1103,5 +1104,129 @@ func TestAdminMembers(t *testing.T) {
 	}
 	if m := ims[0].Members[0]; m.Email != "owner@x" || !m.Admin {
 		t.Errorf("member mapping wrong: %+v", m)
+	}
+}
+
+// TestProgressEvidence is Phase C end-to-end: Plane has no "a todo got ticked"
+// event, so production is detected by diffing each sweep. The first sighting
+// baselines silently (we don't know when old todos were ticked), an increase
+// warms the thread, and — crucially — the warmth persists across later sweeps
+// that see no change, because the moment of the increase is what's stored.
+func TestProgressEvidence(t *testing.T) {
+	var doneTodos atomic.Int32 // ticked items in wi-1's logbook, live-editable
+	var revisions atomic.Int32 // revision sub-items hanging off wi-1
+
+	body := func() string {
+		var b strings.Builder
+		b.WriteString("<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul>")
+		for i := 0; i < 3; i++ {
+			if int32(i) < doneTodos.Load() {
+				b.WriteString("<li data-checked='true'>step</li>")
+			} else {
+				b.WriteString("<li data-checked='false'>step</li>")
+			}
+		}
+		b.WriteString("</ul>")
+		return b.String()
+	}
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Backlog","group":"backlog","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"assignees":["u1"],"state":"s1"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			items := []string{fmt.Sprintf(`{"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-01-01T10:00:00Z"}`, body())}
+			for i := 0; i < int(revisions.Load()); i++ {
+				items = append(items, fmt.Sprintf(`{"id":"rev-%d","name":"rev: pass","parent":"wi-1"}`, i))
+			}
+			fmt.Fprintf(w, `{"results":[%s],"next_page_results":false}`, strings.Join(items, ","))
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	level := func() string {
+		code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/threads", key, "")
+		if code != http.StatusOK {
+			t.Fatalf("timeline status %d: %s", code, body)
+		}
+		var nodes []domain.ThreadNode
+		if err := json.Unmarshal(body, &nodes); err != nil {
+			t.Fatalf("decode timeline: %v", err)
+		}
+		if len(nodes) != 1 {
+			t.Fatalf("want 1 thread, got %d", len(nodes))
+		}
+		return nodes[0].Level
+	}
+
+	// First sweep: the thread already has one ticked todo, but we've never seen it
+	// before. Baseline silently — stamping it "now" would fabricate heat for work
+	// that could be a year old. Born in January against a 1h cycle → 🪦.
+	doneTodos.Store(1)
+	if lv := level(); lv != "rip" {
+		t.Fatalf("first sighting should baseline silently, got %s", lv)
+	}
+
+	// Someone ticks another one. The next sweep notices the increase and stamps it.
+	doneTodos.Store(2)
+	srv.flushCaches()
+	if lv := level(); lv != "in_progress" {
+		t.Fatalf("after a todo was ticked: want in_progress, got %s", lv)
+	}
+
+	// A later sweep sees no change at all — the thread must STAY warm, because
+	// heat is derived from when the tick happened, not from noticing it.
+	srv.flushCaches()
+	if lv := level(); lv != "in_progress" {
+		t.Fatalf("warmth must survive a no-change sweep, got %s", lv)
+	}
+
+	// Unticking is not evidence of anything: the counter follows, the timestamp
+	// does not move, so the thread stays warm on its earlier real progress.
+	doneTodos.Store(0)
+	srv.flushCaches()
+	if lv := level(); lv != "in_progress" {
+		t.Fatalf("unticking must not rewrite history, got %s", lv)
+	}
+	prog, err := st.ThreadProgressFor([]string{"wi-1"})
+	if err != nil {
+		t.Fatalf("load progress: %v", err)
+	}
+	if p := prog["wi-1"]; p.DoneTodos != 0 || p.TodosAt.IsZero() {
+		t.Errorf("counter should follow but the stamp should hold: %+v", p)
+	}
+
+	// A revision artifact landing is progress too, counted from the sub-items
+	// that name the thread as parent.
+	revisions.Store(1)
+	srv.flushCaches()
+	if lv := level(); lv != "in_progress" {
+		t.Fatalf("after a revision landed: want in_progress, got %s", lv)
+	}
+	prog, _ = st.ThreadProgressFor([]string{"wi-1"})
+	if p := prog["wi-1"]; p.Revisions != 1 || p.RevisionsAt.IsZero() {
+		t.Errorf("revision not counted/stamped: %+v", p)
 	}
 }

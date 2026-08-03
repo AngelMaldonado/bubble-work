@@ -194,6 +194,7 @@ export interface Tuning {
   decay_cycles: number;
   ownerless_is_dormant: boolean;
   bubble_rip_needs_owner: boolean;
+  bubble_level_rollup: boolean;
   thread_birth_heats: boolean;
   thread_grace_cycles: number;
   thread_rip_needs_owner: boolean;

@@ -500,10 +500,12 @@ func TestLevelsReviewAndSearch(t *testing.T) {
 	if l := level(); l != "rip" {
 		t.Fatalf("initial: want rip, got %q", l)
 	}
-	// give it an owner → dormant with owner+evidence → zzzz
+	// Naming an owner does NOT rescue the band: with the roll-up on, a bubble is
+	// its threads, and paperwork is not work. (bubble_rip_needs_owner only
+	// applies in union mode.)
 	do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/contract", key, `{"owner":"angel"}`)
-	if l := level(); l != "zzzz" {
-		t.Fatalf("with owner: want zzzz, got %q", l)
+	if l := level(); l != "rip" {
+		t.Fatalf("an owner should not change the roll-up band, got %q", l)
 	}
 	// review → reviewed
 	if code, _ := do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/review", key, ""); code != http.StatusOK {
@@ -706,6 +708,16 @@ func TestTickTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(st, time.Hour) // 1h cycle
+	// Union mode: this exercises the classic "a bubble cools and we say so" path,
+	// where a thread's BIRTH warms its bubble. Under the roll-up the same bubble
+	// is dormant from the start (an untouched work item has produced nothing), so
+	// there is no transition to report — see TestBubbleRollup.
+	if tun := srv.Tuning(); true {
+		tun.BubbleLevelRollup = false
+		if _, err := srv.SetTuning(tun); err != nil {
+			t.Fatalf("tuning: %v", err)
+		}
+	}
 	ctx := context.Background()
 
 	// Tick 1: 10 min after creation → bubble is hot → baseline, no notification.
@@ -1019,9 +1031,9 @@ func TestAdminTuning(t *testing.T) {
 		t.Fatalf("before retune: want rip, got %s", lv)
 	}
 
-	// Stretch the cycle to a year: the same evidence now lands inside the current
-	// window, so the very next read floats the bubble back up. No recompute, no
-	// cache flush — everything is derived.
+	// Stretch the cycle to a year: the thread is now well inside its newborn grace
+	// period, so it stops reading as abandoned and the bubble follows it up a
+	// band on the very next read. No recompute, no cache flush — all derived.
 	code, body = do(t, http.MethodPut, ts.URL+"/api/admin/tuning", key, `{"cycle_hours": 8760}`)
 	if code != http.StatusOK {
 		t.Fatalf("put tuning status %d: %s", code, body)
@@ -1033,8 +1045,8 @@ func TestAdminTuning(t *testing.T) {
 	if v.Tuning.CycleHours != 8760 || v.Tuning.DormantCycles != 2 || !v.Tuning.ThreadTerminalStateWins {
 		t.Fatalf("partial patch clobbered other knobs: %+v", v.Tuning)
 	}
-	if lv := bubbleLevelFor(t, ts, key, "ws:p1:m1"); lv != "in_progress" {
-		t.Fatalf("after retune: want in_progress, got %s", lv)
+	if lv := bubbleLevelFor(t, ts, key, "ws:p1:m1"); lv != "zzzz" {
+		t.Fatalf("after retune: want zzzz, got %s", lv)
 	}
 
 	// Out-of-range values are clamped, never applied raw.
@@ -1457,5 +1469,100 @@ func TestAutoTarget(t *testing.T) {
 		if got := autoTarget(level); got != want {
 			t.Errorf("autoTarget(%q) = %q, want %q", level, got, want)
 		}
+	}
+}
+
+// A bubble IS its threads: it sits in the band of its hottest unfinished one.
+// The union mode it replaces counts a thread's BIRTH as bubble output, so a
+// bubble full of untouched new work items reads 🔥 there and 😴 here.
+func TestBubbleRollup(t *testing.T) {
+	srv := New(openStore(t), time.Hour)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	srv.now = func() time.Time { return now }
+	tun := srv.Tuning()
+
+	old := now.AddDate(0, -6, 0)
+	thread := func(id string, opts ...func(*domain.Thread)) domain.Thread {
+		th := domain.Thread{ID: id, Active: true, Owner: "me", CreatedAt: old}
+		for _, o := range opts {
+			o(&th)
+		}
+		return th
+	}
+	done := func(th *domain.Thread) { th.Active = false; c := old; th.CompletedAt = &c }
+	fresh := func(th *domain.Thread) { th.CreatedAt = now.Add(-time.Minute) } // inside grace
+
+	birth := func(ids ...string) []domain.EvidenceEvent {
+		var ev []domain.EvidenceEvent
+		for _, id := range ids {
+			ev = append(ev, domain.EvidenceEvent{ThreadID: id, Kind: domain.EvThreadCreated, At: old})
+		}
+		return ev
+	}
+
+	level := func(b domain.Bubble, tn domain.Tuning) string {
+		_, lv, _ := srv.bubbleHeat(b, tn, now)
+		return lv
+	}
+
+	// One thread waiting its turn (😴), one abandoned (🪦) → the hottest wins.
+	mixed := domain.Bubble{
+		Threads:  []domain.Thread{thread("a", fresh), thread("b")},
+		Evidence: birth("a", "b"),
+	}
+	if got := level(mixed, tun); got != "zzzz" {
+		t.Errorf("hottest thread should set the band: got %s", got)
+	}
+
+	// All abandoned → the bubble is too.
+	dead := domain.Bubble{Threads: []domain.Thread{thread("a"), thread("b")}, Evidence: birth("a", "b")}
+	if got := level(dead, tun); got != "rip" {
+		t.Errorf("a bubble of graves is a grave: got %s", got)
+	}
+
+	// Every thread finished, but nobody closed the bubble. NOT 🏆 — that band
+	// means "closed", and closing is a human decision (§4).
+	finished := domain.Bubble{Threads: []domain.Thread{thread("a", done)}, Evidence: birth("a")}
+	res, lv, _ := srv.bubbleHeat(finished, tun, now)
+	if lv != "zzzz" || !strings.Contains(res.Reason, "close or redefine") {
+		t.Errorf("finished bubble: got %s / %q", lv, res.Reason)
+	}
+
+	// A bubble with no threads at all never got going.
+	if got := level(domain.Bubble{}, tun); got != "rip" {
+		t.Errorf("empty bubble: got %s", got)
+	}
+
+	// Explicit human declarations still outrank anything derived.
+	closed := dead
+	closed.Closed = true
+	if got := level(closed, tun); got != "done" {
+		t.Errorf("closed must win: got %s", got)
+	}
+	reviewed := dead
+	reviewed.Stage = "reviewed"
+	if got := level(reviewed, tun); got != "reviewed" {
+		t.Errorf("reviewed must win: got %s", got)
+	}
+
+	// The headline divergence, and the reason the roll-up is on by default: a
+	// bubble whose work items were all created moments ago but touched by nobody.
+	// The union counts those births as bubble output and calls it 🔥; the roll-up
+	// asks the threads, and every one of them is still waiting its turn.
+	justBorn := domain.Bubble{
+		Owner:   "me",
+		Threads: []domain.Thread{thread("a", fresh), thread("b", fresh)},
+		Evidence: []domain.EvidenceEvent{
+			{ThreadID: "a", Kind: domain.EvThreadCreated, At: now.Add(-time.Minute)},
+			{ThreadID: "b", Kind: domain.EvThreadCreated, At: now.Add(-time.Minute)},
+		},
+	}
+	union := tun
+	union.BubbleLevelRollup = false
+	if got := level(justBorn, union); got != "in_progress" {
+		t.Errorf("union mode: birthing threads warms the bubble, got %s", got)
+	}
+	if got := level(justBorn, tun); got != "zzzz" {
+		t.Errorf("roll-up: nothing has been produced yet, want zzzz, got %s", got)
 	}
 }

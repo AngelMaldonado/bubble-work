@@ -95,8 +95,14 @@ type Tuning struct {
 	// ---- bubble grain ----
 
 	// BubbleRipNeedsOwner sends a dormant, ownerless bubble to 🪦 instead of 😴.
-	// A bubble that never produced anything is 🪦 either way.
+	// A bubble that never produced anything is 🪦 either way. Only consulted when
+	// BubbleLevelRollup is off.
 	BubbleRipNeedsOwner bool `json:"bubble_rip_needs_owner"`
+	// BubbleLevelRollup makes a bubble's band the band of its HOTTEST unfinished
+	// thread, instead of classifying the union of its evidence. The union counts a
+	// thread's birth as bubble output, so a bubble full of untouched new work
+	// items reads 🔥; the roll-up reports what its threads are actually doing.
+	BubbleLevelRollup bool `json:"bubble_level_rollup"`
 
 	// ---- thread grain (THREAD-LIFECYCLE.md) ----
 
@@ -129,6 +135,7 @@ func DefaultTuning() Tuning {
 		DecayCycles:             1,
 		OwnerlessIsDormant:      true,
 		BubbleRipNeedsOwner:     true,
+		BubbleLevelRollup:       true,
 		ThreadBirthHeats:        false,
 		ThreadGraceCycles:       1,
 		ThreadRipNeedsOwner:     true,
@@ -189,8 +196,10 @@ func TuningFields() []TuningField {
 		{Key: "ownerless_is_dormant", Label: "No owner sinks to dormant", Kind: "toggle", Group: "pulse",
 			Help: "Something with nobody accountable goes dormant once it has gone quiet. Anything still producing stays hot either way."},
 
+		{Key: "bubble_level_rollup", Label: "Band = hottest thread", Kind: "toggle", Group: "bubble",
+			Help: "A bubble sits in the band of its hottest unfinished thread. Off, it is classified from the union of its evidence instead — which counts a thread's birth as bubble output, so a bubble full of untouched new work items reads 🔥. Explicit close and review always win either way."},
 		{Key: "bubble_rip_needs_owner", Label: "Ownerless bubble is RIP", Kind: "toggle", Group: "bubble",
-			Help: "A dormant bubble with no owner reads 🪦 instead of 😴. A bubble that never produced anything is 🪦 regardless."},
+			Help: "A dormant bubble with no owner reads 🪦 instead of 😴. A bubble that never produced anything is 🪦 regardless. Only used when the band is NOT rolled up from threads."},
 
 		{Key: "thread_birth_heats", Label: "Creating a thread heats it", Kind: "toggle", Group: "thread",
 			Help: "Off by default: being born is not producing. Turning this on makes every new work item read 🔥 for a whole cycle, even untouched in Backlog. A birth always heats its bubble."},

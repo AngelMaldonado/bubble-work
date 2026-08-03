@@ -618,8 +618,9 @@ func (s *Server) handleWhoami(w http.ResponseWriter, r *http.Request) {
 
 // ---- Backend implementation (shared by REST + MCP) ----
 
-// bubbleLevel maps a bubble to its UI band (§ web-ui): explicit stage/closed win,
-// otherwise heat decides in-progress ↔ zzzz ↔ rip.
+// bubbleLevel maps a bubble to its UI band from the UNION of its evidence
+// (§ web-ui): explicit stage/closed win, otherwise heat decides in-progress ↔
+// zzzz ↔ rip. Used when Tuning.BubbleLevelRollup is off — see bubbleHeat.
 func bubbleLevel(b domain.Bubble, lc domain.Lifecycle, tun domain.Tuning) string {
 	switch {
 	case b.Closed:
@@ -722,19 +723,74 @@ func (s *Server) threadBuoyancy(b domain.Bubble) map[string]domain.Buoyancy {
 	return out
 }
 
+// levelRank orders the bands from hottest to coldest, for rolling threads up.
+// "done" is absent on purpose: a finished thread never sets its bubble's band.
+var levelRank = map[string]int{"in_progress": 0, "reviewed": 1, "zzzz": 2, "rip": 3}
+
+// bubbleHeat derives a bubble's temperature, band and per-thread breakdown — the
+// one place either is decided, so the board, the CLI and the cooling sweep can
+// never disagree.
+//
+// With Tuning.BubbleLevelRollup on (the default), a bubble IS its threads: it
+// sits in the band of its hottest unfinished thread, and reports that thread's
+// reason. This is the model THREAD-LIFECYCLE.md specifies — a bubble is Zzzz
+// because its open threads went cold, not as a separate judgement. Classifying
+// the union of the evidence instead lets a thread's BIRTH count as bubble
+// output, so a bubble full of untouched new work items reads 🔥.
+//
+// Explicit human declarations — closed, reviewed — always win over anything
+// derived, in both modes.
+func (s *Server) bubbleHeat(b domain.Bubble, tun domain.Tuning, now time.Time) (heat.Result, string, map[string]domain.Buoyancy) {
+	res := heat.Classify(b, tun, now)
+	buoy := s.threadBuoyancy(b)
+	if !tun.BubbleLevelRollup {
+		return res, bubbleLevel(b, res.Lifecycle, tun), buoy
+	}
+	switch {
+	case b.Closed:
+		return res, "done", buoy // heat.Classify already reports Closed
+	case b.Stage == "reviewed":
+		return res, "reviewed", buoy
+	}
+
+	// The hottest thread that hasn't finished sets the band.
+	var hottest domain.Buoyancy
+	found := false
+	for _, t := range b.Threads {
+		lv, ok := levelRank[buoy[t.ID].Level]
+		if !ok {
+			continue // done, or not classified
+		}
+		if !found || lv < levelRank[hottest.Level] {
+			hottest, found = buoy[t.ID], true
+		}
+	}
+	switch {
+	case found:
+		return heat.Result{Lifecycle: hottest.Lifecycle, Score: hottest.Score, Reason: hottest.Reason}, hottest.Level, buoy
+	case len(b.Threads) > 0:
+		// Every thread finished. Not 🏆 — that band means "closed", and closing is
+		// a human decision (§4). Surface it as needing one.
+		return heat.Result{Lifecycle: domain.Dormant, Score: res.Score,
+			Reason: "every thread is finished — close or redefine this bubble"}, "zzzz", buoy
+	default:
+		return heat.Result{Lifecycle: domain.Dormant, Score: 0, Reason: "no threads yet"}, "rip", buoy
+	}
+}
+
 // toViews classifies bubbles into derived views, hottest first (buoyancy).
 func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 	now, tun := s.now(), s.Tuning()
 	out := make([]domain.BubbleView, 0, len(bubbles))
 	for _, b := range bubbles {
-		r := heat.Classify(b, tun, now)
+		r, level, buoy := s.bubbleHeat(b, tun, now)
 		out = append(out, domain.BubbleView{
 			ID: b.ID, Name: b.Name, Instance: b.Instance,
 			Project: b.Project, ProjectName: b.ProjectName,
-			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle, tun),
+			Lifecycle: r.Lifecycle, Level: level,
 			Score: r.Score, Reason: r.Reason,
 			Outcome: b.Outcome, Owner: b.Owner, Members: bubbleMembers(b),
-			Threads: len(b.Threads), ThreadLevels: levelCounts(s.threadBuoyancy(b)),
+			Threads: len(b.Threads), ThreadLevels: levelCounts(buoy),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
@@ -1604,7 +1660,9 @@ func (s *Server) Tick(ctx context.Context) (int, error) {
 	n := 0
 	bubbles := s.collectAll(ctx)
 	for _, b := range bubbles {
-		cur := heat.Classify(b, tun, now).Lifecycle
+		// Same signal the board shows, so a notification never contradicts it.
+		res, _, _ := s.bubbleHeat(b, tun, now)
+		cur := res.Lifecycle
 		prev, had, err := s.store.GetLifecycle(b.ID)
 		if err != nil {
 			log.Printf("tick: get lifecycle %s: %v", b.ID, err)

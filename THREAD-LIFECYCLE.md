@@ -183,7 +183,8 @@ model changes unless someone turns a knob.
 | `dormant_cycles` | both | cycles of silence before Dormant (2 = "not this cycle or last") |
 | `decay_cycles` | both | scales the buoyancy score used for ordering (not the bands) |
 | `ownerless_is_dormant` | both | nobody accountable → sinks once quiet |
-| `bubble_rip_needs_owner` | bubble | dormant + ownerless → 🪦 instead of 😴 |
+| `bubble_level_rollup` | bubble | band = hottest unfinished thread (off = classify the union of the evidence) |
+| `bubble_rip_needs_owner` | bubble | dormant + ownerless → 🪦 instead of 😴 (union mode only) |
 | `thread_birth_heats` | thread | whether a work item's creation heats the item itself |
 | `thread_grace_cycles` | thread | how long a newborn that produced nothing stays 😴 before 🪦 |
 | `thread_rip_needs_owner` | thread | dormant + unassigned → 🪦 instead of 😴 |
@@ -203,13 +204,7 @@ MCP — like the other admin capabilities (instances, members, kiosk), calibrati
 the model is an operator action, not an agent one. A PUT body is decoded ONTO the
 live values, so a partial patch only changes the keys it names.
 
-**Deliberately NOT done in A:** the bubble's own band is still computed from the
-union of its evidence, not as `max(thread levels)`. The two agree in the common
-case; they diverge when a bubble's only recent evidence belongs to a thread that
-is already closed (union says Warm, roll-up says colder). Switching the band to
-the roll-up changes which bubbles appear in which band on a live board, so it is
-a one-line change held for an explicit decision rather than smuggled in with the
-display work.
+**The roll-up** (deferred out of A, shipped later — see *The bubble roll-up*).
 
 ## Phase C as built
 
@@ -334,6 +329,44 @@ and someone later edits its Logbook, the thread recomputes to 🔥, our provenan
 still matches (we wrote that Cancelado), and the next tick moves it to In
 Progress. The card follows the work back.
 
+## The bubble roll-up
+
+`Server.bubbleHeat` is the single place a bubble's temperature, band and
+per-thread breakdown are decided, so the board, the CLI and the cooling sweep
+cannot disagree. With `bubble_level_rollup` on (the default), **a bubble is its
+threads**: it sits in the band of its hottest unfinished thread and reports that
+thread's reason.
+
+This is what "push buoyancy down, roll it up" was always meant to mean. The
+alternative — classifying the union of a bubble's evidence — has one specific
+flaw: `thread-created` is bubble-level evidence, so a bubble whose work items
+were all created moments ago and touched by nobody reads 🔥. The roll-up asks the
+threads instead, and every one of them is still waiting its turn (😴).
+
+| Situation | Band |
+|-----------|------|
+| Any thread unfinished | that thread's band, hottest wins |
+| Every thread finished, bubble not closed | 😴 *"every thread is finished — close or redefine this bubble"* |
+| No threads at all | 🪦 *"no threads yet"* |
+| Bubble closed / reviewed | 🏆 / 👀 — explicit human declarations always win |
+
+Consequences worth knowing:
+
+- **Birthing threads no longer warms a bubble.** Creating work is not doing work
+  — the same rule threads already follow, now applied consistently at both
+  grains. A newly filled bubble reads 😴 until something is actually produced.
+- **`bubble_rip_needs_owner` is inert** while the roll-up is on: naming an owner
+  is paperwork, and the band now comes from the threads.
+- **A bubble of graves is a grave.** Under the union a bubble with any threads
+  essentially never reached 🪦, because their births counted as evidence forever.
+- The knob flips the whole thing back to union mode instantly, with no
+  recompute — useful for comparing the two against a live board.
+
+Known coarseness (pre-existing, not introduced here): notifications fire on
+`Lifecycle` transitions, and 😴 and 🪦 are both `Dormant`, so a bubble sliding
+from asleep to abandoned is silent. Making notifications track the *band* would
+fix it in both modes.
+
 ## Decisions locked
 
 - Buoyancy is computed **per thread** and **rolls up** to the bubble.
@@ -363,5 +396,5 @@ Progress. The card follows the work back.
   a sweep if projects churn.
 - Whether a structured "decision" comment should ever count as progress (kept as
   pulse for now).
-- Whether a bubble's band should become `max(thread levels)` outright (see
-  *Phase A as built*) — needs a look at a live board before flipping.
+- Notifications track `Lifecycle`, which cannot see a 😴 → 🪦 slide. Tracking the
+  band instead would fix it for both modes.

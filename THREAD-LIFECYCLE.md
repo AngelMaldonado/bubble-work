@@ -124,10 +124,20 @@ evidence with no thread is dropped rather than smeared across threads.
 
 - **Server.** `threadBuoyancy(bubble)` is the one place per-thread lifecycle is
   derived — the timeline, the interior and the roll-up all read it.
-  `threadLevel` mirrors `bubbleLevel`, with one deliberate difference: a
-  thread's own birth is not production, so a dormant thread that only ever
-  emitted `thread-created` is 🪦, not 😴 (`EvidenceEvent.Progress()`; evidence
-  kinds are now the constants `domain.EvThreadCreated` / `EvCompletedTodo`).
+- **Birth does not heat a thread.** A new work item is a real output for the
+  *bubble* that gained it, but the item itself has produced nothing by existing,
+  so `ClassifyThread` classifies from **progress evidence only**
+  (`EvidenceEvent.Progress()`; kinds are the constants `domain.EvThreadCreated` /
+  `EvCompletedTodo`). Without this, every work item created in the current cycle
+  read 🔥 for a full cycle while sitting untouched in Backlog. A thread born
+  inside the current cycle with nothing produced yet is 😴 *"born this cycle;
+  nothing produced yet"* — it gets the cycle before we call it 🪦.
+- **Evidence decides the band; Plane's column does not.** Dragging a card into
+  "In Progress" is motion, not evidence (`AGENTS.md`), so `started` never by
+  itself makes a thread 🔥, and a thread sitting in Backlog whose todos are
+  actually getting ticked genuinely is 🔥. `threadLevel` consults the state group
+  for the two **terminal** columns only — `completed` → 🏆 and `cancelled` → 🪦 —
+  because those are statements of fact, not status theatre.
 - **Plane state, read-only.** `plane.ListStates` + a per-project
   `statesCache` (30 min) resolve a work item's state uuid → `{name, group}`.
   Threads carry both; **only `group` is ever matched on**, `name` is display-only
@@ -160,6 +170,9 @@ display work.
 ## Decisions locked
 
 - Buoyancy is computed **per thread** and **rolls up** to the bubble.
+- A thread's **birth does not heat it** (it heats its bubble); only progress does.
+- **Evidence leads, not the Plane column.** The state group short-circuits only
+  `completed` and `cancelled`.
 - **Progress resurrects; comments are pulse** (hold/block, never wake).
 - Auto-write is **opt-in per instance**, off by default.
 - Guardrail is **provenance** (hands-off the moment a human changes the state).

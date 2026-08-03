@@ -82,6 +82,22 @@ func TestClassifyThread(t *testing.T) {
 	if r := ClassifyThread(done, byThread["c"], win, now); r.Lifecycle != domain.Closed {
 		t.Fatalf("thread c: want Closed, got %s", r.Lifecycle)
 	}
+	// Birth does not heat a thread: a work item created minutes ago that has
+	// produced nothing is NOT 🔥 — otherwise every new Backlog item would read as
+	// in-progress for a whole cycle just for existing.
+	newborn := domain.Thread{ID: "e", Active: true, Owner: "me", CreatedAt: at(2)}
+	birthOnly := []domain.EvidenceEvent{{ThreadID: "e", Kind: domain.EvThreadCreated, At: at(2)}}
+	if r := ClassifyThread(newborn, birthOnly, win, now); r.Lifecycle != domain.Dormant {
+		t.Fatalf("newborn thread: want Dormant, got %s (%s)", r.Lifecycle, r.Reason)
+	} else if r.Reason != "born this cycle; nothing produced yet" {
+		t.Errorf("newborn reason = %q", r.Reason)
+	}
+	// The bubble that gained it, however, IS warmed by the birth (§5.1).
+	nb := domain.Bubble{Owner: "me", Threads: []domain.Thread{newborn}, Evidence: birthOnly}
+	if r := Classify(nb, cycle, now); r.Lifecycle != domain.Hot {
+		t.Fatalf("bubble gaining a thread: want Hot, got %s", r.Lifecycle)
+	}
+
 	// An unassigned open thread has nobody accountable → Dormant, like a bubble.
 	orphan := domain.Thread{ID: "d", Active: true}
 	if r := ClassifyThread(orphan, []domain.EvidenceEvent{{At: at(5)}}, win, now); r.Lifecycle != domain.Hot {

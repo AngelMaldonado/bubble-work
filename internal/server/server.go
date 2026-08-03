@@ -577,11 +577,18 @@ func bubbleLevel(b domain.Bubble, lc domain.Lifecycle) string {
 }
 
 // threadLevel maps a thread to the same UI bands as a bubble
-// (THREAD-LIFECYCLE.md Phase A). The zzzz↔rip split mirrors bubbleLevel's
-// "never got going vs went quiet", except that at the work-item grain a thread's
-// own birth doesn't count as production — a thread that was created, assigned to
-// nobody, and never produced anything is 🪦, not 😴.
-func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle) string {
+// (THREAD-LIFECYCLE.md Phase A). Evidence decides the band; Plane's state group
+// only short-circuits the two TERMINAL columns, which are statements of fact
+// rather than status theatre. A thread being dragged into "In Progress" is
+// motion, not evidence, so it does not by itself make the thread 🔥 — and a
+// thread sitting in Backlog while its todos get ticked genuinely is 🔥.
+func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle, w heat.Window) string {
+	switch t.StateGroup {
+	case "completed":
+		return "done"
+	case "cancelled":
+		return "rip"
+	}
 	switch lc {
 	case domain.Closed:
 		return "done"
@@ -597,10 +604,15 @@ func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle
 				break
 			}
 		}
-		if t.Owner == "" || !produced {
-			return "rip" // never got going / abandoned
+		if produced {
+			return "zzzz" // had a life, went quiet
 		}
-		return "zzzz" // had a life, went quiet
+		// Nothing produced yet. A thread born inside the current cycle is simply
+		// waiting its turn — it gets the cycle before we call it abandoned.
+		if !t.CreatedAt.IsZero() && t.CreatedAt.After(w.CurStart) {
+			return "zzzz"
+		}
+		return "rip" // never got going / abandoned
 	default:
 		return "zzzz"
 	}
@@ -620,7 +632,7 @@ func (s *Server) threadBuoyancy(b domain.Bubble) map[string]domain.Buoyancy {
 		r := heat.ClassifyThread(t, ev, win, now)
 		out[t.ID] = domain.Buoyancy{
 			Lifecycle: r.Lifecycle,
-			Level:     threadLevel(t, ev, r.Lifecycle),
+			Level:     threadLevel(t, ev, r.Lifecycle, win),
 			Score:     r.Score,
 			Reason:    r.Reason,
 		}

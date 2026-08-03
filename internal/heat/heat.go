@@ -73,16 +73,30 @@ func Classify(b domain.Bubble, cycle time.Duration, now time.Time) Result {
 
 // ClassifyThread computes ONE thread's lifecycle from its own evidence stream,
 // measured against its bubble's window (THREAD-LIFECYCLE.md). A completed thread
-// is Closed; otherwise the bubble rules apply verbatim at the work-item grain,
-// with the thread's assignee standing in for the bubble's owner and its own
-// openness standing in for "active threads remain".
+// is Closed; otherwise the bubble rules apply at the work-item grain, with the
+// thread's assignee standing in for the bubble's owner and its own openness
+// standing in for "active threads remain".
+//
+// One rule differs from the bubble grain: a thread's own BIRTH does not heat it.
+// A new work item is a real output for the bubble that gained it, but the item
+// itself has produced nothing by existing — otherwise every freshly created
+// thread would read 🔥 for a whole cycle while sitting untouched in Backlog.
 func ClassifyThread(t domain.Thread, ev []domain.EvidenceEvent, w Window, now time.Time) Result {
 	if !t.Active || t.CompletedAt != nil {
 		return Result{domain.Closed, 0, "thread completed"}
 	}
-	r := classify(ev, w, t.Owner != "", t.Active, now)
-	if r.Lifecycle == domain.Warm {
+	progress := make([]domain.EvidenceEvent, 0, len(ev))
+	for _, e := range ev {
+		if e.Progress() {
+			progress = append(progress, e)
+		}
+	}
+	r := classify(progress, w, t.Owner != "", t.Active, now)
+	switch {
+	case r.Lifecycle == domain.Warm:
 		r.Reason = "progress last cycle; still open" // the bubble wording doesn't fit a thread
+	case len(progress) == 0 && !t.CreatedAt.IsZero() && t.CreatedAt.After(w.CurStart):
+		r.Reason = "born this cycle; nothing produced yet"
 	}
 	return r
 }

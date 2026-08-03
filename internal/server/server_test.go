@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/heat"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
@@ -396,6 +397,45 @@ func TestThreadBuoyancy(t *testing.T) {
 	}
 	if d.Level != "rip" || d.StateGroup != "started" {
 		t.Errorf("detail buoyancy/state wrong: %s / %s", d.Level, d.StateGroup)
+	}
+}
+
+// threadLevel is pure, so the interesting combinations are worth pinning down
+// directly: evidence decides the band, and Plane's state group only short-
+// circuits the two terminal columns (THREAD-LIFECYCLE.md).
+func TestThreadLevel(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	win := heat.Window{CurStart: now.Add(-7 * 24 * time.Hour), PrevStart: now.Add(-14 * 24 * time.Hour), Decay: 7 * 24 * time.Hour}
+	born := func(daysAgo int) time.Time { return now.AddDate(0, 0, -daysAgo) }
+	birth := []domain.EvidenceEvent{{Kind: domain.EvThreadCreated, At: born(2)}}
+	work := []domain.EvidenceEvent{{Kind: domain.EvCompletedTodo, At: born(1)}}
+
+	cases := []struct {
+		name string
+		t    domain.Thread
+		ev   []domain.EvidenceEvent
+		lc   domain.Lifecycle
+		want string
+	}{
+		{"fresh backlog item is parked, not burning",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "backlog", CreatedAt: born(2)}, birth, domain.Dormant, "zzzz"},
+		{"backlog item with real progress is burning",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "backlog", CreatedAt: born(2)}, work, domain.Hot, "in_progress"},
+		{"old thread that never produced is abandoned",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "unstarted", CreatedAt: born(90)}, birth, domain.Dormant, "rip"},
+		{"thread that produced then went quiet is asleep",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "started", CreatedAt: born(90)}, work, domain.Dormant, "zzzz"},
+		{"cancelled in Plane is a grave regardless of heat",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "cancelled", CreatedAt: born(1)}, work, domain.Hot, "rip"},
+		{"completed in Plane is done regardless of heat",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "completed", CreatedAt: born(1)}, work, domain.Hot, "done"},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := threadLevel(c.t, c.ev, c.lc, win); got != c.want {
+				t.Fatalf("want %s, got %s", c.want, got)
+			}
+		})
 	}
 }
 

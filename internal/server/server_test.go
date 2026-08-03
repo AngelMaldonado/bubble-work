@@ -39,13 +39,19 @@ func fakePlane() *httptest.Server {
 		case strings.HasSuffix(p, "/members/"):
 			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
 		case strings.HasSuffix(p, "/states/"):
-			io.WriteString(w, `{"results":[{"id":"state-1","group":"unstarted","default":true}]}`)
+			// Names are project-configured and localized on purpose — the server must
+			// match on `group`, never on `name` (THREAD-LIFECYCLE.md).
+			io.WriteString(w, `{"results":[
+				{"id":"state-1","name":"Todo","group":"unstarted","default":true},
+				{"id":"state-2","name":"En Progreso","group":"started"},
+				{"id":"state-3","name":"Finalizado","group":"completed"}
+			]}`)
 		case strings.HasSuffix(p, "/work-items/") && r.Method == http.MethodPost:
 			io.WriteString(w, `{"id":"new-wid-123"}`)
 		case strings.Contains(p, "/modules/m1/") && strings.HasSuffix(p, "/module-issues/"):
 			io.WriteString(w, `{"results":[
-				{"id":"wi-1","name":"First thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"sort_order":1000,"assignees":["u1"]},
-				{"id":"wi-2","name":"Second thread","created_at":"2026-02-01T10:00:00Z","completed_at":"2026-03-01T00:00:00Z","sequence_id":2,"sort_order":2000,"parent":"wi-1","assignees":[]}
+				{"id":"wi-1","name":"First thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"sort_order":1000,"assignees":["u1"],"state":"state-2"},
+				{"id":"wi-2","name":"Second thread","created_at":"2026-02-01T10:00:00Z","completed_at":"2026-03-01T00:00:00Z","sequence_id":2,"sort_order":2000,"parent":"wi-1","assignees":[],"state":"state-3"}
 			]}`)
 		case strings.HasSuffix(p, "/relations/"):
 			io.WriteString(w, `{"relates_to":["rev-1"],"blocking":[],"blocked_by":[]}`)
@@ -57,7 +63,7 @@ func fakePlane() *httptest.Server {
 			// sub-issue list: revisions attach as children (parent set to the thread)
 			io.WriteString(w, `{"results":[{"id":"rev-1","name":"rev: first pass","description_html":"<h2>Findings</h2><p>looks solid</p>","parent":"wi-1"}],"next_page_results":false}`)
 		case r.Method == http.MethodGet && strings.Contains(p, "/work-items/"):
-			io.WriteString(w, `{"id":"wi-1","name":"First thread","description_html":"<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul><li data-checked='true'>scaffold</li><li data-checked='false'>wire</li></ul>","sequence_id":1,"priority":"high","assignees":["u1"],"created_at":"2026-01-01T10:00:00Z"}`)
+			io.WriteString(w, `{"id":"wi-1","name":"First thread","description_html":"<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul><li data-checked='true'>scaffold</li><li data-checked='false'>wire</li></ul>","sequence_id":1,"priority":"high","assignees":["u1"],"state":"state-2","created_at":"2026-01-01T10:00:00Z"}`)
 		case strings.HasSuffix(p, "/projects/"):
 			io.WriteString(w, `{"results":[{"id":"p1","name":"Proj One"},{"id":"p2","name":"Proj Two"}]}`)
 		case strings.HasSuffix(p, "/modules/") && strings.Contains(p, "/projects/p1/"):
@@ -316,6 +322,80 @@ func TestInteriorEndpoints(t *testing.T) {
 	code, body = do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, `{"body":"   "}`)
 	if code != http.StatusBadRequest {
 		t.Errorf("empty comment should be 400, got %d: %s", code, body)
+	}
+}
+
+// Threads carry their own derived lifecycle and their real Plane state
+// (THREAD-LIFECYCLE.md Phase A). The fixture's threads were born in early 2026,
+// so both are long past dormant: wi-1 has an owner but never produced anything
+// (🪦), wi-2 completed (🏆).
+func TestThreadBuoyancy(t *testing.T) {
+	ts, key := authedServer(t)
+
+	code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/threads", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("timeline status %d: %s", code, body)
+	}
+	var nodes []domain.ThreadNode
+	if err := json.Unmarshal(body, &nodes); err != nil {
+		t.Fatalf("decode timeline: %v", err)
+	}
+	byID := map[string]domain.ThreadNode{}
+	for _, n := range nodes {
+		byID[n.ID] = n
+	}
+
+	born := byID["ws:p1:wi-1"]
+	if born.Level != "rip" || born.Lifecycle != domain.Dormant {
+		t.Errorf("wi-1: want rip/dormant, got %s/%s (%s)", born.Level, born.Lifecycle, born.Reason)
+	}
+	// Plane state is passed through verbatim; only the group is machine-readable.
+	if born.State != "En Progreso" || born.StateGroup != "started" {
+		t.Errorf("wi-1 plane state wrong: %q / %q", born.State, born.StateGroup)
+	}
+
+	shipped := byID["ws:p1:wi-2"]
+	if shipped.Level != "done" || shipped.Lifecycle != domain.Closed {
+		t.Errorf("wi-2: want done/closed, got %s/%s", shipped.Level, shipped.Lifecycle)
+	}
+	if shipped.StateGroup != "completed" {
+		t.Errorf("wi-2 state group = %q, want completed", shipped.StateGroup)
+	}
+
+	// The same levels roll up onto the bubble view.
+	code, body = do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("bubbles status %d: %s", code, body)
+	}
+	var views []domain.BubbleView
+	if err := json.Unmarshal(body, &views); err != nil {
+		t.Fatalf("decode bubbles: %v", err)
+	}
+	var found bool
+	for _, v := range views {
+		if v.ID != "ws:p1:m1" {
+			continue
+		}
+		found = true
+		if v.ThreadLevels["rip"] != 1 || v.ThreadLevels["done"] != 1 {
+			t.Errorf("thread level roll-up wrong: %v", v.ThreadLevels)
+		}
+	}
+	if !found {
+		t.Fatalf("bubble ws:p1:m1 missing from board: %s", body)
+	}
+
+	// The interior carries the same derived level for the open thread.
+	code, body = do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail status %d: %s", code, body)
+	}
+	var d domain.ThreadDetail
+	if err := json.Unmarshal(body, &d); err != nil {
+		t.Fatalf("decode detail: %v", err)
+	}
+	if d.Level != "rip" || d.StateGroup != "started" {
+		t.Errorf("detail buoyancy/state wrong: %s / %s", d.Level, d.StateGroup)
 	}
 }
 

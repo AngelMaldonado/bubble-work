@@ -19,6 +19,14 @@ const (
 	Closed  Lifecycle = "closed"
 )
 
+// Evidence kinds (§5.1). Birth is what a thread *is*, not what it produced, so
+// it is deliberately weaker than the rest: a thread with nothing but its own
+// birth event never "got going" (THREAD-LIFECYCLE.md).
+const (
+	EvThreadCreated = "thread-created"
+	EvCompletedTodo = "completed-todo"
+)
+
 // EvidenceEvent is a meaningful output that generates heat (§5.1).
 // Comments, pings and cosmetic edits are intentionally NOT evidence.
 type EvidenceEvent struct {
@@ -26,6 +34,10 @@ type EvidenceEvent struct {
 	Kind     string
 	At       time.Time
 }
+
+// Progress reports whether an event is evidence of *production* rather than mere
+// existence. Only progress can resurrect a thread (THREAD-LIFECYCLE.md).
+func (e EvidenceEvent) Progress() bool { return e.Kind != EvThreadCreated }
 
 // Thread is an executable unit of work inside a bubble (maps to a Plane work
 // item). The extra fields feed the timeline view straight from the snapshot, so
@@ -37,8 +49,20 @@ type Thread struct {
 	Seq         int
 	Owner       string // resolved assignee display name (first assignee)
 	Parent      string // parent work-item id ("" if top-level)
+	State       string // Plane state name as configured (localized)
+	StateGroup  string // Plane state group: backlog|unstarted|started|completed|cancelled
 	CreatedAt   time.Time
 	CompletedAt *time.Time
+}
+
+// Buoyancy is a thread's derived lifecycle — the per-thread analogue of a
+// bubble's heat, computed against the bubble's cycle window
+// (THREAD-LIFECYCLE.md Phase A). Embedded flat into the thread DTOs.
+type Buoyancy struct {
+	Lifecycle Lifecycle `json:"lifecycle"`
+	Level     string    `json:"level"` // in_progress | zzzz | rip | done
+	Score     float64   `json:"score"` // 0..1, decayed recency of the last progress
+	Reason    string    `json:"reason"`
 }
 
 // Instance is a configured Plane deployment the server federates over. Each maps
@@ -162,6 +186,9 @@ type BubbleView struct {
 	Owner       string    `json:"owner,omitempty"`
 	Members     []string  `json:"members,omitempty"` // distinct thread assignees + contract owner (Phase 9)
 	Threads     int       `json:"threads"`
+	// ThreadLevels rolls the bubble's threads up by their own derived level
+	// (THREAD-LIFECYCLE.md Phase A) — e.g. {"in_progress":2,"zzzz":1}.
+	ThreadLevels map[string]int `json:"thread_levels,omitempty"`
 }
 
 // ThreadHit is a searchable thread (task) for the ⌘K omnibar.
@@ -184,8 +211,11 @@ type ThreadNode struct {
 	Active      bool       `json:"active"`
 	Owner       string     `json:"owner,omitempty"`
 	Parent      string     `json:"parent,omitempty"` // raw parent work-item id
+	State       string     `json:"state,omitempty"`  // Plane state name (localized)
+	StateGroup  string     `json:"state_group,omitempty"`
 	CreatedAt   time.Time  `json:"created_at"`
 	CompletedAt *time.Time `json:"completed_at,omitempty"`
+	Buoyancy               // lifecycle/level/score/reason, flattened into the JSON
 }
 
 // ThreadDetail is a thread's full interior: work-artifact files, the logbook,
@@ -198,11 +228,14 @@ type ThreadDetail struct {
 	Active      bool          `json:"active"`
 	Priority    string        `json:"priority,omitempty"`
 	Assignees   []string      `json:"assignees,omitempty"`
+	State       string        `json:"state,omitempty"` // Plane state name (localized)
+	StateGroup  string        `json:"state_group,omitempty"`
 	Artifacts   []md.Artifact `json:"artifacts"`
 	Logbook     *md.Logbook   `json:"logbook,omitempty"`
 	Revisions   []md.Artifact `json:"revisions"`
 	CreatedAt   time.Time     `json:"created_at"`
 	CompletedAt *time.Time    `json:"completed_at,omitempty"`
+	Buoyancy                  // lifecycle/level/score/reason, flattened into the JSON
 }
 
 // Comment is one rendered entry in a thread's comment feed (Phase 12). HTML is

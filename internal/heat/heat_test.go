@@ -44,6 +44,68 @@ func TestClassify(t *testing.T) {
 	}
 }
 
+// A thread is classified from ITS OWN evidence against the bubble's window, so
+// two threads in one bubble can sit at different temperatures
+// (THREAD-LIFECYCLE.md Phase A).
+func TestClassifyThread(t *testing.T) {
+	cycle := time.Hour
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	at := func(mins int) time.Time { return now.Add(-time.Duration(mins) * time.Minute) }
+
+	hot := domain.Thread{ID: "a", Active: true, Owner: "me"}
+	cold := domain.Thread{ID: "b", Active: true, Owner: "me"}
+	shipped := time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)
+	done := domain.Thread{ID: "c", Active: false, Owner: "me", CompletedAt: &shipped}
+
+	b := domain.Bubble{
+		Owner:   "me",
+		Threads: []domain.Thread{hot, cold, done},
+		Evidence: []domain.EvidenceEvent{
+			{ThreadID: "a", Kind: domain.EvCompletedTodo, At: at(5)},   // this cycle
+			{ThreadID: "b", Kind: domain.EvCompletedTodo, At: at(300)}, // long gone
+			{ThreadID: "c", Kind: domain.EvCompletedTodo, At: shipped},
+		},
+	}
+	win := WindowFor(b, cycle, now)
+	byThread := Attribute(b.Evidence)
+
+	// The bubble as a whole is Hot — but only one of its threads is.
+	if r := Classify(b, cycle, now); r.Lifecycle != domain.Hot {
+		t.Fatalf("bubble: want Hot, got %s", r.Lifecycle)
+	}
+	if r := ClassifyThread(hot, byThread["a"], win, now); r.Lifecycle != domain.Hot {
+		t.Fatalf("thread a: want Hot, got %s", r.Lifecycle)
+	}
+	if r := ClassifyThread(cold, byThread["b"], win, now); r.Lifecycle != domain.Dormant {
+		t.Fatalf("thread b: want Dormant, got %s", r.Lifecycle)
+	}
+	if r := ClassifyThread(done, byThread["c"], win, now); r.Lifecycle != domain.Closed {
+		t.Fatalf("thread c: want Closed, got %s", r.Lifecycle)
+	}
+	// An unassigned open thread has nobody accountable → Dormant, like a bubble.
+	orphan := domain.Thread{ID: "d", Active: true}
+	if r := ClassifyThread(orphan, []domain.EvidenceEvent{{At: at(5)}}, win, now); r.Lifecycle != domain.Hot {
+		t.Fatalf("orphan with fresh output should still be Hot, got %s", r.Lifecycle)
+	}
+	if r := ClassifyThread(orphan, nil, win, now); r.Lifecycle != domain.Dormant {
+		t.Fatalf("orphan with no output: want Dormant, got %s", r.Lifecycle)
+	}
+}
+
+// Attribute drops bubble-level evidence (no ThreadID) and buckets the rest.
+func TestAttribute(t *testing.T) {
+	now := time.Now()
+	got := Attribute([]domain.EvidenceEvent{
+		{ThreadID: "a", At: now},
+		{ThreadID: "a", At: now},
+		{ThreadID: "b", At: now},
+		{At: now}, // bubble-level: belongs to no thread
+	})
+	if len(got) != 2 || len(got["a"]) != 2 || len(got["b"]) != 1 {
+		t.Fatalf("unexpected attribution: %v", got)
+	}
+}
+
 // Fresh evidence must score higher than stale evidence (buoyancy ordering).
 func TestScoreDecay(t *testing.T) {
 	cycle := time.Hour

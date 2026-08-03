@@ -116,6 +116,40 @@ func (s *Server) memberNames(ctx context.Context, inst domain.Instance) map[stri
 	return names
 }
 
+// projectStates maps a project's workflow-state ids to their state (group +
+// localized name), cached for statesTTL. Only the GROUP is safe to reason about
+// — names are project-configured and localized (THREAD-LIFECYCLE.md).
+// Best-effort: an error serves a stale map if we have one, else empty, so a
+// thread simply shows no Plane state rather than failing the read.
+func (s *Server) projectStates(ctx context.Context, cl *plane.Client, slug, projID string) map[string]plane.State {
+	key := slug + ":" + projID
+	now := s.now()
+	s.statesMu.Lock()
+	if c, ok := s.statesCache[key]; ok && now.Before(c.exp) {
+		s.statesMu.Unlock()
+		return c.byID
+	}
+	s.statesMu.Unlock()
+
+	states, err := cl.ListStates(ctx)
+	if err != nil {
+		s.statesMu.Lock()
+		defer s.statesMu.Unlock()
+		if c, ok := s.statesCache[key]; ok {
+			return c.byID
+		}
+		return map[string]plane.State{}
+	}
+	byID := make(map[string]plane.State, len(states))
+	for _, st := range states {
+		byID[st.ID] = st
+	}
+	s.statesMu.Lock()
+	s.statesCache[key] = cachedStates{byID: byID, exp: now.Add(statesTTL)}
+	s.statesMu.Unlock()
+	return byID
+}
+
 // Timeline returns a bubble's threads newest-first (INTERIOR-PLAN.md Phase 10),
 // served straight from the in-memory snapshot — no Plane fetch on the request
 // path. bubbleID may be a short id or a full namespaced id (resolved like heat).
@@ -140,6 +174,10 @@ func (s *Server) Timeline(ctx context.Context, bubbleID string) ([]domain.Thread
 	}
 	slug, projID, _ := cut3(b.ID)
 
+	// Each thread carries its own derived lifecycle, computed against this
+	// bubble's heat window (THREAD-LIFECYCLE.md Phase A).
+	buoy := s.threadBuoyancy(*b)
+
 	out := make([]domain.ThreadNode, 0, len(b.Threads))
 	for _, t := range b.Threads {
 		out = append(out, domain.ThreadNode{
@@ -149,8 +187,11 @@ func (s *Server) Timeline(ctx context.Context, bubbleID string) ([]domain.Thread
 			Active:      t.Active,
 			Owner:       t.Owner,
 			Parent:      t.Parent,
+			State:       t.State,
+			StateGroup:  t.StateGroup,
 			CreatedAt:   t.CreatedAt,
 			CompletedAt: t.CompletedAt,
+			Buoyancy:    buoy[t.ID],
 		})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.After(out[j].CreatedAt) })
@@ -192,7 +233,42 @@ func (s *Server) ThreadDetail(ctx context.Context, threadID string) (domain.Thre
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
-	return v.(domain.ThreadDetail), nil
+	d := v.(domain.ThreadDetail)
+	// Buoyancy is time-dependent, so it is derived per request from the snapshot
+	// rather than baked into the cached body (THREAD-LIFECYCLE.md Phase A).
+	d.Buoyancy = s.threadBuoyancyFor(ctx, wid, d)
+	return d, nil
+}
+
+// threadBuoyancyFor derives one thread's lifecycle. It prefers the snapshot, so
+// the thread is measured against its bubble's real cycle window; a thread that
+// isn't in any bubble (a revision sub-issue, or one the refresher hasn't picked
+// up yet) is classified standalone against the rolling window.
+func (s *Server) threadBuoyancyFor(ctx context.Context, wid string, d domain.ThreadDetail) domain.Buoyancy {
+	if bubbles, err := s.collect(ctx); err == nil {
+		for i := range bubbles {
+			for _, t := range bubbles[i].Threads {
+				if t.ID == wid {
+					return s.threadBuoyancy(bubbles[i])[wid]
+				}
+			}
+		}
+	}
+	owner := ""
+	if len(d.Assignees) > 0 {
+		owner = d.Assignees[0]
+	}
+	solo := domain.Bubble{Threads: []domain.Thread{{
+		ID: wid, Name: d.Title, Active: d.Active, Owner: owner,
+		CreatedAt: d.CreatedAt, CompletedAt: d.CompletedAt,
+	}}}
+	if !d.CreatedAt.IsZero() {
+		solo.Evidence = append(solo.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadCreated, At: d.CreatedAt})
+	}
+	if d.CompletedAt != nil {
+		solo.Evidence = append(solo.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvCompletedTodo, At: *d.CompletedAt})
+	}
+	return s.threadBuoyancy(solo)[wid]
 }
 
 // buildThreadDetail renders a thread's interior with live Plane fetches. Callers
@@ -204,6 +280,7 @@ func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst d
 		wi        plane.WorkItemDetail
 		revisions []md.Artifact
 		names     map[string]string
+		states    map[string]plane.State
 	)
 	g, gctx := errgroup.WithContext(ctx)
 	g.Go(guard("get-work-item", func() error {
@@ -217,6 +294,10 @@ func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst d
 	}))
 	g.Go(guard("members", func() error {
 		names = s.memberNames(gctx, inst)
+		return nil
+	}))
+	g.Go(guard("states", func() error {
+		states = s.projectStates(gctx, cl, inst.Slug, projID)
 		return nil
 	}))
 	if err := g.Wait(); err != nil {
@@ -256,6 +337,8 @@ func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst d
 		log.Todos = []md.Todo{}
 	}
 
+	st := states[wi.StateID]
+
 	return domain.ThreadDetail{
 		ID:          full,
 		Seq:         wi.Sequence,
@@ -264,6 +347,8 @@ func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst d
 		Active:      wi.CompletedAt == nil,
 		Priority:    wi.Priority,
 		Assignees:   assignees,
+		State:       st.Name,
+		StateGroup:  st.Group,
 		Artifacts:   arts,
 		Logbook:     log,
 		Revisions:   revisions,

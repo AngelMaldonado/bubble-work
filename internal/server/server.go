@@ -69,6 +69,9 @@ const (
 	// detailTTL caches a thread's rendered interior. Longer than comments since a
 	// thread body changes far less often than its discussion.
 	detailTTL = 60 * time.Second
+	// statesTTL caches a project's workflow states (id → group/name). A project's
+	// states are configuration, not data — they change on the order of never.
+	statesTTL = 30 * time.Minute
 	// kioskTokenPrefix marks a server-issued read-only display credential so
 	// resolve() can shortcut it before attempting Plane authentication (§9 Phase 9).
 	kioskTokenPrefix = "kiosk_"
@@ -115,6 +118,12 @@ type Server struct {
 	// without this every thread open pays that cost. Viewer-agnostic.
 	detailMu    sync.Mutex
 	detailCache map[string]cachedDetail
+
+	// statesCache holds each project's workflow states by id, so a thread's real
+	// Plane state can be shown without a fetch per timeline/thread open
+	// (THREAD-LIFECYCLE.md). Keyed "slug:project".
+	statesMu    sync.Mutex
+	statesCache map[string]cachedStates
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
@@ -176,6 +185,12 @@ type cachedDetail struct {
 	exp    time.Time
 }
 
+// cachedStates holds a project's workflow states keyed by state id.
+type cachedStates struct {
+	byID map[string]plane.State
+	exp  time.Time
+}
+
 // New builds a server. With no instances configured (or none authorized for the
 // caller) it degrades gracefully to an empty world. Any persisted snapshot is
 // loaded so the board serves the last-known state instantly after a restart.
@@ -190,6 +205,7 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		membersCache:  map[string]cachedMembers{},
 		commentsCache: map[string]cachedComments{},
 		detailCache:   map[string]cachedDetail{},
+		statesCache:   map[string]cachedStates{},
 		adminEmails:   map[string]bool{},
 		startedAt:     time.Now(),
 	}
@@ -560,6 +576,58 @@ func bubbleLevel(b domain.Bubble, lc domain.Lifecycle) string {
 	}
 }
 
+// threadLevel maps a thread to the same UI bands as a bubble
+// (THREAD-LIFECYCLE.md Phase A). The zzzz↔rip split mirrors bubbleLevel's
+// "never got going vs went quiet", except that at the work-item grain a thread's
+// own birth doesn't count as production — a thread that was created, assigned to
+// nobody, and never produced anything is 🪦, not 😴.
+func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle) string {
+	switch lc {
+	case domain.Closed:
+		return "done"
+	case domain.Hot, domain.Warm:
+		return "in_progress"
+	case domain.Cooling:
+		return "zzzz"
+	case domain.Dormant:
+		produced := false
+		for _, e := range ev {
+			if e.Progress() {
+				produced = true
+				break
+			}
+		}
+		if t.Owner == "" || !produced {
+			return "rip" // never got going / abandoned
+		}
+		return "zzzz" // had a life, went quiet
+	default:
+		return "zzzz"
+	}
+}
+
+// threadBuoyancy classifies every thread in a bubble against the bubble's own
+// heat window, keyed by raw work-item id (THREAD-LIFECYCLE.md Phase A). This is
+// the single place per-thread lifecycle is derived; the timeline, the interior
+// and the bubble roll-up all read it.
+func (s *Server) threadBuoyancy(b domain.Bubble) map[string]domain.Buoyancy {
+	now := s.now()
+	win := heat.WindowFor(b, s.cycle, now)
+	byThread := heat.Attribute(b.Evidence)
+	out := make(map[string]domain.Buoyancy, len(b.Threads))
+	for _, t := range b.Threads {
+		ev := byThread[t.ID]
+		r := heat.ClassifyThread(t, ev, win, now)
+		out[t.ID] = domain.Buoyancy{
+			Lifecycle: r.Lifecycle,
+			Level:     threadLevel(t, ev, r.Lifecycle),
+			Score:     r.Score,
+			Reason:    r.Reason,
+		}
+	}
+	return out
+}
+
 // toViews classifies bubbles into derived views, hottest first (buoyancy).
 func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 	now := s.now()
@@ -572,10 +640,24 @@ func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 			Lifecycle: r.Lifecycle, Level: bubbleLevel(b, r.Lifecycle),
 			Score: r.Score, Reason: r.Reason,
 			Outcome: b.Outcome, Owner: b.Owner, Members: bubbleMembers(b),
-			Threads: len(b.Threads),
+			Threads: len(b.Threads), ThreadLevels: levelCounts(s.threadBuoyancy(b)),
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Score > out[j].Score })
+	return out
+}
+
+// levelCounts rolls per-thread levels up into a histogram for the bubble view
+// ("2 threads burning, 1 asleep"). Nil for a bubble with no threads so the JSON
+// omits it entirely.
+func levelCounts(bs map[string]domain.Buoyancy) map[string]int {
+	if len(bs) == 0 {
+		return nil
+	}
+	out := make(map[string]int, len(bs))
+	for _, b := range bs {
+		out[b.Level]++
+	}
 	return out
 }
 
@@ -751,7 +833,7 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	// Reflect the new thread in the cache without a refetch.
 	s.patchCachedBubble(slug, id, func(b *domain.Bubble) {
 		b.Threads = append(b.Threads, domain.Thread{ID: wid, Name: req.Name, Active: true})
-		b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: "thread-created", At: s.now()})
+		b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadCreated, At: s.now()})
 	})
 	log.Printf("birth_thread by %s: bubble=%s -> work item %s", actor.Label(), id, wid)
 	return domain.BirthResult{ThreadID: wid, Created: true, Message: fmt.Sprintf("created thread %q in %s", req.Name, id)}, nil
@@ -1234,6 +1316,9 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 		}
 		// Align heat to this project's active Plane cycle (§3.6); zero → rolling.
 		cycleStart, cyclePrev := s.projectCycleWindow(gctx, cl, now)
+		// Resolve state uuid → group/name once per project (cached, ~never changes)
+		// so each thread carries its real Plane state (THREAD-LIFECYCLE.md).
+		states := s.projectStates(gctx, cl, inst.Slug, projID)
 		for _, m := range mods {
 			m := m
 			g.Go(func() error {
@@ -1245,7 +1330,7 @@ func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]dom
 					mu.Unlock()
 					return nil // one bad module shouldn't fail the whole fetch
 				}
-				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items, names)
+				b := s.buildBubble(inst.Slug, projID, projName[projID], m, items, names, states)
 				b.CycleStart, b.CyclePrevStart = cycleStart, cyclePrev
 				mu.Lock()
 				out = append(out, b)
@@ -1313,7 +1398,7 @@ func cycleWindow(cycles []plane.Cycle, now time.Time) (curStart, prevStart time.
 // buildBubble assembles a bubble from a module + its work items, deriving heat
 // evidence from each item's created (thread born) and completed (todo done)
 // timestamps (§5.1), then merging the server-owned contract overlay (§4).
-func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, items []plane.WorkItem, names map[string]string) domain.Bubble {
+func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, items []plane.WorkItem, names map[string]string, states map[string]plane.State) domain.Bubble {
 	// Namespaced id carries the project so writes/close can route.
 	id := slug + ":" + projID + ":" + m.ID
 	b := domain.Bubble{ID: id, Name: m.Name, Instance: slug, Project: projID, ProjectName: projName}
@@ -1325,16 +1410,18 @@ func (s *Server) buildBubble(slug, projID, projName string, m plane.Module, item
 		if len(it.Assignees) > 0 {
 			owner = names[it.Assignees[0]]
 		}
+		st := states[it.StateID]
 		b.Threads = append(b.Threads, domain.Thread{
 			ID: it.ID, Name: it.Name, Active: it.Active,
 			Seq: it.Sequence, Owner: owner, Parent: it.Parent,
+			State: st.Name, StateGroup: st.Group,
 			CreatedAt: it.CreatedAt, CompletedAt: it.CompletedAt,
 		})
 		if !it.CreatedAt.IsZero() {
-			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: "thread-created", At: it.CreatedAt})
+			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvThreadCreated, At: it.CreatedAt})
 		}
 		if it.CompletedAt != nil {
-			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: "completed-todo", At: *it.CompletedAt})
+			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvCompletedTodo, At: *it.CompletedAt})
 		}
 	}
 	return b

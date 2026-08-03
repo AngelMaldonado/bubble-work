@@ -142,7 +142,7 @@ func Handler(b Backend) http.Handler {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "thread_timeline", Description: "List a bubble's threads newest-first — how the bubble has progressed over time (INTERIOR Phase 10). Read this to understand a bubble before acting."},
+		&sdk.Tool{Name: "thread_timeline", Description: "List a bubble's threads newest-first — how the bubble has progressed over time (INTERIOR Phase 10). Read this to understand a bubble before acting. Each thread carries its OWN derived buoyancy (level: in_progress|zzzz|rip|done, with the reason) plus its real Plane state — use it to find what has gone quiet."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in timelineIn) (*sdk.CallToolResult, timelineOut, error) {
 			ts, err := b.Timeline(withActor(ctx, req), in.BubbleID)
 			if err != nil {
@@ -152,7 +152,7 @@ func Handler(b Backend) http.Handler {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "read_thread", Description: "Read a thread's interior: work artifacts (Brief), the Logbook, its Definition of Done, and revisions. REQUIRED before implementing a thread — the birth rule says confirm the outcome and DoD first (§3)."},
+		&sdk.Tool{Name: "read_thread", Description: "Read a thread's interior: work artifacts (Brief), the Logbook, its Definition of Done, and revisions, plus its derived buoyancy (level/reason) and its Plane state. REQUIRED before implementing a thread — the birth rule says confirm the outcome and DoD first (§3)."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in threadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.ThreadDetail(withActor(ctx, req), in.ThreadID)
 			if err != nil {

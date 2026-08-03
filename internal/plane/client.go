@@ -201,26 +201,34 @@ func (c *Client) CreateModule(ctx context.Context, name string) (Module, error) 
 	return out, nil
 }
 
-// DefaultState returns a state id to create work items in: the project's default
-// state, else an unstarted/backlog one, else the first.
-func (c *Client) DefaultState(ctx context.Context) (string, error) {
-	var states []struct {
-		ID      string `json:"id"`
-		Group   string `json:"group"`
-		Default bool   `json:"default"`
-	}
+// State is one of a project's workflow states. Group is the stable machine
+// grouping (backlog|unstarted|started|completed|cancelled); Name is whatever the
+// project configured and is localized, so ALWAYS match on Group, never on Name.
+type State struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Group   string `json:"group"`
+	Default bool   `json:"default"`
+}
+
+// ListStates returns every workflow state in the client's project.
+func (c *Client) ListStates(ctx context.Context) ([]State, error) {
+	var out []State
 	err := c.getPaged(ctx, c.projectBase()+"/states/", func(raw json.RawMessage) error {
-		var page []struct {
-			ID      string `json:"id"`
-			Group   string `json:"group"`
-			Default bool   `json:"default"`
-		}
+		var page []State
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return err
 		}
-		states = append(states, page...)
+		out = append(out, page...)
 		return nil
 	})
+	return out, err
+}
+
+// DefaultState returns a state id to create work items in: the project's default
+// state, else an unstarted/backlog one, else the first.
+func (c *Client) DefaultState(ctx context.Context) (string, error) {
+	states, err := c.ListStates(ctx)
 	if err != nil {
 		return "", err
 	}
@@ -405,6 +413,7 @@ type WorkItem struct {
 	SortOrder   float64  // Plane's manual ordering key
 	Parent      string   // parent work-item id ("" if top-level)
 	Assignees   []string // assignee user ids
+	StateID     string   // Plane state uuid; resolve to a group via ListStates
 }
 
 // WorkItemDetail is a single work item with its rich-text body and metadata,
@@ -520,7 +529,8 @@ func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]Wo
 	var out []WorkItem
 	err := c.getPaged(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", func(raw json.RawMessage) error {
 		// On module-issues, `state` is the state UUID string (not the expanded
-		// object), so we don't decode it — `completed_at` tells us if it's active.
+		// object); `completed_at` tells us if it's active, and the uuid resolves to
+		// a state group via ListStates (THREAD-LIFECYCLE.md).
 		var page []struct {
 			ID          string     `json:"id"`
 			Name        string     `json:"name"`
@@ -530,6 +540,7 @@ func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]Wo
 			SortOrder   float64    `json:"sort_order"`
 			Parent      *string    `json:"parent"`
 			Assignees   []string   `json:"assignees"`
+			State       string     `json:"state"`
 		}
 		if err := json.Unmarshal(raw, &page); err != nil {
 			return err
@@ -549,6 +560,7 @@ func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]Wo
 				SortOrder:   it.SortOrder,
 				Parent:      parent,
 				Assignees:   it.Assignees,
+				StateID:     it.State,
 			})
 		}
 		return nil

@@ -1,7 +1,7 @@
 # Thread Lifecycle — automatic buoyancy for work items
 
-Status: **design agreed, not yet built** · Drafted 2026-08-03 · Companion to
-[`AGENTS.md`](./AGENTS.md) and [`INTERIOR-PLAN.md`](./INTERIOR-PLAN.md).
+Status: **Phase A shipped · Phase B/C pending** · Drafted 2026-08-03 · Companion
+to [`AGENTS.md`](./AGENTS.md) and [`INTERIOR-PLAN.md`](./INTERIOR-PLAN.md).
 
 ## Why
 
@@ -101,16 +101,61 @@ degrade gracefully to overlay-only (compute + display, no writes).
 
 ## Phasing
 
-- **Phase A — compute + show (no writes, safe).** Attribute evidence per thread,
-  run `heat.Classify` per thread, roll up to the bubble, and render a thread
-  level chip in the timeline + interior. Read each thread's real Plane group for
-  display. Zero risk; independently useful. First reviewable slice.
+- **Phase A — compute + show (no writes, safe).** ✅ **Shipped.** Attribute
+  evidence per thread, run the classifier per thread, roll up to the bubble, and
+  render a thread level chip in the timeline + interior. Read each thread's real
+  Plane group for display. Zero risk; independently useful. See *Phase A as
+  built* below.
 - **Phase B — auto-write policy (behind the per-instance toggle).** Extend the
   cooling `tick`: Zzzz→Backlog, RIP→Cancelled, resurrect→In Progress, provenance
   guardrail, group resolution, inbox notifications. Depends on A.
 - **Phase C — evidence sharpening.** Logbook-todo diffing + revision-added
   detection for resurrection; comment-pulse tracking (hold 😴 / block 🪦).
   Some of this is needed by A/B and will be pulled forward as required.
+
+## Phase A as built
+
+One classifier, two grains. `heat.WindowFor` resolves the heat window once (Plane
+cycle when present, rolling otherwise) and a private `classify` applies the
+identical rule to a bubble (`heat.Classify`) and to a single thread
+(`heat.ClassifyThread`), so thread and bubble temperature are commensurable by
+construction. `heat.Attribute` buckets a bubble's evidence by `ThreadID`;
+evidence with no thread is dropped rather than smeared across threads.
+
+- **Server.** `threadBuoyancy(bubble)` is the one place per-thread lifecycle is
+  derived — the timeline, the interior and the roll-up all read it.
+  `threadLevel` mirrors `bubbleLevel`, with one deliberate difference: a
+  thread's own birth is not production, so a dormant thread that only ever
+  emitted `thread-created` is 🪦, not 😴 (`EvidenceEvent.Progress()`; evidence
+  kinds are now the constants `domain.EvThreadCreated` / `EvCompletedTodo`).
+- **Plane state, read-only.** `plane.ListStates` + a per-project
+  `statesCache` (30 min) resolve a work item's state uuid → `{name, group}`.
+  Threads carry both; **only `group` is ever matched on**, `name` is display-only
+  (it is localized). `module-issues` already returns the state uuid, so the
+  snapshot pays one extra cached call per project, not per thread.
+- **Surfaces (parity).** `ThreadNode` and `ThreadDetail` embed
+  `domain.Buoyancy` (`lifecycle`/`level`/`score`/`reason`) flattened into their
+  JSON, plus `state`/`state_group` — so REST, MCP (`thread_timeline`,
+  `read_thread`) and the CLI all get it from the same structs. CLI: `bubble show`
+  marks each row with the thread's level icon and a Plane-state column, `bubble
+  thread` prints a `buoyancy:` and `plane:` line, `bubble heat` appends the
+  roll-up. Web: a level chip per timeline row, a level + Plane-state chip in the
+  thread header, and a tally on the bubble hover card.
+- **Freshness.** Buoyancy is time-dependent, so it is never baked into the
+  60s-cached thread body — `ThreadDetail` derives it per request from the
+  snapshot. A thread outside the snapshot (a revision sub-issue, or one the
+  refresher hasn't picked up) is classified standalone against the rolling
+  window.
+- **Roll-up.** `BubbleView.thread_levels` is a histogram of its threads' levels
+  (`{"in_progress":2,"zzzz":1}`).
+
+**Deliberately NOT done in A:** the bubble's own band is still computed from the
+union of its evidence, not as `max(thread levels)`. The two agree in the common
+case; they diverge when a bubble's only recent evidence belongs to a thread that
+is already closed (union says Warm, roll-up says colder). Switching the band to
+the roll-up changes which bubbles appear in which band on a live board, so it is
+a one-line change held for an explicit decision rather than smuggled in with the
+display work.
 
 ## Decisions locked
 
@@ -130,3 +175,5 @@ degrade gracefully to overlay-only (compute + display, no writes).
 - Commit/PR linkage as progress evidence (needs description-link parsing).
 - Whether a structured "decision" comment should ever count as progress (kept as
   pulse for now).
+- Whether a bubble's band should become `max(thread levels)` outright (see
+  *Phase A as built*) — needs a look at a live board before flipping.

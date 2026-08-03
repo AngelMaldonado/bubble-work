@@ -597,26 +597,27 @@ func Show(cfg config.Config, bubble string) error {
 		return nil
 	}
 
-	sw, ow := 1, 0
+	sw, ow, stw := 1, 0, 0
 	for _, n := range nodes {
 		sw = max(sw, len(fmt.Sprintf("%d", n.Seq)))
 		ow = max(ow, utf8.RuneCountInString(n.Owner))
+		stw = max(stw, utf8.RuneCountInString(n.State))
 	}
-	ow = min(ow, 16)
-	used := 8 + 2 + 2 + sw + 2 + 2 + ow + 2 + 8 // hash + mark + '#'+seq + gaps + owner + age
+	ow, stw = min(ow, 16), min(stw, 14)
+	// hash + level icon + '#'+seq + gaps + owner + plane state + age
+	used := 8 + 2 + 2 + sw + 2 + 2 + ow + 2 + stw + 2 + 8
 	tw := max(termWidth()-used, 16)
 
 	for _, n := range nodes {
-		mark := "•"
-		if !n.Active {
-			mark = "✓"
-		}
 		hash := shortID(n.ID)
 		if len(hash) > 8 {
 			hash = hash[:8]
 		}
-		fmt.Printf("%-8s  %s #%-*d  %s  %s  %s\n",
-			hash, mark, sw, n.Seq, pad(trunc(n.Title, tw), tw), pad(trunc(n.Owner, ow), ow), relAge(n.CreatedAt))
+		// The mark is the thread's OWN buoyancy (THREAD-LIFECYCLE.md), not just
+		// open/closed; the Plane state column shows where the work item actually is.
+		fmt.Printf("%-8s  %s #%-*d  %s  %s  %s  %s\n",
+			hash, levelIcon(n.Level), sw, n.Seq, pad(trunc(n.Title, tw), tw),
+			pad(trunc(n.Owner, ow), ow), pad(trunc(n.State, stw), stw), relAge(n.CreatedAt))
 	}
 	fmt.Printf("\n%d thread(s) · open one: bubble thread <id>\n", len(nodes))
 	return nil
@@ -635,6 +636,12 @@ func Thread(cfg config.Config, id string, comments bool) error {
 		state = "done"
 	}
 	fmt.Printf("#%d  %s  [%s · %s]\n", d.Seq, d.Title, d.Kind, state)
+	if d.Level != "" {
+		fmt.Printf("buoyancy  : %s %s — %s\n", levelIcon(d.Level), levelLabel(d.Level), d.Reason)
+	}
+	if d.State != "" {
+		fmt.Printf("plane     : %s (%s)\n", d.State, d.StateGroup)
+	}
 	if len(d.Assignees) > 0 {
 		fmt.Printf("assignees : %s\n", strings.Join(d.Assignees, ", "))
 	}
@@ -781,6 +788,24 @@ func Heat(cfg config.Config, id string) error {
 	if v.Outcome != "" {
 		fmt.Printf("  outcome   : %s\n", v.Outcome)
 	}
-	fmt.Printf("  threads   : %d\n", v.Threads)
+	fmt.Printf("  threads   : %d%s\n", v.Threads, threadRollup(v.ThreadLevels))
 	return nil
+}
+
+// threadRollup renders a bubble's per-thread levels compactly, hottest band
+// first — "  (🔥 2 · 😴 1)" (THREAD-LIFECYCLE.md Phase A).
+func threadRollup(levels map[string]int) string {
+	if len(levels) == 0 {
+		return ""
+	}
+	var parts []string
+	for _, k := range []string{"in_progress", "reviewed", "zzzz", "rip", "done"} {
+		if n := levels[k]; n > 0 {
+			parts = append(parts, fmt.Sprintf("%s %d", levelIcon(k), n))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return "  (" + strings.Join(parts, " · ") + ")"
 }

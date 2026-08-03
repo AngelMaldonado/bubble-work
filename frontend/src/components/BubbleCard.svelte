@@ -46,6 +46,7 @@
     onclick={() => store.openDetail(bubble)}
     oncontextmenu={(e) => {
       e.preventDefault();
+      e.stopPropagation(); // the bubble's menu wins over the board's
       bubbleMenu.show(bubble, e.clientX, e.clientY);
     }}
     aria-label="open {bubble.name}"

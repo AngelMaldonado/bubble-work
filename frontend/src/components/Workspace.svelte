@@ -9,9 +9,11 @@
   import BirthForm from './BirthForm.svelte';
   import CreateBubbleForm from './CreateBubbleForm.svelte';
   import BubbleContextMenu from './BubbleContextMenu.svelte';
+  import BoardContextMenu from './BoardContextMenu.svelte';
   import BubbleDetail from './BubbleDetail.svelte';
   import ProjectCombobox from './ProjectCombobox.svelte';
   import ViewCombobox from './ViewCombobox.svelte';
+  import { boardMenu } from '../lib/contextmenu.svelte';
 
   let omni = $state(false);
   let birthTarget = $state<BubbleView | null>(null);
@@ -49,7 +51,15 @@
 
 <svelte:window onkeydown={onKey} />
 
-<div class="app">
+<div
+  class="app"
+  oncontextmenu={(e) => {
+    // The board's own menu. A bubble stops propagation, so its menu wins.
+    e.preventDefault();
+    boardMenu.show(e.clientX, e.clientY);
+  }}
+  role="presentation"
+>
   <!-- the one fixed floating bubble, top-left; doubles as the ⌘K launcher
        (a kiosk display is passive, so it's just a mark there) -->
   {#if kiosk}
@@ -192,6 +202,10 @@
 {/if}
 
 <BubbleContextMenu onbirth={startBirth} />
+<BoardContextMenu
+  onnewbubble={() => (showCreate = true)}
+  onsearch={() => (omni = true)}
+/>
 
 <style>
   .app {

@@ -55,7 +55,7 @@
 {#if bubbleMenu.open && b}
   <!-- click/right-click anywhere else dismisses -->
   <div
-    class="cm-scrim"
+    class="ctxmenu-scrim"
     role="presentation"
     onclick={() => bubbleMenu.hide()}
     oncontextmenu={(e) => {
@@ -64,103 +64,43 @@
     }}
   ></div>
 
-  <div class="cm" style="left: {px}px; top: {py}px" role="menu">
-    <div class="cm-head" title={b.name}>{b.name}</div>
-    <button class="cm-item" role="menuitem" onclick={openTimeline}>
-      <span class="ic">🫧</span> Open timeline
+  <div class="ctxmenu" style="left: {px}px; top: {py}px" role="menu">
+    <div class="ctxmenu-head" title={b.name}>{b.name}</div>
+    <button class="ctxmenu-item" role="menuitem" onclick={openTimeline}>
+      <span class="ctxmenu-ic">🫧</span> Open timeline
     </button>
 
     {#if !store.kiosk}
-      <button class="cm-item" role="menuitem" onclick={birth}>
-        <span class="ic">➕</span> Birth thread…
+      <button class="ctxmenu-item" role="menuitem" onclick={birth}>
+        <span class="ctxmenu-ic">➕</span> Birth thread…
       </button>
 
-      <div class="cm-sep"></div>
+      <div class="ctxmenu-sep"></div>
 
       {#if b.level === 'reviewed'}
-        <button class="cm-item" role="menuitem" onclick={() => act((x) => api.unreview(x.id))}>
-          <span class="ic">↩</span> Un-review
+        <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.unreview(x.id))}>
+          <span class="ctxmenu-ic">↩</span> Un-review
         </button>
       {:else}
-        <button class="cm-item" role="menuitem" onclick={() => act((x) => api.review(x.id))}>
-          <span class="ic">👀</span> Mark reviewed
+        <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.review(x.id))}>
+          <span class="ctxmenu-ic">👀</span> Mark reviewed
         </button>
       {/if}
 
       {#if b.level === 'done'}
-        <button class="cm-item" role="menuitem" onclick={() => act((x) => api.reopen(x.id))}>
-          <span class="ic">♻️</span> Reopen
+        <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.reopen(x.id))}>
+          <span class="ctxmenu-ic">♻️</span> Reopen
         </button>
       {:else}
-        <button class="cm-item" role="menuitem" onclick={() => act((x) => api.close(x.id))}>
-          <span class="ic">🏆</span> Close (done)
+        <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.close(x.id))}>
+          <span class="ctxmenu-ic">🏆</span> Close (done)
         </button>
       {/if}
     {/if}
 
-    <div class="cm-sep"></div>
-    <button class="cm-item" role="menuitem" onclick={copyId}>
-      <span class="ic">🔗</span> Copy id
+    <div class="ctxmenu-sep"></div>
+    <button class="ctxmenu-item" role="menuitem" onclick={copyId}>
+      <span class="ctxmenu-ic">🔗</span> Copy id
     </button>
   </div>
 {/if}
-
-<style>
-  .cm-scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 80;
-    background: transparent;
-    border: none;
-  }
-  .cm {
-    position: fixed;
-    z-index: 81;
-    min-width: 200px;
-    padding: 0.35rem;
-    border-radius: 12px;
-    background: var(--surface-solid);
-    border: 1px solid var(--line);
-    box-shadow: 0 20px 50px var(--shadow-strong);
-    display: grid;
-    gap: 1px;
-  }
-  .cm-head {
-    padding: 0.35rem 0.55rem 0.4rem;
-    font-size: 0.72rem;
-    font-weight: 700;
-    color: var(--faint);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    max-width: 260px;
-  }
-  .cm-item {
-    display: flex;
-    align-items: center;
-    gap: 0.55rem;
-    width: 100%;
-    text-align: left;
-    padding: 0.45rem 0.55rem;
-    border: none;
-    border-radius: 8px;
-    background: transparent;
-    color: var(--text);
-    cursor: pointer;
-    font-size: 0.85rem;
-  }
-  .cm-item:hover {
-    background: var(--hover);
-  }
-  .ic {
-    width: 1.1rem;
-    text-align: center;
-    flex: none;
-    font-size: 0.85rem;
-  }
-  .cm-sep {
-    height: 1px;
-    margin: 0.25rem 0.3rem;
-    background: var(--line);
-  }
-</style>

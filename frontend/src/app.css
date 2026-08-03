@@ -134,3 +134,71 @@ textarea {
     animation: none !important;
   }
 }
+
+/* ---- right-click context menus (bubble + board) ------------------------- */
+/* Global so both menus are the same object to the eye; scoped styles would
+   drift the moment one is edited. */
+.ctxmenu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  background: transparent;
+  border: none;
+}
+.ctxmenu {
+  position: fixed;
+  z-index: 81;
+  min-width: 208px;
+  padding: 0.35rem;
+  border-radius: 12px;
+  background: var(--surface-solid);
+  border: 1px solid var(--line);
+  box-shadow: 0 20px 50px var(--shadow-strong);
+  display: grid;
+  gap: 1px;
+}
+.ctxmenu-head {
+  padding: 0.35rem 0.55rem 0.4rem;
+  font-size: 0.72rem;
+  font-weight: 700;
+  color: var(--faint);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 260px;
+}
+.ctxmenu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  text-align: left;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  font-size: 0.85rem;
+  font-family: inherit;
+}
+.ctxmenu-item:hover {
+  background: var(--hover);
+}
+.ctxmenu-ic {
+  width: 1.1rem;
+  text-align: center;
+  flex: none;
+  font-size: 0.85rem;
+}
+/* trailing hint (a keyboard shortcut, or the current value of a toggle) */
+.ctxmenu-hint {
+  margin-left: auto;
+  color: var(--faint);
+  font-size: 0.72rem;
+}
+.ctxmenu-sep {
+  height: 1px;
+  margin: 0.25rem 0.3rem;
+  background: var(--line);
+}

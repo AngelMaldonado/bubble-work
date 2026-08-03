@@ -19,6 +19,9 @@
     startCollapsed?: boolean;
   } = $props();
 
+  // Deliberately a one-shot seed: startCollapsed decides how the band OPENS,
+  // and from then on it is the reader's toggle to own.
+  // svelte-ignore state_referenced_locally
   let expanded = $state(!startCollapsed);
 
   const isFocus = $derived(level === 'in_progress');

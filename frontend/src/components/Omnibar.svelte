@@ -89,14 +89,24 @@
       label: 'set owner…',
       needsBubble: true,
       needsInput: 'owner name / email',
-      run: (b, v) => b && v !== undefined && api.contract(b.id, { owner: v }).then(() => store.refresh()),
+      run: (b, v) => {
+        // Guarded rather than chained: `v !== undefined &&` yields `false`,
+        // which is not a valid Cmd result.
+        if (!b || v === undefined) return;
+        return api.contract(b.id, { owner: v }).then(() => store.refresh());
+      },
     },
     {
       id: 'outcome',
       label: 'set outcome…',
       needsBubble: true,
       needsInput: 'the intended outcome',
-      run: (b, v) => b && v !== undefined && api.contract(b.id, { outcome: v }).then(() => store.refresh()),
+      run: (b, v) => {
+        // Guarded rather than chained: `v !== undefined &&` yields `false`,
+        // which is not a valid Cmd result.
+        if (!b || v === undefined) return;
+        return api.contract(b.id, { outcome: v }).then(() => store.refresh());
+      },
     },
     {
       id: 'signout',

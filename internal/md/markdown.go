@@ -1,16 +1,46 @@
 package md
 
 import (
+	"bytes"
 	"regexp"
 	"strings"
+
+	"github.com/yuin/goldmark"
+	"github.com/yuin/goldmark/extension"
+	"github.com/yuin/goldmark/parser"
+	gmhtml "github.com/yuin/goldmark/renderer/html"
 )
+
+// gm is the shared Markdown→HTML renderer — the same engine (goldmark GFM) the
+// mds tool uses, with auto heading IDs so the web view can anchor a TOC/minimap.
+// goldmark escapes raw HTML, so rendered output is safe to inject. Convert is
+// safe for concurrent use.
+var gm = goldmark.New(
+	goldmark.WithExtensions(extension.GFM),
+	goldmark.WithParserOptions(parser.WithAutoHeadingID()),
+	goldmark.WithRendererOptions(gmhtml.WithHardWraps()),
+)
+
+// RenderHTML converts GFM Markdown to safe HTML for the web interior view.
+func RenderHTML(markdown string) string {
+	if strings.TrimSpace(markdown) == "" {
+		return ""
+	}
+	var buf bytes.Buffer
+	if err := gm.Convert([]byte(markdown), &buf); err != nil {
+		return ""
+	}
+	return buf.String()
+}
 
 // Artifact is one "file" of a thread's work: a top-level H1 section of the body
 // (or the whole body when there are no H1s), with a TOC built from its H2+.
+// HTML is the goldmark-rendered body for the web view; CLI/MCP use Markdown.
 type Artifact struct {
 	Title    string     `json:"title"`
 	TOC      []TOCEntry `json:"toc"`
 	Markdown string     `json:"markdown"`
+	HTML     string     `json:"html"`
 }
 
 // TOCEntry is one heading (level 2..6) inside an artifact.
@@ -31,8 +61,10 @@ type Todo struct {
 // whether the work is phased (has phase subheadings) vs a flat task list.
 type Logbook struct {
 	Markdown string `json:"markdown"`
-	Todos    []Todo `json:"todos"`
-	DoD      []Todo `json:"dod,omitempty"`
+	HTML     string `json:"html"`               // goldmark-rendered logbook (web view)
+	Todos    []Todo `json:"todos"`              // parsed items (CLI/MCP)
+	DoD      []Todo `json:"dod,omitempty"`      // parsed DoD items (CLI/MCP)
+	DoDHTML  string `json:"dod_html,omitempty"` // goldmark-rendered DoD (web view)
 	Phased   bool   `json:"phased"`
 }
 
@@ -55,13 +87,24 @@ func ParseThread(body, threadName string) (artifacts []Artifact, logbook *Logboo
 	logMD, rest, hasLog := ExtractSection(body, "logbook")
 	dodMD, rest, hasDoD := ExtractSection(rest, "definition of done", "dod")
 
-	artifacts = Split(rest, threadName)
+	// Render the whole remaining body as ONE document. Plane uses H1/H2 as
+	// ordinary in-content headings, so splitting on H1 would fragment real work
+	// items into spurious "files". The minimap navigates the headings instead.
+	if rest = strings.TrimSpace(rest); rest != "" {
+		title := strings.TrimSpace(threadName)
+		if title == "" {
+			title = "Document"
+		}
+		artifacts = []Artifact{makeArtifact(title, rest)}
+	}
 
 	if hasLog || hasDoD {
 		logbook = &Logbook{
 			Markdown: logMD,
+			HTML:     RenderHTML(logMD),
 			Todos:    ParseTodos(logMD),
 			DoD:      ParseTodos(dodMD),
+			DoDHTML:  RenderHTML(dodMD),
 			Phased:   headingRe.MatchString(logMD),
 		}
 	}
@@ -178,7 +221,8 @@ func ParseTodos(section string) []Todo {
 func NewArtifact(title, body string) Artifact { return makeArtifact(title, body) }
 
 func makeArtifact(title, body string) Artifact {
-	return Artifact{Title: title, Markdown: strings.TrimSpace(body), TOC: toc(body)}
+	body = strings.TrimSpace(body)
+	return Artifact{Title: title, Markdown: body, TOC: toc(body), HTML: RenderHTML(body)}
 }
 
 func toc(body string) []TOCEntry {

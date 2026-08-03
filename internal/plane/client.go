@@ -77,7 +77,7 @@ func (c *Client) projectBase() string {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	const maxAttempts = 3 // 1 try + 2 retries
+	const maxAttempts = 4 // 1 try + 3 retries (backoff 0.4s, 0.8s, 1.6s)
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
@@ -583,6 +583,37 @@ func (c *Client) GetWorkItem(ctx context.Context, workItemID string) (WorkItemDe
 		d.Parent = *r.Parent
 	}
 	return d, nil
+}
+
+// ListChildren returns a work item's sub-work-items (children). Plane's list
+// endpoint doesn't filter by parent server-side and there's no sub-items
+// endpoint on all instances, so we page the project's work items and filter by
+// parent client-side. The list already carries description_html, so no per-item
+// fetch is needed.
+func (c *Client) ListChildren(ctx context.Context, parentID string) ([]WorkItemDetail, error) {
+	var out []WorkItemDetail
+	err := c.getPaged(ctx, c.projectBase()+"/work-items/", func(raw json.RawMessage) error {
+		var page []struct {
+			ID              string  `json:"id"`
+			Name            string  `json:"name"`
+			DescriptionHTML string  `json:"description_html"`
+			Parent          *string `json:"parent"`
+			CreatedAt       time.Time `json:"created_at"`
+		}
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		for _, it := range page {
+			if it.Parent != nil && *it.Parent == parentID {
+				out = append(out, WorkItemDetail{
+					ID: it.ID, Name: it.Name, DescriptionHTML: it.DescriptionHTML,
+					CreatedAt: it.CreatedAt,
+				})
+			}
+		}
+		return nil
+	})
+	return out, err
 }
 
 // ListRelations returns a work item's typed relationships (INTERIOR-PLAN.md).

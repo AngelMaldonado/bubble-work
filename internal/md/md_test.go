@@ -22,6 +22,8 @@ func TestFromHTML_Basics(t *testing.T) {
 		{"blockquote", `<blockquote><p>quoted</p></blockquote>`, "> quoted"},
 		{"empty", ``, ""},
 		{"whitespace collapse", "<p>a\n   b\tc</p>", "a b c"},
+		{"block image", `<p>x</p><img src="https://e.com/a.png" alt="pic">`, "x\n\n![pic](https://e.com/a.png)"},
+		{"inline image", `<p>see <img src="https://e.com/b.png" alt="b"></p>`, "see ![b](https://e.com/b.png)"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

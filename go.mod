@@ -4,6 +4,7 @@ go 1.26
 
 require (
 	github.com/modelcontextprotocol/go-sdk v1.7.0
+	github.com/yuin/goldmark v1.8.5
 	golang.org/x/net v0.57.0
 	golang.org/x/sync v0.21.0
 	golang.org/x/term v0.45.0

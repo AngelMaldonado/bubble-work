@@ -65,6 +65,13 @@ func (c *htmlConv) block(n *html.Node) {
 			c.sb.WriteString("\n\n")
 		}
 	case html.ElementNode:
+		// Plane embeds images as a custom <image-component src="<asset-id>">.
+		if n.Data == "image-component" {
+			if src := attr(n, "src"); src != "" {
+				c.sb.WriteString("![](" + assetRef(src) + ")\n\n")
+			}
+			return
+		}
 		switch n.DataAtom {
 		case atom.H1, atom.H2, atom.H3, atom.H4, atom.H5, atom.H6:
 			level := int(n.Data[1] - '0')
@@ -90,12 +97,29 @@ func (c *htmlConv) block(n *html.Node) {
 			}
 			c.sb.WriteByte('\n')
 		case atom.Pre:
+			// preserve the code language (e.g. language-mermaid) so mermaid blocks
+			// are detected and other languages can be highlighted later.
+			lang := ""
+			for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
+				if ch.Type == html.ElementNode && ch.DataAtom == atom.Code {
+					for _, cls := range strings.Fields(attr(ch, "class")) {
+						if l, ok := strings.CutPrefix(cls, "language-"); ok {
+							lang = l
+						}
+					}
+				}
+			}
 			code := strings.TrimRight(textContent(n), "\n")
-			c.sb.WriteString("```\n")
+			c.sb.WriteString("```" + lang + "\n")
 			c.sb.WriteString(code)
 			c.sb.WriteString("\n```\n\n")
 		case atom.Hr:
 			c.sb.WriteString("---\n\n")
+		case atom.Img:
+			// a block-level <img> (direct child, not inside a <p>)
+			if src := attr(n, "src"); src != "" {
+				c.sb.WriteString("![" + attr(n, "alt") + "](" + src + ")\n\n")
+			}
 		case atom.Table:
 			c.table(n)
 		case atom.Div, atom.Section, atom.Article, atom.Main, atom.Header, atom.Footer:
@@ -127,6 +151,12 @@ func (c *htmlConv) inlineNode(n *html.Node) string {
 	case html.TextNode:
 		return collapseWS(n.Data)
 	case html.ElementNode:
+		if n.Data == "image-component" {
+			if src := attr(n, "src"); src != "" {
+				return "![](" + assetRef(src) + ")"
+			}
+			return ""
+		}
 		switch n.DataAtom {
 		case atom.Strong, atom.B:
 			return wrap("**", strings.TrimSpace(c.inline(n)))
@@ -306,6 +336,19 @@ func (c *htmlConv) table(n *html.Node) {
 }
 
 // ---- small helpers ----
+
+// AssetScheme marks a Plane asset id inside an image src so the server can
+// rewrite it to a real (proxied) URL once it knows the instance and project.
+const AssetScheme = "plane-asset:"
+
+// assetRef wraps a Plane image src: absolute URLs pass through; bare asset ids
+// get the plane-asset: marker for later server-side rewriting.
+func assetRef(src string) string {
+	if strings.HasPrefix(src, "http://") || strings.HasPrefix(src, "https://") {
+		return src
+	}
+	return AssetScheme + src
+}
 
 func attr(n *html.Node, key string) string {
 	for _, a := range n.Attr {

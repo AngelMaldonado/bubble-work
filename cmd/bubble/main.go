@@ -488,12 +488,38 @@ func cmdAdmin(args []string) {
 		err = client.AdminRefresh(cfg, token)
 	case "tick":
 		err = client.AdminTick(cfg, token)
+	case "kiosk":
+		err = cmdAdminKiosk(cfg, token, args[1:])
 	default:
 		adminUsage()
 		os.Exit(2)
 	}
 	if err != nil {
 		log.Fatalf("admin: %v", err)
+	}
+}
+
+func cmdAdminKiosk(cfg config.Config, token string, args []string) error {
+	if len(args) < 1 {
+		fmt.Fprint(os.Stderr, "usage: bubble admin kiosk [ls | new <instance> [name...] | rm <token>]\n")
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "ls", "list":
+		return client.AdminKioskList(cfg, token)
+	case "new", "add":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: bubble admin kiosk new <instance> [name...]")
+		}
+		name := strings.Join(args[2:], " ")
+		return client.AdminKioskNew(cfg, token, args[1], name)
+	case "rm", "revoke", "remove":
+		if len(args) < 2 {
+			return fmt.Errorf("usage: bubble admin kiosk rm <token>")
+		}
+		return client.AdminKioskRevoke(cfg, token, args[1])
+	default:
+		return fmt.Errorf("unknown kiosk subcommand %q", args[0])
 	}
 }
 
@@ -509,6 +535,9 @@ Usage:
   bubble admin stats         server health snapshot
   bubble admin refresh       flush server caches
   bubble admin tick          force a cooling sweep now
+  bubble admin kiosk ls              list read-only display tokens
+  bubble admin kiosk new <inst> [n]  mint a kiosk token for an instance
+  bubble admin kiosk rm <token>      revoke a kiosk token
 
 `)
 }

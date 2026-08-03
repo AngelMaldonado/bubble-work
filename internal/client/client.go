@@ -236,6 +236,88 @@ func postTok(cfg config.Config, path, token string, out any) error {
 	return nil
 }
 
+// kioskToken mirrors the server's store.KioskToken JSON contract.
+type kioskToken struct {
+	Token     string `json:"token"`
+	Instance  string `json:"instance"`
+	Name      string `json:"name"`
+	CreatedAt string `json:"created_at"`
+}
+
+// adminSend performs an authenticated admin request with an optional JSON body.
+func adminSend(cfg config.Config, method, path, token string, body, out any) error {
+	var b []byte
+	if body != nil {
+		var err error
+		if b, err = json.Marshal(body); err != nil {
+			return err
+		}
+	}
+	req, err := http.NewRequest(method, cfg.ActiveServer()+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("forbidden — not a service admin (set BUBBLE_ADMIN_TOKEN or use an admin email)")
+	}
+	if resp.StatusCode >= 300 {
+		return serverError(resp, path)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// AdminKioskList prints all kiosk display tokens (service admin).
+func AdminKioskList(cfg config.Config, token string) error {
+	var ks []kioskToken
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/kiosk", token, &ks); err != nil {
+		return err
+	}
+	if len(ks) == 0 {
+		fmt.Println("(no kiosk tokens)")
+		return nil
+	}
+	for _, k := range ks {
+		fmt.Printf("%-30s  instance=%s  name=%s  created=%s\n",
+			k.Token, k.Instance, orDash(k.Name), k.CreatedAt)
+	}
+	return nil
+}
+
+// AdminKioskNew mints a read-only kiosk display token bound to an instance.
+func AdminKioskNew(cfg config.Config, token, instance, name string) error {
+	var k kioskToken
+	if err := adminSend(cfg, http.MethodPost, "/api/admin/kiosk", token,
+		map[string]string{"instance": instance, "name": name}, &k); err != nil {
+		return err
+	}
+	fmt.Printf("kiosk token for %s:\n\n  %s\n\nOpen the board as:  <server>/?kiosk=%s\n",
+		k.Instance, k.Token, k.Token)
+	return nil
+}
+
+// AdminKioskRevoke deletes a kiosk display token.
+func AdminKioskRevoke(cfg config.Config, token, kiosk string) error {
+	if err := adminSend(cfg, http.MethodDelete, "/api/admin/kiosk/"+url.PathEscape(kiosk), token, nil, nil); err != nil {
+		return err
+	}
+	fmt.Println("revoked")
+	return nil
+}
+
 // AdminInstances lists all instances (service admin).
 func AdminInstances(cfg config.Config, token string) error {
 	var is []domain.AdminInstance

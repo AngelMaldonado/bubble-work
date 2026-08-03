@@ -49,6 +49,8 @@ func fakePlane() *httptest.Server {
 			]}`)
 		case strings.HasSuffix(p, "/relations/"):
 			io.WriteString(w, `{"relates_to":["rev-1"],"blocking":[],"blocked_by":[]}`)
+		case strings.HasSuffix(p, "/comments/") && r.Method == http.MethodPost:
+			io.WriteString(w, `{"id":"c2","actor":"u1","comment_html":"<p>shipping it</p>","created_at":"2026-04-02T00:00:00Z"}`)
 		case strings.HasSuffix(p, "/comments/"):
 			io.WriteString(w, `{"results":[{"id":"c1","actor":"u1","comment_html":"<p>looks good</p>","created_at":"2026-04-01T00:00:00Z"}]}`)
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
@@ -292,6 +294,28 @@ func TestInteriorEndpoints(t *testing.T) {
 	}
 	if len(cs) != 1 || cs[0].Author != "Owner" || cs[0].Markdown != "looks good" {
 		t.Errorf("comments wrong: %+v", cs)
+	}
+
+	// Posting a comment: written as the caller (actor u1 == me → mine), 201.
+	code, body = do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, `{"body":"shipping it"}`)
+	if code != http.StatusCreated {
+		t.Fatalf("post comment status %d: %s", code, body)
+	}
+	var pc domain.Comment
+	if err := json.Unmarshal(body, &pc); err != nil {
+		t.Fatalf("decode posted comment: %v", err)
+	}
+	if pc.Markdown != "shipping it" || pc.Author != "Owner" || !pc.Mine {
+		t.Errorf("posted comment wrong: %+v", pc)
+	}
+	if pc.HTML == "" {
+		t.Error("posted comment should carry rendered HTML")
+	}
+
+	// Empty body is a 400, not a Plane round-trip.
+	code, body = do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, `{"body":"   "}`)
+	if code != http.StatusBadRequest {
+		t.Errorf("empty comment should be 400, got %d: %s", code, body)
 	}
 }
 

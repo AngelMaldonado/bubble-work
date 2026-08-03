@@ -203,12 +203,24 @@ type ThreadDetail struct {
 	CompletedAt *time.Time    `json:"completed_at,omitempty"`
 }
 
-// Comment is one rendered entry in a thread's comment feed (Phase 12).
+// Comment is one rendered entry in a thread's comment feed (Phase 12). HTML is
+// the goldmark render for the chat UI; Markdown serves CLI/MCP. Mine marks the
+// caller's own messages so the UI can align them.
 type Comment struct {
 	ID        string    `json:"id"`
 	Author    string    `json:"author"`
+	AuthorID  string    `json:"author_id,omitempty"`
 	Markdown  string    `json:"markdown"`
+	HTML      string    `json:"html"`
+	Mine      bool      `json:"mine"`
+	Readers   []Reader  `json:"readers,omitempty"` // 👀 read-receipts (server overlay)
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// Reader is one person who has read a comment (a 👀 read-receipt).
+type Reader struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
 }
 
 // BirthRequest carries the two birth artifacts the policy engine enforces (§3).

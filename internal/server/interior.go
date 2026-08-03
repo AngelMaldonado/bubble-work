@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
 	"regexp"
 	"sort"
 	"strings"
+	"time"
 
 	"golang.org/x/sync/errgroup"
 
@@ -168,6 +170,34 @@ func (s *Server) ThreadDetail(ctx context.Context, threadID string) (domain.Thre
 		return domain.ThreadDetail{}, err
 	}
 
+	// Serve from cache when fresh — building the detail pages the whole project
+	// for revisions (~1.7s). singleflight coalesces concurrent misses.
+	s.detailMu.Lock()
+	if c, ok := s.detailCache[wid]; ok && s.now().Before(c.exp) {
+		s.detailMu.Unlock()
+		return c.detail, nil
+	}
+	s.detailMu.Unlock()
+
+	v, err, _ := s.sf.Do("detail:"+wid, func() (any, error) {
+		d, e := s.buildThreadDetail(ctx, cl, inst, projID, wid, full)
+		if e != nil {
+			return nil, e
+		}
+		s.detailMu.Lock()
+		s.detailCache[wid] = cachedDetail{detail: d, exp: s.now().Add(detailTTL)}
+		s.detailMu.Unlock()
+		return d, nil
+	})
+	if err != nil {
+		return domain.ThreadDetail{}, err
+	}
+	return v.(domain.ThreadDetail), nil
+}
+
+// buildThreadDetail renders a thread's interior with live Plane fetches. Callers
+// go through ThreadDetail, which caches the (viewer-agnostic) result.
+func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst domain.Instance, projID, wid, full string) (domain.ThreadDetail, error) {
 	// Fetch the body, revisions, and member names concurrently — each is a
 	// separate Plane round-trip (~0.3-1s), so serial would stack up.
 	var (
@@ -328,22 +358,163 @@ func (s *Server) ThreadComments(ctx context.Context, threadID string) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	cms, err := cl.ListComments(ctx, wid)
+	// Base comments come from a short-lived cache (the expensive, paged Plane
+	// fetch). It's viewer-agnostic — the per-caller "mine" flag and the live 👀
+	// readers are applied to a copy below, so the cache is safe to share.
+	base, err := s.commentsFor(ctx, cl, inst, wid)
 	if err != nil {
 		return nil, err
 	}
-	names := s.memberNames(ctx, inst)
-
-	out := make([]domain.Comment, 0, len(cms))
-	for _, cm := range cms {
-		out = append(out, domain.Comment{
-			ID:        cm.ID,
-			Author:    names[cm.ActorID],
-			Markdown:  md.FromHTML(cm.HTML),
-			CreatedAt: cm.CreatedAt,
-		})
+	me, _ := domain.ActorFrom(ctx)
+	out := make([]domain.Comment, len(base))
+	copy(out, base)
+	for i := range out {
+		out[i].Mine = out[i].AuthorID != "" && out[i].AuthorID == me.ID
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	s.attachReaders(inst.Slug, out)
+	return out, nil
+}
+
+// commentsFor returns a work item's rendered comments (oldest-first, without the
+// viewer-specific "mine" flag or 👀 readers), served from a short-TTL cache.
+// singleflight coalesces concurrent misses so a burst of opens hits Plane once.
+func (s *Server) commentsFor(ctx context.Context, cl *plane.Client, inst domain.Instance, wid string) ([]domain.Comment, error) {
+	s.commentsMu.Lock()
+	if c, ok := s.commentsCache[wid]; ok && s.now().Before(c.exp) {
+		s.commentsMu.Unlock()
+		return c.comments, nil
+	}
+	s.commentsMu.Unlock()
+
+	v, err, _ := s.sf.Do("comments:"+wid, func() (any, error) {
+		cms, err := cl.ListComments(ctx, wid)
+		if err != nil {
+			return nil, err
+		}
+		names := s.memberNames(ctx, inst)
+		out := make([]domain.Comment, 0, len(cms))
+		for _, cm := range cms {
+			out = append(out, renderComment(cm, names, "")) // viewer-agnostic (Mine=false)
+		}
+		sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+		s.commentsMu.Lock()
+		s.commentsCache[wid] = cachedComments{comments: out, exp: s.now().Add(commentsTTL)}
+		s.commentsMu.Unlock()
+		return out, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.([]domain.Comment), nil
+}
+
+// invalidateComments drops a work item's cached comments (after a new post) so
+// the next read reflects it immediately.
+func (s *Server) invalidateComments(wid string) {
+	s.commentsMu.Lock()
+	delete(s.commentsCache, wid)
+	s.commentsMu.Unlock()
+}
+
+// attachReaders decorates each comment with its 👀 read-receipts, excluding the
+// comment's own author (you don't "read" your own message).
+func (s *Server) attachReaders(instance string, cs []domain.Comment) {
+	if len(cs) == 0 {
+		return
+	}
+	ids := make([]string, len(cs))
+	for i, c := range cs {
+		ids[i] = c.ID
+	}
+	byID, err := s.store.CommentReaders(instance, ids)
+	if err != nil {
+		return // read-receipts are best-effort, never fatal to reading comments
+	}
+	for i := range cs {
+		for _, r := range byID[cs[i].ID] {
+			if r.ID == cs[i].AuthorID {
+				continue // author isn't a reader of their own comment
+			}
+			cs[i].Readers = append(cs[i].Readers, domain.Reader{ID: r.ID, Name: r.Name})
+		}
+	}
+}
+
+// MarkCommentsRead records the caller as having read the given comments (👀).
+// Plane has no comment-reaction API, so this is a server overlay. Callers pass
+// only comments they didn't author; the read display also excludes self-reads.
+func (s *Server) MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error {
+	if len(commentIDs) == 0 {
+		return nil
+	}
+	full, err := s.resolveThreadID(ctx, threadID)
+	if err != nil {
+		return err
+	}
+	_, inst, _, _, _, err := s.interiorClient(ctx, full) // also authorizes access
+	if err != nil {
+		return err
+	}
+	me, _ := domain.ActorFrom(ctx)
+	if me.ID == "" {
+		return fmt.Errorf("%w: no identity", errUnauth)
+	}
+	return s.store.MarkCommentsRead(inst.Slug, me.ID, me.Name, s.now().Format(time.RFC3339), commentIDs)
+}
+
+// renderComment normalizes a Plane comment through the same md pipeline used
+// everywhere else (FromHTML → GFM → goldmark), resolving the author name and
+// flagging the caller's own messages.
+func renderComment(cm plane.Comment, names map[string]string, meID string) domain.Comment {
+	author := names[cm.ActorID]
+	if author == "" {
+		author = "someone"
+	}
+	markdown := md.FromHTML(cm.HTML)
+	return domain.Comment{
+		ID:        cm.ID,
+		Author:    author,
+		AuthorID:  cm.ActorID,
+		Markdown:  markdown,
+		HTML:      md.RenderHTML(markdown),
+		Mine:      cm.ActorID != "" && cm.ActorID == meID,
+		CreatedAt: cm.CreatedAt,
+	}
+}
+
+// PostComment adds a comment to a thread's discussion, written AS the caller so
+// Plane attributes it correctly (impersonation via the presented Plane key, like
+// birth). Comments are communication, not evidence — posting warms nothing (§4).
+func (s *Server) PostComment(ctx context.Context, threadID, body string) (domain.Comment, error) {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return domain.Comment{}, fmt.Errorf("%w: empty comment", errBadRequest)
+	}
+	full, err := s.resolveThreadID(ctx, threadID)
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	_, inst, _, projID, wid, err := s.interiorClient(ctx, full)
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	// Write with the caller's own key so Plane's native actor is the real author.
+	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
+	cm, err := wcl.CreateComment(ctx, wid, md.RenderHTML(body))
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	s.invalidateComments(wid) // next read includes the new comment
+	me, _ := domain.ActorFrom(ctx)
+	names := s.memberNames(ctx, inst)
+	out := renderComment(cm, names, me.ID)
+	// The freshly-created comment is definitively ours, and Plane may not have
+	// filled the author name into our members cache path — trust the actor.
+	out.Mine = true
+	if out.Author == "someone" && me.Name != "" {
+		out.Author = me.Name
+	}
+	log.Printf("comment by %s on thread %s", me.Label(), wid)
 	return out, nil
 }
 
@@ -371,4 +542,38 @@ func (s *Server) handleThreadComments(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, c)
+}
+
+func (s *Server) handlePostComment(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Body     string `json:"body"`
+		Markdown string `json:"markdown"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	body := in.Body
+	if body == "" {
+		body = in.Markdown
+	}
+	cm, err := s.PostComment(r.Context(), r.PathValue("id"), body)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusCreated, cm)
+}
+
+func (s *Server) handleMarkCommentsRead(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		CommentIDs []string `json:"comment_ids"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	if err := s.MarkCommentsRead(r.Context(), r.PathValue("id"), in.CommentIDs); writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }

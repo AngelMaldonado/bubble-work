@@ -40,6 +40,8 @@ var (
 	errUnauth   = errors.New("unauthorized")
 	errForbid   = errors.New("not authorized for this instance")
 	errAmbig    = errors.New("ambiguous id")
+	// errBadRequest is a client input error (empty/invalid payload) → 400.
+	errBadRequest = errors.New("bad request")
 	// errUpstream is a transient Plane failure during resolution. It must map to
 	// 5xx (not 401) so callers retry instead of signing out, and it is never
 	// cached — see resolveUncached.
@@ -58,6 +60,13 @@ const (
 	// membersTTL caches an instance's member id→name map. Members change rarely,
 	// and this call otherwise runs on every timeline/thread open (~0.5s each).
 	membersTTL = 10 * time.Minute
+	// commentsTTL caches a work item's comments so repeat chat opens don't each
+	// hit Plane's paged comments endpoint. Kept short since posting invalidates it
+	// and read-receipts are attached fresh regardless.
+	commentsTTL = 30 * time.Second
+	// detailTTL caches a thread's rendered interior. Longer than comments since a
+	// thread body changes far less often than its discussion.
+	detailTTL = 60 * time.Second
 	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept low
 	// so a full fetch (modules + work-items + cycles) doesn't burst past Plane's
 	// rate limit; get() also retries 429s with backoff.
@@ -89,6 +98,18 @@ type Server struct {
 	// membersCache caches each instance's member id→name map (see memberNames).
 	membersMu    sync.Mutex
 	membersCache map[string]cachedMembers
+
+	// commentsCache holds each work item's rendered comments (WITHOUT 👀 readers,
+	// which are attached fresh from SQLite per request). It shortcuts the live,
+	// paged Plane fetch on repeat chat opens; sf coalesces concurrent misses.
+	commentsMu    sync.Mutex
+	commentsCache map[string]cachedComments
+
+	// detailCache holds each work item's fully-rendered interior (artifacts,
+	// logbook, revisions). Revisions require paging the whole project (~1.7s), so
+	// without this every thread open pays that cost. Viewer-agnostic.
+	detailMu    sync.Mutex
+	detailCache map[string]cachedDetail
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
@@ -137,20 +158,35 @@ type cachedMembers struct {
 	exp   time.Time
 }
 
+// cachedComments holds a work item's rendered comments (readerless — 👀 receipts
+// are attached per request so they stay live).
+type cachedComments struct {
+	comments []domain.Comment
+	exp      time.Time
+}
+
+// cachedDetail holds a work item's rendered interior (viewer-agnostic).
+type cachedDetail struct {
+	detail domain.ThreadDetail
+	exp    time.Time
+}
+
 // New builds a server. With no instances configured (or none authorized for the
 // caller) it degrades gracefully to an empty world. Any persisted snapshot is
 // loaded so the board serves the last-known state instantly after a restart.
 func New(st *store.Store, cycle time.Duration) *Server {
 	s := &Server{
-		store:        st,
-		cycle:        cycle,
-		now:          time.Now,
-		cache:        map[string]cachedActor{},
-		bubblesCache: map[string]cachedBubbles{},
-		subs:         map[chan struct{}]struct{}{},
-		membersCache: map[string]cachedMembers{},
-		adminEmails:  map[string]bool{},
-		startedAt:    time.Now(),
+		store:         st,
+		cycle:         cycle,
+		now:           time.Now,
+		cache:         map[string]cachedActor{},
+		bubblesCache:  map[string]cachedBubbles{},
+		subs:          map[chan struct{}]struct{}{},
+		membersCache:  map[string]cachedMembers{},
+		commentsCache: map[string]cachedComments{},
+		detailCache:   map[string]cachedDetail{},
+		adminEmails:   map[string]bool{},
+		startedAt:     time.Now(),
 	}
 	s.loadPersistedSnapshots()
 	return s
@@ -333,6 +369,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/threads/birth", s.restAuth(s.handleBirth))
 	mux.HandleFunc("GET /api/threads/{id}", s.restAuth(s.handleThreadDetail))
 	mux.HandleFunc("GET /api/threads/{id}/comments", s.restAuth(s.handleThreadComments))
+	mux.HandleFunc("POST /api/threads/{id}/comments", s.restAuth(s.handlePostComment))
+	mux.HandleFunc("POST /api/threads/{id}/comments/read", s.restAuth(s.handleMarkCommentsRead))
 	mux.HandleFunc("POST /api/bubbles/{id}/contract", s.restAuth(s.handleSetContract))
 	mux.HandleFunc("POST /api/bubbles/{id}/close", s.restAuth(s.handleClose))
 	mux.HandleFunc("POST /api/bubbles/{id}/reopen", s.restAuth(s.handleReopen))
@@ -1652,7 +1690,7 @@ func writeErr(w http.ResponseWriter, err error) bool {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 	case errors.Is(err, errNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-	case errors.Is(err, errAmbig):
+	case errors.Is(err, errAmbig), errors.Is(err, errBadRequest):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})

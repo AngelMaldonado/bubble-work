@@ -190,3 +190,36 @@ func TestSnapshotPersistence(t *testing.T) {
 		t.Fatalf("ayetec not upserted: %+v", got["ayetec"])
 	}
 }
+
+func TestCommentReads(t *testing.T) {
+	st := openTestStore(t)
+	at := "2026-08-02T00:00:00Z"
+
+	// two readers mark comment c1; one marks c2.
+	if err := st.MarkCommentsRead("ws", "u1", "Ana", at, []string{"c1"}); err != nil {
+		t.Fatalf("mark u1: %v", err)
+	}
+	if err := st.MarkCommentsRead("ws", "u2", "Bo", at, []string{"c1", "c2"}); err != nil {
+		t.Fatalf("mark u2: %v", err)
+	}
+	// idempotent: re-marking the same (comment, reader) doesn't duplicate.
+	if err := st.MarkCommentsRead("ws", "u1", "Ana", at, []string{"c1"}); err != nil {
+		t.Fatalf("remark u1: %v", err)
+	}
+
+	byID, err := st.CommentReaders("ws", []string{"c1", "c2"})
+	if err != nil {
+		t.Fatalf("readers: %v", err)
+	}
+	if len(byID["c1"]) != 2 {
+		t.Errorf("c1 want 2 readers, got %+v", byID["c1"])
+	}
+	if len(byID["c2"]) != 1 || byID["c2"][0].Name != "Bo" {
+		t.Errorf("c2 readers wrong: %+v", byID["c2"])
+	}
+	// instance is scoped.
+	other, _ := st.CommentReaders("other", []string{"c1"})
+	if len(other) != 0 {
+		t.Errorf("instance scope leaked: %+v", other)
+	}
+}

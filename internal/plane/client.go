@@ -647,6 +647,22 @@ func (c *Client) ListComments(ctx context.Context, workItemID string) ([]Comment
 	return out, err
 }
 
+// CreateComment posts a comment on a work item and returns the created entry.
+// The caller's key (passed as c's key) determines the Plane actor.
+func (c *Client) CreateComment(ctx context.Context, workItemID, commentHTML string) (Comment, error) {
+	var out struct {
+		ID          string    `json:"id"`
+		Actor       string    `json:"actor"`
+		CommentHTML string    `json:"comment_html"`
+		CreatedAt   time.Time `json:"created_at"`
+	}
+	body := map[string]any{"comment_html": commentHTML}
+	if err := c.post(ctx, c.projectBase()+"/work-items/"+workItemID+"/comments/", body, &out); err != nil {
+		return Comment{}, err
+	}
+	return Comment{ID: out.ID, ActorID: out.Actor, HTML: out.CommentHTML, CreatedAt: out.CreatedAt}, nil
+}
+
 // ListActivities returns a work item's timeline (source of heat evidence, §5.1).
 func (c *Client) ListActivities(ctx context.Context, workItemID string) ([]Activity, error) {
 	var r struct {

@@ -22,6 +22,8 @@ type Backend interface {
 	Timeline(ctx context.Context, bubbleID string) ([]domain.ThreadNode, error)
 	ThreadDetail(ctx context.Context, threadID string) (domain.ThreadDetail, error)
 	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
+	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
+	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
 }
 
 // withActor lifts the MCP-verified identity (carried in req.Extra.TokenInfo by
@@ -70,6 +72,17 @@ type threadIn struct {
 }
 type commentsOut struct {
 	Comments []domain.Comment `json:"comments"`
+}
+type postCommentIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the thread id from thread_timeline, or a work-item id"`
+	Body     string `json:"body" jsonschema:"the comment text (Markdown); posted to Plane as you"`
+}
+type markReadIn struct {
+	ThreadID   string   `json:"thread_id" jsonschema:"the thread id whose comments to mark read"`
+	CommentIDs []string `json:"comment_ids" jsonschema:"ids of comments you've read (not your own)"`
+}
+type okOut struct {
+	OK bool `json:"ok"`
 }
 
 // Handler builds the MCP server and returns a streamable-HTTP handler to mount.
@@ -145,6 +158,25 @@ func Handler(b Backend) http.Handler {
 				return nil, commentsOut{}, err
 			}
 			return nil, commentsOut{Comments: cs}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "post_comment", Description: "Post a comment to a thread's discussion, written to Plane as you. Comments are communication, not evidence — posting does NOT warm the bubble (§4)."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in postCommentIn) (*sdk.CallToolResult, domain.Comment, error) {
+			cm, err := b.PostComment(withActor(ctx, req), in.ThreadID, in.Body)
+			if err != nil {
+				return nil, domain.Comment{}, err
+			}
+			return nil, cm, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "mark_comments_read", Description: "Mark thread comments as read by you (👀 read-receipt). Pass comments you didn't author; your own are never marked."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in markReadIn) (*sdk.CallToolResult, okOut, error) {
+			if err := b.MarkCommentsRead(withActor(ctx, req), in.ThreadID, in.CommentIDs); err != nil {
+				return nil, okOut{}, err
+			}
+			return nil, okOut{OK: true}, nil
 		})
 
 	return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, nil)

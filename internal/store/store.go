@@ -59,6 +59,14 @@ CREATE TABLE IF NOT EXISTS bubble_snapshots (
   bubbles    TEXT NOT NULL,      -- JSON-encoded []domain.Bubble (materialized read model)
   updated_at TEXT NOT NULL       -- RFC3339 timestamp of the fetch
 );
+CREATE TABLE IF NOT EXISTS comment_reads (
+  instance    TEXT NOT NULL,     -- instance slug (Plane has no comment reactions API)
+  comment_id  TEXT NOT NULL,     -- Plane comment id
+  reader_id   TEXT NOT NULL,     -- Plane user id of the reader
+  reader_name TEXT NOT NULL,     -- display name at read time
+  read_at     TEXT NOT NULL,     -- RFC3339
+  PRIMARY KEY (instance, comment_id, reader_id)
+);
 `
 
 // Store wraps the SQLite connection.
@@ -404,4 +412,73 @@ func (s *Store) LoadSnapshots() ([]Snapshot, error) {
 		out = append(out, sn)
 	}
 	return out, rows.Err()
+}
+
+// Reader is one person who has read a comment (a 👀 read-receipt).
+type Reader struct {
+	ID   string `json:"id"`
+	Name string `json:"name"`
+}
+
+// MarkCommentsRead records readerID as having read each comment (idempotent).
+// Plane exposes no comment-reaction API, so read state is a server overlay.
+func (s *Store) MarkCommentsRead(instance, readerID, readerName, at string, commentIDs []string) error {
+	if len(commentIDs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	stmt, err := tx.Prepare(`INSERT INTO comment_reads (instance, comment_id, reader_id, reader_name, read_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(instance, comment_id, reader_id) DO UPDATE SET reader_name = excluded.reader_name`)
+	if err != nil {
+		return err
+	}
+	defer stmt.Close()
+	for _, cid := range commentIDs {
+		if _, err := stmt.Exec(instance, cid, readerID, readerName, at); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// CommentReaders returns, per comment id, the people who have read it.
+func (s *Store) CommentReaders(instance string, commentIDs []string) (map[string][]Reader, error) {
+	out := map[string][]Reader{}
+	if len(commentIDs) == 0 {
+		return out, nil
+	}
+	q := `SELECT comment_id, reader_id, reader_name FROM comment_reads WHERE instance = ? AND comment_id IN (` +
+		placeholders(len(commentIDs)) + `) ORDER BY read_at`
+	args := make([]any, 0, len(commentIDs)+1)
+	args = append(args, instance)
+	for _, c := range commentIDs {
+		args = append(args, c)
+	}
+	rows, err := s.db.Query(q, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var cid string
+		var r Reader
+		if err := rows.Scan(&cid, &r.ID, &r.Name); err != nil {
+			return nil, err
+		}
+		out[cid] = append(out[cid], r)
+	}
+	return out, rows.Err()
+}
+
+// placeholders returns "?, ?, ..." for an IN clause of n items.
+func placeholders(n int) string {
+	if n <= 0 {
+		return ""
+	}
+	return strings.Repeat("?, ", n-1) + "?"
 }

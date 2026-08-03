@@ -136,10 +136,19 @@ evidence with no thread is dropped rather than smeared across threads.
   nothing produced yet"* — it gets the cycle before we call it 🪦.
 - **Evidence decides the band; Plane's column does not.** Dragging a card into
   "In Progress" is motion, not evidence (`AGENTS.md`), so `started` never by
-  itself makes a thread 🔥, and a thread sitting in Backlog whose todos are
-  actually getting ticked genuinely is 🔥. `threadLevel` consults the state group
-  for the two **terminal** columns only — `completed` → 🏆 and `cancelled` → 🪦 —
-  because those are statements of fact, not status theatre.
+  itself makes a thread 🔥, and a thread sitting in Backlog whose logbook is
+  actually moving genuinely is 🔥. `threadLevel` consults the state group for the
+  two **terminal** columns only — `completed` → 🏆 and `cancelled` → 🪦 — because
+  those are statements of fact, not status theatre. The case ordering in
+  `threadLevel` *is* the precedence.
+- **Cancelling is undone by production, never by chatter.** `completed` always
+  wins — finishing is the goal. `cancelled` normally wins too, but a thread that
+  someone cancelled and then went back to work on resurrects to 🔥: evidence
+  outranks a stale declaration. Comments cannot do this — the pulse is stripped
+  before the lifecycle is computed, so only a logbook edit or a landed revision
+  can reverse a cancellation. (While the two disagree, the board shows 🔥 and
+  Plane still shows Cancelled, until a human moves the card or Phase B writes it
+  back.)
 - **Plane state, read-only.** `plane.ListStates` + a per-project
   `statesCache` (30 min) resolve a work item's state uuid → `{name, group}`.
   Threads carry both; **only `group` is ever matched on**, `name` is display-only
@@ -179,7 +188,7 @@ model changes unless someone turns a knob.
 | `thread_grace_cycles` | thread | how long a newborn that produced nothing stays 😴 before 🪦 |
 | `thread_rip_needs_owner` | thread | dormant + unassigned → 🪦 instead of 😴 |
 | `pulse_cycles` | thread | how long a comment blocks 🪦 (0 = comments carry no weight) |
-| `thread_terminal_state_wins` | thread | Plane's `completed`/`cancelled` columns override the computed level |
+| `thread_terminal_state_wins` | thread | Plane's `completed`/`cancelled` columns override the computed level (`cancelled` still yields to production) |
 
 `domain.TuningFields()` publishes the label, help text, kind and range for each
 knob, so the **CLI listing and the God Mode form render from the same schema**

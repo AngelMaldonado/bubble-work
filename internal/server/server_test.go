@@ -428,8 +428,10 @@ func TestThreadLevel(t *testing.T) {
 			domain.Thread{Active: true, Owner: "me", StateGroup: "unstarted", CreatedAt: born(90)}, birth, domain.Dormant, "rip"},
 		{"thread that produced then went quiet is asleep",
 			domain.Thread{Active: true, Owner: "me", StateGroup: "started", CreatedAt: born(90)}, work, domain.Dormant, "zzzz"},
-		{"cancelled in Plane is a grave regardless of heat",
-			domain.Thread{Active: true, Owner: "me", StateGroup: "cancelled", CreatedAt: born(1)}, work, domain.Hot, "rip"},
+		{"production resurrects a cancelled thread",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "cancelled", CreatedAt: born(1)}, work, domain.Hot, "in_progress"},
+		{"a quiet cancelled thread stays a grave",
+			domain.Thread{Active: true, Owner: "me", StateGroup: "cancelled", CreatedAt: born(90)}, birth, domain.Dormant, "rip"},
 		{"completed in Plane is done regardless of heat",
 			domain.Thread{Active: true, Owner: "me", StateGroup: "completed", CreatedAt: born(1)}, work, domain.Hot, "done"},
 	}
@@ -1271,6 +1273,17 @@ func TestCommentPulseBlocksTheGrave(t *testing.T) {
 	off.PulseCycles = 0
 	if got := threadLevel(abandoned, chattered, domain.Dormant, win, off, now); got != "rip" {
 		t.Fatalf("pulse_cycles=0: want rip, got %s", got)
+	}
+
+	// And a comment can never talk a CANCELLED thread out of the grave — only
+	// production undoes a cancellation.
+	cancelled := abandoned
+	cancelled.StateGroup = "cancelled"
+	if got := threadLevel(cancelled, chattered, domain.Dormant, win, tun, now); got != "rip" {
+		t.Fatalf("chatter must not revive a cancelled thread, got %s", got)
+	}
+	if got := threadLevel(cancelled, chattered, domain.Hot, win, tun, now); got != "in_progress" {
+		t.Fatalf("production must revive a cancelled thread, got %s", got)
 	}
 }
 

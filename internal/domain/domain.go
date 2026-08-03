@@ -116,7 +116,8 @@ type Tuning struct {
 	PulseCycles float64 `json:"pulse_cycles"`
 	// ThreadTerminalStateWins lets Plane's terminal columns override the computed
 	// level: `completed` → 🏆, `cancelled` → 🪦. Those are statements of fact;
-	// every other column is status theatre and is ignored either way.
+	// every other column is status theatre and is ignored either way. Note that
+	// `cancelled` is still overridden by real production — see threadLevel.
 	ThreadTerminalStateWins bool `json:"thread_terminal_state_wins"`
 }
 
@@ -200,7 +201,7 @@ func TuningFields() []TuningField {
 		{Key: "pulse_cycles", Label: "Comment pulse (cycles)", Kind: "number", Group: "thread", Min: 0, Max: 52, Step: 0.5,
 			Help: "How long a comment keeps a thread out of 🪦. Comments are presence, not production — they never warm a thread to 🔥, but we don't declare something abandoned while people are still discussing it. 0 turns the pulse off."},
 		{Key: "thread_terminal_state_wins", Label: "Plane's terminal columns win", Kind: "toggle", Group: "thread",
-			Help: "Let Plane decide the two terminal states: completed → 🏆, cancelled → 🪦. Every other column is ignored either way — moving a card is motion, not evidence."},
+			Help: "Let Plane decide the two terminal states: completed → 🏆, cancelled → 🪦. Cancelling is still undone by real production (a logbook edit or a revision resurrects the thread) but never by comments. Every other column is ignored either way — moving a card is motion, not evidence."},
 	}
 }
 

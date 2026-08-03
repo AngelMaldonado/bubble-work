@@ -643,27 +643,36 @@ func bubbleLevel(b domain.Bubble, lc domain.Lifecycle, tun domain.Tuning) string
 
 // threadLevel maps a thread to the same UI bands as a bubble
 // (THREAD-LIFECYCLE.md Phase A). Evidence decides the band; Plane's state group
-// only short-circuits the two TERMINAL columns, which are statements of fact
-// rather than status theatre. A thread being dragged into "In Progress" is
-// motion, not evidence, so it does not by itself make the thread 🔥 — and a
-// thread sitting in Backlog while its todos get ticked genuinely is 🔥.
+// only speaks for the two TERMINAL columns, which are statements of fact rather
+// than status theatre. A thread being dragged into "In Progress" is motion, not
+// evidence, so it does not by itself make the thread 🔥 — and a thread sitting in
+// Backlog whose logbook is actually moving genuinely is 🔥.
+//
+// The case ordering below IS the precedence, and it encodes one deliberate
+// asymmetry between the two terminal columns:
+//
+//   - `completed` always wins. Finishing is the goal; nothing overrides it.
+//   - `cancelled` normally wins, but **production resurrects it**. Someone
+//     cancelled the thread and then went back to work on it, and evidence
+//     outranks a stale declaration. Chatter does NOT qualify: the pulse is
+//     already stripped from lc, so only real progress can undo a cancellation.
 func threadLevel(t domain.Thread, ev []domain.EvidenceEvent, lc domain.Lifecycle, w heat.Window, tun domain.Tuning, now time.Time) string {
+	terminal := ""
 	if tun.ThreadTerminalStateWins {
-		switch t.StateGroup {
-		case "completed":
-			return "done"
-		case "cancelled":
-			return "rip"
-		}
+		terminal = t.StateGroup
 	}
-	switch lc {
-	case domain.Closed:
+	switch {
+	case terminal == "completed":
 		return "done"
-	case domain.Hot, domain.Warm:
-		return "in_progress"
-	case domain.Cooling:
+	case lc == domain.Closed:
+		return "done"
+	case lc == domain.Hot, lc == domain.Warm:
+		return "in_progress" // resurrects even out of the cancelled column
+	case terminal == "cancelled":
+		return "rip"
+	case lc == domain.Cooling:
 		return "zzzz"
-	case domain.Dormant:
+	case lc == domain.Dormant:
 		produced := false
 		for _, e := range ev {
 			if e.Progress() {

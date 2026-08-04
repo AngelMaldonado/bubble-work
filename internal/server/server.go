@@ -1173,7 +1173,7 @@ func (s *Server) handlePlaneWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	// Rebuild this instance's snapshot in the background so the change shows up
 	// without a blocking read (singleflight coalesces with the periodic refresh).
-	go s.refreshInstance(context.Background(), inst)
+	go s.refreshInstance(plane.Background(context.Background()), inst)
 	log.Printf("webhook: %s refresh triggered from Plane", slug)
 	w.WriteHeader(http.StatusOK)
 }
@@ -1407,6 +1407,10 @@ func (s *Server) RefreshAll(ctx context.Context) {
 // snapshotRefresh until ctx is done. This — not request latency — is what keeps
 // the board fresh.
 func (s *Server) RunRefresher(ctx context.Context) {
+	// Everything this loop does yields to a human waiting on a page (Phase 0).
+	// Marked at the entry point, not inside RefreshAll — the admin "refresh now"
+	// button calls the same code and is very much interactive.
+	ctx = plane.Background(ctx)
 	s.RefreshAll(ctx)
 	t := time.NewTicker(snapshotRefresh)
 	defer t.Stop()
@@ -1699,6 +1703,9 @@ func (s *Server) RunTicker(ctx context.Context, interval time.Duration) {
 	if interval <= 0 {
 		return
 	}
+	// The pulse probe and the auto-state writer both run under Tick, and both are
+	// exactly the kind of work that should stand aside for a page load (Phase 0).
+	ctx = plane.Background(ctx)
 	t := time.NewTicker(interval)
 	defer t.Stop()
 	for {
@@ -1995,6 +2002,8 @@ func (s *Server) handleAdminBubbles(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleAdminRefresh(w http.ResponseWriter, r *http.Request) {
 	s.flushCaches()
 	// Re-warm the snapshot in the background so the next read isn't a cold fetch.
+	// Deliberately NOT plane.Background: an admin asked for this and is watching
+	// for it, so it keeps interactive priority even though it is detached.
 	go s.RefreshAll(context.Background())
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
 }
@@ -2010,6 +2019,14 @@ func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
 	st := domain.AdminStats{
 		Instances: len(insts), CachedInstances: cachedInst, CachedIdents: cachedIdents,
 		StartedAt: s.startedAt.Format(time.RFC3339),
+	}
+	for _, i := range insts {
+		b := plane.BudgetFor(i.BaseURL, i.APIKey)
+		st.RateBudgets = append(st.RateBudgets, domain.RateBudget{
+			Instance: i.Slug, Known: b.Known, Remaining: b.Remaining, Limit: b.Limit,
+			ResetIn: b.ResetIn, Throttled: b.Throttled, Waits: b.Waits,
+			Spent: b.Spent, Floor: b.Floor,
+		})
 	}
 	if bi, ok := debug.ReadBuildInfo(); ok {
 		for _, kv := range bi.Settings {

@@ -77,32 +77,33 @@ func (c *Client) projectBase() string {
 }
 
 func (c *Client) get(ctx context.Context, path string, out any) error {
-	const maxAttempts = 4 // 1 try + 3 retries (backoff 0.4s, 0.8s, 1.6s)
+	const maxAttempts = 4 // 1 try + 3 retries
+	bud := c.budget()
+	ln := laneOf(ctx)
 	var lastErr error
 	for attempt := 0; attempt < maxAttempts; attempt++ {
 		if attempt > 0 {
-			// back off before retrying (429/5xx/transient). Honor Retry-After
-			// when present, else exponential 0.4s, 0.8s.
-			wait := time.Duration(400*(1<<(attempt-1))) * time.Millisecond
-			if ra, ok := lastErr.(*APIError); ok && ra.retryAfter > 0 {
-				wait = ra.retryAfter
+			if err := sleepCtx(ctx, backoffFor(lastErr, bud, attempt)); err != nil {
+				return err
 			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(wait):
-			}
+		}
+		// Background work yields here when the remaining allowance is down to the
+		// reserved slice; interactive callers are never delayed.
+		if err := bud.wait(ctx, ln); err != nil {
+			return err
 		}
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
 		if err != nil {
 			return err
 		}
 		req.Header.Set("X-API-Key", c.APIKey)
+		bud.begin()
 		resp, err := c.HTTP.Do(req)
 		if err != nil {
 			lastErr = err // network/timeout → retry
 			continue
 		}
+		bud.observe(resp.Header, resp.StatusCode)
 		// Retry only on rate-limit / server errors; other statuses are final.
 		if resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500 {
 			lastErr = &APIError{Status: resp.StatusCode, Path: "GET " + path, retryAfter: retryAfter(resp)}
@@ -118,6 +119,44 @@ func (c *Client) get(ctx context.Context, path string, out any) error {
 		return err
 	}
 	return lastErr
+}
+
+// backoffFor decides how long to wait before a retry. Retry-After wins when
+// Plane sends it; otherwise, if we were rate-limited and know when the window
+// rolls over, wait for the reset — retrying sooner is guaranteed to fail and
+// only burns more of the allowance. Everything else falls back to exponential.
+func backoffFor(lastErr error, bud *Budget, attempt int) time.Duration {
+	exp := time.Duration(400*(1<<(attempt-1))) * time.Millisecond
+	ae, ok := lastErr.(*APIError)
+	if !ok {
+		return exp
+	}
+	if ae.retryAfter > 0 {
+		return ae.retryAfter
+	}
+	if ae.Status == http.StatusTooManyRequests {
+		if d := bud.resetIn(); d > 0 {
+			if d > maxLaneWait {
+				d = maxLaneWait
+			}
+			return d
+		}
+	}
+	return exp
+}
+
+func sleepCtx(ctx context.Context, d time.Duration) error {
+	if d <= 0 {
+		return nil
+	}
+	t := time.NewTimer(d)
+	defer t.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-t.C:
+		return nil
+	}
 }
 
 // retryAfter parses a Retry-After header expressed in whole seconds, capped at
@@ -150,11 +189,21 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 	}
 	req.Header.Set("X-API-Key", c.APIKey)
 	req.Header.Set("Content-Type", "application/json")
+	// Writes draw on the same per-key allowance as reads, so they must be
+	// budgeted too — otherwise the auto-state writer could quietly drain what a
+	// human's page load needs. No retry here on purpose: a failed write is the
+	// outbox's job (docs/PLANE-SYNC.md Phase 5), not a silent repeat.
+	bud := c.budget()
+	if err := bud.wait(ctx, laneOf(ctx)); err != nil {
+		return err
+	}
+	bud.begin()
 	resp, err := c.HTTP.Do(req)
 	if err != nil {
 		return err
 	}
 	defer resp.Body.Close()
+	bud.observe(resp.Header, resp.StatusCode)
 	if resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
 		return fmt.Errorf("plane %s %s: %s: %s", method, path, resp.Status, strings.TrimSpace(string(b)))
@@ -532,11 +581,17 @@ func parsePlaneDate(s string) (time.Time, bool) {
 	return time.Time{}, false
 }
 
+// boardFields is exactly what the board derives a thread from. Asking for it by
+// name drops description_html and a dozen unused columns from every page —
+// measured at 1732 → 736 bytes on a 6-item module, values identical (Phase 0).
+// Any new field the board reads MUST be added here or it will arrive as a zero.
+const boardFields = "id,name,created_at,completed_at,sequence_id,sort_order,parent,assignees,state"
+
 // ListModuleWorkItems returns the threads in a bubble, with the timestamps and
 // state group used to derive heat (§5) without extra calls.
 func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]WorkItem, error) {
 	var out []WorkItem
-	err := c.getPaged(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", func(raw json.RawMessage) error {
+	err := c.getPaged(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/?fields="+boardFields, func(raw json.RawMessage) error {
 		// On module-issues, `state` is the state UUID string (not the expanded
 		// object); `completed_at` tells us if it's active, and the uuid resolves to
 		// a state group via ListStates (THREAD-LIFECYCLE.md).
@@ -630,8 +685,12 @@ func (c *Client) ListChildren(ctx context.Context, parentID string) ([]WorkItemD
 // every thread: what its logbook says, and how many sub-items it has
 // (THREAD-LIFECYCLE.md Phase C).
 func (c *Client) ListProjectItems(ctx context.Context) ([]WorkItemDetail, error) {
+	// Same discipline as boardFields, and it matters more here: the unfiltered
+	// row also carries description_binary, a second copy of the body in Plane's
+	// internal encoding that nothing in this codebase reads.
+	const fields = "id,name,description_html,parent,created_at,completed_at"
 	var out []WorkItemDetail
-	err := c.getPaged(ctx, c.projectBase()+"/work-items/", func(raw json.RawMessage) error {
+	err := c.getPaged(ctx, c.projectBase()+"/work-items/?fields="+fields, func(raw json.RawMessage) error {
 		var page []struct {
 			ID              string     `json:"id"`
 			Name            string     `json:"name"`

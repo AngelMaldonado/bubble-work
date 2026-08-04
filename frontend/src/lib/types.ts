@@ -143,6 +143,20 @@ export interface Inbox {
   notifications: Notification[];
 }
 
+/** One instance's live Plane rate-limit state. Plane allows 60 req/min per API
+ *  key and reports the remaining allowance on every response (PLANE-SYNC.md). */
+export interface RateBudget {
+  instance: string;
+  known: boolean; // false until a response carried the headers
+  remaining: number; // -1 when unknown
+  limit: number; // inferred ceiling (largest remaining seen)
+  reset_in: number; // seconds until the window rolls over
+  throttled: number; // 429s observed since start
+  waits: number; // times background work yielded to the floor
+  spent: number; // requests issued since start
+  floor: number; // allowance reserved for interactive work
+}
+
 export interface AdminStats {
   instances: number;
   cached_instances: number;
@@ -150,6 +164,7 @@ export interface AdminStats {
   revision: string;
   built: string;
   started_at: string;
+  rate_budgets?: RateBudget[];
 }
 
 export interface AdminInstance {

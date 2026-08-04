@@ -538,6 +538,24 @@ type AdminStats struct {
 	Revision        string `json:"revision"`
 	Built           string `json:"built"`
 	StartedAt       string `json:"started_at"`
+	// RateBudgets is each instance's live Plane rate-limit state. Plane allows
+	// 60 requests/minute per API key and reports the remaining allowance on
+	// every response; this is that, surfaced (docs/PLANE-SYNC.md Phase 0).
+	RateBudgets []RateBudget `json:"rate_budgets,omitempty"`
+}
+
+// RateBudget is one instance's view of its Plane rate limit. Mirrors
+// plane.BudgetStat — kept here so domain stays free of the transport package.
+type RateBudget struct {
+	Instance  string `json:"instance"`
+	Known     bool   `json:"known"`     // false until a response carried the headers
+	Remaining int    `json:"remaining"` // -1 when unknown
+	Limit     int    `json:"limit"`     // inferred ceiling (largest remaining seen)
+	ResetIn   int    `json:"reset_in"`  // seconds until the window rolls over
+	Throttled int    `json:"throttled"` // 429s observed since start
+	Waits     int    `json:"waits"`     // times background work yielded to the floor
+	Spent     int    `json:"spent"`     // requests issued since start
+	Floor     int    `json:"floor"`     // allowance reserved for interactive work
 }
 
 // Notification records a bubble crossing into a colder state (§5) — the push

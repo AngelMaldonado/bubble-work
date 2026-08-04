@@ -497,6 +497,25 @@ func AdminStats(cfg config.Config, token string) error {
 	fmt.Printf("revision         : %s\n", st.Revision)
 	fmt.Printf("built            : %s\n", st.Built)
 	fmt.Printf("started          : %s\n", st.StartedAt)
+	for _, b := range st.RateBudgets {
+		fmt.Printf("\nplane budget %s\n", b.Instance)
+		if !b.Known {
+			fmt.Println("  (nothing observed yet — no calls made, or this Plane omits the rate headers)")
+			continue
+		}
+		fmt.Printf("  remaining      : %d", b.Remaining)
+		if b.Limit > 0 {
+			fmt.Printf(" / %d", b.Limit)
+		}
+		if b.Remaining <= b.Floor {
+			fmt.Printf("  ← at the floor, background work is yielding")
+		}
+		fmt.Println()
+		fmt.Printf("  resets in      : %ds\n", b.ResetIn)
+		fmt.Printf("  reserved floor : %d (kept for interactive calls)\n", b.Floor)
+		fmt.Printf("  spent / 429s   : %d / %d\n", b.Spent, b.Throttled)
+		fmt.Printf("  bg yields      : %d\n", b.Waits)
+	}
 	return nil
 }
 

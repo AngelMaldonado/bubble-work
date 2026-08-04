@@ -77,6 +77,26 @@ Handy laptop alias for remote admin:
 alias bubble-admin='ssh -t reko@100.88.150.73 "cd ~/dev-angel/bubble-work && BUBBLE_HOME=~/dev-angel/bubble-work/.bubble ./bubble"'
 ```
 
+## Plane rate limit
+
+Plane allows **60 requests per minute per API key**, and it reports the state of
+that limit on every response. The server budgets against those headers and
+reserves the last 15 of the allowance for interactive calls, so background work
+(the refresher, the tick, auto-state writes) stands aside when the budget runs
+thin rather than 429-ing a page load. Watch it with:
+
+```bash
+./bubble admin stats     # remaining / limit, reset, 429s, background yields
+```
+…or the **Plane rate budget** card in God Mode.
+
+If `429s` climbs or background yields are constant, the real fix is
+[`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md) — not needing the calls. As a
+stopgap on a **self-hosted** Plane the ceiling itself is configurable; on the
+Plane host set the API rate-limit env var (`API_KEY_RATE_LIMIT`, format
+`number/timeunit`, e.g. `120/minute`) and restart it. This is a knob on *your*
+Plane deployment, not on Bubble Work.
+
 ## Client setup (your laptop)
 
 ```bash

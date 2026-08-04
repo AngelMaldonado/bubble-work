@@ -1,6 +1,6 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Drafted, nothing shipped · Phase 1 spike answered (see below)** ·
+Status: **Phase 0 shipped · Phases 1-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -222,41 +222,51 @@ the `mirror_` prefix keeps that boundary visible in the schema itself.
 
 ---
 
-## Phase 0 — Rate discipline
+## Phase 0 — Rate discipline · **SHIPPED**
 
 *No architecture change. Ships in a day and makes today measurably better, which
 also gives us a baseline to prove the rest against.*
 
-- [ ] Parse `X-RateLimit-Remaining` / `X-RateLimit-Reset` on every response into
-      a per-key budget in `internal/plane`.
-- [ ] **Reserve a lane**: background work must stop at a floor (e.g. 15 of 60),
-      leaving the rest for interactive calls. Background callers block or skip;
-      interactive callers always pass.
-- [ ] Replace the blind 0.4/0.8/1.6 s backoff with "wait until reset" when the
-      budget is known.
-- [ ] Add `fields=` to the two hot list calls so pages carry only what the board
+- [x] Parse `X-RateLimit-Remaining` / `X-RateLimit-Reset` on every response into
+      a per-key budget in `internal/plane` (`budget.go`). The registry is keyed by
+      base URL + key, **not** held on a `Client` — `plane.New(...)` is called
+      ad-hoc at ~10 call sites, so a per-client budget would have seen nothing.
+- [x] **Reserve a lane**: `backgroundFloor = 15`. The lane rides on the context
+      (`plane.Background(ctx)`), so none of the ~25 client methods changed
+      signature; `RunRefresher`, `RunTicker` and the webhook refresh mark theirs
+      once at the entry point. Admin "refresh now" stays interactive on purpose —
+      a person asked for it and is watching.
+- [x] Replace the blind 0.4/0.8/1.6 s backoff with "wait until reset" when the
+      budget is known (`backoffFor`). Retry-After still wins when Plane sends it.
+- [x] Add `fields=` to the two hot list calls. Measured on a 6-item module:
+      **1732 → 736 bytes, values identical**. `ListProjectItems` also stops
+      pulling `description_binary`, a second copy of every body that nothing
       reads.
-- [ ] Expose budget state on `GET /api/admin/stats` (remaining, reset, calls in
-      the last minute, 429 count) → surface in God Mode.
-- [ ] Raise `API_KEY_RATE_LIMIT` on the self-hosted Plane as an explicit,
-      documented stopgap in `DEPLOY.md`.
-- [ ] **Put SQLite in WAL mode.** `store.Open` currently does a bare
-      `sql.Open("sqlite", path)` (`store.go:119`) — no journal mode, no busy
-      timeout, no pool limits. That is fine today because writes are rare and
-      tiny; it will **not** survive a sync worker bulk-upserting while every
-      board read queries the same file. Default rollback journal means a reader
-      and the writer collide as `SQLITE_BUSY`, surfacing as intermittent 500s
-      under load — the worst class of bug to chase later. Needed:
-      `_pragma=journal_mode(WAL)`, `_pragma=busy_timeout(5000)`,
-      `_pragma=synchronous(NORMAL)`, and `SetMaxOpenConns` bounded with a single
-      writer path. **This must land before Phase 1 writes bulk data.**
+- [x] Expose budget state on `GET /api/admin/stats` → `bubble admin stats` and a
+      **Plane rate budget** card in God Mode (surface parity; admin capability,
+      so no MCP — matching `autostate` and `tuning`).
+- [x] Document the `API_KEY_RATE_LIMIT` stopgap in `DEPLOY.md`.
+- [x] **Put SQLite in WAL mode.** `store.Open` did a bare
+      `sql.Open("sqlite", path)` — no journal mode, no busy timeout, no pool
+      limits. Fine while writes were rare and tiny; it would **not** have
+      survived a sync worker bulk-upserting while the board read the same file.
+      Now `journal_mode(WAL)` + `busy_timeout(5000)` + `synchronous(NORMAL)`,
+      with `Open` **verifying** the mode took (a file that silently stayed in
+      rollback-journal mode is exactly the failure this prevents).
 
-**Accept:** God Mode shows live budget; a forced burst degrades background
-refresh instead of 429-ing a human's thread open. A concurrent
-read-while-bulk-write test passes without `SQLITE_BUSY`.
+**Accepted:** `TestWALConcurrentReadWrite` was confirmed to *fail* without WAL —
+`database is locked (5) (SQLITE_BUSY)` — and pass with it, so it is a real
+regression guard rather than a tautology. `TestBackgroundYieldsInteractiveDoesNot`
+pins the reservation: at the floor the background call is refused and the
+interactive one goes through. Full suite green; `svelte-check` 0/0.
 
-**Cleanup carried:** the retry/backoff block in `client.go:79-120` becomes one
-budget-aware helper shared by `get` and `send`.
+**Cleanup carried:** the retry/backoff block in `client.go` became `backoffFor` +
+`sleepCtx`, shared by `get` and `send`. Writes are budgeted now too — they draw
+on the same per-key allowance, so an unbudgeted auto-state writer could otherwise
+drain what a page load needed.
+
+**Deliberately not done:** `send` still has no retry. A failed write is the
+outbox's job (Phase 5), not a silent repeat.
 
 ## Phase 1 — The mirror, in shadow
 

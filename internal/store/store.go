@@ -5,6 +5,9 @@ package store
 
 import (
 	"database/sql"
+	"fmt"
+	"net/url"
+	"path/filepath"
 	"sort"
 	"strings"
 	"time"
@@ -114,15 +117,72 @@ type Contract struct {
 	Stage   string // "" | "reviewed"
 }
 
+// dsn turns a filesystem path into a modernc DSN carrying the pragmas this
+// server needs. See Open for why each one is here.
+func dsn(path string) string {
+	// A caller that already speaks URI knows better than we do.
+	if strings.HasPrefix(path, "file:") {
+		return path
+	}
+	// Relative paths would produce an opaque "file:t.db" URI; make it absolute so
+	// the driver always sees file:///... (best-effort — a failure here just means
+	// we hand the driver what the caller gave us).
+	if abs, err := filepath.Abs(path); err == nil {
+		path = abs
+	}
+	q := url.Values{}
+	for _, p := range []string{
+		// WAL: readers do not block the writer and the writer does not block
+		// readers. Without it the default rollback journal makes any concurrent
+		// read/write pair collide as SQLITE_BUSY.
+		"journal_mode(WAL)",
+		// SQLite still permits only ONE writer at a time; busy_timeout makes the
+		// loser wait for the lock instead of failing instantly.
+		"busy_timeout(5000)",
+		// With WAL, NORMAL syncs at checkpoints rather than every commit. The
+		// exposure is losing the last commits on an OS crash (not on a process
+		// crash), which for a rebuildable mirror is a fine trade.
+		"synchronous(NORMAL)",
+	} {
+		q.Add("_pragma", p)
+	}
+	u := url.URL{Scheme: "file", Path: path, RawQuery: q.Encode()}
+	return u.String()
+}
+
 // Open opens (and migrates) the SQLite database at path.
+//
+// The connection is tuned for one background writer alongside many concurrent
+// readers (docs/PLANE-SYNC.md Phase 0). This was inert while the store held only
+// the small, rare overlay writes; it stops being inert the moment the sync
+// worker bulk-upserts the mirror while every board read queries the same file.
 func Open(path string) (*Store, error) {
-	db, err := sql.Open("sqlite", path)
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, err
 	}
+	// Reads stay concurrent (that is the point of WAL); writes serialize on the
+	// file lock and wait out busy_timeout. The cap is here to bound file handles
+	// and memory, not to serialize.
+	db.SetMaxOpenConns(16)
+	db.SetMaxIdleConns(8)
 	if _, err := db.Exec(schema); err != nil {
 		db.Close()
 		return nil, err
+	}
+	// journal_mode is a property of the DATABASE, not the connection, so a
+	// pre-existing file only converts on this first successful call. Verify
+	// rather than assume: silently staying in rollback-journal mode is exactly
+	// the failure this is meant to prevent, and it would only surface later as
+	// intermittent SQLITE_BUSY under load.
+	var mode string
+	if err := db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		db.Close()
+		return nil, fmt.Errorf("read journal_mode: %w", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		db.Close()
+		return nil, fmt.Errorf("sqlite journal_mode is %q, want WAL", mode)
 	}
 	// Best-effort migrations for pre-existing DBs (errors on already-migrated
 	// DBs are expected and ignored).

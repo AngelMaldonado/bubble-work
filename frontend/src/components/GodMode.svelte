@@ -237,6 +237,59 @@
         {/if}
       </section>
 
+      <!-- plane rate budget -->
+      <section class="card">
+        <h3>Plane rate budget</h3>
+        {#if stats?.rate_budgets?.length}
+          {#each stats.rate_budgets as b (b.instance)}
+            <div class="budget">
+              <div class="bhead">
+                <strong>{b.instance}</strong>
+                {#if b.known}
+                  <span class="bnum" class:low={b.remaining <= b.floor}>
+                    {b.remaining}{b.limit > 0 ? ` / ${b.limit}` : ''}
+                  </span>
+                {:else}
+                  <span class="bnum unknown">—</span>
+                {/if}
+              </div>
+              {#if b.known}
+                <!-- the reserved slice is drawn as a distinct zone, so "thin" is
+                     visible at a glance rather than requiring arithmetic -->
+                <div
+                  class="bar"
+                  title="{b.remaining} left, {b.floor} reserved for interactive calls"
+                >
+                  <div
+                    class="fill"
+                    class:low={b.remaining <= b.floor}
+                    style="width: {b.limit > 0
+                      ? Math.min(100, Math.max(2, (b.remaining / b.limit) * 100))
+                      : 0}%"
+                  ></div>
+                  {#if b.limit > 0}
+                    <div class="floor" style="width: {Math.min(100, (b.floor / b.limit) * 100)}%"></div>
+                  {/if}
+                </div>
+                <p class="bmeta">
+                  resets in {b.reset_in}s · {b.spent} spent · {b.throttled} × 429 · {b.waits} bg
+                  {b.waits === 1 ? 'yield' : 'yields'}
+                </p>
+                {#if b.remaining <= b.floor}
+                  <p class="bwarn">At the floor — background work is yielding to keep pages fast.</p>
+                {/if}
+              {:else}
+                <p class="bmeta">
+                  Nothing observed yet — no calls made, or this Plane omits the rate headers.
+                </p>
+              {/if}
+            </div>
+          {/each}
+        {:else}
+          <p class="bmeta">No instances configured.</p>
+        {/if}
+      </section>
+
       <!-- maintenance -->
       <section class="card">
         <h3>Maintenance</h3>
@@ -559,6 +612,66 @@
     margin: 0;
     color: var(--text);
     text-align: right;
+  }
+
+  /* plane rate budget */
+  .budget + .budget {
+    margin-top: 0.9rem;
+    padding-top: 0.9rem;
+    border-top: 1px solid var(--line);
+  }
+  .bhead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 0.5rem;
+  }
+  .bnum {
+    font-variant-numeric: tabular-nums;
+    font-size: 0.85rem;
+    color: var(--text);
+  }
+  .bnum.low {
+    color: var(--warn, #d97706);
+    font-weight: 700;
+  }
+  .bnum.unknown {
+    color: var(--faint);
+  }
+  .bar {
+    position: relative;
+    height: 6px;
+    margin: 0.4rem 0 0.35rem;
+    border-radius: 999px;
+    background: var(--hover);
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    border-radius: 999px;
+    background: var(--accent, #16a34a);
+    transition: width 0.3s ease;
+  }
+  .fill.low {
+    background: var(--warn, #d97706);
+  }
+  /* the reserved slice, drawn under the fill so it reads as a boundary */
+  .floor {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-right: 1px dashed var(--faint);
+    pointer-events: none;
+  }
+  .bmeta {
+    margin: 0;
+    font-size: 0.72rem;
+    color: var(--faint);
+    font-variant-numeric: tabular-nums;
+  }
+  .bwarn {
+    margin: 0.3rem 0 0;
+    font-size: 0.72rem;
+    color: var(--warn, #d97706);
   }
 
   .actions {

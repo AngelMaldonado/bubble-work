@@ -1,7 +1,10 @@
 package store
 
 import (
+	"fmt"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -290,5 +293,97 @@ func TestThreadProgress(t *testing.T) {
 	got, _ = st.ThreadProgressFor([]string{"wi-1"})
 	if p := got["wi-1"]; p.DoneTodos != 3 || p.LogbookHash != "zzz999" || !p.LogbookAt.Equal(later) {
 		t.Errorf("upsert wrong: %+v", p)
+	}
+}
+
+// TestWALConcurrentReadWrite is the regression guard for docs/PLANE-SYNC.md
+// Phase 0. Before WAL, a bulk transaction and a concurrent reader collided as
+// SQLITE_BUSY the moment they overlapped — harmless while writes were rare and
+// tiny, fatal once the sync worker bulk-upserts the mirror on every tick while
+// the board reads the same file.
+//
+// SaveThreadProgress is deliberately the writer here: it is the existing
+// batch-in-a-transaction, so it has the same shape the mirror's upserts will.
+func TestWALConcurrentReadWrite(t *testing.T) {
+	st := openTestStore(t)
+
+	const (
+		batch   = 200 // rows per transaction
+		rounds  = 25  // transactions
+		readers = 8
+	)
+
+	ids := make([]string, batch)
+	for i := range ids {
+		ids[i] = fmt.Sprintf("thread-%03d", i)
+	}
+
+	var wg sync.WaitGroup
+	errs := make(chan error, readers+1)
+	stop := make(chan struct{})
+
+	wg.Add(1)
+	go func() { // the writer
+		defer wg.Done()
+		defer close(stop)
+		for r := 0; r < rounds; r++ {
+			ps := make([]ThreadProgress, batch)
+			for i := range ps {
+				ps[i] = ThreadProgress{
+					ThreadID:    ids[i],
+					LogbookHash: fmt.Sprintf("h%d-%d", r, i),
+					DoneTodos:   r,
+					LogbookAt:   time.Now(),
+				}
+			}
+			if err := st.SaveThreadProgress(ps); err != nil {
+				errs <- fmt.Errorf("write round %d: %w", r, err)
+				return
+			}
+		}
+	}()
+
+	for n := 0; n < readers; n++ { // readers hammering the same table
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				select {
+				case <-stop:
+					return
+				default:
+				}
+				if _, err := st.ThreadProgressFor(ids); err != nil {
+					errs <- fmt.Errorf("read: %w", err)
+					return
+				}
+			}
+		}()
+	}
+
+	wg.Wait()
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent access failed (WAL not in effect?): %v", err)
+	}
+}
+
+// TestOpenIsWAL pins the pragma itself. journal_mode is a property of the
+// database file, so a regression here would be silent until load exposed it.
+func TestOpenIsWAL(t *testing.T) {
+	st := openTestStore(t)
+	var mode string
+	if err := st.db.QueryRow(`PRAGMA journal_mode`).Scan(&mode); err != nil {
+		t.Fatalf("read journal_mode: %v", err)
+	}
+	if !strings.EqualFold(mode, "wal") {
+		t.Errorf("journal_mode = %q, want WAL", mode)
+	}
+	var busy int
+	if err := st.db.QueryRow(`PRAGMA busy_timeout`).Scan(&busy); err != nil {
+		t.Fatalf("read busy_timeout: %v", err)
+	}
+	if busy == 0 {
+		t.Error("busy_timeout is 0; a lock contention would fail instantly")
 	}
 }

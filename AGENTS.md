@@ -45,7 +45,9 @@ closing or redefining a bubble when its outcome no longer justifies the work.
 - **Plane is the system of record** for work items + activity. The **server**
   owns the overlay: heat, lifecycle, the Bubble contract, and members.
 - The server is Plane's ONLY client, over REST only. No component talks to
-  Plane directly or via Plane's MCP.
+  Plane directly or via Plane's MCP. Plane's 60 req/min budget is the binding
+  constraint — [`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md) is moving reads onto
+  a local SQLite mirror with a single sync worker.
 - Agents consume the server's OWN MCP endpoint (`/mcp`), authenticated as a
   member. The framework's rules are enforced server-side, so they cannot be
   bypassed from any client.

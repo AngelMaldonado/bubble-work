@@ -1,6 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phase 0 shipped · Phases 1-7 pending** ·
+Status: **Phase 0 shipped · Phase 1 built and running in shadow, live `sync-diff`
+not yet clean (see below) · Phases 2-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -276,21 +277,99 @@ outbox's job (Phase 5), not a silent repeat.
       **Answered 2026-08-04: yes, untruncated** (14 k body identical list vs get).
       Per-item `GetWorkItem` is off the critical path; bodies arrive 100/page.
       See *Probed against the live instance* above.
-- [ ] `internal/mirror`: schema + upsert/query API. Migrations in `store.Open`
-      alongside the existing best-effort ALTERs.
-- [ ] `internal/sync`: `Backfill(instance)` — full walk of projects, modules,
-      module membership, states, members, items. Rate-budgeted, resumable via
-      `sync_cursors`. Use `expand=state` so a row carries its state group inline,
-      and **count arriving rows** rather than trusting `total_results`.
-- [ ] `internal/sync`: `Delta(instance)` — `order_by=-updated_at`, early-stop at
-      the watermark, one page in steady state.
-- [ ] Worker loop replacing the tick's fetch role: delta every `snapshotRefresh`,
-      full reconcile on a long interval (catches deletes, which delta cannot see).
-- [ ] Shadow verification: a `bubble admin sync-diff <slug>` that builds the
-      board from the mirror and from the live path and reports differences.
+- [x] `internal/mirror`: schema + upsert/query API. The mirror borrows the
+      store's `*sql.DB` rather than opening its own — two pools over one SQLite
+      file would reintroduce exactly the contention WAL was added to remove.
+- [x] `internal/sync`: `Backfill(instance)` — full walk of projects, modules,
+      module membership, states, members, items. Uses `expand=state` so a row
+      carries its state group inline, and **counts arriving rows** rather than
+      trusting `total_results`.
+- [x] `internal/sync`: `Delta(instance)` — `order_by=-updated_at`, early-stop at
+      the watermark. Verified at **≤ 3 calls** for a quiet pass.
+- [x] Worker loop: delta every 2 min, full reconcile hourly. Runs in the Phase 0
+      background lane, so shadow-period double-running does not degrade the board.
+- [x] `bubble admin sync-diff <slug>`, plus `sync` (census, no Plane calls) and
+      `sync-backfill`. REST + CLI (admin capability → no MCP).
 
-**Accept:** `sync-diff` is empty for every instance across a full cycle. Nothing
-in `server.go` has changed behaviour yet.
+**Accepted:** the substrate comparison is clean after a backfill and catches both
+a corrupted field and a module-membership change (the drift a delta structurally
+cannot see). `TestBackfillThenDeltaIsCheap` asserts the economic claim numerically
+rather than trusting it.
+
+### What sync-diff compares, and why
+
+It compares the **substrate** — module list, module membership, and the item
+fields the board and interior read — not the rendered board. The board is a pure
+function of that substrate, so equal substrate means an equal board by
+construction, and a mismatch points straight at the sync bug instead of at a
+downstream symptom. Diffing rendered bubbles would conflate "the mirror is wrong"
+with "the board builder changed".
+
+### Three things the first live run changed
+
+Running this against `plane.cuby.work` for real found what the unit tests could
+not, because the unit tests had a rate limit of infinity:
+
+1. **A 429 on one sub-fetch aborted the entire pass.** Now a project that fails
+   is logged, marked partial, and skipped — what arrived is kept. The invariant
+   that makes this safe: **a project that did not walk cleanly is never pruned,
+   and a partial pass never advances the watermark.** "I could not see it" must
+   never be mistaken for "it is gone".
+2. **A full walk ran in the interactive lane.** It is tempting to give an
+   explicitly-requested backfill priority, but a walk that spends the whole
+   minute's allowance is precisely what starves the board — and unlike a page
+   load, it can afford to wait. All sync passes, including admin-triggered ones,
+   are background now.
+3. **Losing the project list aborted everything** — the worst possible response,
+   since the mirror already knows the projects. It now falls back to the
+   mirrored list and continues degraded; a genuinely new project waits for a
+   pass that can read the list.
+
+A fourth thing was fixed on the way: **the full walk is now resumable.** A pass
+that ran out of budget used to restart from project one next time, and since a
+partial pass cannot advance the watermark, it could never finish — self-
+reinforcing under sustained pressure. Each project now carries its own cursor.
+Note the deliberate asymmetry: the *automatic* hourly reconcile resumes (skips
+projects still fresh), while an *explicit* `sync-backfill` always re-walks
+everything — an admin asking for a backfill means "go and look".
+
+Also learned, and worth remembering: the rate limit is **per key, shared across
+processes**. Three consumers on one key (a scratch server, the live server, and a
+few probe scripts) is enough that even `list projects` 429s. `X-RateLimit-Limit`
+is not sent, so the inferred ceiling is "largest remaining ever seen" — a lower
+bound that corrects upward, which is why it can read oddly low right after a
+busy period.
+
+### Live verification is INCOMPLETE — read this before Phase 2
+
+The logic is unit-tested end to end against a fake Plane, and a real backfill
+mirrored **7 projects, 22 modules, 60 items, 30 states, 5 comments** from
+`plane.cuby.work`. But **no clean full pass has completed against live Plane
+yet**, so `sync-diff` has not returned clean on real data. The gate is built; it
+has not been passed.
+
+The cause is budget contention, not a defect. During the shadow period the legacy
+fetch path and the syncer compete for one key's 60/min — and the legacy path is
+the greedy one (the pulse probe alone is up to 20 calls a tick). Both correctly
+yield at the Phase 0 floor, so instead of failing they both crawl. The test was
+also pessimistic: a scratch server was running the full legacy stack *alongside*
+the real server, doubling the load.
+
+Three ways forward, in order of preference:
+
+1. **Deploy and let the real server run alone.** One legacy path plus one syncer
+   on one key is roughly half the contention the test had. Watch
+   `bubble admin sync cuby` until `last full` is set, then run `sync-diff`.
+2. **Raise `API_KEY_RATE_LIMIT`** on the self-hosted Plane for the duration of
+   the shadow period. This is the documented stopgap and the shadow period is
+   exactly what it is for.
+3. **Get to Phase 2 quickly.** The contention disappears the moment the legacy
+   fetch path is deleted, because the syncer stops competing with it. There is a
+   real argument for treating Phase 1's gate as "clean diff on a quiet instance"
+   rather than blocking on a busy one.
+
+Do not let Phase 2 start reading from the mirror until a `sync-diff` has come
+back clean at least once on real data. That is the whole point of shadow mode.
 
 ## Phase 2 — Board reads from L1
 
@@ -424,11 +503,19 @@ second with no polling, and the pulse updates without any `ListComments` call.
 - **Deletes are invisible to delta sync.** An item removed in Plane keeps its
   mirror row until the periodic full reconcile. Reconcile interval is therefore a
   correctness knob, not just a cost one.
-- **Module membership may be invisible too.** Bubbles *are* modules, so moving a
-  work item between modules changes the board — but it is unknown whether that
-  bumps the item's `updated_at`. Probe it in Phase 1 (cheap: move an item, re-read
-  the delta page). If it does not, module membership rides on the full reconcile
-  alone, which tightens the reconcile interval further. Safety net either way.
+- **Module membership rides on the full reconcile.** Bubbles *are* modules, so
+  moving a work item between modules changes the board. Rather than probe whether
+  that bumps `updated_at`, Phase 1 simply assumes it does not: membership is
+  re-read only on a full pass. That makes the reconcile interval (1 h) the
+  worst-case lag on a bubble gaining or losing a thread. `sync-diff` reports
+  membership drift explicitly, so the assumption is observable rather than
+  hidden — if an hour proves too slow in practice, tighten the interval.
+- **A partial pass is sticky.** Holding the watermark back on a partial pass is
+  correct, but it means every subsequent pass is a full walk until one completes
+  cleanly. Under sustained rate pressure that is self-reinforcing: full walks cost
+  more, so they are likelier to be partial. The escape is Phase 2 — once the
+  legacy fetch path is gone, the syncer stops competing with it for the same
+  budget.
 - **Optimistic writes can be wrong.** A write that abandons after max retries has
   been shown to the user as if it succeeded. This is why the outbox needs a
   visible surface on all three admin surfaces, not just a log line.

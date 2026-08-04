@@ -32,8 +32,10 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
 	"github.com/AngelMaldonado/bubble-work/internal/mcpapi"
+	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
+	planesync "github.com/AngelMaldonado/bubble-work/internal/sync"
 	"github.com/AngelMaldonado/bubble-work/web"
 )
 
@@ -86,6 +88,12 @@ const (
 type Server struct {
 	store *store.Store
 	now   func() time.Time
+
+	// mirror is the local projection of Plane and syncer is what fills it
+	// (docs/PLANE-SYNC.md). Both are nil if the mirror failed to open — during
+	// the Phase 1 shadow period nothing reads from it, so that is survivable.
+	mirror *mirror.Mirror
+	syncer *planesync.Syncer
 
 	// tuning is the live calibration of the buoyancy model (both grains).
 	// Persisted in the store and editable by a service admin at runtime; every
@@ -226,8 +234,25 @@ func New(st *store.Store, cycle time.Duration) *Server {
 	}
 	s.loadTuning()
 	s.loadPersistedSnapshots()
+	// The Plane mirror shares the store's file and pool (docs/PLANE-SYNC.md
+	// Phase 1). Failing to open it must NOT take the server down: in shadow mode
+	// nothing reads from it yet, so a broken mirror costs sync-diff and nothing
+	// else. Phase 2 is where this becomes load-bearing.
+	if mr, err := mirror.New(st.DB()); err != nil {
+		log.Printf("mirror: disabled (%v)", err)
+	} else {
+		s.mirror = mr
+		s.syncer = planesync.New(mr)
+	}
 	return s
 }
+
+// Syncer exposes the mirror worker so cmd/bubble can run it. Nil when the mirror
+// failed to open.
+func (s *Server) Syncer() *planesync.Syncer { return s.syncer }
+
+// Instances lists the configured Plane instances (the sync worker's input).
+func (s *Server) Instances() ([]domain.Instance, error) { return s.store.ListInstances() }
 
 // Tuning returns the live buoyancy calibration.
 func (s *Server) Tuning() domain.Tuning {
@@ -492,6 +517,9 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
 	mux.HandleFunc("GET /api/admin/members", s.adminOnly(s.handleAdminMembers))
 	mux.HandleFunc("POST /api/admin/instances/{slug}/autostate", s.adminOnly(s.handleSetAutoState))
+	mux.HandleFunc("GET /api/admin/sync/{slug}", s.adminOnly(s.handleSyncStatus))
+	mux.HandleFunc("POST /api/admin/sync/{slug}/diff", s.adminOnly(s.handleSyncDiff))
+	mux.HandleFunc("POST /api/admin/sync/{slug}/backfill", s.adminOnly(s.handleSyncBackfill))
 	mux.HandleFunc("GET /api/admin/tuning", s.adminOnly(s.handleGetTuning))
 	mux.HandleFunc("PUT /api/admin/tuning", s.adminOnly(s.handleSetTuning))
 	mux.HandleFunc("GET /api/admin/kiosk", s.adminOnly(s.handleListKiosk))

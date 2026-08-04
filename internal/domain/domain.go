@@ -558,6 +558,68 @@ type RateBudget struct {
 	Floor     int    `json:"floor"`     // allowance reserved for interactive work
 }
 
+// ---- Plane mirror (docs/PLANE-SYNC.md) ----
+
+// SyncStatus is one instance's mirror census and cursor. Cheap: no Plane calls.
+type SyncStatus struct {
+	Instance  string `json:"instance"`
+	Projects  int    `json:"projects"`
+	Modules   int    `json:"modules"`
+	Items     int    `json:"items"`
+	States    int    `json:"states"`
+	Members   int    `json:"members"`
+	Comments  int    `json:"comments"`
+	Watermark string `json:"watermark,omitempty"`  // newest updated_at applied
+	LastFull  string `json:"last_full,omitempty"`  // last complete reconcile
+	LastOK    string `json:"last_ok,omitempty"`    // last successful pass
+	LastError string `json:"last_error,omitempty"` // why the mirror may be stale
+}
+
+// SyncResult reports what one sync pass did.
+type SyncResult struct {
+	Instance  string `json:"instance"`
+	Full      bool   `json:"full"`
+	Projects  int    `json:"projects"`
+	Modules   int    `json:"modules"`
+	Items     int    `json:"items"`
+	Comments  int    `json:"comments"`
+	Pruned    int    `json:"pruned"`
+	Watermark string `json:"watermark,omitempty"`
+	TookMS    int64  `json:"took_ms"`
+	// Partial means some projects could not be walked completely (usually a
+	// 429). What arrived is kept; prunes and the watermark are held back.
+	Partial bool     `json:"partial,omitempty"`
+	Errors  []string `json:"errors,omitempty"`
+}
+
+// SyncFinding is one disagreement between the mirror and Plane.
+type SyncFinding struct {
+	Kind  string `json:"kind"`  // missing-in-mirror | missing-in-plane | field
+	Scope string `json:"scope"` // module | membership | item
+	ID    string `json:"id"`
+	Label string `json:"label"`
+	Field string `json:"field,omitempty"`
+	Plane string `json:"plane,omitempty"`
+	Local string `json:"local,omitempty"`
+	Text  string `json:"text"` // pre-rendered one-liner, so surfaces agree
+}
+
+// SyncDiff is the Phase 1 acceptance gate: the mirror compared against a live
+// fetch. Expensive — it runs the very calls the mirror exists to remove.
+type SyncDiff struct {
+	Instance  string        `json:"instance"`
+	Projects  int           `json:"projects"`
+	Modules   int           `json:"modules"`
+	Items     int           `json:"items"`
+	Clean     bool          `json:"clean"`
+	Findings  []SyncFinding `json:"findings,omitempty"`
+	Watermark string        `json:"watermark,omitempty"`
+	LastFull  string        `json:"last_full,omitempty"`
+	LastOK    string        `json:"last_ok,omitempty"`
+	LastError string        `json:"last_error,omitempty"`
+	TookMS    int64         `json:"took_ms"`
+}
+
 // Notification records a bubble crossing into a colder state (§5) — the push
 // side of the buoyancy model: it tells you what's sinking without you looking.
 type Notification struct {

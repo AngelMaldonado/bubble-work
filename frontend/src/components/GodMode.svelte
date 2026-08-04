@@ -13,6 +13,8 @@
     TuningField,
     TuningKey,
     TuningView,
+    SyncStatus,
+    SyncDiff,
   } from '../lib/types';
 
   function roleLabel(m: Member): string {
@@ -37,6 +39,11 @@
   let mintInstance = $state('');
   let mintName = $state('');
 
+  // Plane mirror (PLANE-SYNC.md). Census loads with the page; diff and backfill
+  // are explicit because both walk Plane completely and cost real rate budget.
+  let syncStatus = $state<Record<string, SyncStatus>>({});
+  let syncDiffs = $state<Record<string, SyncDiff>>({});
+
   function flash(msg: string): void {
     toast = msg;
     setTimeout(() => (toast = null), 4000);
@@ -44,6 +51,41 @@
 
   function fail(e: unknown): void {
     error = e instanceof ApiError ? e.message : String(e);
+  }
+
+  // Both of these walk Plane completely and are rate-budgeted server-side, so
+  // they can legitimately take a while. The button stays disabled meanwhile
+  // rather than letting an impatient click queue a second full walk.
+  async function runSyncDiff(slug: string): Promise<void> {
+    busy = 'diff:' + slug;
+    error = null;
+    try {
+      syncDiffs[slug] = await api.adminSyncDiff(slug);
+      syncStatus[slug] = await api.adminSync(slug);
+      flash(syncDiffs[slug].clean ? `${slug}: mirror matches Plane` : `${slug}: ${syncDiffs[slug].findings?.length ?? 0} finding(s)`);
+    } catch (e) {
+      fail(e);
+    } finally {
+      busy = null;
+    }
+  }
+
+  async function runSyncBackfill(slug: string): Promise<void> {
+    busy = 'backfill:' + slug;
+    error = null;
+    try {
+      const r = await api.adminSyncBackfill(slug);
+      syncStatus[slug] = await api.adminSync(slug);
+      flash(
+        r.partial
+          ? `${slug}: partial — ${r.items} item(s), ${r.errors?.length ?? 0} project(s) incomplete`
+          : `${slug}: ${r.items} item(s), ${r.modules} module(s), ${r.pruned} pruned`,
+      );
+    } catch (e) {
+      fail(e);
+    } finally {
+      busy = null;
+    }
   }
 
   async function loadAll(): Promise<void> {
@@ -59,6 +101,15 @@
       ]);
       draft = { ...tuning.tuning };
       if (!mintInstance && instances.length) mintInstance = instances[0].slug;
+      // Census only — cheap, and it is what tells you whether the mirror is
+      // keeping up. A failure here must not blank the rest of God Mode.
+      for (const i of instances) {
+        try {
+          syncStatus[i.slug] = await api.adminSync(i.slug);
+        } catch {
+          // an instance without a mirror simply has no card body
+        }
+      }
     } catch (e) {
       fail(e);
     } finally {
@@ -288,6 +339,68 @@
         {:else}
           <p class="bmeta">No instances configured.</p>
         {/if}
+      </section>
+
+      <!-- plane mirror (PLANE-SYNC.md) -->
+      <section class="card wide">
+        <h3>Plane mirror</h3>
+        <p class="bmeta">
+          A local SQLite copy of Plane, kept current by one background worker. In
+          shadow mode nothing reads from it yet — <em>sync-diff</em> is the gate that
+          proves it agrees with Plane before anything does.
+        </p>
+        {#each instances as i (i.slug)}
+          {@const st = syncStatus[i.slug]}
+          {@const d = syncDiffs[i.slug]}
+          <div class="budget">
+            <div class="bhead">
+              <strong>{i.slug}</strong>
+              {#if st}
+                <span class="bnum">{st.items} items · {st.modules} bubbles</span>
+              {:else}
+                <span class="bnum unknown">no mirror</span>
+              {/if}
+            </div>
+            {#if st}
+              <p class="bmeta">
+                {st.projects} projects · {st.states} states · {st.members} members ·
+                {st.comments} comments
+              </p>
+              <p class="bmeta">
+                last full: {st.last_full ? new Date(st.last_full).toLocaleString() : '—'} ·
+                watermark: {st.watermark ? new Date(st.watermark).toLocaleString() : '—'}
+              </p>
+              {#if st.last_error}
+                <!-- A stale mirror that says nothing is the failure mode this
+                     whole refactor must avoid, so it is surfaced loudly. -->
+                <p class="bwarn">stale: {st.last_error}</p>
+              {/if}
+              <div class="actions tight">
+                <button onclick={() => runSyncDiff(i.slug)} disabled={busy !== null}>
+                  {busy === 'diff:' + i.slug ? 'comparing…' : 'Compare with Plane'}
+                </button>
+                <button onclick={() => runSyncBackfill(i.slug)} disabled={busy !== null}>
+                  {busy === 'backfill:' + i.slug ? 'walking…' : 'Backfill'}
+                </button>
+              </div>
+              {#if d}
+                {#if d.clean}
+                  <p class="bok">✓ mirror matches Plane ({d.items} items compared)</p>
+                {:else}
+                  <p class="bwarn">{d.findings?.length ?? 0} finding(s):</p>
+                  <ul class="findings">
+                    {#each (d.findings ?? []).slice(0, 12) as f (f.id + f.field)}
+                      <li>{f.text}</li>
+                    {/each}
+                  </ul>
+                  {#if (d.findings?.length ?? 0) > 12}
+                    <p class="bmeta">…and {(d.findings?.length ?? 0) - 12} more</p>
+                  {/if}
+                {/if}
+              {/if}
+            {/if}
+          </div>
+        {/each}
       </section>
 
       <!-- maintenance -->
@@ -672,6 +785,28 @@
     margin: 0.3rem 0 0;
     font-size: 0.72rem;
     color: var(--warn, #d97706);
+  }
+  .bok {
+    margin: 0.3rem 0 0;
+    font-size: 0.72rem;
+    color: var(--accent, #16a34a);
+  }
+  .actions.tight {
+    margin-top: 0.5rem;
+  }
+  /* findings are the point of the card when non-empty, so give them room to be
+     read rather than truncating each line */
+  .findings {
+    margin: 0.35rem 0 0;
+    padding-left: 1.1rem;
+    font-size: 0.72rem;
+    color: var(--muted);
+    max-height: 12rem;
+    overflow-y: auto;
+  }
+  .findings li {
+    margin-bottom: 0.2rem;
+    word-break: break-word;
   }
 
   .actions {

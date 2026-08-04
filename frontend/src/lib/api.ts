@@ -13,6 +13,9 @@ import type {
   ThreadDetail,
   Comment,
   TuningView,
+  SyncStatus,
+  SyncDiff,
+  SyncResult,
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
@@ -138,4 +141,14 @@ export const api = {
   // a partial body patches only the keys it names; the server clamps and persists
   adminTuningSet: (patch: Record<string, number | boolean>) =>
     req<TuningView>('PUT', '/api/admin/tuning', patch),
+
+  // Plane mirror (PLANE-SYNC.md). Status is a local census — cheap. Diff and
+  // backfill both walk Plane completely and can take minutes on a large
+  // workspace, hence POST rather than GET: neither should be prefetchable.
+  adminSync: (slug: string) =>
+    req<SyncStatus>('GET', `/api/admin/sync/${encodeURIComponent(slug)}`),
+  adminSyncDiff: (slug: string) =>
+    req<SyncDiff>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/diff`),
+  adminSyncBackfill: (slug: string) =>
+    req<SyncResult>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/backfill`),
 };

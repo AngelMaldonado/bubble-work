@@ -178,6 +178,66 @@ export interface AdminInstance {
   auto_state: boolean; // writes derived levels back to Plane (Phase B)
 }
 
+// ---- Plane mirror (docs/PLANE-SYNC.md) ----
+
+/** One instance's mirror census and cursor. Cheap: no Plane calls. */
+export interface SyncStatus {
+  instance: string;
+  projects: number;
+  modules: number;
+  items: number;
+  states: number;
+  members: number;
+  comments: number;
+  watermark?: string; // newest updated_at applied
+  last_full?: string; // last complete reconcile
+  last_ok?: string; // last successful pass
+  last_error?: string; // why the mirror may be stale
+}
+
+export interface SyncResult {
+  instance: string;
+  full: boolean;
+  projects: number;
+  modules: number;
+  items: number;
+  comments: number;
+  pruned: number;
+  watermark?: string;
+  took_ms: number;
+  /** some projects could not be walked completely (usually a 429); what
+   *  arrived is kept, prunes and the watermark are held back */
+  partial?: boolean;
+  errors?: string[];
+}
+
+export interface SyncFinding {
+  kind: string; // missing-in-mirror | missing-in-plane | field
+  scope: string; // module | membership | item
+  id: string;
+  label: string;
+  field?: string;
+  plane?: string;
+  local?: string;
+  text: string; // pre-rendered one-liner, so every surface agrees
+}
+
+/** The mirror compared against a live fetch — the Phase 1 acceptance gate.
+ *  Expensive: it runs the very calls the mirror exists to remove. */
+export interface SyncDiff {
+  instance: string;
+  projects: number;
+  modules: number;
+  items: number;
+  clean: boolean;
+  findings?: SyncFinding[];
+  watermark?: string;
+  last_full?: string;
+  last_ok?: string;
+  last_error?: string;
+  took_ms: number;
+}
+
 export interface KioskToken {
   token: string;
   instance: string;

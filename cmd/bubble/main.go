@@ -24,6 +24,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/server"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
+	planesync "github.com/AngelMaldonado/bubble-work/internal/sync"
 )
 
 const version = "0.1.0"
@@ -496,6 +497,12 @@ func cmdAdmin(args []string) {
 		err = cmdAdminKiosk(cfg, token, args[1:])
 	case "tuning":
 		err = cmdAdminTuning(cfg, token, args[1:])
+	case "sync", "sync-diff", "sync-backfill":
+		if len(args) < 2 {
+			err = fmt.Errorf("usage: bubble admin %s <instance>", args[0])
+			break
+		}
+		err = client.AdminSync(cfg, token, args[0], args[1])
 	case "autostate":
 		if len(args) < 3 {
 			err = fmt.Errorf("usage: bubble admin autostate <instance> <on|off>")
@@ -581,6 +588,9 @@ Usage:
   bubble admin tuning reset          restore the stock calibration
   bubble admin autostate <inst> on   write derived levels back to Plane (Phase B)
   bubble admin autostate <inst> off  stop writing to Plane (default)
+  bubble admin sync <inst>           mirror census + cursor (no Plane calls)
+  bubble admin sync-diff <inst>      compare the mirror against a live fetch
+  bubble admin sync-backfill <inst>  force a complete re-walk of one instance
 
 `)
 }
@@ -851,6 +861,15 @@ func cmdServe(args []string) {
 	if iv := cfg.TickInterval(); iv > 0 {
 		go srv.RunTicker(context.Background(), iv)
 		log.Printf("cooling sweep every %s", iv)
+	}
+	// The Plane mirror runs in SHADOW during Phase 1: it fills sqlite but nothing
+	// reads from it yet, so `bubble admin sync-diff` can prove it agrees with
+	// Plane before Phase 2 points the board at it. It runs in the background rate
+	// lane, so it yields to page loads rather than competing with them.
+	if sy := srv.Syncer(); sy != nil {
+		go sy.Run(context.Background(), srv.Instances)
+		log.Printf("plane mirror syncing (delta %s, full reconcile %s) — shadow mode, nothing reads it yet",
+			planesync.DeltaInterval, planesync.FullInterval)
 	}
 
 	// Record our pid so `bubble stop` can find us; clean it up on exit.

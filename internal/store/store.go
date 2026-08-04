@@ -200,6 +200,15 @@ func Open(path string) (*Store, error) {
 // Close releases the database.
 func (s *Store) Close() error { return s.db.Close() }
 
+// DB exposes the underlying handle so the Plane mirror can keep its tables in
+// the SAME file and connection pool (docs/PLANE-SYNC.md Phase 1). Two pools over
+// one SQLite file would reintroduce exactly the lock contention WAL is here to
+// remove, so the mirror borrows this rather than opening its own.
+//
+// The overlay tables above and the mirror_* tables are different things: this is
+// the server's own state, those are a rebuildable projection of Plane.
+func (s *Store) DB() *sql.DB { return s.db }
+
 // GetContract returns a bubble's overlay, or ok=false when none is set yet.
 func (s *Store) GetContract(bubbleID string) (Contract, bool, error) {
 	var c Contract

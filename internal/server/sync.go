@@ -1,10 +1,14 @@
 package server
 
 import (
+	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
 // Admin surface for the Plane mirror (docs/PLANE-SYNC.md Phase 1). Admin
@@ -117,4 +121,75 @@ func rfc3339(t time.Time) string {
 		return ""
 	}
 	return t.UTC().Format(time.RFC3339)
+}
+
+// ---- outbox (docs/PLANE-SYNC.md Phase 5) ----
+
+// handleAdminOutbox lists queued and abandoned writes. An abandoned entry is the
+// point of this surface: it is a write that never reached Plane, and it must be
+// visible rather than quietly gone.
+func (s *Server) handleAdminOutbox(w http.ResponseWriter, r *http.Request) {
+	es, err := s.store.ListOutbox(200)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	pending, abandoned, err := s.store.CountOutbox()
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	out := domain.OutboxView{Pending: pending, Abandoned: abandoned}
+	for _, e := range es {
+		out.Entries = append(out.Entries, domain.OutboxItem{
+			ID: e.ID, Instance: e.Instance, Kind: e.Kind, TargetID: e.TargetID,
+			Author: e.AuthorEmail, Status: e.Status, Attempts: e.Attempts,
+			FieldLock: e.FieldLock, LastError: e.LastError,
+			CreatedAt: rfc3339(e.CreatedAt), NextAt: rfc3339(e.NextAt),
+			Summary: outboxSummary(e),
+		})
+	}
+	writeJSON(w, http.StatusOK, out)
+}
+
+// handleDropOutbox clears one entry (an admin unsticking a queue).
+func (s *Server) handleDropOutbox(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("id"), 10, 64)
+	if err != nil {
+		http.Error(w, "bad id", http.StatusBadRequest)
+		return
+	}
+	ok, err := s.store.DiscardOutbox(id)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	if !ok {
+		http.Error(w, "no such entry", http.StatusNotFound)
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// outboxSummary renders an entry as one human-readable line, so every surface
+// describes a queued write the same way.
+func outboxSummary(e store.OutboxEntry) string {
+	switch e.Kind {
+	case store.OutComment:
+		body := strings.Join(strings.Fields(e.Body()), " ")
+		if len(body) > 60 {
+			body = body[:57] + "…"
+		}
+		return fmt.Sprintf("unsent comment by %s: %q", e.AuthorEmail, body)
+	case store.OutState:
+		return fmt.Sprintf("move %s to state %s", short(e.TargetID), short(e.StateID()))
+	}
+	return e.Kind
+}
+
+func short(id string) string {
+	if len(id) > 8 {
+		return id[:8]
+	}
+	return id
 }

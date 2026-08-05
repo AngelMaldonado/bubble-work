@@ -1813,3 +1813,175 @@ func TestColdAuthCostsOneCall(t *testing.T) {
 		t.Errorf("a warm auth spent %d Plane call(s); identity should still be cached", n)
 	}
 }
+
+// TestCommentSurvivesPlaneOutage is the Phase 5 acceptance test
+// (docs/PLANE-SYNC.md). What a person actually loses when a post fails is their
+// typing, so that is what must survive — without storing their credential to
+// replay later, and without the comment turning up in Plane authored by a
+// service account.
+func TestCommentSurvivesPlaneOutage(t *testing.T) {
+	var down atomic.Bool
+	var posted atomic.Int32
+	inner := fakePlane()
+	t.Cleanup(inner.Close)
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if down.Load() && r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/comments/") {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		if r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/comments/") {
+			posted.Add(1)
+		}
+		req, _ := http.NewRequest(r.Method, inner.URL+r.URL.RequestURI(), r.Body)
+		req.Header = r.Header.Clone()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// Plane is down. The post must NOT 500 — it parks the words and says so.
+	down.Store(true)
+	code, body := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, `{"body":"important thought"}`)
+	if code != http.StatusAccepted {
+		t.Fatalf("during outage want 202 Accepted, got %d: %s", code, body)
+	}
+	var draft domain.Comment
+	if err := json.Unmarshal(body, &draft); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !draft.Pending || draft.DraftID == 0 || draft.Markdown != "important thought" {
+		t.Fatalf("draft wrong: %+v", draft)
+	}
+
+	// It appears in the thread where it was typed, marked unsent.
+	_, body = do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, "")
+	var cs []domain.Comment
+	if err := json.Unmarshal(body, &cs); err != nil {
+		t.Fatalf("decode comments: %v", err)
+	}
+	found := false
+	for _, c := range cs {
+		if c.Pending && c.Markdown == "important thought" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("the draft is not in the thread: %+v", cs)
+	}
+
+	// Nothing was sent to Plane, and no credential was stored to send it later.
+	if n := posted.Load(); n != 0 {
+		t.Errorf("posted %d comment(s) to Plane during the outage", n)
+	}
+	entries, err := st.ListOutbox(10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("outbox = %d entries (%v), want 1", len(entries), err)
+	}
+	for k, v := range entries[0].Payload {
+		if k != "body" {
+			t.Errorf("draft payload carries %q=%q; it must hold only the text", k, v)
+		}
+	}
+	if strings.Contains(strings.ToLower(entries[0].Payload["body"]), "plane_personal_key") {
+		t.Error("the caller's credential leaked into the draft")
+	}
+
+	// Plane comes back; the author re-sends with their live key.
+	down.Store(false)
+	code, body = do(t, http.MethodPost,
+		fmt.Sprintf("%s/api/threads/ws:p1:wi-1/drafts/%d/retry", ts.URL, draft.DraftID), key, "")
+	if code != http.StatusCreated {
+		t.Fatalf("retry want 201, got %d: %s", code, body)
+	}
+	if n := posted.Load(); n != 1 {
+		t.Errorf("retry posted %d time(s), want 1", n)
+	}
+	// ...and the draft is gone, not duplicated alongside the real comment.
+	if entries, _ := st.ListOutbox(10); len(entries) != 0 {
+		t.Errorf("draft survived a successful retry: %+v", entries)
+	}
+}
+
+// A draft belongs to its author and nobody else: it carries no credential, so
+// showing or re-sending it for another person is showing them words that nobody
+// present can post.
+func TestDraftsAreAuthorScoped(t *testing.T) {
+	st := openStore(t)
+	id, err := st.Enqueue(store.OutboxEntry{
+		Instance: "ws", Kind: store.OutComment, TargetID: "wi-1",
+		Payload: map[string]string{"body": "mine"}, AuthorEmail: "someone@else",
+		CreatedAt: time.Now(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ds, err := st.DraftsFor("ws", "wi-1", "owner@x"); err != nil || len(ds) != 0 {
+		t.Errorf("another person's draft is visible: %+v (%v)", ds, err)
+	}
+	if _, ok, _ := st.Draft(id, "owner@x"); ok {
+		t.Error("another person's draft is addressable by id")
+	}
+	if ds, _ := st.DraftsFor("ws", "wi-1", "SOMEONE@ELSE"); len(ds) != 1 {
+		t.Errorf("the author cannot see their own draft (case-insensitively): %+v", ds)
+	}
+}
+
+// A queued state write must not be reverted by a sync pass that still sees
+// Plane's older value — the board would visibly flip back, then forward again
+// when the write lands.
+func TestQueuedWriteIsShieldedFromSync(t *testing.T) {
+	st := openStore(t)
+	if _, err := st.Enqueue(store.OutboxEntry{
+		Instance: "ws", Kind: store.OutState, TargetID: "wi-1",
+		Payload: map[string]string{"state_id": "state-3"}, FieldLock: "state",
+		CreatedAt: time.Now(),
+	}); err != nil {
+		t.Fatal(err)
+	}
+	locked, err := st.LockedFields("ws", []string{"wi-1", "wi-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !locked["wi-1"]["state"] {
+		t.Error("a pending state write does not lock the state field")
+	}
+	if locked["wi-2"]["state"] {
+		t.Error("an unrelated item is locked")
+	}
+
+	// Once abandoned the lock lifts: Plane's own value becomes truth again.
+	es, _ := st.ListOutbox(1)
+	for i := 0; i < outboxMaxAttempts; i++ {
+		if err := st.FailOutbox(es[0].ID, time.Now(), outboxMaxAttempts, "nope"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	locked, _ = st.LockedFields("ws", []string{"wi-1"})
+	if locked["wi-1"]["state"] {
+		t.Error("an abandoned write still locks its field")
+	}
+	// ...but the row stays visible. Silently dropping a write is the one thing
+	// an outbox must never do.
+	after, _ := st.ListOutbox(10)
+	if len(after) != 1 || after[0].Status != store.OutAbandoned {
+		t.Errorf("abandoned entry should remain visible: %+v", after)
+	}
+}

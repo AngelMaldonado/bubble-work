@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
+	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
 // planeAssetImgRe matches the <img> tags md emits for Plane image-components
@@ -364,7 +366,74 @@ func (s *Server) ThreadComments(ctx context.Context, threadID string) ([]domain.
 		out[i].Mine = out[i].AuthorID != "" && out[i].AuthorID == me.ID
 	}
 	s.attachReaders(inst.Slug, out)
+
+	// A person's own unsent drafts belong in the thread where they typed them,
+	// not in some separate "failed" list they would have to go and find. Only
+	// ever their own: a draft carries no credential and can only be re-sent by
+	// its author, so showing it to anyone else would be showing them words that
+	// nobody present can post.
+	if me.Email != "" {
+		drafts, err := s.store.DraftsFor(inst.Slug, wid, me.Email)
+		if err != nil {
+			log.Printf("outbox: drafts for %s: %v", wid, err)
+		}
+		for _, d := range drafts {
+			out = append(out, draftAsComment(d, me.Name))
+		}
+	}
 	return out, nil
+}
+
+// RetryDraft re-sends an unsent comment with the caller's LIVE credential, which
+// is the whole reason drafts are not drained by a worker: it is the only way the
+// author recorded in Plane is the person who actually wrote it.
+func (s *Server) RetryDraft(ctx context.Context, threadID string, draftID int64) (domain.Comment, error) {
+	me, _ := domain.ActorFrom(ctx)
+	if me.Email == "" {
+		return domain.Comment{}, errUnauth
+	}
+	d, ok, err := s.store.Draft(draftID, me.Email)
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	if !ok {
+		// Either it does not exist or it is not theirs; the two are deliberately
+		// indistinguishable from outside.
+		return domain.Comment{}, errNotFound
+	}
+	out, err := s.PostComment(ctx, threadID, d.Body())
+	if err != nil {
+		return domain.Comment{}, err
+	}
+	if out.Pending {
+		// Still could not reach Plane. PostComment parked a NEW draft, so drop
+		// this one or the same words accumulate a copy per attempt.
+		if _, derr := s.store.DiscardOutbox(d.ID); derr != nil {
+			log.Printf("outbox: replacing draft %d: %v", d.ID, derr)
+		}
+		return out, nil
+	}
+	if _, err := s.store.DiscardOutbox(d.ID); err != nil {
+		log.Printf("outbox: clearing sent draft %d: %v", d.ID, err)
+	}
+	return out, nil
+}
+
+// DiscardDraft throws away an unsent comment. Author-scoped, like RetryDraft.
+func (s *Server) DiscardDraft(ctx context.Context, draftID int64) error {
+	me, _ := domain.ActorFrom(ctx)
+	if me.Email == "" {
+		return errUnauth
+	}
+	if _, ok, err := s.store.Draft(draftID, me.Email); err != nil {
+		return err
+	} else if !ok {
+		return errNotFound
+	}
+	if _, err := s.store.DiscardOutbox(draftID); err != nil {
+		return err
+	}
+	return nil
 }
 
 // commentsFor returns a work item's rendered comments (oldest-first, without the
@@ -390,6 +459,51 @@ func (s *Server) commentsFor(inst domain.Instance, wid string) ([]domain.Comment
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
 	return out, nil
+}
+
+// draftComment parks an unsent comment and returns it as a pending entry, so the
+// caller sees their words still there rather than an error and an empty box.
+func (s *Server) draftComment(ctx context.Context, inst domain.Instance, wid, body string, cause error) (domain.Comment, error) {
+	me, _ := domain.ActorFrom(ctx)
+	if me.Email == "" {
+		// Without an identity there is nobody who could ever re-send it, so
+		// parking it would be a quiet way to lose it. Fail loudly instead.
+		return domain.Comment{}, cause
+	}
+	id, err := s.store.Enqueue(store.OutboxEntry{
+		Instance: inst.Slug, Kind: store.OutComment, TargetID: wid,
+		Payload: map[string]string{"body": body}, AuthorEmail: me.Email,
+		CreatedAt: s.now(), LastError: cause.Error(),
+	})
+	if err != nil {
+		log.Printf("outbox: saving draft for %s: %v", wid, err)
+		return domain.Comment{}, cause // could not even park it — surface the original
+	}
+	log.Printf("comment by %s on thread %s could not reach Plane (%v); kept as draft %d",
+		me.Label(), wid, cause, id)
+	return draftAsComment(store.OutboxEntry{
+		ID: id, TargetID: wid, Payload: map[string]string{"body": body},
+		AuthorEmail: me.Email, CreatedAt: s.now(), LastError: cause.Error(),
+	}, me.Name), nil
+}
+
+// draftAsComment renders an unsent draft in the shape the discussion already
+// speaks, so a client shows it in place rather than needing a second feed.
+func draftAsComment(e store.OutboxEntry, author string) domain.Comment {
+	if author == "" {
+		author = "you"
+	}
+	return domain.Comment{
+		ID:        fmt.Sprintf("draft:%d", e.ID),
+		Author:    author,
+		Markdown:  e.Body(),
+		HTML:      md.RenderHTML(e.Body()),
+		Mine:      true,
+		CreatedAt: e.CreatedAt,
+		Pending:   true,
+		DraftID:   e.ID,
+		Error:     e.LastError,
+	}
 }
 
 // attachReaders decorates each comment with its 👀 read-receipts, excluding the
@@ -478,7 +592,14 @@ func (s *Server) PostComment(ctx context.Context, threadID, body string) (domain
 	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
 	cm, err := wcl.CreateComment(ctx, wid, md.RenderHTML(body))
 	if err != nil {
-		return domain.Comment{}, err
+		// Plane refused or was unreachable. Keep the words: what a person
+		// actually loses here is their typing, and that is recoverable without
+		// storing their credential (docs/PLANE-SYNC.md Phase 5).
+		//
+		// The draft carries no key on purpose, so nothing drains it
+		// automatically — only its author can re-send it, with their live
+		// credential, which is also the only way Plane records the right author.
+		return s.draftComment(ctx, inst, wid, body, err)
 	}
 	// Put it in the mirror now rather than waiting for a sync pass to discover
 	// it. This is not an optimistic write: Plane already accepted it and handed
@@ -550,7 +671,13 @@ func (s *Server) handlePostComment(w http.ResponseWriter, r *http.Request) {
 	if writeErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusCreated, cm)
+	// 202 when Plane could not be reached: the words are kept as a draft, but
+	// nothing was created there, and a 201 would claim otherwise.
+	code := http.StatusCreated
+	if cm.Pending {
+		code = http.StatusAccepted
+	}
+	writeJSON(w, code, cm)
 }
 
 func (s *Server) handleMarkCommentsRead(w http.ResponseWriter, r *http.Request) {
@@ -562,6 +689,39 @@ func (s *Server) handleMarkCommentsRead(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	if err := s.MarkCommentsRead(r.Context(), r.PathValue("id"), in.CommentIDs); writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
+}
+
+// handleRetryDraft re-sends an unsent comment with the caller's live credential.
+func (s *Server) handleRetryDraft(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("draft"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad draft id"})
+		return
+	}
+	out, err := s.RetryDraft(r.Context(), r.PathValue("id"), id)
+	if writeErr(w, err) {
+		return
+	}
+	// 202 when it STILL could not be sent: the words are safe but nothing
+	// reached Plane, and a 201 would claim otherwise.
+	code := http.StatusCreated
+	if out.Pending {
+		code = http.StatusAccepted
+	}
+	writeJSON(w, code, out)
+}
+
+// handleDiscardDraft throws away an unsent comment.
+func (s *Server) handleDiscardDraft(w http.ResponseWriter, r *http.Request) {
+	id, err := strconv.ParseInt(r.PathValue("draft"), 10, 64)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "bad draft id"})
+		return
+	}
+	if writeErr(w, s.DiscardDraft(r.Context(), id)) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})

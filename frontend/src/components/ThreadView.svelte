@@ -147,6 +147,41 @@
     if (tid) void markOthersRead(tid);
   }
 
+  // A comment that could not reach Plane comes back as a draft (202) rather
+  // than an error, so the words stay put. Only its author can re-send it,
+  // because it deliberately carries no credential (docs/PLANE-SYNC.md Phase 5).
+  let draftBusy = $state<number | null>(null);
+
+  async function retryDraft(c: Comment): Promise<void> {
+    const tid = store.threadId;
+    if (!tid || !c.draft_id) return;
+    draftBusy = c.draft_id;
+    chatErr = null;
+    try {
+      const sent = await api.retryDraft(tid, c.draft_id);
+      comments = comments.map((x) => (x.draft_id === c.draft_id ? sent : x));
+      if (sent.pending) chatErr = sent.error || 'still unable to reach Plane';
+    } catch (e) {
+      chatErr = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      draftBusy = null;
+    }
+  }
+
+  async function discardDraft(c: Comment): Promise<void> {
+    const tid = store.threadId;
+    if (!tid || !c.draft_id) return;
+    draftBusy = c.draft_id;
+    try {
+      await api.discardDraft(tid, c.draft_id);
+      comments = comments.filter((x) => x.draft_id !== c.draft_id);
+    } catch (e) {
+      chatErr = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      draftBusy = null;
+    }
+  }
+
   async function postComment(): Promise<void> {
     const tid = store.threadId;
     const body = draft.trim();
@@ -530,13 +565,31 @@
               <p class="dim chat-empty">No comments yet — start the discussion.</p>
             {:else}
               {#each comments as c (c.id)}
-                <div class="msg" class:mine={isMine(c)}>
+                <div class="msg" class:mine={isMine(c)} class:unsent={c.pending}>
                   <div class="msg-meta">
                     <span class="msg-who">{c.author}</span>
-                    <span class="msg-age">{fmtTime(c.created_at)}</span>
+                    {#if c.pending}
+                      <span class="msg-unsent" title={c.error}>⧗ unsent</span>
+                    {:else}
+                      <span class="msg-age">{fmtTime(c.created_at)}</span>
+                    {/if}
                   </div>
                   <!-- server-rendered goldmark HTML (raw HTML escaped upstream) -->
                   <div class="msg-body prose">{@html c.html}</div>
+                  {#if c.pending}
+                    <!-- A draft carries no credential, so it can only be re-sent
+                         from here, with the live session — which is also what
+                         makes Plane record the right author. -->
+                    <div class="msg-draft">
+                      <span class="draft-why">{c.error || 'could not reach Plane'}</span>
+                      <button onclick={() => retryDraft(c)} disabled={draftBusy === c.draft_id}>
+                        {draftBusy === c.draft_id ? '…' : 'Retry'}
+                      </button>
+                      <button class="link" onclick={() => discardDraft(c)} disabled={draftBusy === c.draft_id}>
+                        Discard
+                      </button>
+                    </div>
+                  {/if}
                   {#if c.readers && c.readers.length}
                     <div class="msg-seen" title={c.readers.map((r) => r.name).join(', ')}>
                       <span aria-hidden="true">👀</span>
@@ -1286,6 +1339,41 @@
     background: color-mix(in oklab, var(--wip) 18%, var(--surface-solid));
     border-color: color-mix(in oklab, var(--wip) 30%, transparent);
   }
+  /* an unsent draft: present in the thread, visibly not yet real */
+  .msg.unsent {
+    opacity: 0.75;
+    border-left: 2px dashed var(--warn, #d97706);
+    padding-left: 0.5rem;
+  }
+  .msg-unsent {
+    color: var(--warn, #d97706);
+    font-size: 0.7rem;
+    font-weight: 700;
+  }
+  .msg-draft {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    margin-top: 0.3rem;
+    font-size: 0.7rem;
+    color: var(--faint);
+  }
+  .draft-why {
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .msg-draft button.link {
+    background: none;
+    border: none;
+    color: var(--faint);
+    text-decoration: underline;
+    cursor: pointer;
+    padding: 0;
+    font-size: inherit;
+  }
+
   .msg-seen {
     display: flex;
     gap: 0.3rem;

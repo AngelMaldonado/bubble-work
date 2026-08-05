@@ -15,6 +15,7 @@
     TuningView,
     SyncStatus,
     SyncDiff,
+    OutboxView,
   } from '../lib/types';
 
   function roleLabel(m: Member): string {
@@ -43,6 +44,8 @@
   // are explicit because both walk Plane completely and cost real rate budget.
   let syncStatus = $state<Record<string, SyncStatus>>({});
   let syncDiffs = $state<Record<string, SyncDiff>>({});
+  // Writes that have not reached Plane (PLANE-SYNC.md Phase 5).
+  let outbox = $state<OutboxView | null>(null);
 
   function flash(msg: string): void {
     toast = msg;
@@ -56,6 +59,20 @@
   // Both of these walk Plane completely and are rate-budgeted server-side, so
   // they can legitimately take a while. The button stays disabled meanwhile
   // rather than letting an impatient click queue a second full walk.
+  async function dropOutbox(id: number): Promise<void> {
+    busy = 'outbox:' + id;
+    error = null;
+    try {
+      await api.adminOutboxDrop(id);
+      outbox = await api.adminOutbox();
+      flash(`dropped outbox entry ${id}`);
+    } catch (e) {
+      fail(e);
+    } finally {
+      busy = null;
+    }
+  }
+
   async function runSyncDiff(slug: string): Promise<void> {
     busy = 'diff:' + slug;
     error = null;
@@ -109,6 +126,11 @@
         } catch {
           // an instance without a mirror simply has no card body
         }
+      }
+      try {
+        outbox = await api.adminOutbox();
+      } catch {
+        // the queue is a diagnostic; failing to read it must not blank God Mode
       }
     } catch (e) {
       fail(e);
@@ -338,6 +360,45 @@
           {/each}
         {:else}
           <p class="bmeta">No instances configured.</p>
+        {/if}
+      </section>
+
+      <!-- outbox: writes that have not reached Plane (PLANE-SYNC.md Phase 5) -->
+      <section class="card wide">
+        <h3>
+          Outbox
+          {#if outbox && (outbox.pending || outbox.abandoned)}
+            <span class="bnum" class:low={!!outbox.abandoned}>
+              {outbox.pending} pending{outbox.abandoned ? ` · ${outbox.abandoned} abandoned` : ''}
+            </span>
+          {/if}
+        </h3>
+        {#if !outbox || !outbox.entries?.length}
+          <p class="bmeta">Empty — every write has reached Plane.</p>
+        {:else}
+          <p class="bmeta">
+            Auto-state moves retry on their own. Comment drafts hold no credential by
+            design, so only their author can re-send one — from the thread it was
+            written in.
+          </p>
+          {#each outbox.entries as e (e.id)}
+            <div class="budget">
+              <div class="bhead">
+                <strong>{e.status === 'abandoned' ? '✖' : '⧗'} {e.summary}</strong>
+                <span class="bnum">{e.instance}</span>
+              </div>
+              <p class="bmeta">
+                {e.kind} · attempts {e.attempts}{e.next_at ? ` · next ${new Date(e.next_at).toLocaleTimeString()}` : ''}
+                {e.field_lock ? ` · holding "${e.field_lock}"` : ''}
+              </p>
+              {#if e.last_error}<p class="bwarn">{e.last_error}</p>{/if}
+              <div class="actions tight">
+                <button onclick={() => dropOutbox(e.id)} disabled={busy !== null}>
+                  {busy === 'outbox:' + e.id ? '…' : 'Drop'}
+                </button>
+              </div>
+            </div>
+          {/each}
         {/if}
       </section>
 

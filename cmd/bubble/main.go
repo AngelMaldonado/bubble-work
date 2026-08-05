@@ -95,6 +95,7 @@ Usage:
   bubble show <id>                 a bubble's thread timeline (git-log-oneline)
   bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
   bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
+                                   --retry/--discard <draft> for an unsent one
   bubble search <query>            fuzzy-search threads (tasks) across your instances
   bubble whoami                    show the identity resolved from your credential
   bubble notifications             your inbox of cooling/dormant alerts (alias: inbox)
@@ -497,6 +498,8 @@ func cmdAdmin(args []string) {
 		err = cmdAdminKiosk(cfg, token, args[1:])
 	case "tuning":
 		err = cmdAdminTuning(cfg, token, args[1:])
+	case "outbox":
+		err = client.AdminOutbox(cfg, token, args[1:])
 	case "sync", "sync-diff", "sync-backfill":
 		if len(args) < 2 {
 			err = fmt.Errorf("usage: bubble admin %s <instance>", args[0])
@@ -591,6 +594,8 @@ Usage:
   bubble admin sync <inst>           mirror census + cursor (no Plane calls)
   bubble admin sync-diff <inst>      compare the mirror against a live fetch
   bubble admin sync-backfill <inst>  force a complete re-walk of one instance
+  bubble admin outbox                writes that have not reached Plane
+  bubble admin outbox drop <id>      clear one stuck entry
 
 `)
 }
@@ -866,6 +871,9 @@ func cmdServe(args []string) {
 	// reads from it yet, so `bubble admin sync-diff` can prove it agrees with
 	// Plane before Phase 2 points the board at it. It runs in the background rate
 	// lane, so it yields to page loads rather than competing with them.
+	// Retry writes that could not reach Plane (Phase 5). Auto-state moves only:
+	// comment drafts carry no credential and are re-sent by their author.
+	go srv.RunOutbox(context.Background())
 	if sy := srv.Syncer(); sy != nil {
 		go sy.Run(context.Background(), srv.Instances)
 		log.Printf("plane mirror syncing (delta %s, full reconcile %s) — shadow mode, nothing reads it yet",
@@ -1044,15 +1052,34 @@ func cmdThread(args []string) {
 
 func cmdComment(args []string) {
 	if len(args) < 2 {
-		log.Fatal("usage: bubble comment <id> <text...>   (id from `bubble show`)")
+		log.Fatal("usage: bubble comment <id> <text...> | --retry <draft> | --discard <draft>")
 	}
 	id := args[0]
-	body := strings.Join(args[1:], " ")
 	cfg, err := config.Load()
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	if err := client.Comment(cfg, id, body); err != nil {
+	// A comment that could not reach Plane is kept as a draft rather than lost
+	// (docs/PLANE-SYNC.md Phase 5). These re-send or throw one away.
+	if args[1] == "--retry" || args[1] == "--discard" {
+		if len(args) < 3 {
+			log.Fatalf("usage: bubble comment %s %s <draft-id>", id, args[1])
+		}
+		draft, perr := strconv.ParseInt(args[2], 10, 64)
+		if perr != nil {
+			log.Fatalf("comment: %q is not a draft id", args[2])
+		}
+		if args[1] == "--retry" {
+			err = client.RetryDraft(cfg, id, draft)
+		} else {
+			err = client.DiscardDraft(cfg, id, draft)
+		}
+		if err != nil {
+			log.Fatalf("comment: %v", err)
+		}
+		return
+	}
+	if err := client.Comment(cfg, id, strings.Join(args[1:], " ")); err != nil {
 		log.Fatalf("comment: %v", err)
 	}
 }

@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/config"
@@ -117,6 +118,61 @@ func postLong(cfg config.Config, path, token string, out any) error {
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
+// AdminOutbox lists writes that have not reached Plane, or drops one.
+func AdminOutbox(cfg config.Config, token string, args []string) error {
+	if len(args) >= 2 && args[0] == "drop" {
+		path := fmt.Sprintf("%s/api/admin/outbox/%s", cfg.ActiveServer(), url.PathEscape(args[1]))
+		req, err := http.NewRequest(http.MethodDelete, path, nil)
+		if err != nil {
+			return err
+		}
+		if token != "" {
+			req.Header.Set("Authorization", "Bearer "+token)
+		}
+		resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+		if err != nil {
+			return err
+		}
+		defer resp.Body.Close()
+		if resp.StatusCode >= 300 {
+			return serverError(resp, path)
+		}
+		fmt.Printf("dropped outbox entry %s\n", args[1])
+		return nil
+	}
+
+	var v domain.OutboxView
+	if err := getJSON(cfg.ActiveServer()+"/api/admin/outbox", token, &v); err != nil {
+		return err
+	}
+	fmt.Printf("outbox: %d pending, %d abandoned\n", v.Pending, v.Abandoned)
+	if len(v.Entries) == 0 {
+		fmt.Println("  (empty — every write has reached Plane)")
+		return nil
+	}
+	for _, e := range v.Entries {
+		mark := "⧗"
+		if e.Status == "abandoned" {
+			mark = "✖"
+		}
+		fmt.Printf("\n%s %d  %s  [%s]\n", mark, e.ID, e.Summary, e.Instance)
+		fmt.Printf("   status=%s attempts=%d", e.Status, e.Attempts)
+		if e.NextAt != "" {
+			fmt.Printf(" next=%s", e.NextAt)
+		}
+		fmt.Println()
+		if e.LastError != "" {
+			fmt.Printf("   ↳ %s\n", e.LastError)
+		}
+		if e.Kind == "comment" {
+			// Comment drafts carry no credential, so nothing drains them: only
+			// their author can re-send, with their own key.
+			fmt.Printf("   (a draft — only %s can re-send it)\n", e.Author)
+		}
 	}
 	return nil
 }

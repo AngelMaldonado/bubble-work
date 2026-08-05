@@ -179,6 +179,9 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		s.syncer = planesync.New(mr)
 		// Rebuild the board the moment the mirror changes, rather than waiting out
 		// the refresher's timer. Cheap now that a rebuild is local (Phase 2).
+		// A field with a queued write must not be reverted by a sync pass while
+		// that write is still in flight (Phase 5).
+		s.syncer.SetLocks(st.LockedFields)
 		s.syncer.OnChange(func(slug string) {
 			inst, ok, err := s.instanceBySlug(slug)
 			if err != nil || !ok {
@@ -472,6 +475,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/threads/{id}/comments", s.restAuth(s.handleThreadComments))
 	mux.HandleFunc("POST /api/threads/{id}/comments", s.restAuth(s.handlePostComment))
 	mux.HandleFunc("POST /api/threads/{id}/comments/read", s.restAuth(s.handleMarkCommentsRead))
+	mux.HandleFunc("POST /api/threads/{id}/drafts/{draft}/retry", s.restAuth(s.handleRetryDraft))
+	mux.HandleFunc("DELETE /api/threads/{id}/drafts/{draft}", s.restAuth(s.handleDiscardDraft))
 	mux.HandleFunc("POST /api/bubbles/{id}/contract", s.restAuth(s.handleSetContract))
 	mux.HandleFunc("POST /api/bubbles/{id}/close", s.restAuth(s.handleClose))
 	mux.HandleFunc("POST /api/bubbles/{id}/reopen", s.restAuth(s.handleReopen))
@@ -491,6 +496,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
 	mux.HandleFunc("GET /api/admin/members", s.adminOnly(s.handleAdminMembers))
 	mux.HandleFunc("POST /api/admin/instances/{slug}/autostate", s.adminOnly(s.handleSetAutoState))
+	mux.HandleFunc("GET /api/admin/outbox", s.adminOnly(s.handleAdminOutbox))
+	mux.HandleFunc("DELETE /api/admin/outbox/{id}", s.adminOnly(s.handleDropOutbox))
 	mux.HandleFunc("GET /api/admin/sync/{slug}", s.adminOnly(s.handleSyncStatus))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/diff", s.adminOnly(s.handleSyncDiff))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/backfill", s.adminOnly(s.handleSyncBackfill))

@@ -1,7 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phases 0-4 shipped — every read serves from SQLite; the only Plane
-traffic left is the sync worker and writes · Phases 5-7 pending** ·
+Status: **Phases 0-4 shipped, Phase 5 shipped narrowed (comments + auto-state;
+creates stay write-through) · Phases 6-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -529,30 +529,70 @@ members means *we have not found out yet*, and scoping fails retryably instead.
 `TestTransientMembersFailIsRetryable` covers it: during an outage the answer is
 `502`, never `401`, and never an empty-scope `200`.
 
-## Phase 5 — Writes: the outbox
+## Phase 5 — Writes: the outbox · **SHIPPED (narrowed)**
 
-- [ ] `outbox` table + `internal/sync` drainer, rate-budgeted, exponential
-      backoff, `abandoned` after a bounded number of attempts.
-- [ ] Migrate each write in turn, L1 first then enqueue:
-      comment post, thread birth, work-item state (auto-state, Phase B),
-      module create, project create.
-- [ ] **Conflict shield**: `field_lock` on pending rows; the sync applier skips
-      locked columns. On abandon, Plane's value wins and the row surfaces.
-- [ ] `thread_autostate`'s `handed_off` latch composes with this rather than
-      duplicating it — the latch is permanent provenance, the lock is transient.
-- [ ] Pending state on the wire: DTOs carry `pending?: string[]` (field names);
-      the UI shows ⧗ on those fields.
-- [ ] Surface parity — the outbox is operator-facing, so:
-      **REST** `GET /api/admin/outbox`, `POST /api/admin/outbox/{id}/retry`,
-      `DELETE /api/admin/outbox/{id}`; **CLI** `bubble admin outbox [retry|drop]`;
-      **web** a God Mode panel. No MCP (admin capability, matching `autostate`
-      and `tuning`).
-- [ ] **Enforce the boundary:** CI greps that `internal/server` no longer imports
-      `internal/plane`.
+Scoped deliberately to the two writes that benefit. **Creates stay
+write-through** — see *Why creates are not queued* below.
 
-**Accept:** with Plane stopped, a comment posts, appears immediately marked ⧗,
-survives a server restart, and lands when Plane returns. A state changed by hand
-in Plane's UI while a write is queued is not clobbered, and is not reverted.
+- [x] `outbox` table, drainer with exponential backoff (1m…1h), abandon after 8
+      attempts.
+- [x] **Auto-state** moves queue on failure and drain automatically: they use the
+      instance key the server already holds.
+- [x] **Comment drafts** keep the text and nothing else. Re-sent by their author,
+      from the thread they were written in.
+- [x] Conflict shield: `LockedFields` + `Syncer.SetLocks`. A field with a pending
+      write is not overwritten by an incoming sync, so the board never visibly
+      reverts a change and then flips forward again when the write lands.
+- [x] Surfaces — drafts: REST (`202` + retry/discard), CLI
+      (`bubble comment <id> --retry|--discard <draft>`), web (in-thread, marked
+      unsent). Admin queue: `GET/DELETE /api/admin/outbox`,
+      `bubble admin outbox [drop <id>]`, a God Mode panel.
+
+**Accepted:** `TestCommentSurvivesPlaneOutage` takes Plane down, posts, and
+asserts a `202` with the text intact, the draft visible in its thread, **zero**
+comments sent to Plane, and that the stored payload contains only `body` — no
+credential. Then Plane returns, the author retries, exactly one comment is
+posted, and the draft is gone rather than duplicated.
+
+### The outbox is not in the mirror
+
+The worksheet's schema sketch put it there. That is wrong and would have been a
+data-loss bug: the mirror is explicitly rebuildable and `mirror.Reset` /
+`sync-backfill` drop its tables, but the outbox holds writes that have **not**
+reached Plane. It lives in `internal/store` with the overlay.
+
+### Why comment drafts carry no credential
+
+Comments are posted with the **caller's own** Plane key, so Plane records the
+real author. Queueing one for later needs a credential at drain time, and the
+options were: store every user's key at rest, post as the service account and
+misattribute the comment, or don't queue at all.
+
+None of those is good. The draft holds only the text, and its author re-sends it
+with their live key — no credentials at rest, correct authorship, and the thing
+a person actually loses (their typing) survives. The cost is that a draft needs
+its author to come back; a worker cannot land it for them. That is the right
+trade for a comment, which is someone's words rather than a system action.
+
+### Why creates are not queued
+
+Three writes are creates — `CreateProject`, `CreateModule`, and thread birth
+(`CreateWorkItem` + `AddIssuesToModule`, which is two steps and can half-succeed).
+Everything downstream keys off Plane's assigned id: a bubble's id is literally
+`slug:project:module`. Queueing a create means minting a local id and rewriting
+it everywhere once Plane answers — contracts, snapshots, links people may have
+bookmarked.
+
+Optimistic **updates** are easy; optimistic **creates** are a distributed-identity
+problem. These run a few times a week and waiting a second for a real id is
+fine, so they stay write-through with a clear error. Worth revisiting only if
+creating things while Plane is down turns out to matter.
+
+### An abandoned write stays visible
+
+Past 8 attempts an entry stops retrying and releases its field lock, so Plane's
+value becomes truth again — but the row remains, on all three admin surfaces.
+Silently dropping someone's write is the one thing an outbox must never do.
 
 ## Phase 6 — Payload-aware webhooks
 

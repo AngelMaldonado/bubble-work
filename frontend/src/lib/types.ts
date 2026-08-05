@@ -124,6 +124,12 @@ export interface Comment {
   mine: boolean;
   readers?: Reader[];
   created_at: string;
+  /** an unsent draft kept after a failed post (PLANE-SYNC.md Phase 5). It holds
+   *  no credential, so only its author can re-send it — with their live key,
+   *  which is also the only way Plane records the right author. */
+  pending?: boolean;
+  draft_id?: number;
+  error?: string;
 }
 
 export interface Notification {
@@ -181,6 +187,30 @@ export interface AdminInstance {
 // ---- Plane mirror (docs/PLANE-SYNC.md) ----
 
 /** One instance's mirror census and cursor. Cheap: no Plane calls. */
+/** One write that has not reached Plane. */
+export interface OutboxItem {
+  id: number;
+  instance: string;
+  kind: string; // state | comment
+  target_id: string;
+  author?: string;
+  status: string; // pending | abandoned
+  attempts: number;
+  field_lock?: string;
+  last_error?: string;
+  created_at?: string;
+  next_at?: string;
+  summary: string;
+}
+
+/** The queue of unsent writes. An abandoned entry stays visible on purpose:
+ *  silently dropping a write is the one thing an outbox must never do. */
+export interface OutboxView {
+  pending: number;
+  abandoned: number;
+  entries?: OutboxItem[];
+}
+
 export interface SyncStatus {
   instance: string;
   projects: number;

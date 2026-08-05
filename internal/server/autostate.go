@@ -9,6 +9,7 @@ import (
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
+	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
 // autoWriteLimit bounds how many cards one tick may move. A calibration change
@@ -135,7 +136,20 @@ func (s *Server) autoStateBubble(ctx context.Context, inst domain.Instance, b do
 			continue // this project has no state in that group
 		}
 		if err := cl.SetWorkItemState(ctx, t.ID, target.ID); err != nil {
-			log.Printf("autostate: move %s → %s: %v", t.ID, group, err)
+			// Queue it rather than dropping it. This write is performed with the
+			// INSTANCE key, which we already hold, so the drainer can retry it
+			// with nobody present (docs/PLANE-SYNC.md Phase 5). The field lock
+			// stops a sync pass reverting the mirror to Plane's older state
+			// while the write is still in flight.
+			if _, qerr := s.store.Enqueue(store.OutboxEntry{
+				Instance: b.Instance, Kind: store.OutState, TargetID: t.ID,
+				Payload:   map[string]string{"state_id": target.ID},
+				FieldLock: "state", CreatedAt: s.now(), LastError: err.Error(),
+			}); qerr != nil {
+				log.Printf("autostate: queue %s: %v", t.ID, qerr)
+			} else {
+				log.Printf("autostate: move %s → %s failed (%v); queued for retry", t.ID, group, err)
+			}
 			continue
 		}
 		if err := s.store.RecordAutoState(t.ID, target.ID, s.now()); err != nil {

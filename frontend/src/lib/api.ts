@@ -16,6 +16,7 @@ import type {
   SyncStatus,
   SyncDiff,
   SyncResult,
+  OutboxView,
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
@@ -91,6 +92,12 @@ export const api = {
     req<Comment[]>('GET', `/api/threads/${encodeURIComponent(id)}/comments`),
   postComment: (id: string, body: string) =>
     req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/comments`, { body }),
+  // A failed post returns 202 with the draft; retry re-sends it with the live
+  // session credential (PLANE-SYNC.md Phase 5).
+  retryDraft: (id: string, draftId: number) =>
+    req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}/retry`),
+  discardDraft: (id: string, draftId: number) =>
+    req<void>('DELETE', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}`),
   markCommentsRead: (id: string, commentIds: string[]) =>
     req<{ ok: boolean }>('POST', `/api/threads/${encodeURIComponent(id)}/comments/read`, {
       comment_ids: commentIds,
@@ -151,4 +158,6 @@ export const api = {
     req<SyncDiff>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/diff`),
   adminSyncBackfill: (slug: string) =>
     req<SyncResult>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/backfill`),
+  adminOutbox: () => req<OutboxView>('GET', '/api/admin/outbox'),
+  adminOutboxDrop: (id: number) => req<void>('DELETE', `/api/admin/outbox/${id}`),
 };

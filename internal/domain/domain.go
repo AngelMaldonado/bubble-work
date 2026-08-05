@@ -423,6 +423,14 @@ type Comment struct {
 	Mine      bool      `json:"mine"`
 	Readers   []Reader  `json:"readers,omitempty"` // 👀 read-receipts (server overlay)
 	CreatedAt time.Time `json:"created_at"`
+
+	// Pending marks a comment that has NOT reached Plane — a draft kept after a
+	// failed post (docs/PLANE-SYNC.md Phase 5). It carries no credential, so
+	// only its author can re-send it, with their live key; that is also the only
+	// way Plane records the right author. DraftID addresses it for retry/discard.
+	Pending bool   `json:"pending,omitempty"`
+	DraftID int64  `json:"draft_id,omitempty"`
+	Error   string `json:"error,omitempty"` // why it did not land
 }
 
 // Reader is one person who has read a comment (a 👀 read-receipt).
@@ -559,6 +567,31 @@ type RateBudget struct {
 }
 
 // ---- Plane mirror (docs/PLANE-SYNC.md) ----
+
+// OutboxItem is one write that has not reached Plane.
+type OutboxItem struct {
+	ID        int64  `json:"id"`
+	Instance  string `json:"instance"`
+	Kind      string `json:"kind"` // state | comment
+	TargetID  string `json:"target_id"`
+	Author    string `json:"author,omitempty"` // comment drafts only
+	Status    string `json:"status"`           // pending | abandoned
+	Attempts  int    `json:"attempts"`
+	FieldLock string `json:"field_lock,omitempty"`
+	LastError string `json:"last_error,omitempty"`
+	CreatedAt string `json:"created_at,omitempty"`
+	NextAt    string `json:"next_at,omitempty"`
+	Summary   string `json:"summary"` // pre-rendered, so surfaces agree
+}
+
+// OutboxView is the queue of unsent writes. An abandoned entry is the point of
+// this: a write that never reached Plane must stay visible, because silently
+// dropping one is the only thing an outbox must never do.
+type OutboxView struct {
+	Pending   int          `json:"pending"`
+	Abandoned int          `json:"abandoned"`
+	Entries   []OutboxItem `json:"entries,omitempty"`
+}
 
 // SyncStatus is one instance's mirror census and cursor. Cheap: no Plane calls.
 type SyncStatus struct {

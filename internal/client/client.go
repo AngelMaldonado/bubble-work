@@ -853,6 +853,17 @@ func threadComments(cfg config.Config, id string) error {
 		if who == "" {
 			who = "someone"
 		}
+		if c.Pending {
+			// An unsent draft, kept after a failed post. It is shown in place so
+			// the words are where they were typed, not in a separate list.
+			fmt.Printf("\n%s · ⧗ UNSENT\n%s\n", who, indent(c.Markdown, "  "))
+			if c.Error != "" {
+				fmt.Printf("  ↳ %s\n", c.Error)
+			}
+			fmt.Printf("  retry: bubble comment %s --retry %d   discard: --discard %d\n",
+				id, c.DraftID, c.DraftID)
+			continue
+		}
 		fmt.Printf("\n%s · %s\n%s\n", who, relAge(c.CreatedAt), indent(c.Markdown, "  "))
 		if len(c.Readers) > 0 {
 			names := make([]string, len(c.Readers))
@@ -884,8 +895,55 @@ func Comment(cfg config.Config, id, body string) error {
 	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/comments", map[string]string{"body": body}, &c); err != nil {
 		return err
 	}
-	fmt.Printf("posted · %s · %s\n", c.Author, relAge(c.CreatedAt))
+	printPosted(id, c)
 	return nil
+}
+
+// RetryDraft re-sends an unsent comment; DiscardDraft throws one away. A draft
+// carries no credential, so re-sending happens with YOUR live key — which is
+// also the only way Plane records you as the author.
+func RetryDraft(cfg config.Config, id string, draftID int64) error {
+	var c domain.Comment
+	path := fmt.Sprintf("/api/threads/%s/drafts/%d/retry", url.PathEscape(id), draftID)
+	if err := postJSON(cfg, path, nil, &c); err != nil {
+		return err
+	}
+	printPosted(id, c)
+	return nil
+}
+
+func DiscardDraft(cfg config.Config, id string, draftID int64) error {
+	path := fmt.Sprintf("%s/api/threads/%s/drafts/%d",
+		cfg.ActiveServer(), url.PathEscape(id), draftID)
+	req, err := http.NewRequest(http.MethodDelete, path, nil)
+	if err != nil {
+		return err
+	}
+	if tok := cfg.ActiveToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return serverError(resp, path)
+	}
+	fmt.Printf("discarded draft %d\n", draftID)
+	return nil
+}
+
+func printPosted(id string, c domain.Comment) {
+	if c.Pending {
+		// Plane still could not be reached. Say so plainly rather than printing
+		// "posted" for something that is only saved locally.
+		fmt.Printf("⧗ NOT sent — Plane is unreachable (%s)\n", c.Error)
+		fmt.Printf("  your words are kept as draft %d; retry with:\n", c.DraftID)
+		fmt.Printf("  bubble comment %s --retry %d\n", id, c.DraftID)
+		return
+	}
+	fmt.Printf("posted · %s · %s\n", c.Author, relAge(c.CreatedAt))
 }
 
 func printTodos(todos []md.Todo) {

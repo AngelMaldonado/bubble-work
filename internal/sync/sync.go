@@ -49,7 +49,21 @@ type Syncer struct {
 	m        *mirror.Mirror
 	now      func() time.Time
 	onChange func(slug string) // see OnChange
+	locks    LockFunc          // see SetLocks
 }
+
+// LockFunc reports which mirror columns must not be overwritten for which work
+// items, because a write to them is queued and has not reached Plane yet.
+type LockFunc func(instance string, ids []string) (map[string]map[string]bool, error)
+
+// SetLocks installs the conflict shield (docs/PLANE-SYNC.md Phase 5).
+//
+// Plane remains the system of record, so a sync normally overwrites the mirror
+// wholesale. The one exception is a field with a write still in flight: applying
+// Plane's older value there would make the board visibly revert a change the
+// user already made, then flip back when the write lands. The lock lifts as soon
+// as the write succeeds or is abandoned, and Plane is truth again.
+func (s *Syncer) SetLocks(fn LockFunc) { s.locks = fn }
 
 // New builds a Syncer over a mirror.
 func New(m *mirror.Mirror) *Syncer {
@@ -285,12 +299,34 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 			}
 		}
 
+		// Fields with a queued write are held back — see SetLocks.
+		var locked map[string]map[string]bool
+		if s.locks != nil && len(rows) > 0 {
+			ids := make([]string, 0, len(rows))
+			for _, r := range rows {
+				ids = append(ids, r.ID)
+			}
+			if lk, lerr := s.locks(inst.Slug, ids); lerr != nil {
+				log.Printf("sync %s: reading write locks: %v", inst.Slug, lerr)
+			} else {
+				locked = lk
+			}
+		}
+
 		items := make([]mirror.Item, 0, len(rows))
 		for _, r := range rows {
 			if r.UpdatedAt.After(newest) {
 				newest = r.UpdatedAt
 			}
-			items = append(items, toItem(r, p.ID))
+			it := toItem(r, p.ID)
+			if locked[r.ID]["state"] {
+				// Keep what the mirror already says about state; everything else
+				// on the row still applies.
+				if prev, ok, err := s.m.Item(inst.Slug, r.ID); err == nil && ok {
+					it.StateID, it.StateName, it.StateGroup = prev.StateID, prev.StateName, prev.StateGroup
+				}
+			}
+			items = append(items, it)
 		}
 		if len(items) > 0 {
 			if err := s.m.UpsertItems(inst.Slug, items, s.now()); err != nil {

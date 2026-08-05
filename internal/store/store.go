@@ -96,6 +96,32 @@ CREATE TABLE IF NOT EXISTS server_settings (
   key   TEXT PRIMARY KEY,        -- e.g. "tuning" (the buoyancy calibration)
   value TEXT NOT NULL            -- opaque JSON, owned by the caller
 );
+-- The outbox lives HERE, with the overlay, and deliberately NOT in the mirror.
+-- The mirror is a rebuildable projection: mirror.Reset and sync-backfill drop
+-- its tables on purpose. This holds writes that have NOT reached Plane, so
+-- losing it loses real work (docs/PLANE-SYNC.md Phase 5).
+CREATE TABLE IF NOT EXISTS outbox (
+  id           INTEGER PRIMARY KEY AUTOINCREMENT,
+  instance     TEXT NOT NULL,
+  kind         TEXT NOT NULL,            -- 'state' (auto-drains) | 'comment' (a draft)
+  target_id    TEXT NOT NULL,            -- Plane work-item id
+  payload      TEXT NOT NULL,            -- JSON, shape depends on kind
+  -- whose draft this is. Comments carry no credential (that would put every
+  -- user's Plane key at rest), so a draft can only be re-sent by its author,
+  -- with their live key. This scopes it to them.
+  author_email TEXT NOT NULL DEFAULT '',
+  -- the mirror column an incoming sync must not overwrite while this is pending,
+  -- so a sync cannot revert a write that has not landed yet.
+  field_lock   TEXT NOT NULL DEFAULT '',
+  status       TEXT NOT NULL DEFAULT 'pending',  -- pending | abandoned
+  attempts     INTEGER NOT NULL DEFAULT 0,
+  next_at      TEXT NOT NULL DEFAULT '',         -- RFC3339; backoff for auto-drain
+  created_at   TEXT NOT NULL,
+  last_error   TEXT NOT NULL DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_outbox_pending ON outbox(status, instance);
+CREATE INDEX IF NOT EXISTS idx_outbox_target  ON outbox(instance, target_id, status);
+
 CREATE TABLE IF NOT EXISTS kiosk_tokens (
   token      TEXT PRIMARY KEY,   -- server-issued read-only display credential (§9 Phase 9)
   instance   TEXT NOT NULL,      -- the instance slug this token may view

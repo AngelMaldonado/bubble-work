@@ -1,7 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phase 0 shipped · Phase 1 built and running in shadow, live `sync-diff`
-not yet clean (see below) · Phases 2-7 pending** ·
+Status: **Phases 0 and 1 shipped · live `sync-diff` CLEAN on 2026-08-05, so
+Phase 2 is unblocked · Phases 2-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -294,7 +294,8 @@ outbox's job (Phase 5), not a silent repeat.
 **Accepted:** the substrate comparison is clean after a backfill and catches both
 a corrupted field and a module-membership change (the drift a delta structurally
 cannot see). `TestBackfillThenDeltaIsCheap` asserts the economic claim numerically
-rather than trusting it.
+rather than trusting it. **Verified against live Plane on 2026-08-05: 0 findings
+across 7 projects / 22 modules / 118 items** — see the gate section above.
 
 ### What sync-diff compares, and why
 
@@ -340,36 +341,30 @@ is not sent, so the inferred ceiling is "largest remaining ever seen" — a lowe
 bound that corrects upward, which is why it can read oddly low right after a
 busy period.
 
-### Live verification is INCOMPLETE — read this before Phase 2
+### The gate: PASSED on live Plane (2026-08-05)
 
-The logic is unit-tested end to end against a fake Plane, and a real backfill
-mirrored **7 projects, 22 modules, 60 items, 30 states, 5 comments** from
-`plane.cuby.work`. But **no clean full pass has completed against live Plane
-yet**, so `sync-diff` has not returned clean on real data. The gate is built; it
-has not been passed.
+```
+sync-diff cuby — compared 7 projects, 22 modules, 118 items in 180.1s
+  ✓ mirror matches Plane          findings: 0
+```
 
-The cause is budget contention, not a defect. During the shadow period the legacy
-fetch path and the syncer compete for one key's 60/min — and the legacy path is
-the greedy one (the pulse probe alone is up to 20 calls a tick). Both correctly
-yield at the Phase 0 floor, so instead of failing they both crawl. The test was
-also pessimistic: a scratch server was running the full legacy stack *alongside*
-the real server, doubling the load.
+The mirror reached a complete full pass **six minutes after deploy** and then
+matched Plane exactly on every compared field. Phase 2 is unblocked.
 
-Three ways forward, in order of preference:
+Two things this run settled that the earlier, noisier attempt could not:
 
-1. **Deploy and let the real server run alone.** One legacy path plus one syncer
-   on one key is roughly half the contention the test had. Watch
-   `bubble admin sync cuby` until `last full` is set, then run `sync-diff`.
-2. **Raise `API_KEY_RATE_LIMIT`** on the self-hosted Plane for the duration of
-   the shadow period. This is the documented stopgap and the shadow period is
-   exactly what it is for.
-3. **Get to Phase 2 quickly.** The contention disappears the moment the legacy
-   fetch path is deleted, because the syncer stops competing with it. There is a
-   real argument for treating Phase 1's gate as "clean diff on a quiet instance"
-   rather than blocking on a busy one.
+- **The shadow-period contention is survivable.** The legacy fetch path and the
+  syncer do share one key's 60/min, and the syncer does get the smaller share —
+  but it converges rather than starving. The earlier failure to converge was an
+  artifact of a scratch server running a *second* full legacy stack against the
+  same key.
+- **Phase 0 is doing exactly what it was built for.** Across the run:
+  `429s = 0, bg_yields = 9`. Every rate-limit collision that would previously
+  have been a failed fetch became a controlled wait instead. The inferred ceiling
+  settled at 59, essentially the true 60.
 
-Do not let Phase 2 start reading from the mirror until a `sync-diff` has come
-back clean at least once on real data. That is the whole point of shadow mode.
+The cost of `sync-diff` itself is worth noting: **180 s and a full Plane walk.**
+It is a shadow-period verification tool, not something to leave running.
 
 ## Phase 2 — Board reads from L1
 

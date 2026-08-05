@@ -90,6 +90,19 @@ CREATE TABLE IF NOT EXISTS mirror_items (
 );
 CREATE INDEX IF NOT EXISTS idx_mirror_items_project ON mirror_items(instance, project_id);
 CREATE INDEX IF NOT EXISTS idx_mirror_items_parent  ON mirror_items(instance, parent_id);
+CREATE TABLE IF NOT EXISTS mirror_cycles (
+  instance   TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  name       TEXT NOT NULL DEFAULT '',
+  -- stored VERBATIM: Plane emits either RFC3339 or a bare YYYY-MM-DD, and draft
+  -- cycles emit null. plane.Cycle already parses both leniently, so the mirror
+  -- keeps the raw text rather than becoming a second date parser that could
+  -- disagree with the first.
+  start_date TEXT NOT NULL DEFAULT '',
+  end_date   TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (instance, id)
+);
 CREATE TABLE IF NOT EXISTS mirror_comments (
   instance     TEXT NOT NULL,
   id           TEXT NOT NULL,
@@ -173,6 +186,16 @@ type Member struct {
 	Email       string
 	DisplayName string
 	Role        int
+}
+
+// Cycle is a project's repeating pulse (§3.6), the window heat is measured
+// against. Dates stay as raw strings — see the schema note.
+type Cycle struct {
+	ID        string
+	ProjectID string
+	Name      string
+	StartDate string
+	EndDate   string
 }
 
 // Comment is one mirrored work-item comment.

@@ -44,8 +44,9 @@ const (
 
 // Syncer keeps one server's mirror current.
 type Syncer struct {
-	m   *mirror.Mirror
-	now func() time.Time
+	m        *mirror.Mirror
+	now      func() time.Time
+	onChange func(slug string) // see OnChange
 }
 
 // New builds a Syncer over a mirror.
@@ -236,6 +237,15 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 				// states are unknown must not be pruned on this pass.
 				fail("states", err)
 				continue
+			}
+			// Cycles define the heat window (§3.6), but they are OPTIONAL: a
+			// project with the cycles feature off has no such endpoint, and heat
+			// correctly falls back to the rolling window. Blocking the project on
+			// this would leave every cycle-less project permanently unclean, so
+			// it stays best-effort exactly as the pre-mirror code had it.
+			if err := s.cycles(ctx, cl, inst, p.ID); err != nil {
+				log.Printf("sync %s: project %s: cycles: %v (heat falls back to the rolling window)",
+					inst.Slug, short(p.ID), err)
 			}
 		}
 
@@ -434,6 +444,24 @@ func (s *Syncer) states(ctx context.Context, cl *plane.Client, inst domain.Insta
 	}
 	if err := s.m.UpsertStates(inst.Slug, out); err != nil {
 		return fmt.Errorf("write states: %w", err)
+	}
+	return nil
+}
+
+func (s *Syncer) cycles(ctx context.Context, cl *plane.Client, inst domain.Instance, projID string) error {
+	cs, err := cl.ListCycles(ctx)
+	if err != nil {
+		return fmt.Errorf("list cycles for project %s: %w", projID, err)
+	}
+	out := make([]mirror.Cycle, 0, len(cs))
+	for _, c := range cs {
+		out = append(out, mirror.Cycle{
+			ID: c.ID, ProjectID: projID, Name: c.Name,
+			StartDate: c.StartDate, EndDate: c.EndDate,
+		})
+	}
+	if err := s.m.UpsertCycles(inst.Slug, out); err != nil {
+		return fmt.Errorf("write cycles: %w", err)
 	}
 	return nil
 }

@@ -26,7 +26,6 @@ import (
 	"time"
 
 	"github.com/modelcontextprotocol/go-sdk/auth"
-	"golang.org/x/sync/errgroup"
 	"golang.org/x/sync/singleflight"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
@@ -77,10 +76,6 @@ const (
 	// kioskTokenPrefix marks a server-issued read-only display credential so
 	// resolve() can shortcut it before attempting Plane authentication (§9 Phase 9).
 	kioskTokenPrefix = "kiosk_"
-	// fetchConcurrency bounds parallel Plane calls per instance fetch. Kept low
-	// so a full fetch (modules + work-items + cycles) doesn't burst past Plane's
-	// rate limit; get() also retries 429s with backoff.
-	fetchConcurrency = 2
 )
 
 // Server holds the overlay store and the cycle pulse. Plane clients are built
@@ -177,7 +172,6 @@ type cachedActor struct {
 type cachedBubbles struct {
 	bubbles   []domain.Bubble
 	updatedAt time.Time
-	partial   bool
 }
 
 type cachedMembers struct {
@@ -243,6 +237,17 @@ func New(st *store.Store, cycle time.Duration) *Server {
 	} else {
 		s.mirror = mr
 		s.syncer = planesync.New(mr)
+		// Rebuild the board the moment the mirror changes, rather than waiting out
+		// the refresher's timer. Cheap now that a rebuild is local (Phase 2).
+		s.syncer.OnChange(func(slug string) {
+			inst, ok, err := s.instanceBySlug(slug)
+			if err != nil || !ok {
+				return
+			}
+			if _, err := s.refreshInstance(context.Background(), inst); err != nil {
+				log.Printf("rebuild after sync %s: %v", slug, err)
+			}
+		})
 	}
 	return s
 }
@@ -1374,17 +1379,21 @@ func (s *Server) instanceBubbles(ctx context.Context, inst domain.Instance) ([]d
 	return s.refreshInstance(ctx, inst)
 }
 
-// refreshInstance fetches an instance from Plane and atomically updates its
-// snapshot, coalescing concurrent refreshes of the same instance (background
-// loop + cold reads + webhooks). It keeps the last good snapshot on failure and
-// never lets a rate-limited partial shrink a fuller one — so reads never see a
-// half-populated or empty board once warm.
+// refreshInstance rebuilds an instance's snapshot FROM THE MIRROR and swaps it
+// in atomically, coalescing concurrent rebuilds of the same instance (background
+// loop + cold reads + webhooks). It keeps the last good snapshot on failure.
+//
+// Since Phase 2 this touches no network at all: it is a handful of indexed
+// SQLite queries plus the heat computation. The old "partial result must not
+// shrink a fuller snapshot" guard is gone with it — that existed because a
+// rate-limited Plane fetch could return half a board. A mirror read either
+// succeeds completely or fails, and a mirror that is itself incomplete is the
+// syncer's problem, surfaced on the sync cursor rather than papered over here.
 func (s *Server) refreshInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, error) {
 	v, err, _ := s.sf.Do(inst.Slug, func() (any, error) {
-		bs, partial, err := s.fetchInstance(ctx, inst)
+		bs, err := s.buildInstance(inst)
 		if err != nil {
-			// Total failure (e.g. list-projects 429'd) — keep the prior snapshot
-			// rather than blanking the board.
+			// Keep the prior snapshot rather than blanking the board.
 			s.bubblesMu.Lock()
 			prev, ok := s.bubblesCache[inst.Slug]
 			s.bubblesMu.Unlock()
@@ -1394,13 +1403,7 @@ func (s *Server) refreshInstance(ctx context.Context, inst domain.Instance) ([]d
 			return nil, err
 		}
 		s.bubblesMu.Lock()
-		prev, had := s.bubblesCache[inst.Slug]
-		// A partial must not replace a fuller snapshot — hold the better one.
-		if partial && had && len(prev.bubbles) > len(bs) {
-			s.bubblesMu.Unlock()
-			return prev.bubbles, nil
-		}
-		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, updatedAt: s.now(), partial: partial}
+		s.bubblesCache[inst.Slug] = cachedBubbles{bubbles: bs, updatedAt: s.now()}
 		s.bubblesMu.Unlock()
 		// Persist outside the lock so restarts serve the last-known board (F2).
 		s.persistSnapshot(inst.Slug, bs)
@@ -1452,101 +1455,6 @@ func (s *Server) RunRefresher(ctx context.Context) {
 	}
 }
 
-// fetchInstance pulls an instance's bubbles from Plane. It discovers projects
-// (unless one is pinned) and fans out across modules concurrently. Heat evidence
-// comes from work-item timestamps in the list response — no per-item activity
-// call — so this stays within Plane's rate limits.
-func (s *Server) fetchInstance(ctx context.Context, inst domain.Instance) ([]domain.Bubble, bool, error) {
-	base := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "")
-	projects := []string{inst.Project}
-	projName := map[string]string{}
-	if inst.Project == "" {
-		ps, err := base.ListProjects(ctx)
-		if err != nil {
-			return nil, false, fmt.Errorf("list projects: %w", err)
-		}
-		projects = projects[:0]
-		for _, p := range ps {
-			projects = append(projects, p.ID)
-			projName[p.ID] = p.Name
-		}
-	}
-
-	// Resolve assignee names once (cached) so the snapshot's threads carry owners
-	// for the timeline — served straight from memory, no per-open Plane fetch.
-	names := s.memberNames(ctx, inst)
-
-	var (
-		mu     sync.Mutex
-		out    []domain.Bubble
-		failed int // module/project fetches that errored (→ partial result)
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(fetchConcurrency)
-
-	now := s.now()
-	for _, projID := range projects {
-		projID := projID
-		cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, projID)
-		mods, err := cl.ListModules(gctx)
-		if err != nil {
-			log.Printf("instance %s project %s: list modules: %v", inst.Slug, projID, err)
-			mu.Lock()
-			failed++
-			mu.Unlock()
-			continue
-		}
-		// Per-project lookups, resolved once here rather than per module. The
-		// progress diff also PERSISTS, so it deliberately runs on this goroutine —
-		// one writer per project, never inside the module fan-out.
-		pc := projectCtx{
-			slug: inst.Slug, projID: projID, projName: projName[projID],
-			names: names,
-			// Resolve state uuid → group/name once (cached, ~never changes) so each
-			// thread carries its real Plane state (THREAD-LIFECYCLE.md).
-			states: s.projectStates(gctx, cl, inst.Slug, projID),
-		}
-		// Align heat to this project's active Plane cycle (§3.6); zero → rolling.
-		pc.cycleStart, pc.cyclePrevStart = s.projectCycleWindow(gctx, cl, now)
-		// Notice what each thread has produced since the last sweep (Phase C).
-		pc.progress = s.progressEvidence(s.projectItems(gctx, cl, inst.Slug, projID))
-
-		for _, m := range mods {
-			m := m
-			g.Go(func() error {
-				items, err := cl.ListModuleWorkItems(gctx, m.ID)
-				if err != nil {
-					log.Printf("instance %s module %s: list work items: %v", inst.Slug, m.ID, err)
-					mu.Lock()
-					failed++
-					mu.Unlock()
-					return nil // one bad module shouldn't fail the whole fetch
-				}
-				b := s.buildBubble(pc, m, items)
-				mu.Lock()
-				out = append(out, b)
-				mu.Unlock()
-				return nil
-			})
-		}
-	}
-	if err := g.Wait(); err != nil {
-		return nil, false, err
-	}
-	return out, failed > 0, nil
-}
-
-// projectCycleWindow fetches a project's cycles and returns the active cycle's
-// window (§3.6). Best-effort: on any error or when cycles are off/absent it
-// returns zero times, so heat falls back to the rolling window.
-func (s *Server) projectCycleWindow(ctx context.Context, cl *plane.Client, now time.Time) (curStart, prevStart time.Time) {
-	cycles, err := cl.ListCycles(ctx)
-	if err != nil || len(cycles) == 0 {
-		return time.Time{}, time.Time{}
-	}
-	return cycleWindow(cycles, now)
-}
-
 // cycleWindow picks the cycle containing `now` and the one immediately before it.
 // Zero times mean "no active cycle" → the caller falls back to the rolling
 // window. Pure, so it is unit-tested directly.
@@ -1595,43 +1503,6 @@ type projectCtx struct {
 	progress               map[string][]domain.EvidenceEvent // thread id → produced-since evidence
 	cycleStart             time.Time
 	cyclePrevStart         time.Time
-}
-
-// buildBubble assembles a bubble from a module + its work items, deriving heat
-// evidence from each item's created (thread born) and completed (todo done)
-// timestamps (§5.1), then merging the server-owned contract overlay (§4).
-func (s *Server) buildBubble(pc projectCtx, m plane.Module, items []plane.WorkItem) domain.Bubble {
-	// Namespaced id carries the project so writes/close can route.
-	id := pc.slug + ":" + pc.projID + ":" + m.ID
-	b := domain.Bubble{
-		ID: id, Name: m.Name, Instance: pc.slug, Project: pc.projID, ProjectName: pc.projName,
-		CycleStart: pc.cycleStart, CyclePrevStart: pc.cyclePrevStart,
-	}
-	if c, ok, _ := s.store.GetContract(id); ok {
-		b.Outcome, b.Owner, b.Closure, b.Closed, b.Stage = c.Outcome, c.Owner, c.Closure, c.Closed, c.Stage
-	}
-	for _, it := range items {
-		owner := ""
-		if len(it.Assignees) > 0 {
-			owner = pc.names[it.Assignees[0]]
-		}
-		st := pc.states[it.StateID]
-		b.Threads = append(b.Threads, domain.Thread{
-			ID: it.ID, Name: it.Name, Active: it.Active,
-			Seq: it.Sequence, Owner: owner, Parent: it.Parent,
-			State: st.Name, StateGroup: st.Group,
-			CreatedAt: it.CreatedAt, CompletedAt: it.CompletedAt,
-		})
-		if !it.CreatedAt.IsZero() {
-			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvThreadCreated, At: it.CreatedAt})
-		}
-		if it.CompletedAt != nil {
-			b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: it.ID, Kind: domain.EvThreadCompleted, At: *it.CompletedAt})
-		}
-		// Ticked todos and landed revisions, noticed by diffing (Phase C).
-		b.Evidence = append(b.Evidence, pc.progress[it.ID]...)
-	}
-	return b
 }
 
 // ---- Scheduler & notifications (§5 push) ----

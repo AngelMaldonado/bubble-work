@@ -162,6 +162,28 @@ func (m *Mirror) UpsertMembers(instance string, ms []Member) error {
 	})
 }
 
+// UpsertCycles writes a project's cycles.
+func (m *Mirror) UpsertCycles(instance string, cs []Cycle) error {
+	return m.batch(func(tx *sql.Tx) error {
+		st, err := tx.Prepare(`
+			INSERT INTO mirror_cycles(instance, id, project_id, name, start_date, end_date)
+			VALUES(?,?,?,?,?,?)
+			ON CONFLICT(instance, id) DO UPDATE SET
+			  project_id = excluded.project_id, name = excluded.name,
+			  start_date = excluded.start_date, end_date = excluded.end_date`)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		for _, c := range cs {
+			if _, err := st.Exec(instance, c.ID, c.ProjectID, c.Name, c.StartDate, c.EndDate); err != nil {
+				return fmt.Errorf("upsert cycle %s: %w", c.ID, err)
+			}
+		}
+		return nil
+	})
+}
+
 // ReplaceComments swaps a work item's comment set. Like module membership this
 // is a replace rather than a merge: a DELETED comment has no signal of its own,
 // so re-stating the whole set is the only way it disappears here too.
@@ -172,9 +194,16 @@ func (m *Mirror) ReplaceComments(instance, itemID string, cs []Comment) error {
 			instance, itemID); err != nil {
 			return err
 		}
+		// Upsert, not a plain INSERT: every write in this package is idempotent,
+		// and a bare INSERT breaks that promise the moment the same comment id
+		// arrives under a second item — a retried pass then fails on a UNIQUE
+		// violation instead of being a no-op.
 		st, err := tx.Prepare(`
 			INSERT INTO mirror_comments(instance, id, item_id, actor_id, comment_html, created_at)
-			VALUES(?,?,?,?,?,?)`)
+			VALUES(?,?,?,?,?,?)
+			ON CONFLICT(instance, id) DO UPDATE SET
+			  item_id = excluded.item_id, actor_id = excluded.actor_id,
+			  comment_html = excluded.comment_html, created_at = excluded.created_at`)
 		if err != nil {
 			return err
 		}
@@ -262,7 +291,8 @@ func (m *Mirror) Reset(instance string) error {
 	return m.batch(func(tx *sql.Tx) error {
 		for _, t := range []string{
 			"mirror_items", "mirror_modules", "mirror_module_items", "mirror_projects",
-			"mirror_states", "mirror_members", "mirror_comments", "sync_cursors",
+			"mirror_states", "mirror_members", "mirror_comments", "mirror_cycles",
+			"sync_cursors",
 		} {
 			if _, err := tx.Exec(`DELETE FROM `+t+` WHERE instance = ?`, instance); err != nil {
 				return fmt.Errorf("reset %s: %w", t, err)

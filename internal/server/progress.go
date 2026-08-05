@@ -7,6 +7,7 @@ import (
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/md"
+	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
@@ -39,7 +40,12 @@ import (
 //
 // A store failure is logged and yields no evidence — threads simply don't warm,
 // which is the safe direction.
-func (s *Server) progressEvidence(items []plane.WorkItemDetail) map[string][]domain.EvidenceEvent {
+// Reads the mirror, not Plane (docs/PLANE-SYNC.md Phase 2). Note it does NOT
+// reuse mirror_items.description_hash: that fingerprints the WHOLE body, so a
+// Brief or title edit would register as production. Only the Logbook and DoD are
+// production, so the Logbook fingerprint is recomputed here. Hashing a body is
+// local CPU; the call it used to cost was the expensive part, and that is gone.
+func (s *Server) progressEvidenceFromMirror(items []mirror.Item) map[string][]domain.EvidenceEvent {
 	if len(items) == 0 {
 		return nil
 	}
@@ -48,8 +54,8 @@ func (s *Server) progressEvidence(items []plane.WorkItemDetail) map[string][]dom
 	// many items name it as parent.
 	revisions := make(map[string]int, len(items))
 	for _, it := range items {
-		if it.Parent != "" {
-			revisions[it.Parent]++
+		if it.ParentID != "" {
+			revisions[it.ParentID]++
 		}
 	}
 
@@ -123,18 +129,6 @@ func (s *Server) progressEvidence(items []plane.WorkItemDetail) map[string][]dom
 		log.Printf("progress: save: %v", err)
 	}
 	return out
-}
-
-// projectItems pages a project's work items for the progress diff. Best-effort:
-// on failure the sweep continues without new evidence rather than dropping the
-// whole project from the board.
-func (s *Server) projectItems(ctx context.Context, cl *plane.Client, slug, projID string) []plane.WorkItemDetail {
-	items, err := cl.ListProjectItems(ctx)
-	if err != nil {
-		log.Printf("instance %s project %s: list work items for progress: %v", slug, projID, err)
-		return nil
-	}
-	return items
 }
 
 // pulseProbeLimit bounds how many at-risk threads one tick checks for a pulse.

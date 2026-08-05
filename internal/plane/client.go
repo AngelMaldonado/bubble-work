@@ -458,22 +458,6 @@ type Module struct {
 	Name string `json:"name"`
 }
 
-// WorkItem is a Thread (§7.1). Timestamps come straight from the list response,
-// so heat can be derived without a per-item activity fetch. The interior view
-// (INTERIOR-PLAN.md) also uses Sequence/Parent/Assignees for the timeline.
-type WorkItem struct {
-	ID          string
-	Name        string
-	CreatedAt   time.Time
-	CompletedAt *time.Time
-	Active      bool
-	Sequence    int      // sequence_id, e.g. the 12 in PROJ-12
-	SortOrder   float64  // Plane's manual ordering key
-	Parent      string   // parent work-item id ("" if top-level)
-	Assignees   []string // assignee user ids
-	StateID     string   // Plane state uuid; resolve to a group via ListStates
-}
-
 // WorkItemDetail is a single work item with its rich-text body and metadata,
 // fetched on demand for the thread interior (INTERIOR-PLAN.md Phase 8/11).
 type WorkItemDetail struct {
@@ -579,57 +563,6 @@ func parsePlaneDate(s string) (time.Time, bool) {
 		return t, true
 	}
 	return time.Time{}, false
-}
-
-// boardFields is exactly what the board derives a thread from. Asking for it by
-// name drops description_html and a dozen unused columns from every page —
-// measured at 1732 → 736 bytes on a 6-item module, values identical (Phase 0).
-// Any new field the board reads MUST be added here or it will arrive as a zero.
-const boardFields = "id,name,created_at,completed_at,sequence_id,sort_order,parent,assignees,state"
-
-// ListModuleWorkItems returns the threads in a bubble, with the timestamps and
-// state group used to derive heat (§5) without extra calls.
-func (c *Client) ListModuleWorkItems(ctx context.Context, moduleID string) ([]WorkItem, error) {
-	var out []WorkItem
-	err := c.getPaged(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/?fields="+boardFields, func(raw json.RawMessage) error {
-		// On module-issues, `state` is the state UUID string (not the expanded
-		// object); `completed_at` tells us if it's active, and the uuid resolves to
-		// a state group via ListStates (THREAD-LIFECYCLE.md).
-		var page []struct {
-			ID          string     `json:"id"`
-			Name        string     `json:"name"`
-			CreatedAt   time.Time  `json:"created_at"`
-			CompletedAt *time.Time `json:"completed_at"`
-			SequenceID  int        `json:"sequence_id"`
-			SortOrder   float64    `json:"sort_order"`
-			Parent      *string    `json:"parent"`
-			Assignees   []string   `json:"assignees"`
-			State       string     `json:"state"`
-		}
-		if err := json.Unmarshal(raw, &page); err != nil {
-			return err
-		}
-		for _, it := range page {
-			parent := ""
-			if it.Parent != nil {
-				parent = *it.Parent
-			}
-			out = append(out, WorkItem{
-				ID:          it.ID,
-				Name:        it.Name,
-				CreatedAt:   it.CreatedAt,
-				CompletedAt: it.CompletedAt,
-				Active:      it.CompletedAt == nil,
-				Sequence:    it.SequenceID,
-				SortOrder:   it.SortOrder,
-				Parent:      parent,
-				Assignees:   it.Assignees,
-				StateID:     it.State,
-			})
-		}
-		return nil
-	})
-	return out, err
 }
 
 // GetWorkItem fetches one work item with its rich-text body and metadata

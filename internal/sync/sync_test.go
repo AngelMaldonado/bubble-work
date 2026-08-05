@@ -30,6 +30,7 @@ type fakePlane struct {
 	states   []map[string]any
 	comments map[string][]map[string]any
 	modItems map[string][]string
+	cycles   []map[string]any
 	calls    int64
 	paths    []string
 	fail429  string // when set, any path containing this 429s
@@ -69,6 +70,8 @@ func newFakePlane(t *testing.T) *fakePlane {
 			page(w, out)
 		case strings.HasSuffix(p, "/states/"):
 			page(w, f.states)
+		case strings.HasSuffix(p, "/cycles/"):
+			page(w, f.cycles)
 		case strings.HasSuffix(p, "/members/"):
 			json.NewEncoder(w).Encode(f.member)
 		case strings.HasSuffix(p, "/comments/"):

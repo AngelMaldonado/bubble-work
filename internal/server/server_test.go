@@ -54,7 +54,7 @@ func fakePlane() *httptest.Server {
 		case strings.Contains(p, "/modules/m1/") && strings.HasSuffix(p, "/module-issues/"):
 			io.WriteString(w, `{"results":[
 				{"id":"wi-1","name":"First thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"sort_order":1000,"assignees":["u1"],"state":"state-2"},
-				{"id":"wi-2","name":"Second thread","created_at":"2026-02-01T10:00:00Z","completed_at":"2026-03-01T00:00:00Z","sequence_id":2,"sort_order":2000,"parent":"wi-1","assignees":[],"state":"state-3"}
+				{"id":"wi-2","name":"Second thread","created_at":"2026-02-01T10:00:00Z","completed_at":"2026-03-01T00:00:00Z","sequence_id":2,"sort_order":2000,"assignees":[],"state":"state-3"}
 			]}`)
 		case strings.HasSuffix(p, "/relations/"):
 			io.WriteString(w, `{"relates_to":["rev-1"],"blocking":[],"blocked_by":[]}`)
@@ -63,8 +63,15 @@ func fakePlane() *httptest.Server {
 		case strings.HasSuffix(p, "/comments/"):
 			io.WriteString(w, `{"results":[{"id":"c1","actor":"u1","comment_html":"<p>looks good</p>","created_at":"2026-04-01T00:00:00Z"}]}`)
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
-			// sub-issue list: revisions attach as children (parent set to the thread)
-			io.WriteString(w, `{"results":[{"id":"rev-1","name":"rev: first pass","description_html":"<h2>Findings</h2><p>looks solid</p>","parent":"wi-1"}],"next_page_results":false}`)
+			// The project-wide item list. Real Plane returns EVERY item here —
+			// threads and their revision sub-items alike — and callers filter
+			// client-side (ListChildren by parent, the mirror not at all). `state`
+			// arrives as an object because the sync asks for expand=state.
+			io.WriteString(w, `{"results":[
+				{"id":"wi-1","name":"First thread","description_html":"<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul><li data-checked='true'>scaffold</li><li data-checked='false'>wire</li></ul>","sequence_id":1,"sort_order":1000,"priority":"high","assignees":["u1"],"created_at":"2026-01-01T10:00:00Z","updated_at":"2026-01-01T10:00:00Z","completed_at":null,"state":{"id":"state-2","name":"En Progreso","group":"started"}},
+				{"id":"wi-2","name":"Second thread","description_html":"","sequence_id":2,"sort_order":2000,"assignees":[],"created_at":"2026-02-01T10:00:00Z","updated_at":"2026-03-01T00:00:00Z","completed_at":"2026-03-01T00:00:00Z","state":{"id":"state-3","name":"Finalizado","group":"completed"}},
+				{"id":"rev-1","name":"rev: first pass","description_html":"<h2>Findings</h2><p>looks solid</p>","parent":"wi-1","created_at":"2026-01-05T10:00:00Z","updated_at":"2026-01-05T10:00:00Z","state":{"id":"state-2","name":"En Progreso","group":"started"}}
+			],"next_page_results":false}`)
 		case r.Method == http.MethodGet && strings.Contains(p, "/work-items/"):
 			io.WriteString(w, `{"id":"wi-1","name":"First thread","description_html":"<h1>Brief</h1><p>Do it.</p><h2>Logbook</h2><ul><li data-checked='true'>scaffold</li><li data-checked='false'>wire</li></ul>","sequence_id":1,"priority":"high","assignees":["u1"],"state":"state-2","created_at":"2026-01-01T10:00:00Z"}`)
 		case strings.HasSuffix(p, "/projects/"):
@@ -89,6 +96,34 @@ func openStore(t *testing.T) *store.Store {
 	return st
 }
 
+// warmMirror fills the mirror from the fake Plane.
+//
+// Since docs/PLANE-SYNC.md Phase 2 the board is BUILT from sqlite rather than
+// fetched from Plane, so a test that asserts on board contents has to sync
+// first — the same thing the real server does at boot. Backfill rather than
+// Delta on purpose: the fakes mostly omit updated_at, so a delta would early-stop
+// at the watermark and see nothing.
+func warmMirror(t *testing.T, srv *Server) {
+	t.Helper()
+	insts, err := srv.Instances()
+	if err != nil {
+		t.Fatalf("instances: %v", err)
+	}
+	for _, i := range insts {
+		if _, err := srv.Syncer().Backfill(context.Background(), i); err != nil {
+			t.Fatalf("warm mirror %s: %v", i.Slug, err)
+		}
+	}
+}
+
+// sweep is one production cycle at test scale: the syncer pulls, then the
+// snapshot is rebuilt from what it pulled.
+func sweep(t *testing.T, srv *Server) {
+	t.Helper()
+	warmMirror(t, srv)
+	srv.flushCaches()
+}
+
 // authedServer registers a whole-workspace instance backed by a fake Plane and
 // returns the test server plus a usable Plane key (any string works).
 func authedServer(t *testing.T) (*httptest.Server, string) {
@@ -101,7 +136,9 @@ func authedServer(t *testing.T) (*httptest.Server, string) {
 	}); err != nil {
 		t.Fatalf("add instance: %v", err)
 	}
-	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	return ts, "plane_personal_key"
 }
@@ -467,6 +504,9 @@ func TestLevelsReviewAndSearch(t *testing.T) {
 			io.WriteString(w, `{"results":[{"id":"p1","name":"P"}]}`)
 		case strings.HasSuffix(p, "/module-issues/"):
 			io.WriteString(w, `{"results":[{"id":"w1","name":"Design signup","created_at":"2026-01-01T12:00:00Z"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			// item DATA now comes from here; /module-issues/ only supplies membership
+			io.WriteString(w, `{"results":[{"id":"w1","name":"Design signup","created_at":"2026-01-01T12:00:00Z","updated_at":"2026-01-01T12:00:00Z"}],"next_page_results":false}`)
 		case strings.HasSuffix(p, "/modules/"):
 			io.WriteString(w, `{"results":[{"id":"m1","name":"Onboarding"}]}`)
 		default:
@@ -478,7 +518,9 @@ func TestLevelsReviewAndSearch(t *testing.T) {
 	if err := st.AddInstance(domain.Instance{Slug: "ws", BaseURL: fake.URL, APIKey: "k", Workspace: "w", Project: ""}); err != nil {
 		t.Fatal(err)
 	}
-	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
 	const id = "ws:p1:m1"
 	key := "k"
@@ -695,6 +737,8 @@ func TestTickTransition(t *testing.T) {
 			io.WriteString(w, `{"results":[{"id":"p1","name":"P"}]}`)
 		case strings.HasSuffix(p, "/module-issues/"):
 			io.WriteString(w, `{"results":[{"id":"w1","name":"W","created_at":"2026-01-01T12:00:00Z"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			io.WriteString(w, `{"results":[{"id":"w1","name":"W","created_at":"2026-01-01T12:00:00Z","updated_at":"2026-01-01T12:00:00Z"}],"next_page_results":false}`)
 		case strings.HasSuffix(p, "/modules/"):
 			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
 		default:
@@ -708,6 +752,7 @@ func TestTickTransition(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(st, time.Hour) // 1h cycle
+	warmMirror(t, srv)
 	// Union mode: this exercises the classic "a bubble cools and we say so" path,
 	// where a thread's BIRTH warms its bubble. Under the roll-up the same bubble
 	// is dormant from the start (an untouched work item has produced nothing), so
@@ -754,8 +799,11 @@ func TestPlaneWebhook(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(st, time.Hour)
-	// Seed a stale one-bubble snapshot so we can observe the webhook refreshing
-	// it from Plane (the fake returns two bubbles).
+	warmMirror(t, srv)
+	// Seed a stale one-bubble snapshot so we can observe the webhook rebuilding
+	// it (the mirror holds two bubbles). Since Phase 2 a webhook triggers a
+	// snapshot REBUILD from the mirror rather than a fetch from Plane; making it
+	// apply the event payload directly is Phase 6.
 	srv.bubblesCache["ws"] = cachedBubbles{
 		bubbles:   []domain.Bubble{{ID: "ws:stale:x", Name: "stale"}},
 		updatedAt: srv.now(),
@@ -789,8 +837,8 @@ func TestPlaneWebhook(t *testing.T) {
 	if code := post("ws", sign("topsecret")); code != http.StatusOK {
 		t.Fatalf("valid webhook: want 200, got %d", code)
 	}
-	// the valid webhook triggers a background refresh from Plane, replacing the
-	// stale seed with the fake's two bubbles.
+	// the valid webhook triggers a background rebuild, replacing the stale seed
+	// with the mirror's two bubbles.
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		srv.bubblesMu.Lock()
@@ -901,7 +949,9 @@ func TestTransientMembersFailIsRetryable(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add instance: %v", err)
 	}
-	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
 	// During the outage: retryable 502, not 401.
@@ -959,7 +1009,9 @@ func TestKioskCredential(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add kiosk: %v", err)
 	}
-	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	const kiosk = "kiosk_test"
 
@@ -1005,6 +1057,7 @@ func TestAdminTuning(t *testing.T) {
 		t.Fatalf("add instance: %v", err)
 	}
 	srv := New(st, time.Hour)
+	warmMirror(t, srv)
 	srv.SetAdmin("", []string{"owner@x"})
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -1177,6 +1230,7 @@ func TestProgressEvidence(t *testing.T) {
 		t.Fatalf("add instance: %v", err)
 	}
 	srv := New(st, time.Hour)
+	warmMirror(t, srv)
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	const key = "plane_personal_key"
@@ -1207,7 +1261,7 @@ func TestProgressEvidence(t *testing.T) {
 	// Someone ticks another one. The next sweep notices and stamps it, labelling
 	// the change as a tick rather than a re-plan.
 	doneTodos.Store(2)
-	srv.flushCaches()
+	sweep(t, srv)
 	if lv := level(); lv != "in_progress" {
 		t.Fatalf("after a todo was ticked: want in_progress, got %s", lv)
 	}
@@ -1219,7 +1273,7 @@ func TestProgressEvidence(t *testing.T) {
 
 	// A later sweep sees no change at all — the thread must STAY warm, because
 	// heat is derived from when the tick happened, not from noticing it.
-	srv.flushCaches()
+	sweep(t, srv)
 	if lv := level(); lv != "in_progress" {
 		t.Fatalf("warmth must survive a no-change sweep, got %s", lv)
 	}
@@ -1227,7 +1281,7 @@ func TestProgressEvidence(t *testing.T) {
 	// Any logbook change is progress — the Logbook is the plan, so revising it
 	// (here, striking an item) is a recorded decision, not motion.
 	doneTodos.Store(0)
-	srv.flushCaches()
+	sweep(t, srv)
 	if lv := level(); lv != "in_progress" {
 		t.Fatalf("re-planning is progress too, got %s", lv)
 	}
@@ -1243,7 +1297,7 @@ func TestProgressEvidence(t *testing.T) {
 	// A revision artifact landing is progress too, counted from the sub-items
 	// that name the thread as parent.
 	revisions.Store(1)
-	srv.flushCaches()
+	sweep(t, srv)
 	if lv := level(); lv != "in_progress" {
 		t.Fatalf("after a revision landed: want in_progress, got %s", lv)
 	}
@@ -1311,7 +1365,9 @@ func TestPulseRecordedFromComments(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("add instance: %v", err)
 	}
-	ts := httptest.NewServer(New(st, time.Hour).Handler())
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 	const key = "plane_personal_key"
 
@@ -1369,6 +1425,10 @@ func TestAutoStateWriteBack(t *testing.T) {
 			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
 		case strings.HasSuffix(p, "/module-issues/"):
 			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"Old thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"assignees":["u1"],"state":%q}]}`, state)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			// item data + its CURRENT state, so a re-sync reflects our own write back
+			grp := map[string]string{"state-1": "unstarted", "state-2": "started", "state-3": "cancelled"}[state]
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"Old thread","created_at":"2026-01-01T10:00:00Z","updated_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"assignees":["u1"],"state":{"id":%q,"group":%q}}],"next_page_results":false}`, state, grp)
 		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
 			var body struct {
 				State string `json:"state"`
@@ -1390,6 +1450,7 @@ func TestAutoStateWriteBack(t *testing.T) {
 		t.Fatalf("add instance: %v", err)
 	}
 	srv := New(st, time.Hour)
+	warmMirror(t, srv)
 
 	writes := func() []string {
 		mu.Lock()
@@ -1564,5 +1625,87 @@ func TestBubbleRollup(t *testing.T) {
 	}
 	if got := level(justBorn, tun); got != "zzzz" {
 		t.Errorf("roll-up: nothing has been produced yet, want zzzz, got %s", got)
+	}
+}
+
+// TestBoardMakesNoPlaneCalls is the Phase 2 acceptance test (docs/PLANE-SYNC.md).
+//
+// The whole point of the mirror is that reading the board stops touching Plane.
+// Asserting that in prose is worthless — this counts actual HTTP requests to the
+// fake and requires the count to be EXACTLY zero across every board read path.
+func TestBoardMakesNoPlaneCalls(t *testing.T) {
+	var calls atomic.Int32
+	var mu sync.Mutex
+	var paths []string
+	inner := fakePlane()
+	t.Cleanup(inner.Close)
+	counting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		mu.Lock()
+		paths = append(paths, r.Method+" "+r.URL.Path)
+		mu.Unlock()
+		req, _ := http.NewRequest(r.Method, inner.URL+r.URL.RequestURI(), r.Body)
+		req.Header = r.Header.Clone()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(counting.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: counting.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv) // the sync worker's calls are expected and not counted below
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	// Resolve identity once so the auth cache is warm. Identity is deliberately
+	// OUT of scope here: /users/me is the actual credential check and the member
+	// scoping still calls Plane, both until Phase 4. Flushing the whole cache in
+	// the loop below would re-resolve every iteration and this test would be
+	// measuring auth rather than the board.
+	if code, body := do(t, http.MethodGet, ts.URL+"/api/whoami", "plane_personal_key", ""); code != http.StatusOK {
+		t.Fatalf("whoami: %d %s", code, body)
+	}
+
+	calls.Store(0) // ← everything from here must be served from sqlite
+	mu.Lock()
+	paths = nil
+	mu.Unlock()
+
+	for i := 0; i < 5; i++ {
+		// Drop only the SNAPSHOT, so each iteration rebuilds the board from
+		// scratch. A cold rebuild is the expensive path and it must still be free.
+		srv.bubblesMu.Lock()
+		srv.bubblesCache = map[string]cachedBubbles{}
+		srv.bubblesMu.Unlock()
+		if code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles", "plane_personal_key", ""); code != http.StatusOK {
+			t.Fatalf("bubbles: %d %s", code, body)
+		}
+		if code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/threads", "plane_personal_key", ""); code != http.StatusOK {
+			t.Fatalf("timeline: %d %s", code, body)
+		}
+		if code, body := do(t, http.MethodGet, ts.URL+"/api/threads?q=thread", "plane_personal_key", ""); code != http.StatusOK {
+			t.Fatalf("search: %d %s", code, body)
+		}
+		if code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/heat", "plane_personal_key", ""); code != http.StatusOK {
+			t.Fatalf("heat: %d %s", code, body)
+		}
+	}
+
+	if n := calls.Load(); n != 0 {
+		mu.Lock()
+		defer mu.Unlock()
+		t.Errorf("the board made %d Plane call(s); Phase 2 requires zero:\n  %s",
+			n, strings.Join(paths, "\n  "))
 	}
 }

@@ -20,6 +20,13 @@ const (
 	FullInterval = time.Hour
 )
 
+// OnChange registers a callback fired after a pass that actually changed
+// something. Before Phase 2 the board was rebuilt on a fixed timer because
+// rebuilding meant re-fetching Plane; now it is a handful of SQLite queries, so
+// it can simply happen when there is something new to show. Fixed-interval
+// polling of a local file is latency for no reason.
+func (s *Syncer) OnChange(fn func(slug string)) { s.onChange = fn }
+
 // Run keeps every configured instance's mirror current until ctx is done.
 //
 // Everything here is background work in the Phase 0 sense: when the rate budget
@@ -75,6 +82,10 @@ func (s *Syncer) pass(ctx context.Context, instances func() ([]domain.Instance, 
 		// normal case and should not fill the log.
 		if res.Items > 0 || res.Comments > 0 || res.Pruned > 0 || res.Full {
 			log.Printf("sync: %s", res)
+		}
+		// Nudge the board only when the mirror actually moved.
+		if s.onChange != nil && (res.Items > 0 || res.Pruned > 0 || res.Full) {
+			s.onChange(inst.Slug)
 		}
 	}
 }

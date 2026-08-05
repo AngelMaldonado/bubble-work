@@ -1,7 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phases 0 and 1 shipped · live `sync-diff` CLEAN on 2026-08-05, so
-Phase 2 is unblocked · Phases 2-7 pending** ·
+Status: **Phases 0, 1 and 2 shipped — the board now serves entirely from SQLite
+with zero Plane calls · Phases 3-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -366,23 +366,52 @@ Two things this run settled that the earlier, noisier attempt could not:
 The cost of `sync-diff` itself is worth noting: **180 s and a full Plane walk.**
 It is a shadow-period verification tool, not something to leave running.
 
-## Phase 2 — Board reads from L1
+## Phase 2 — Board reads from L1 · **SHIPPED**
 
-- [ ] `bubbleHeat` / `buildBubble` / `threadBuoyancy` take mirror rows instead of
-      `plane.WorkItem`.
-- [ ] `/api/bubbles`, `/api/bubbles/{id}/threads`, `/api/threads`, `/api/tick`
-      read the mirror.
-- [ ] Delete `bubblesCache`, `statesCache`, `membersCache` and `fetchInstance`.
-      `bubble_snapshots` survives only if it still beats a mirror query at boot —
-      measure, then decide.
-- [ ] `progressEvidence` diffs against `mirror_items.description_hash`; drop
-      `ListProjectItems`.
+- [x] `buildInstance` / `buildBubbleFromMirror` (`internal/server/board.go`)
+      replace `fetchInstance` / `buildBubble`. Heat, buoyancy and the contract
+      are untouched — they stop being computed *during a fetch* and start being
+      computed *over the mirror*, which is exactly what `sync-diff` verifies.
+- [x] `/api/bubbles`, `/api/bubbles/{id}/threads`, `/api/threads`,
+      `/api/bubbles/{id}/heat` and `/api/tick` all serve from SQLite.
+- [x] **Cycles are mirrored too.** They were the one thing the board still needed
+      from Plane; without them heat silently falls back to the rolling window.
+      They stay best-effort in the syncer, because a project with the cycles
+      feature switched off has no such endpoint and blocking on it would leave
+      that project permanently unclean.
+- [x] `progressEvidenceFromMirror` replaces the `ListProjectItems` call per
+      project per tick.
+- [x] Deleted: `fetchInstance`, `buildBubble`, `projectCycleWindow`,
+      `plane.ListModuleWorkItems`, `plane.WorkItem`, `boardFields`,
+      `fetchConcurrency`, and the snapshot's `partial` flag.
 
-**Accept:** board renders with **zero** Plane calls in the request path; a `tcpdump`
-/ call-counter over a minute of heavy browsing shows only worker traffic.
+**Accepted:** `TestBoardMakesNoPlaneCalls` proxies the fake Plane through a
+request counter and requires **exactly zero** calls across five full cold board
+rebuilds. Not a claim in prose — a count.
 
-**Cleanup carried:** `server.go` sheds the fetch/refresh path (~500 lines) into
-`internal/sync`. `projectCtx` moves with it.
+### Where the worksheet was wrong
+
+Two instructions above turned out to be mistakes, and following them literally
+would have introduced bugs:
+
+- **"`progressEvidence` diffs against `mirror_items.description_hash`."** No.
+  That column hashes the WHOLE body, so a Brief or title edit would register as
+  production — which `AGENTS.md` explicitly says it is not. The Logbook
+  fingerprint is still recomputed per item. Hashing a body is local CPU; the
+  *call* was the expensive part and that is what went away.
+- **"Delete `statesCache` and `membersCache`."** Not yet. The thread interior
+  still uses both, and it does not move to the mirror until Phase 3. They are
+  no longer on the board's path, which was the point.
+
+`bubble_snapshots` also survives: with the board rebuilt from SQLite it is no
+longer a cost saver, but it still serves the last-known board during the window
+between a restart and the first sync pass.
+
+**Cleanup carried:** the board rebuild is now event-driven — the syncer fires
+`OnChange` and the snapshot rebuilds immediately, instead of the board waiting
+out a 90 s timer. Fixed-interval polling of a local file is latency for no
+reason. Also fixed: `mirror.ReplaceComments` used a bare `INSERT`, breaking the
+package's own idempotency promise the moment a comment id reappeared.
 
 ## Phase 3 — Interiors and comments from L1
 

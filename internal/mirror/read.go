@@ -186,6 +186,26 @@ func (m *Mirror) Members(instance string) (map[string]Member, error) {
 	return out, rows.Err()
 }
 
+// Cycles returns a project's cycles.
+func (m *Mirror) Cycles(instance, projectID string) ([]Cycle, error) {
+	rows, err := m.db.Query(
+		`SELECT id, project_id, name, start_date, end_date FROM mirror_cycles
+		 WHERE instance = ? AND project_id = ?`, instance, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Cycle
+	for rows.Next() {
+		var c Cycle
+		if err := rows.Scan(&c.ID, &c.ProjectID, &c.Name, &c.StartDate, &c.EndDate); err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, rows.Err()
+}
+
 // Comments returns a work item's comments, oldest first (as Plane paginates).
 func (m *Mirror) Comments(instance, itemID string) ([]Comment, error) {
 	rows, err := m.db.Query(
@@ -232,6 +252,7 @@ type Counts struct {
 	States   int
 	Members  int
 	Comments int
+	Cycles   int
 }
 
 // Counts reports how much is mirrored for an instance.
@@ -247,6 +268,7 @@ func (m *Mirror) Counts(instance string) (Counts, error) {
 		{"mirror_states", &c.States},
 		{"mirror_members", &c.Members},
 		{"mirror_comments", &c.Comments},
+		{"mirror_cycles", &c.Cycles},
 	} {
 		if err := m.db.QueryRow(
 			`SELECT count(*) FROM `+q.table+` WHERE instance = ?`, instance).Scan(q.into); err != nil {

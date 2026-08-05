@@ -407,6 +407,29 @@ would have introduced bugs:
 longer a cost saver, but it still serves the last-known board during the window
 between a restart and the first sync pass.
 
+### Measured on the live server
+
+| | before Phase 2 | after |
+|---|---|---|
+| Plane calls | 106 in 5 min (**~21/min**) | **12/min**, then **~4/min** once the delta stopped re-reading structure |
+| board content | 22 bubbles · 4 😴 / 18 🪦 · 93 threads | **identical** |
+
+The board rendering identically is the real result: the refactor changed *where*
+the data comes from without changing *what* it says.
+
+The first measurement also exposed a waste the design had not accounted for. A
+delta was spending **one ListProjects plus one ListModules per project, every two
+minutes**, producing nothing — module membership is only applied on a full pass
+anyway. On a 7-project workspace that was 8 of every 15 calls.
+
+Those lists could not simply move to the hourly reconcile either: a newly created
+bubble would take up to an hour to appear, a visible regression from the 90 s the
+old refresher managed. So structure got its own cadence, `StructureInterval`
+(10 min) — rare enough to be cheap, frequent enough that making a bubble still
+feels responsive. `TestDeltaDoesNotRefetchStructure` pins both halves: a delta
+must not re-read the lists, and a new bubble must still appear once the cadence
+elapses.
+
 **Cleanup carried:** the board rebuild is now event-driven — the syncer fires
 `OnChange` and the snapshot rebuilds immediately, instead of the board waiting
 out a 90 s timer. Fixed-interval polling of a local file is latency for no

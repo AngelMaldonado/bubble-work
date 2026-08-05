@@ -18,6 +18,19 @@ const (
 	// knob but a CORRECTNESS one: deletes and module-membership moves are
 	// invisible to the delta, so an hour is also the worst-case lag on both.
 	FullInterval = time.Hour
+
+	// StructureInterval is how often the project and module LISTS are re-read.
+	//
+	// These were being fetched on every delta — one ListProjects plus one
+	// ListModules per project, every two minutes, producing nothing new, since
+	// membership is only applied on a full pass anyway. On a 7-project workspace
+	// that was 8 of every 15 calls a delta spent.
+	//
+	// They cannot simply ride the hourly reconcile either: a newly created bubble
+	// would take up to an hour to appear, which is a visible regression from the
+	// 90s the old refresher managed. So structure gets its own cadence — rare
+	// enough to be cheap, frequent enough that making a bubble feels responsive.
+	StructureInterval = 10 * time.Minute
 )
 
 // OnChange registers a callback fired after a pass that actually changed

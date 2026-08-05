@@ -27,6 +27,8 @@ const (
 	// resourceItems tracks the work-item watermark; resourceStructure tracks the
 	// last complete walk of projects/modules/states/members.
 	resourceItems = "items"
+	// resourceStructure tracks the last refresh of the project/module lists.
+	resourceStructure = "structure"
 	// resourceProject prefixes a PER-PROJECT cursor, which is what makes a full
 	// walk resumable across passes when the rate budget runs out mid-way.
 	resourceProject = "project:"
@@ -147,8 +149,17 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 		res.Full = true
 	}
 
+	// Structure (the project and module LISTS) is re-read on its own cadence, not
+	// on every delta — see StructureInterval. A full pass always refreshes it.
+	structCur, err := s.m.Cursor(inst.Slug, resourceStructure)
+	if err != nil {
+		return res, fmt.Errorf("read structure cursor: %w", err)
+	}
+	freshStructure := full || structCur.LastOK.IsZero() ||
+		s.now().Sub(structCur.LastOK) >= StructureInterval
+
 	// ---- structure: projects, and per project modules + states ----
-	projects, err := s.projects(ctx, base, inst)
+	projects, err := s.projects(ctx, base, inst, freshStructure)
 	if err != nil {
 		// Losing the project list is usually a 429, and it used to abort the
 		// whole pass — which is the worst possible response, because the mirror
@@ -224,7 +235,7 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 			log.Printf("sync %s: project %s: %s: %v", inst.Slug, short(p.ID), stage, err)
 		}
 
-		mods, err := s.modules(ctx, cl, inst, p.ID, full)
+		mods, err := s.modules(ctx, cl, inst, p.ID, full, freshStructure)
 		if err != nil {
 			fail("modules", err)
 			continue
@@ -352,6 +363,16 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 		return res, nil
 	}
 
+	// Only stamp the structure cursor when the lists were actually re-read AND
+	// the pass completed cleanly; stamping it after a partial pass would skip the
+	// next refresh on the strength of data we failed to fetch.
+	if freshStructure {
+		if err := s.m.SetCursor(inst.Slug, resourceStructure,
+			mirror.Cursor{LastOK: s.now(), LastFull: structCur.LastFull}); err != nil {
+			return res, fmt.Errorf("write structure cursor: %w", err)
+		}
+	}
+
 	cur.Watermark = newest
 	cur.LastOK = s.now()
 	cur.LastError = ""
@@ -368,7 +389,14 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 
 // projects resolves the instance's projects (respecting a pinned one) and
 // mirrors them.
-func (s *Syncer) projects(ctx context.Context, base *plane.Client, inst domain.Instance) ([]mirror.Project, error) {
+func (s *Syncer) projects(ctx context.Context, base *plane.Client, inst domain.Instance, refresh bool) ([]mirror.Project, error) {
+	if !refresh {
+		// Serve the list we already have. A genuinely new project waits for the
+		// next structure refresh, which is the point of the cadence.
+		if known, err := s.m.Projects(inst.Slug); err == nil && len(known) > 0 {
+			return known, nil
+		}
+	}
 	if inst.Project != "" {
 		// A pinned instance still needs a name for the board, so take it from
 		// the mirror if we have it and don't spend a call re-deriving it.
@@ -404,7 +432,12 @@ func (s *Syncer) projects(ctx context.Context, base *plane.Client, inst domain.I
 // modules may not bump the item's updated_at, so a delta cannot be trusted to
 // notice it. That makes the reconcile interval a correctness knob, which is
 // recorded in PLANE-SYNC.md rather than hidden here.
-func (s *Syncer) modules(ctx context.Context, cl *plane.Client, inst domain.Instance, projID string, full bool) ([]mirror.Module, error) {
+func (s *Syncer) modules(ctx context.Context, cl *plane.Client, inst domain.Instance, projID string, full, refresh bool) ([]mirror.Module, error) {
+	if !refresh {
+		if known, err := s.m.Modules(inst.Slug, projID); err == nil {
+			return known, nil
+		}
+	}
 	ms, err := cl.ListModules(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("list modules for project %s: %w", projID, err)

@@ -192,6 +192,51 @@ func TestBackfillThenDeltaIsCheap(t *testing.T) {
 	}
 }
 
+// A delta must not re-read the project and module LISTS. It used to, on every
+// pass for every project, producing nothing new — on a 7-project workspace that
+// was 8 of every 15 calls a delta spent. Structure has its own cadence now.
+func TestDeltaDoesNotRefetchStructure(t *testing.T) {
+	f := newFakePlane(t)
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	f.modules = []map[string]any{{"id": "m1", "name": "Bubble One"}}
+	f.modItems["m1"] = []string{"i1"}
+	f.addItem("i1", 1, "One", "<p>a</p>", base)
+
+	s, _ := newTestSyncer(t)
+	if _, err := s.Backfill(context.Background(), inst(f)); err != nil {
+		t.Fatal(err)
+	}
+
+	f.reset()
+	if _, err := s.Delta(context.Background(), inst(f)); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range f.paths {
+		if strings.HasSuffix(p, "/projects/") || strings.HasSuffix(p, "/modules/") {
+			t.Errorf("delta re-read structure: %v", f.paths)
+			break
+		}
+	}
+	// ...but the mirror must still report the modules, or the board loses its
+	// bubbles the moment a delta runs.
+	mods, err := s.m.Modules("cuby", "p1")
+	if err != nil || len(mods) != 1 {
+		t.Fatalf("modules after delta = %d (%v); serving from the mirror failed", len(mods), err)
+	}
+
+	// Once the cadence elapses, structure is re-read so a new bubble appears.
+	s.SetClock(func() time.Time { return time.Now().Add(StructureInterval + time.Minute) })
+	f.modules = append(f.modules, map[string]any{"id": "m2", "name": "Bubble Two"})
+	f.reset()
+	if _, err := s.Delta(context.Background(), inst(f)); err != nil {
+		t.Fatal(err)
+	}
+	mods, _ = s.m.Modules("cuby", "p1")
+	if len(mods) != 2 {
+		t.Errorf("a new bubble did not appear after %s: %d module(s)", StructureInterval, len(mods))
+	}
+}
+
 // The watermark must come from the newest item OBSERVED, never from the clock —
 // otherwise an item written while we were paging falls in the gap forever.
 func TestWatermarkComesFromDataNotClock(t *testing.T) {

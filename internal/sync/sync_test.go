@@ -511,3 +511,69 @@ func TestFullWalkResumesInsteadOfRestarting(t *testing.T) {
 		t.Errorf("an explicit backfill skipped %d project(s); it must always re-walk", res.Skipped)
 	}
 }
+
+// The comment budget is per PASS, not per project. Applied per project it would
+// let an hourly reconcile of N projects spend N × the cap forever — comments are
+// the only per-item call left in the sync, so this is the biggest cost lever.
+func TestCommentBudgetIsSharedAcrossProjects(t *testing.T) {
+	f := newFakePlane(t)
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	// More items than the per-pass budget, so the cap must bite.
+	for i := 0; i < commentFetchPerPass+10; i++ {
+		f.addItem(fmt.Sprintf("i%02d", i), i, fmt.Sprintf("Item %d", i), "<p>b</p>", base)
+	}
+
+	s, _ := newTestSyncer(t)
+	f.reset()
+	if _, err := s.Backfill(context.Background(), inst(f)); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	for _, p := range f.paths {
+		if strings.HasSuffix(p, "/comments/") {
+			calls++
+		}
+	}
+	if calls > commentFetchPerPass {
+		t.Errorf("spent %d comment calls in one pass, budget is %d", calls, commentFetchPerPass)
+	}
+	if calls == 0 {
+		t.Error("spent no comment calls at all; the budget should allow some")
+	}
+}
+
+// A comment fetch that fails must not make the project unclean. Comments are a
+// fill-in — the board and sync-diff do not read them — so blocking a project's
+// cursor on them would stall the reconcile behind the most deferrable work.
+func TestCommentFailureDoesNotBlockTheProject(t *testing.T) {
+	f := newFakePlane(t)
+	base := time.Date(2026, 8, 1, 10, 0, 0, 0, time.UTC)
+	f.modules = []map[string]any{{"id": "m1", "name": "Bubble One"}}
+	f.modItems["m1"] = []string{"i1"}
+	f.addItem("i1", 1, "One", "<p>a</p>", base)
+	f.fail429 = "/comments/"
+
+	s, m := newTestSyncer(t)
+	res, err := s.Backfill(context.Background(), inst(f))
+	if err != nil {
+		t.Fatalf("a comment failure should not fail the pass: %v", err)
+	}
+	if res.Partial {
+		t.Error("a comment failure marked the pass partial; comments are a fill-in")
+	}
+	if res.Items != 1 {
+		t.Errorf("items = %d, want 1 — structure should still have landed", res.Items)
+	}
+	// The project walked cleanly, so it carries a cursor and the watermark moved.
+	pc, err := m.Cursor("cuby", resourceProject+"p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if pc.LastFull.IsZero() {
+		t.Error("project cursor not set; a comment failure blocked an otherwise clean walk")
+	}
+	cur, _ := m.Cursor("cuby", resourceItems)
+	if cur.Watermark.IsZero() {
+		t.Error("watermark held back by a comment failure alone")
+	}
+}

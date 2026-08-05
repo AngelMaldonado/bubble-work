@@ -31,11 +31,15 @@ const (
 	// walk resumable across passes when the rate budget runs out mid-way.
 	resourceProject = "project:"
 
-	// commentFetchLimit bounds how many items one delta pass will pull comments
-	// for. A burst of commenting across many items should spread over ticks
-	// rather than spend the whole rate budget at once — the Phase 0 floor would
-	// stop it anyway, but failing softly beats being throttled.
-	commentFetchLimit = 25
+	// commentFetchPerPass bounds how many items ONE PASS pulls comments for,
+	// across every project — not per project. Comments are the only per-item
+	// call left in the sync, so this is the single biggest cost lever: applied
+	// per project it would let an hourly reconcile of N projects spend N × the
+	// cap, forever. A burst of commenting should spread over passes instead.
+	//
+	// Note the cost is paid per ITEM, not per comment: an item with no comments
+	// still costs a call to discover that. So this bounds calls, not rows.
+	commentFetchPerPass = 25
 )
 
 // Syncer keeps one server's mirror current.
@@ -182,6 +186,9 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 		log.Printf("sync %s: full walk of %d project(s) starting", inst.Slug, len(projects))
 	}
 
+	// One comment budget for the WHOLE pass, shared across projects.
+	commentBudget := commentFetchPerPass
+
 	// newest tracks the high-water mark actually OBSERVED. Deliberately not
 	// time.Now(): an item written while we were paging would otherwise fall
 	// between the last page and the clock, and be skipped forever.
@@ -297,10 +304,15 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 		// Comments: fetched only for items the delta actually named, and only
 		// those whose body did NOT change — a body edit explains the updated_at
 		// on its own, so re-reading its comments would be wasted budget.
-		n, err := s.comments(ctx, cl, inst, rows, prevHash, full)
+		// Comments are a FILL-IN, not structure. A comment fetch that fails or
+		// runs out of budget must not mark the project unclean: the board and
+		// sync-diff do not read comments at all, and the pulse only needs
+		// accuracy for dying threads (THREAD-LIFECYCLE.md). Blocking a project's
+		// cursor on them would stall the whole reconcile behind the cheapest-to-
+		// defer work.
+		n, err := s.comments(ctx, cl, inst, rows, prevHash, full, &commentBudget)
 		if err != nil {
-			fail("comments", err)
-			continue
+			log.Printf("sync %s: project %s: comments: %v", inst.Slug, short(p.ID), err)
 		}
 		res.Comments += n
 
@@ -436,7 +448,10 @@ func (s *Syncer) states(ctx context.Context, cl *plane.Client, inst domain.Insta
 //
 // prevHash holds the body hashes from BEFORE this pass wrote its items; reading
 // them from the mirror here would always compare a row against itself.
-func (s *Syncer) comments(ctx context.Context, cl *plane.Client, inst domain.Instance, rows []plane.ItemRow, prevHash map[string]string, full bool) (int, error) {
+func (s *Syncer) comments(ctx context.Context, cl *plane.Client, inst domain.Instance, rows []plane.ItemRow, prevHash map[string]string, full bool, budget *int) (int, error) {
+	if budget != nil && *budget <= 0 {
+		return 0, nil
+	}
 	type cand struct {
 		id string
 		at time.Time
@@ -456,13 +471,17 @@ func (s *Syncer) comments(ctx context.Context, cl *plane.Client, inst domain.Ins
 	}
 	// Newest first, so a truncated pass covers what matters most.
 	sort.Slice(want, func(i, j int) bool { return want[i].at.After(want[j].at) })
-	if len(want) > commentFetchLimit {
-		log.Printf("sync %s: %d items want comments, fetching the %d newest this pass",
-			inst.Slug, len(want), commentFetchLimit)
-		want = want[:commentFetchLimit]
+	if budget != nil && len(want) > *budget {
+		// Say what was dropped. A silent cap reads as "covered everything".
+		log.Printf("sync %s: %d item(s) want comments, budget allows %d this pass; the rest wait",
+			inst.Slug, len(want), *budget)
+		want = want[:*budget]
 	}
 	n := 0
 	for _, c := range want {
+		if budget != nil {
+			*budget--
+		}
 		cs, err := cl.ListComments(ctx, c.id)
 		if err != nil {
 			// One unreadable item must not abort the whole pass.

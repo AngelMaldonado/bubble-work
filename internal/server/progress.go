@@ -1,14 +1,12 @@
 package server
 
 import (
-	"context"
 	"log"
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/mirror"
-	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
@@ -45,7 +43,7 @@ import (
 // Brief or title edit would register as production. Only the Logbook and DoD are
 // production, so the Logbook fingerprint is recomputed here. Hashing a body is
 // local CPU; the call it used to cost was the expensive part, and that is gone.
-func (s *Server) progressEvidenceFromMirror(items []mirror.Item) map[string][]domain.EvidenceEvent {
+func (s *Server) progressEvidenceFromMirror(slug string, items []mirror.Item) map[string][]domain.EvidenceEvent {
 	if len(items) == 0 {
 		return nil
 	}
@@ -79,9 +77,28 @@ func (s *Server) progressEvidenceFromMirror(items []mirror.Item) map[string][]do
 	}
 	// Pulse rides along in the evidence stream as a non-progress event: the
 	// classifier ignores it, threadLevel uses it to block the grave.
+	//
+	// It comes from the mirrored comments now — a SELECT, where it used to be a
+	// Plane call per at-risk thread, capped at 20 a tick and never able to cover
+	// everything (docs/PLANE-SYNC.md Phase 3).
+	//
+	// The stored pulse is still consulted, and the LATER of the two wins. They
+	// answer subtly different questions: an item with no mirrored comments might
+	// have none, or might simply not have had its comments fetched yet — the
+	// comment budget fills those in over several passes. Taking the max means a
+	// thread is never wrongly declared abandoned because the mirror had not got
+	// to it, while a mirrored comment still corrects a stale stored pulse.
 	pulse, err := s.store.PulseFor(ids)
 	if err != nil {
 		log.Printf("pulse: load: %v", err)
+	}
+	lastComment := make(map[string]time.Time, len(ids))
+	if s.mirror != nil {
+		for _, id := range ids {
+			if at, err := s.mirror.LastCommentAt(slug, id); err == nil && !at.IsZero() {
+				lastComment[id] = at
+			}
+		}
 	}
 
 	now := s.now()
@@ -89,8 +106,12 @@ func (s *Server) progressEvidenceFromMirror(items []mirror.Item) map[string][]do
 	var dirty []store.ThreadProgress
 
 	for id, cur := range observed {
-		if p, ok := pulse[id]; ok && !p.LastCommentAt.IsZero() {
-			out[id] = append(out[id], domain.EvidenceEvent{ThreadID: id, Kind: domain.EvComment, At: p.LastCommentAt})
+		at := pulse[id].LastCommentAt
+		if m := lastComment[id]; m.After(at) {
+			at = m
+		}
+		if !at.IsZero() {
+			out[id] = append(out[id], domain.EvidenceEvent{ThreadID: id, Kind: domain.EvComment, At: at})
 		}
 		was, seen := prev[id]
 		if !seen {
@@ -129,78 +150,4 @@ func (s *Server) progressEvidenceFromMirror(items []mirror.Item) map[string][]do
 		log.Printf("progress: save: %v", err)
 	}
 	return out
-}
-
-// pulseProbeLimit bounds how many at-risk threads one tick checks for a pulse.
-// The probe costs one Plane call per thread, so it is deliberately small: the
-// least-recently-checked threads are picked, and the rest wait for a later tick.
-const pulseProbeLimit = 20
-
-// probePulse asks Plane for comments on the threads we are about to declare
-// abandoned, and records when their discussion was last alive.
-//
-// Comments can't be swept cheaply — Plane has no project-wide comment feed, so
-// reading them is one call per thread. But the pulse is only ever load-bearing
-// in ONE place: blocking 🪦. So instead of polling every thread, this probes only
-// the threads that already compute to 🪦, least-recently-checked first, capped
-// per tick. Everything else records a pulse for free whenever someone opens or
-// posts to the discussion.
-//
-// The recorded pulse reaches the board via the next snapshot refresh, which
-// emits it as a non-progress evidence event.
-func (s *Server) probePulse(ctx context.Context, bubbles []domain.Bubble) {
-	if s.Tuning().PulseCycles <= 0 {
-		return // the pulse is switched off; don't spend calls on it
-	}
-	type target struct{ slug, proj, wid string }
-	at := map[string]target{}
-	var ids []string
-	for _, b := range bubbles {
-		buoy := s.threadBuoyancy(b)
-		for _, t := range b.Threads {
-			if !t.Active || buoy[t.ID].Level != "rip" {
-				continue
-			}
-			at[t.ID] = target{b.Instance, b.Project, t.ID}
-			ids = append(ids, t.ID)
-		}
-	}
-	if len(ids) == 0 {
-		return
-	}
-
-	pick, err := s.store.StalePulseCheck(ids, pulseProbeLimit)
-	if err != nil {
-		log.Printf("pulse: pick: %v", err)
-		return
-	}
-	checked, found := 0, 0
-	for _, id := range pick {
-		tgt := at[id]
-		inst, ok, err := s.instanceBySlug(tgt.slug)
-		if err != nil || !ok {
-			continue
-		}
-		cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, tgt.proj)
-		cms, err := cl.ListComments(ctx, id)
-		if err != nil {
-			log.Printf("pulse: comments for %s: %v", id, err)
-			continue
-		}
-		var latest time.Time
-		for _, c := range cms {
-			if c.CreatedAt.After(latest) {
-				latest = c.CreatedAt
-			}
-		}
-		if err := s.store.RecordPulse(id, latest, s.now()); err != nil {
-			log.Printf("pulse: record %s: %v", id, err)
-			continue
-		}
-		checked++
-		if !latest.IsZero() {
-			found++
-		}
-	}
-	log.Printf("pulse: probed %d/%d at-risk thread(s), %d had a discussion", checked, len(ids), found)
 }

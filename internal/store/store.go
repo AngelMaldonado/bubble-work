@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
@@ -732,23 +731,6 @@ func (s *Store) RecordPulse(threadID string, lastComment, checkedAt time.Time) e
 		   checked_at = excluded.checked_at`,
 		threadID, stamp(lastComment), stamp(checkedAt))
 	return err
-}
-
-// StalePulseCheck returns which of the given threads we have checked least
-// recently (never-checked first), capped at limit — the probe budget.
-func (s *Store) StalePulseCheck(ids []string, limit int) ([]string, error) {
-	if len(ids) == 0 || limit <= 0 {
-		return nil, nil
-	}
-	checked, err := s.PulseFor(ids)
-	if err != nil {
-		return nil, err
-	}
-	ordered := append([]string(nil), ids...)
-	sort.Slice(ordered, func(i, j int) bool {
-		return checked[ordered[i]].CheckedAt.Before(checked[ordered[j]].CheckedAt)
-	})
-	return ordered[:min(limit, len(ordered))], nil
 }
 
 // GetSetting reads a server-wide setting. The value is opaque JSON to the store

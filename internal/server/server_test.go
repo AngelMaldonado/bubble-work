@@ -1371,30 +1371,42 @@ func TestPulseRecordedFromComments(t *testing.T) {
 	t.Cleanup(ts.Close)
 	const key = "plane_personal_key"
 
-	if p, _ := st.PulseFor([]string{"wi-1"}); len(p) != 0 {
-		t.Fatalf("no pulse should exist before anyone looks: %+v", p)
+	// The pulse now comes from the MIRRORED comments — a local SELECT, where it
+	// used to be a Plane call per at-risk thread capped at 20 a tick
+	// (docs/PLANE-SYNC.md Phase 3). Reading the discussion no longer "records"
+	// anything, because reading the mirror observes nothing new about Plane.
+	want := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) // the fixture's only comment
+	at, err := srv.mirror.LastCommentAt("ws", "wi-1")
+	if err != nil {
+		t.Fatalf("mirror pulse: %v", err)
+	}
+	if !at.Equal(want) {
+		t.Fatalf("pulse from the mirror = %v, want %v", at, want)
 	}
 
-	// Simply opening the discussion tells us when it was last alive.
+	// Opening the discussion still works and still shows the comment.
 	if code, body := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, ""); code != http.StatusOK {
 		t.Fatalf("comments status %d: %s", code, body)
 	}
-	got, err := st.PulseFor([]string{"wi-1"})
-	if err != nil {
-		t.Fatalf("pulse: %v", err)
-	}
-	want := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) // the fixture's only comment
-	if p := got["wi-1"]; !p.LastCommentAt.Equal(want) || p.CheckedAt.IsZero() {
-		t.Fatalf("pulse from read wrong: %+v", p)
-	}
 
-	// Posting one is the strongest pulse: someone is here now.
+	// Posting one is the strongest pulse: someone is here now. The created row
+	// goes straight into the mirror rather than waiting for a sync pass, so the
+	// discussion — and the pulse — reflect it immediately.
 	if code, body := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/comments", key, `{"body":"still on it"}`); code != http.StatusCreated {
 		t.Fatalf("post status %d: %s", code, body)
 	}
-	got, _ = st.PulseFor([]string{"wi-1"})
-	if p := got["wi-1"]; !p.LastCommentAt.After(want) {
-		t.Fatalf("posting should advance the pulse: %+v", p)
+	at, err = srv.mirror.LastCommentAt("ws", "wi-1")
+	if err != nil {
+		t.Fatalf("mirror pulse: %v", err)
+	}
+	if !at.After(want) {
+		t.Fatalf("posting should advance the pulse, got %v", at)
+	}
+	// The stored pulse is still written on a post and still consulted as a
+	// fallback: an item whose comments the sync has not reached yet must not be
+	// mistaken for one that has none.
+	if p, _ := st.PulseFor([]string{"wi-1"}); !p["wi-1"].LastCommentAt.After(want) {
+		t.Errorf("posting should also advance the stored fallback pulse: %+v", p["wi-1"])
 	}
 }
 
@@ -1628,11 +1640,13 @@ func TestBubbleRollup(t *testing.T) {
 	}
 }
 
-// TestBoardMakesNoPlaneCalls is the Phase 2 acceptance test (docs/PLANE-SYNC.md).
+// TestBoardMakesNoPlaneCalls is the Phase 2+3 acceptance test
+// (docs/PLANE-SYNC.md).
 //
-// The whole point of the mirror is that reading the board stops touching Plane.
-// Asserting that in prose is worthless — this counts actual HTTP requests to the
-// fake and requires the count to be EXACTLY zero across every board read path.
+// The whole point of the mirror is that READING stops touching Plane. Asserting
+// that in prose is worthless — this counts actual HTTP requests to the fake and
+// requires the count to be EXACTLY zero across every read path: the board, the
+// timeline, search, heat, a thread's interior and its comments.
 func TestBoardMakesNoPlaneCalls(t *testing.T) {
 	var calls atomic.Int32
 	var mu sync.Mutex
@@ -1699,6 +1713,15 @@ func TestBoardMakesNoPlaneCalls(t *testing.T) {
 		}
 		if code, body := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/heat", "plane_personal_key", ""); code != http.StatusOK {
 			t.Fatalf("heat: %d %s", code, body)
+		}
+		// Phase 3: the thread interior too. This was the expensive one — four
+		// concurrent Plane calls, one of which paged the WHOLE project to find
+		// revisions, cached for 60s because it took over a second.
+		if code, body := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", "plane_personal_key", ""); code != http.StatusOK {
+			t.Fatalf("thread detail: %d %s", code, body)
+		}
+		if code, body := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1/comments", "plane_personal_key", ""); code != http.StatusOK {
+			t.Fatalf("comments: %d %s", code, body)
 		}
 	}
 

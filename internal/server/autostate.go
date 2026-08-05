@@ -84,8 +84,11 @@ func (s *Server) autoState(ctx context.Context, bubbles []domain.Bubble) int {
 // autoStateBubble moves the cards of one bubble, returning how many it wrote.
 func (s *Server) autoStateBubble(ctx context.Context, inst domain.Instance, b domain.Bubble, budget int) int {
 	cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, b.Project)
-	states := s.projectStates(ctx, cl, inst.Slug, b.Project)
-	if len(states) == 0 {
+	// Target states come from the mirror (Phase 3). This used to be a cached
+	// Plane call with a 30-minute TTL, which meant a newly added workflow state
+	// could be invisible for half an hour while we wrote cards to the wrong one.
+	states, err := s.mirrorStates(inst.Slug, b.Project)
+	if err != nil || len(states) == 0 {
 		return 0 // can't resolve targets; do nothing rather than guess
 	}
 

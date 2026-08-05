@@ -72,7 +72,7 @@ func (s *Server) buildInstance(inst domain.Instance) ([]domain.Bubble, error) {
 		if err != nil {
 			return nil, fmt.Errorf("mirror items: %w", err)
 		}
-		pc.progress = s.progressEvidenceFromMirror(items)
+		pc.progress = s.progressEvidenceFromMirror(inst.Slug, items)
 
 		for _, m := range mods {
 			mi, err := s.mirror.ModuleItems(inst.Slug, m.ID)
@@ -136,6 +136,21 @@ func (s *Server) mirrorNames(slug string) (map[string]string, error) {
 		}
 	}
 	return names, nil
+}
+
+// mirrorStates is projectStates served from the mirror: state id → group/name.
+// Only the GROUP is safe to reason about — names are project-configured and
+// localized (THREAD-LIFECYCLE.md).
+func (s *Server) mirrorStates(slug, projID string) (map[string]plane.State, error) {
+	ms, err := s.mirror.States(slug, projID)
+	if err != nil {
+		return nil, fmt.Errorf("mirror states: %w", err)
+	}
+	out := make(map[string]plane.State, len(ms))
+	for id, st := range ms {
+		out[id] = plane.State{ID: st.ID, Name: st.Name, Group: st.Group, Default: st.Default}
+	}
+	return out, nil
 }
 
 // mirrorCycleWindow is projectCycleWindow over mirrored cycles. Zero times mean

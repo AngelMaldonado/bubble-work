@@ -217,6 +217,23 @@ func (m *Mirror) ReplaceComments(instance, itemID string, cs []Comment) error {
 	})
 }
 
+// UpsertComment writes ONE comment without disturbing the item's others.
+//
+// ReplaceComments is the sync's tool: it re-states a whole set, which is the
+// only way a deletion lands. This is for the write path — when the server itself
+// posts a comment it already holds the created row, so the discussion can show
+// it immediately instead of waiting for the next sync pass to discover it.
+func (m *Mirror) UpsertComment(instance, itemID string, c Comment) error {
+	_, err := m.db.Exec(`
+		INSERT INTO mirror_comments(instance, id, item_id, actor_id, comment_html, created_at)
+		VALUES(?,?,?,?,?,?)
+		ON CONFLICT(instance, id) DO UPDATE SET
+		  item_id = excluded.item_id, actor_id = excluded.actor_id,
+		  comment_html = excluded.comment_html, created_at = excluded.created_at`,
+		instance, c.ID, itemID, c.ActorID, c.HTML, ts(c.CreatedAt))
+	return err
+}
+
 // PruneItems removes mirrored items for a project that are no longer in Plane.
 // Deletes are invisible to a delta sync (an absent item reports nothing), so
 // they are only ever caught here, during a full reconcile. Returns how many rows

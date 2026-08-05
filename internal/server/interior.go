@@ -11,10 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"golang.org/x/sync/errgroup"
-
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/md"
+	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 )
 
@@ -80,92 +79,6 @@ func (s *Server) interiorClient(ctx context.Context, nsID string) (cl *plane.Cli
 	return cl, inst, slug, projID, objID, nil
 }
 
-// memberNames maps an instance's member ids to display names for resolving
-// assignees and comment authors, cached for membersTTL (members change rarely
-// and this call otherwise runs on every timeline/thread open). Best-effort: an
-// error serves a stale map if we have one, else empty.
-func (s *Server) memberNames(ctx context.Context, inst domain.Instance) map[string]string {
-	now := s.now()
-	s.membersMu.Lock()
-	if c, ok := s.membersCache[inst.Slug]; ok && now.Before(c.exp) {
-		s.membersMu.Unlock()
-		return c.names
-	}
-	s.membersMu.Unlock()
-
-	members, err := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Members(ctx)
-	if err != nil {
-		s.membersMu.Lock()
-		defer s.membersMu.Unlock()
-		if c, ok := s.membersCache[inst.Slug]; ok {
-			return c.names // stale is better than nameless
-		}
-		return map[string]string{}
-	}
-	names := make(map[string]string, len(members))
-	for _, m := range members {
-		if m.DisplayName != "" {
-			names[m.ID] = m.DisplayName
-		} else {
-			names[m.ID] = m.Email
-		}
-	}
-	s.membersMu.Lock()
-	s.membersCache[inst.Slug] = cachedMembers{names: names, exp: now.Add(membersTTL)}
-	s.membersMu.Unlock()
-	return names
-}
-
-// recordPulse stores when a thread's discussion was last alive. Comments are
-// presence, never production: this only keeps a thread out of 🪦
-// (THREAD-LIFECYCLE.md). Called wherever comments are already being fetched, so
-// it costs no extra Plane traffic.
-func (s *Server) recordPulse(wid string, cs []domain.Comment) {
-	var latest time.Time
-	for _, c := range cs {
-		if c.CreatedAt.After(latest) {
-			latest = c.CreatedAt
-		}
-	}
-	if err := s.store.RecordPulse(wid, latest, s.now()); err != nil {
-		log.Printf("pulse: record %s: %v", wid, err)
-	}
-}
-
-// projectStates maps a project's workflow-state ids to their state (group +
-// localized name), cached for statesTTL. Only the GROUP is safe to reason about
-// — names are project-configured and localized (THREAD-LIFECYCLE.md).
-// Best-effort: an error serves a stale map if we have one, else empty, so a
-// thread simply shows no Plane state rather than failing the read.
-func (s *Server) projectStates(ctx context.Context, cl *plane.Client, slug, projID string) map[string]plane.State {
-	key := slug + ":" + projID
-	now := s.now()
-	s.statesMu.Lock()
-	if c, ok := s.statesCache[key]; ok && now.Before(c.exp) {
-		s.statesMu.Unlock()
-		return c.byID
-	}
-	s.statesMu.Unlock()
-
-	states, err := cl.ListStates(ctx)
-	if err != nil {
-		s.statesMu.Lock()
-		defer s.statesMu.Unlock()
-		if c, ok := s.statesCache[key]; ok {
-			return c.byID
-		}
-		return map[string]plane.State{}
-	}
-	byID := make(map[string]plane.State, len(states))
-	for _, st := range states {
-		byID[st.ID] = st
-	}
-	s.statesMu.Lock()
-	s.statesCache[key] = cachedStates{byID: byID, exp: now.Add(statesTTL)}
-	s.statesMu.Unlock()
-	return byID
-}
-
 // Timeline returns a bubble's threads newest-first (INTERIOR-PLAN.md Phase 10),
 // served straight from the in-memory snapshot — no Plane fetch on the request
 // path. bubbleID may be a short id or a full namespaced id (resolved like heat).
@@ -222,36 +135,17 @@ func (s *Server) ThreadDetail(ctx context.Context, threadID string) (domain.Thre
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
-	cl, inst, _, projID, wid, err := s.interiorClient(ctx, full)
+	_, inst, _, projID, wid, err := s.interiorClient(ctx, full)
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
 
-	// Serve from cache when fresh — building the detail pages the whole project
-	// for revisions (~1.7s). singleflight coalesces concurrent misses.
-	s.detailMu.Lock()
-	if c, ok := s.detailCache[wid]; ok && s.now().Before(c.exp) {
-		s.detailMu.Unlock()
-		return c.detail, nil
-	}
-	s.detailMu.Unlock()
-
-	v, err, _ := s.sf.Do("detail:"+wid, func() (any, error) {
-		d, e := s.buildThreadDetail(ctx, cl, inst, projID, wid, full)
-		if e != nil {
-			return nil, e
-		}
-		s.detailMu.Lock()
-		s.detailCache[wid] = cachedDetail{detail: d, exp: s.now().Add(detailTTL)}
-		s.detailMu.Unlock()
-		return d, nil
-	})
+	d, err := s.buildThreadDetail(inst, projID, wid, full)
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
-	d := v.(domain.ThreadDetail)
 	// Buoyancy is time-dependent, so it is derived per request from the snapshot
-	// rather than baked into the cached body (THREAD-LIFECYCLE.md Phase A).
+	// rather than baked into the body (THREAD-LIFECYCLE.md Phase A).
 	d.Buoyancy = s.threadBuoyancyFor(ctx, wid, d)
 	return d, nil
 }
@@ -287,48 +181,41 @@ func (s *Server) threadBuoyancyFor(ctx context.Context, wid string, d domain.Thr
 	return s.threadBuoyancy(solo)[wid]
 }
 
-// buildThreadDetail renders a thread's interior with live Plane fetches. Callers
-// go through ThreadDetail, which caches the (viewer-agnostic) result.
-func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst domain.Instance, projID, wid, full string) (domain.ThreadDetail, error) {
-	// Fetch the body, revisions, and member names concurrently — each is a
-	// separate Plane round-trip (~0.3-1s), so serial would stack up.
-	var (
-		wi        plane.WorkItemDetail
-		revisions []md.Artifact
-		names     map[string]string
-		states    map[string]plane.State
-	)
-	g, gctx := errgroup.WithContext(ctx)
-	g.Go(guard("get-work-item", func() error {
-		var e error
-		wi, e = cl.GetWorkItem(gctx, wid)
-		return e
-	}))
-	g.Go(guard("revisions", func() error {
-		revisions = s.revisions(gctx, cl, wid)
-		return nil
-	}))
-	g.Go(guard("members", func() error {
-		names = s.memberNames(gctx, inst)
-		return nil
-	}))
-	g.Go(guard("states", func() error {
-		states = s.projectStates(gctx, cl, inst.Slug, projID)
-		return nil
-	}))
-	if err := g.Wait(); err != nil {
+// buildThreadDetail renders a thread's interior from the MIRROR
+// (docs/PLANE-SYNC.md Phase 3).
+//
+// This used to fan out four concurrent Plane calls — GetWorkItem, the revision
+// walk, members and states — and cache the result for 60s because building it
+// paged the whole project and took well over a second. All four are now local
+// reads, so there is nothing left worth caching: a cache here would only add a
+// staleness window to something that is already fast and always current.
+func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full string) (domain.ThreadDetail, error) {
+	if s.mirror == nil {
+		return domain.ThreadDetail{}, fmt.Errorf("mirror unavailable")
+	}
+	it, ok, err := s.mirror.Item(inst.Slug, wid)
+	if err != nil {
+		return domain.ThreadDetail{}, fmt.Errorf("mirror item: %w", err)
+	}
+	if !ok {
+		// Genuinely unknown, or created since the last sync pass. Either way the
+		// honest answer is "not here yet" rather than a half-rendered thread.
+		return domain.ThreadDetail{}, errNotFound
+	}
+	names, err := s.mirrorNames(inst.Slug)
+	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
 
-	bodyMD := md.FromHTML(wi.DescriptionHTML)
-	arts, log := md.ParseThread(bodyMD, wi.Name)
+	bodyMD := md.FromHTML(it.DescriptionHTML)
+	arts, log := md.ParseThread(bodyMD, it.Name)
 	kind := "simple"
 	if log != nil && log.Phased {
 		kind = "phased"
 	}
 
 	var assignees []string
-	for _, a := range wi.Assignees {
+	for _, a := range it.Assignees {
 		if n := names[a]; n != "" {
 			assignees = append(assignees, n)
 		}
@@ -340,6 +227,8 @@ func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst d
 	for i := range arts {
 		arts[i].HTML = rewriteAssets(arts[i].HTML, itemURL)
 	}
+
+	revisions := s.revisions(inst, projID, wid)
 
 	// Normalize to non-nil slices so the JSON is arrays, never null (the web
 	// client indexes/`.length`s them).
@@ -353,23 +242,23 @@ func (s *Server) buildThreadDetail(ctx context.Context, cl *plane.Client, inst d
 		log.Todos = []md.Todo{}
 	}
 
-	st := states[wi.StateID]
-
 	return domain.ThreadDetail{
-		ID:          full,
-		Seq:         wi.Sequence,
-		Title:       wi.Name,
-		Kind:        kind,
-		Active:      wi.CompletedAt == nil,
-		Priority:    wi.Priority,
-		Assignees:   assignees,
-		State:       st.Name,
-		StateGroup:  st.Group,
+		ID:        full,
+		Seq:       it.Seq,
+		Title:     it.Name,
+		Kind:      kind,
+		Active:    it.CompletedAt == nil,
+		Priority:  it.Priority,
+		Assignees: assignees,
+		// The state group rides along on the mirrored item (expand=state), so
+		// there is no id→state map to go stale.
+		State:       it.StateName,
+		StateGroup:  it.StateGroup,
 		Artifacts:   arts,
 		Logbook:     log,
 		Revisions:   revisions,
-		CreatedAt:   wi.CreatedAt,
-		CompletedAt: wi.CompletedAt,
+		CreatedAt:   it.CreatedAt,
+		CompletedAt: it.CompletedAt,
 	}, nil
 }
 
@@ -429,8 +318,11 @@ func cut3(id string) (slug, proj, obj string) {
 // so revisions attach via the parent/child link instead; an optional "rev:" name
 // prefix is stripped for the label. The child list already carries
 // description_html, so no per-item fetch is needed. Best-effort: never fatal.
-func (s *Server) revisions(ctx context.Context, cl *plane.Client, wid string) []md.Artifact {
-	children, err := cl.ListChildren(ctx, wid)
+func (s *Server) revisions(inst domain.Instance, projID, wid string) []md.Artifact {
+	// This was the expensive half of a thread open: Plane has no usable
+	// sub-item endpoint, so ListChildren paged the WHOLE project and filtered by
+	// parent client-side. The mirror has an index on parent_id.
+	children, err := s.mirror.Children(inst.Slug, wid)
 	if err != nil || len(children) == 0 {
 		return nil
 	}
@@ -443,7 +335,7 @@ func (s *Server) revisions(ctx context.Context, cl *plane.Client, wid string) []
 			}
 		}
 		art := md.NewArtifact(label, md.FromHTML(ch.DescriptionHTML))
-		art.HTML = rewriteAssets(art.HTML, planeItemURL(cl.BaseURL, cl.Workspace, cl.Project, ch.ID))
+		art.HTML = rewriteAssets(art.HTML, planeItemURL(inst.BaseURL, inst.Workspace, projID, ch.ID))
 		out = append(out, art)
 	}
 	return out
@@ -455,14 +347,13 @@ func (s *Server) ThreadComments(ctx context.Context, threadID string) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	cl, inst, _, _, wid, err := s.interiorClient(ctx, full)
+	_, inst, _, _, wid, err := s.interiorClient(ctx, full)
 	if err != nil {
 		return nil, err
 	}
-	// Base comments come from a short-lived cache (the expensive, paged Plane
-	// fetch). It's viewer-agnostic — the per-caller "mine" flag and the live 👀
-	// readers are applied to a copy below, so the cache is safe to share.
-	base, err := s.commentsFor(ctx, cl, inst, wid)
+	// Base comments come from the mirror and are viewer-agnostic — the per-caller
+	// "mine" flag and the 👀 readers are applied to a copy below.
+	base, err := s.commentsFor(inst, wid)
 	if err != nil {
 		return nil, err
 	}
@@ -479,44 +370,26 @@ func (s *Server) ThreadComments(ctx context.Context, threadID string) ([]domain.
 // commentsFor returns a work item's rendered comments (oldest-first, without the
 // viewer-specific "mine" flag or 👀 readers), served from a short-TTL cache.
 // singleflight coalesces concurrent misses so a burst of opens hits Plane once.
-func (s *Server) commentsFor(ctx context.Context, cl *plane.Client, inst domain.Instance, wid string) ([]domain.Comment, error) {
-	s.commentsMu.Lock()
-	if c, ok := s.commentsCache[wid]; ok && s.now().Before(c.exp) {
-		s.commentsMu.Unlock()
-		return c.comments, nil
+func (s *Server) commentsFor(inst domain.Instance, wid string) ([]domain.Comment, error) {
+	if s.mirror == nil {
+		return nil, fmt.Errorf("mirror unavailable")
 	}
-	s.commentsMu.Unlock()
-
-	v, err, _ := s.sf.Do("comments:"+wid, func() (any, error) {
-		cms, err := cl.ListComments(ctx, wid)
-		if err != nil {
-			return nil, err
-		}
-		names := s.memberNames(ctx, inst)
-		out := make([]domain.Comment, 0, len(cms))
-		for _, cm := range cms {
-			out = append(out, renderComment(cm, names, "")) // viewer-agnostic (Mine=false)
-		}
-		sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
-		s.commentsMu.Lock()
-		s.commentsCache[wid] = cachedComments{comments: out, exp: s.now().Add(commentsTTL)}
-		s.commentsMu.Unlock()
-		// Anyone opening the discussion tells us for free when it was last alive.
-		s.recordPulse(wid, out)
-		return out, nil
-	})
+	cms, err := s.mirror.Comments(inst.Slug, wid)
+	if err != nil {
+		return nil, fmt.Errorf("mirror comments: %w", err)
+	}
+	names, err := s.mirrorNames(inst.Slug)
 	if err != nil {
 		return nil, err
 	}
-	return v.([]domain.Comment), nil
-}
-
-// invalidateComments drops a work item's cached comments (after a new post) so
-// the next read reflects it immediately.
-func (s *Server) invalidateComments(wid string) {
-	s.commentsMu.Lock()
-	delete(s.commentsCache, wid)
-	s.commentsMu.Unlock()
+	out := make([]domain.Comment, 0, len(cms))
+	for _, cm := range cms {
+		out = append(out, renderComment(
+			plane.Comment{ID: cm.ID, ActorID: cm.ActorID, HTML: cm.HTML, CreatedAt: cm.CreatedAt},
+			names, "")) // viewer-agnostic (Mine=false)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].CreatedAt.Before(out[j].CreatedAt) })
+	return out, nil
 }
 
 // attachReaders decorates each comment with its 👀 read-receipts, excluding the
@@ -607,13 +480,22 @@ func (s *Server) PostComment(ctx context.Context, threadID, body string) (domain
 	if err != nil {
 		return domain.Comment{}, err
 	}
-	s.invalidateComments(wid) // next read includes the new comment
+	// Put it in the mirror now rather than waiting for a sync pass to discover
+	// it. This is not an optimistic write: Plane already accepted it and handed
+	// back the created row, so this is exact.
+	if s.mirror != nil {
+		if err := s.mirror.UpsertComment(inst.Slug, wid, mirror.Comment{
+			ID: cm.ID, ItemID: wid, ActorID: cm.ActorID, HTML: cm.HTML, CreatedAt: cm.CreatedAt,
+		}); err != nil {
+			log.Printf("mirror: record posted comment %s: %v", cm.ID, err)
+		}
+	}
 	// A fresh comment is the strongest possible pulse: someone is here now.
 	if err := s.store.RecordPulse(wid, cm.CreatedAt, s.now()); err != nil {
 		log.Printf("pulse: record on post %s: %v", wid, err)
 	}
 	me, _ := domain.ActorFrom(ctx)
-	names := s.memberNames(ctx, inst)
+	names, _ := s.mirrorNames(inst.Slug)
 	out := renderComment(cm, names, me.ID)
 	// The freshly-created comment is definitively ours, and Plane may not have
 	// filled the author name into our members cache path — trust the actor.

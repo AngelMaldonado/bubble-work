@@ -1,7 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phases 0, 1 and 2 shipped — the board now serves entirely from SQLite
-with zero Plane calls · Phases 3-7 pending** ·
+Status: **Phases 0-3 shipped — every read (board, timeline, interiors, comments)
+serves from SQLite with zero Plane calls · Phases 4-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -436,29 +436,46 @@ out a 90 s timer. Fixed-interval polling of a local file is latency for no
 reason. Also fixed: `mirror.ReplaceComments` used a bare `INSERT`, breaking the
 package's own idempotency promise the moment a comment id reappeared.
 
-## Phase 3 — Interiors and comments from L1
+## Phase 3 — Interiors and comments from L1 · **SHIPPED**
 
-- [ ] Thread detail, artifacts, revisions (children) and Logbook render from
-      `mirror_items` + `mirror_comments`.
-- [ ] Delete `detailCache` and `commentsCache`.
-- [ ] **Delete `probePulse` and `pulseProbeLimit` entirely** — the pulse becomes
-      `SELECT max(created_at) FROM mirror_comments WHERE item_id = ?`. This is the
-      single biggest budget win in the whole plan.
-- [ ] Comment sync — **targeted off the delta**, per the 2026-08-04 probe. There
-      is no comment feed, but a comment bumps its parent's `updated_at`:
-  - the delta page names the items that changed; fetch comments only for those
-    whose `description_hash` and `state_id` did **not** change;
-  - one-time backfill of comments during Phase 1's initial walk;
-  - webhook `issue_comment` events (Phase 6) collapse the delay to ~0, but are
-    not required for correctness.
-- [ ] Assert the guardrail in code: the delta watermark must not feed
-      `EvidenceEvent`. A test that comments on a thread and asserts it stays 😴
-      (neither 🔥 nor 🪦) is the regression guard.
-- [ ] Comment `👀` read receipts keep using `comment_reads` — unchanged.
+- [x] Thread detail, artifacts, revisions and Logbook render from `mirror_items`;
+      comments from `mirror_comments`.
+- [x] Deleted `detailCache`, `commentsCache`, `statesCache`, `membersCache` and
+      their TTLs. Nothing left to cache: a cache over a local read would only add
+      a staleness window to something already fast and always current.
+- [x] **`probePulse` and `pulseProbeLimit` are gone.** The pulse is now
+      `SELECT max(created_at) FROM mirror_comments WHERE item_id = ?`.
+- [x] Deleted from the Plane client: `GetWorkItem`, `ListChildren`,
+      `ListProjectItems`, `WorkItemDetail`. From the store: `StalePulseCheck`.
+- [x] Comment `👀` read receipts still use `comment_reads` — unchanged, because
+      Plane has no comment-reaction API and that overlay was never Plane's.
 
-**Accept:** opening any thread issues zero Plane calls. Pulse correctness is
-verified against a thread that was commented on but not progressed (it must hold
-😴, not fall to 🪦, and not rise to 🔥).
+**Accepted:** `TestBoardMakesNoPlaneCalls` now covers the interior too — board,
+timeline, search, heat, thread detail and comments, still exactly **zero** calls.
+
+### The revision walk was the real cost
+
+Opening a thread fanned out four concurrent Plane calls, and one of them —
+`ListChildren` — **paged the entire project** and filtered by parent in Go,
+because Plane has no usable sub-item endpoint. That is why the detail was cached
+for 60 s despite being a read. `mirror_items` has an index on `parent_id`.
+
+### Why the stored pulse survives
+
+`thread_pulse` is still consulted, and the LATER of (mirrored comments, stored
+pulse) wins. They answer subtly different questions: an item with no mirrored
+comments might genuinely have none, or might simply not have had its comments
+fetched yet — the per-pass comment budget fills those in over several passes.
+Taking the max means a thread is never wrongly declared abandoned because the
+sync had not reached it, while a mirrored comment still corrects a stale stored
+pulse. Reading a discussion no longer *writes* a pulse, because reading the
+mirror observes nothing new about Plane; posting one still does.
+
+### One correctness gain, not just a speed one
+
+`autoStateBubble` resolved its target states through a 30-minute cache. A newly
+added workflow state could therefore be invisible for half an hour while
+auto-state wrote cards into the wrong one. It reads the mirror now.
 
 ## Phase 4 — Identity and members from L1
 

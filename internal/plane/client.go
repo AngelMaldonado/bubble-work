@@ -458,21 +458,6 @@ type Module struct {
 	Name string `json:"name"`
 }
 
-// WorkItemDetail is a single work item with its rich-text body and metadata,
-// fetched on demand for the thread interior (INTERIOR-PLAN.md Phase 8/11).
-type WorkItemDetail struct {
-	ID              string
-	Name            string
-	DescriptionHTML string
-	Sequence        int
-	Priority        string
-	StateID         string
-	Parent          string
-	Assignees       []string
-	CreatedAt       time.Time
-	CompletedAt     *time.Time
-}
-
 // Relations groups a work item's typed relationships (INTERIOR-PLAN.md). Each
 // slice holds related work-item ids. RelatesTo drives revision artifacts.
 type Relations struct {
@@ -563,91 +548,6 @@ func parsePlaneDate(s string) (time.Time, bool) {
 		return t, true
 	}
 	return time.Time{}, false
-}
-
-// GetWorkItem fetches one work item with its rich-text body and metadata
-// (INTERIOR-PLAN.md Phase 8). Used for the thread interior and revisions.
-func (c *Client) GetWorkItem(ctx context.Context, workItemID string) (WorkItemDetail, error) {
-	var r struct {
-		ID              string     `json:"id"`
-		Name            string     `json:"name"`
-		DescriptionHTML string     `json:"description_html"`
-		SequenceID      int        `json:"sequence_id"`
-		Priority        string     `json:"priority"`
-		State           string     `json:"state"`
-		Parent          *string    `json:"parent"`
-		Assignees       []string   `json:"assignees"`
-		CreatedAt       time.Time  `json:"created_at"`
-		CompletedAt     *time.Time `json:"completed_at"`
-	}
-	if err := c.get(ctx, c.projectBase()+"/work-items/"+workItemID+"/", &r); err != nil {
-		return WorkItemDetail{}, err
-	}
-	d := WorkItemDetail{
-		ID: r.ID, Name: r.Name, DescriptionHTML: r.DescriptionHTML,
-		Sequence: r.SequenceID, Priority: r.Priority, StateID: r.State,
-		Assignees: r.Assignees, CreatedAt: r.CreatedAt, CompletedAt: r.CompletedAt,
-	}
-	if r.Parent != nil {
-		d.Parent = *r.Parent
-	}
-	return d, nil
-}
-
-// ListChildren returns a work item's sub-work-items (children). Plane's list
-// endpoint doesn't filter by parent server-side and there's no sub-items
-// endpoint on all instances, so we page the project's work items and filter by
-// parent client-side. The list already carries description_html, so no per-item
-// fetch is needed.
-func (c *Client) ListChildren(ctx context.Context, parentID string) ([]WorkItemDetail, error) {
-	items, err := c.ListProjectItems(ctx)
-	if err != nil {
-		return nil, err
-	}
-	var out []WorkItemDetail
-	for _, it := range items {
-		if it.Parent == parentID {
-			out = append(out, it)
-		}
-	}
-	return out, nil
-}
-
-// ListProjectItems pages every work item in the project, carrying each one's
-// body and parent link. One call answers two questions the refresher asks of
-// every thread: what its logbook says, and how many sub-items it has
-// (THREAD-LIFECYCLE.md Phase C).
-func (c *Client) ListProjectItems(ctx context.Context) ([]WorkItemDetail, error) {
-	// Same discipline as boardFields, and it matters more here: the unfiltered
-	// row also carries description_binary, a second copy of the body in Plane's
-	// internal encoding that nothing in this codebase reads.
-	const fields = "id,name,description_html,parent,created_at,completed_at"
-	var out []WorkItemDetail
-	err := c.getPaged(ctx, c.projectBase()+"/work-items/?fields="+fields, func(raw json.RawMessage) error {
-		var page []struct {
-			ID              string     `json:"id"`
-			Name            string     `json:"name"`
-			DescriptionHTML string     `json:"description_html"`
-			Parent          *string    `json:"parent"`
-			CreatedAt       time.Time  `json:"created_at"`
-			CompletedAt     *time.Time `json:"completed_at"`
-		}
-		if err := json.Unmarshal(raw, &page); err != nil {
-			return err
-		}
-		for _, it := range page {
-			d := WorkItemDetail{
-				ID: it.ID, Name: it.Name, DescriptionHTML: it.DescriptionHTML,
-				CreatedAt: it.CreatedAt, CompletedAt: it.CompletedAt,
-			}
-			if it.Parent != nil {
-				d.Parent = *it.Parent
-			}
-			out = append(out, d)
-		}
-		return nil
-	})
-	return out, err
 }
 
 // ListRelations returns a work item's typed relationships (INTERIOR-PLAN.md).

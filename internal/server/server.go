@@ -60,19 +60,6 @@ const (
 	// governs freshness. Kept gentle: a full fan-out trips self-hosted Plane's
 	// rate limit, and webhooks cover real-time changes.
 	snapshotRefresh = 90 * time.Second
-	// membersTTL caches an instance's member id→name map. Members change rarely,
-	// and this call otherwise runs on every timeline/thread open (~0.5s each).
-	membersTTL = 10 * time.Minute
-	// commentsTTL caches a work item's comments so repeat chat opens don't each
-	// hit Plane's paged comments endpoint. Kept short since posting invalidates it
-	// and read-receipts are attached fresh regardless.
-	commentsTTL = 30 * time.Second
-	// detailTTL caches a thread's rendered interior. Longer than comments since a
-	// thread body changes far less often than its discussion.
-	detailTTL = 60 * time.Second
-	// statesTTL caches a project's workflow states (id → group/name). A project's
-	// states are configuration, not data — they change on the order of never.
-	statesTTL = 30 * time.Minute
 	// kioskTokenPrefix marks a server-issued read-only display credential so
 	// resolve() can shortcut it before attempting Plane authentication (§9 Phase 9).
 	kioskTokenPrefix = "kiosk_"
@@ -110,28 +97,6 @@ type Server struct {
 	// changes so connected boards update without polling.
 	subsMu sync.Mutex
 	subs   map[chan struct{}]struct{}
-
-	// membersCache caches each instance's member id→name map (see memberNames).
-	membersMu    sync.Mutex
-	membersCache map[string]cachedMembers
-
-	// commentsCache holds each work item's rendered comments (WITHOUT 👀 readers,
-	// which are attached fresh from SQLite per request). It shortcuts the live,
-	// paged Plane fetch on repeat chat opens; sf coalesces concurrent misses.
-	commentsMu    sync.Mutex
-	commentsCache map[string]cachedComments
-
-	// detailCache holds each work item's fully-rendered interior (artifacts,
-	// logbook, revisions). Revisions require paging the whole project (~1.7s), so
-	// without this every thread open pays that cost. Viewer-agnostic.
-	detailMu    sync.Mutex
-	detailCache map[string]cachedDetail
-
-	// statesCache holds each project's workflow states by id, so a thread's real
-	// Plane state can be shown without a fetch per timeline/thread open
-	// (THREAD-LIFECYCLE.md). Keyed "slug:project".
-	statesMu    sync.Mutex
-	statesCache map[string]cachedStates
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
@@ -174,30 +139,6 @@ type cachedBubbles struct {
 	updatedAt time.Time
 }
 
-type cachedMembers struct {
-	names map[string]string
-	exp   time.Time
-}
-
-// cachedComments holds a work item's rendered comments (readerless — 👀 receipts
-// are attached per request so they stay live).
-type cachedComments struct {
-	comments []domain.Comment
-	exp      time.Time
-}
-
-// cachedDetail holds a work item's rendered interior (viewer-agnostic).
-type cachedDetail struct {
-	detail domain.ThreadDetail
-	exp    time.Time
-}
-
-// cachedStates holds a project's workflow states keyed by state id.
-type cachedStates struct {
-	byID map[string]plane.State
-	exp  time.Time
-}
-
 // tuningKey is where the buoyancy calibration lives in the settings table.
 const tuningKey = "tuning"
 
@@ -213,18 +154,14 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		tun.CycleHours = cycle.Hours()
 	}
 	s := &Server{
-		store:         st,
-		tuning:        tun,
-		now:           time.Now,
-		cache:         map[string]cachedActor{},
-		bubblesCache:  map[string]cachedBubbles{},
-		subs:          map[chan struct{}]struct{}{},
-		membersCache:  map[string]cachedMembers{},
-		commentsCache: map[string]cachedComments{},
-		detailCache:   map[string]cachedDetail{},
-		statesCache:   map[string]cachedStates{},
-		adminEmails:   map[string]bool{},
-		startedAt:     time.Now(),
+		store:        st,
+		tuning:       tun,
+		now:          time.Now,
+		cache:        map[string]cachedActor{},
+		bubblesCache: map[string]cachedBubbles{},
+		subs:         map[chan struct{}]struct{}{},
+		adminEmails:  map[string]bool{},
+		startedAt:    time.Now(),
 	}
 	s.loadTuning()
 	s.loadPersistedSnapshots()
@@ -1586,11 +1523,10 @@ func (s *Server) Tick(ctx context.Context) (int, error) {
 			_ = s.store.SetLifecycle(b.ID, string(cur), stamp)
 		}
 	}
-	// Before anything acts on a 🪦, check whether people are still talking about
-	// it (THREAD-LIFECYCLE.md). Bounded, and only for threads actually at risk.
-	s.probePulse(ctx, bubbles)
-	// Then reflect the derived levels back onto Plane — but only for instances
-	// that opted in, and never over a human's own edit (Phase B).
+	// Reflect the derived levels back onto Plane — but only for instances that
+	// opted in, and never over a human's own edit (Phase B). Whether people are
+	// still talking about a 🪦 is already answered: the pulse comes from the
+	// mirrored comments, so there is nothing to probe first (Phase 3).
 	if w := s.autoState(ctx, bubbles); w > 0 {
 		log.Printf("autostate: moved %d card(s) in Plane", w)
 	}

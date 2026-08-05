@@ -409,13 +409,31 @@ between a restart and the first sync pass.
 
 ### Measured on the live server
 
-| | before Phase 2 | after |
-|---|---|---|
-| Plane calls | 106 in 5 min (**~21/min**) | **12/min**, then **~4/min** once the delta stopped re-reading structure |
-| board content | 22 bubbles · 4 😴 / 18 🪦 · 93 threads | **identical** |
+| | before Phase 2 | after Phase 2 | after the structure fix + Phase 3 |
+|---|---|---|---|
+| Plane calls | ~21.2/min | 12.0/min | **4.1/min — 80% off** |
+| 429s | (pre-Phase 0: routine) | 0 | **0** |
+| board content | 22 bubbles · 4 😴 / 18 🪦 · 93 threads | identical | **identical** |
 
-The board rendering identically is the real result: the refactor changed *where*
-the data comes from without changing *what* it says.
+Measured over a 7-minute window starting two minutes after a deploy, so no
+startup reconcile falls inside it. The earlier 21.2 and 12.0 figures were each
+contaminated by a full walk and read high.
+
+Where the remaining 4.1/min goes, and the floor beneath it:
+
+```
+  7 calls / 2 min   delta: one ListItemsSince per project   = 3.5/min
+  8 calls / 10 min  structure: projects + modules           = 0.8/min
+  amortized         hourly reconcile + comment fill-in      ≈ 0.1/min
+```
+
+The floor is **one call per project per delta** — the page that says "nothing
+changed". Only Phase 6 lowers it: with webhooks carrying the changes, the delta
+interval can stretch a long way without the board going stale.
+
+The board rendering identically through three phases of replacing its entire
+data source is the real result: the refactor changed *where* the data comes from
+without changing *what* it says.
 
 The first measurement also exposed a waste the design had not accounted for. A
 delta was spending **one ListProjects plus one ListModules per project, every two

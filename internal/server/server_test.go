@@ -579,6 +579,7 @@ func TestServiceAdmin(t *testing.T) {
 		t.Fatal(err)
 	}
 	srv := New(st, time.Hour)
+	warmMirror(t, srv) // scoping reads the mirrored member registry (Phase 4)
 	srv.SetAdmin("root-secret", []string{"boss@x"})
 	ts := httptest.NewServer(srv.Handler())
 	defer ts.Close()
@@ -954,12 +955,15 @@ func TestTransientMembersFailIsRetryable(t *testing.T) {
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
 
-	// During the outage: retryable 502, not 401.
+	// During the outage the mirror never learned the members, so scoping cannot
+	// be authoritative: retryable 502, not 401, and above all not a 200 with an
+	// empty scope (which would look like "you belong nowhere").
 	if code, _ := do(t, "GET", ts.URL+"/api/whoami", "k", ""); code != http.StatusBadGateway {
 		t.Fatalf("during members outage want 502, got %d", code)
 	}
-	// Recover Plane: the outage must not have poisoned the cache.
+	// Recover Plane, and let the sync pick the members up.
 	failMembers.Store(false)
+	warmMirror(t, srv)
 	code, body := do(t, "GET", ts.URL+"/api/whoami", "k", "")
 	if code != http.StatusOK {
 		t.Fatalf("after recovery want 200, got %d: %s", code, body)
@@ -1155,6 +1159,7 @@ func TestAdminMembers(t *testing.T) {
 		t.Fatalf("add instance: %v", err)
 	}
 	srv := New(st, time.Hour)
+	warmMirror(t, srv)                    // the member registry is mirrored now (Phase 4)
 	srv.SetAdmin("", []string{"owner@x"}) // the fake /users/me email → service admin
 	ts := httptest.NewServer(srv.Handler())
 	t.Cleanup(ts.Close)
@@ -1730,5 +1735,81 @@ func TestBoardMakesNoPlaneCalls(t *testing.T) {
 		defer mu.Unlock()
 		t.Errorf("the board made %d Plane call(s); Phase 2 requires zero:\n  %s",
 			n, strings.Join(paths, "\n  "))
+	}
+}
+
+// TestColdAuthCostsOneCall is the Phase 4 acceptance test (docs/PLANE-SYNC.md).
+//
+// Scoping used to call Members on EVERY configured instance, so a cold auth cost
+// up to 2N Plane calls and had to be cached for 5 minutes to be affordable. Only
+// /users/me is a Plane call now — it is the actual credential check and must
+// stay live, because serving identity from the mirror would let a revoked key
+// keep working for as long as the mirror remembered the person.
+func TestColdAuthCostsOneCall(t *testing.T) {
+	var mu sync.Mutex
+	var paths []string
+	inner := fakePlane()
+	t.Cleanup(inner.Close)
+	counting := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		paths = append(paths, r.URL.Path)
+		mu.Unlock()
+		req, _ := http.NewRequest(r.Method, inner.URL+r.URL.RequestURI(), r.Body)
+		req.Header = r.Header.Clone()
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			w.WriteHeader(http.StatusBadGateway)
+			return
+		}
+		defer resp.Body.Close()
+		w.WriteHeader(resp.StatusCode)
+		io.Copy(w, resp.Body)
+	}))
+	t.Cleanup(counting.Close)
+
+	st := openStore(t)
+	// THREE instances against the same fake: under the old scoping this alone
+	// would have cost up to six calls per cold auth.
+	for _, slug := range []string{"a", "b", "c"} {
+		if err := st.AddInstance(domain.Instance{
+			Slug: slug, BaseURL: counting.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	mu.Lock()
+	paths = nil
+	mu.Unlock()
+
+	if code, body := do(t, http.MethodGet, ts.URL+"/api/whoami", "plane_personal_key", ""); code != http.StatusOK {
+		t.Fatalf("whoami: %d %s", code, body)
+	}
+
+	mu.Lock()
+	got := append([]string(nil), paths...)
+	mu.Unlock()
+	if len(got) != 1 || !strings.HasSuffix(got[0], "/users/me") {
+		t.Errorf("cold auth spent %d call(s) %v; want exactly one /users/me", len(got), got)
+	}
+
+	// Scope is NOT cached — it is a mirror lookup, so a membership change lands
+	// immediately rather than lagging by authTTL. A second request re-scopes for
+	// free and must not re-identify.
+	mu.Lock()
+	paths = nil
+	mu.Unlock()
+	if code, _ := do(t, http.MethodGet, ts.URL+"/api/whoami", "plane_personal_key", ""); code != http.StatusOK {
+		t.Fatal("second whoami failed")
+	}
+	mu.Lock()
+	n := len(paths)
+	mu.Unlock()
+	if n != 0 {
+		t.Errorf("a warm auth spent %d Plane call(s); identity should still be cached", n)
 	}
 }

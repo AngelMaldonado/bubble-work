@@ -129,9 +129,12 @@ func (s *Server) godmodeActor() domain.Actor {
 	}
 }
 
+// cachedActor holds only the IDENTITY behind a credential, not the resolved
+// actor: scope and role are recomputed per request from the mirror so a
+// membership change lands immediately (Phase 4).
 type cachedActor struct {
-	actor domain.Actor
-	exp   time.Time
+	identity identity
+	exp      time.Time
 }
 
 type cachedBubbles struct {
@@ -340,66 +343,95 @@ func (s *Server) resolve(ctx context.Context, cred string) (domain.Actor, error)
 	}
 	now := s.now()
 
+	// Only the IDENTITY half is cached (docs/PLANE-SYNC.md Phase 4). Identity is
+	// what costs a Plane call; scope and role are a mirror lookup, so they are
+	// recomputed on every request. That means a membership or role change takes
+	// effect immediately instead of lagging by authTTL — while credential
+	// revocation still lags by authTTL exactly as it always has, because /users/me
+	// is the only thing that can actually tell us a key was revoked.
 	s.mu.Lock()
-	if c, ok := s.cache[cred]; ok && now.Before(c.exp) {
+	c, ok := s.cache[cred]
+	s.mu.Unlock()
+	if !ok || !now.Before(c.exp) {
+		id, err := s.identify(ctx, cred)
+		if err != nil {
+			return domain.Actor{}, err
+		}
+		c = cachedActor{identity: id, exp: now.Add(authTTL)}
+		s.mu.Lock()
+		s.cache[cred] = c
 		s.mu.Unlock()
-		return c.actor, nil
 	}
-	s.mu.Unlock()
-
-	actor, err := s.resolveUncached(ctx, cred)
-	if err != nil {
-		return domain.Actor{}, err
-	}
-	s.mu.Lock()
-	s.cache[cred] = cachedActor{actor: actor, exp: now.Add(authTTL)}
-	s.mu.Unlock()
-	return actor, nil
+	return s.scopeActor(c.identity)
 }
 
-func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor, error) {
-	// Identify the user behind the Plane key via /users/me on whichever instance
-	// accepts it. (An agent presents the key of the human it impersonates, so it
-	// resolves to that human — indistinguishable, by design.)
+// identity is who a credential belongs to, before scope and role are applied.
+type identity struct{ ID, Email, Name string }
+
+// identify resolves a credential to a person via /users/me.
+//
+// This stays a LIVE Plane call on purpose. It is the actual credential check —
+// serving it from the mirror would mean a revoked key kept working for as long
+// as the mirror remembered the person, which is not a cache, it is an
+// authentication bypass.
+func (s *Server) identify(ctx context.Context, cred string) (identity, error) {
+	// An agent presents the key of the human it impersonates, so it resolves to
+	// that human — indistinguishable, by design.
 	instances, err := s.store.ListInstances()
 	if err != nil {
-		return domain.Actor{}, err
+		return identity{}, err
 	}
-	var email, name, uid string
 	var meTransient error // a non-auth failure (429/5xx/timeout) while identifying
 	for _, inst := range instances {
 		u, err := plane.New(inst.BaseURL, cred, inst.Workspace, "").Me(ctx)
 		if err == nil && u.Email != "" {
-			email, name, uid = u.Email, u.DisplayName, u.ID
-			meTransient = nil
-			break
+			return identity{ID: u.ID, Email: u.Email, Name: u.DisplayName}, nil
 		}
 		if err != nil && !plane.IsAuthError(err) {
-			meTransient = err // remember: could not reach Plane, not "key rejected"
+			meTransient = err // could not reach Plane, not "key rejected"
 		}
 	}
-	if email == "" {
-		// A transient upstream failure must NOT look like "key rejected" — that
-		// would 401 the caller (and sign a browser out). Surface it as upstream.
-		if meTransient != nil {
-			return domain.Actor{}, fmt.Errorf("%w: identifying via Plane: %v", errUpstream, meTransient)
-		}
-		return domain.Actor{}, errUnauth
+	// A transient upstream failure must NOT look like "key rejected" — that
+	// would 401 the caller (and sign a browser out). Surface it as upstream.
+	if meTransient != nil {
+		return identity{}, fmt.Errorf("%w: identifying via Plane: %v", errUpstream, meTransient)
 	}
+	return identity{}, errUnauth
+}
 
-	// Scope + role: using the server's OWN admin key per instance, find every
-	// instance whose member list contains this email.
+// scopeActor finds every instance whose member list contains this person, and
+// whether they are an admin there.
+//
+// This used to call Members on EVERY configured instance — so a cold auth cost
+// up to 2N Plane calls, and the result had to be cached for 5 minutes to be
+// affordable. It is a mirror lookup now, which is why scope no longer needs
+// caching at all.
+func (s *Server) scopeActor(id identity) (domain.Actor, error) {
+	instances, err := s.store.ListInstances()
+	if err != nil {
+		return domain.Actor{}, err
+	}
 	var scope []string
 	admin := false
-	var memberErr error // a failed membership fetch (transient or misconfig)
+	var lookupErr error
 	for _, inst := range instances {
-		members, err := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Members(ctx)
+		members, err := s.mirror.Members(inst.Slug)
 		if err != nil {
-			memberErr = err // can't confirm membership here — remember it
+			lookupErr = err
+			continue
+		}
+		// An instance with NO mirrored members is not "nobody is a member" — it
+		// is "we have not been able to find out yet", because a Plane workspace
+		// always has at least the key's own owner. Treating the two the same
+		// would turn a sync outage into a silent, authoritative "you belong
+		// nowhere", blacking out every board with a 200 instead of a retryable
+		// error. This is the mirror-era form of the old members-fetch failure.
+		if len(members) == 0 {
+			lookupErr = fmt.Errorf("instance %s has no mirrored members yet", inst.Slug)
 			continue
 		}
 		for _, mm := range members {
-			if strings.EqualFold(mm.Email, email) {
+			if strings.EqualFold(mm.Email, id.Email) {
 				scope = append(scope, inst.Slug)
 				if mm.Role >= plane.RoleAdmin {
 					admin = true
@@ -408,18 +440,18 @@ func (s *Server) resolveUncached(ctx context.Context, cred string) (domain.Actor
 			}
 		}
 	}
-	// An empty scope caused by a fetch error is NOT authoritative — do not return
-	// (and let resolve cache) a scopeless actor for authTTL, or a single blip
-	// blacks out every bubble for minutes. Fail so the caller simply retries.
-	if len(scope) == 0 && memberErr != nil {
-		return domain.Actor{}, fmt.Errorf("%w: scoping via Plane members: %v", errUpstream, memberErr)
+	// An empty scope caused by a lookup failure is NOT authoritative — returning
+	// a scopeless actor would black out every bubble. Fail so the caller retries.
+	if len(scope) == 0 && lookupErr != nil {
+		return domain.Actor{}, fmt.Errorf("%w: scoping via the mirror: %v", errUpstream, lookupErr)
 	}
+	name := id.Name
 	if name == "" {
-		name = email
+		name = id.Email
 	}
 	return domain.Actor{
-		ID: uid, Name: name, Kind: "human", Email: email, Admin: admin,
-		ServiceAdmin: s.adminEmails[strings.ToLower(email)],
+		ID: id.ID, Name: name, Kind: "human", Email: id.Email, Admin: admin,
+		ServiceAdmin: s.adminEmails[strings.ToLower(id.Email)],
 		Instances:    scope,
 	}, nil
 }
@@ -1945,7 +1977,7 @@ func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
 	out := make([]domain.InstanceMembers, 0, len(insts))
 	for _, inst := range insts {
 		im := domain.InstanceMembers{Instance: inst.Slug, Name: inst.Name, Members: []domain.Member{}}
-		ms, err := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, "").Members(r.Context())
+		ms, err := s.mirror.Members(inst.Slug)
 		if err != nil {
 			im.Error = err.Error()
 			out = append(out, im)
@@ -1960,6 +1992,9 @@ func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
 				ID: m.ID, Name: name, Email: m.Email, Role: m.Role, Admin: m.Role >= plane.RoleAdmin,
 			})
 		}
+		// Map iteration is random; a viewer list that reshuffles on every refresh
+		// is just noise.
+		sort.Slice(im.Members, func(a, b int) bool { return im.Members[a].Name < im.Members[b].Name })
 		out = append(out, im)
 	}
 	writeJSON(w, http.StatusOK, out)

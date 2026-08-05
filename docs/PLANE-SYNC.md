@@ -1,7 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phases 0-3 shipped — every read (board, timeline, interiors, comments)
-serves from SQLite with zero Plane calls · Phases 4-7 pending** ·
+Status: **Phases 0-4 shipped — every read serves from SQLite; the only Plane
+traffic left is the sync worker and writes · Phases 5-7 pending** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -495,19 +495,39 @@ mirror observes nothing new about Plane; posting one still does.
 added workflow state could therefore be invisible for half an hour while
 auto-state wrote cards into the wrong one. It reads the mirror now.
 
-## Phase 4 — Identity and members from L1
+## Phase 4 — Identity and members from L1 · **SHIPPED**
 
-- [ ] Actor scoping (`resolveUncached`) reads `mirror_members` instead of calling
-      `Members` on every instance. Cost per cold auth: **2N → 1**.
-- [ ] `Me(cred)` stays live — it is the actual credential check and must not be
-      served from a mirror — but its result caches on the *email*, and a
-      successful identification refreshes that member row.
-- [ ] `/api/admin/members` reads the mirror.
-- [ ] Keep `authTTL` for the `Me` call only; scope is now free, so it can be
-      recomputed per request.
+- [x] Actor scoping reads `mirror_members` instead of calling `Members` on every
+      instance. A cold auth went from **up to 2N Plane calls to exactly one**.
+- [x] `Me(cred)` stays live — see below.
+- [x] `/api/admin/members` reads the mirror (and sorts, since map iteration order
+      would otherwise reshuffle the list on every refresh).
+- [x] `authTTL` now caches only the IDENTITY. Scope and role are recomputed per
+      request, so a membership or role change lands immediately instead of
+      lagging five minutes.
 
-**Accept:** a cold browser load with an empty identity cache costs exactly one
-Plane call regardless of instance count.
+**Accepted:** `TestColdAuthCostsOneCall` registers three instances and asserts a
+cold auth spends exactly one `/users/me`, and that a warm one spends none.
+
+### Why identity is not mirrored
+
+`/users/me` is the actual credential check. Serving it from the mirror would mean
+a revoked key kept working for as long as the mirror remembered the person —
+that is not a cache, it is an authentication bypass. Revocation still lags by
+`authTTL` exactly as it always has, because that call is the only thing that can
+tell us a key was withdrawn.
+
+### An empty member table is not an answer
+
+Moving scoping to the mirror introduced a failure mode the Plane version could
+not have: **"no mirrored members" is indistinguishable from "this person is not a
+member"**. A sync outage would therefore have produced an authoritative, silent
+"you belong nowhere" — every board blacked out, with a `200`.
+
+A Plane workspace always contains at least the key's own owner, so zero mirrored
+members means *we have not found out yet*, and scoping fails retryably instead.
+`TestTransientMembersFailIsRetryable` covers it: during an outage the answer is
+`502`, never `401`, and never an empty-scope `200`.
 
 ## Phase 5 — Writes: the outbox
 

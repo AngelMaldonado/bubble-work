@@ -96,6 +96,37 @@ func (s *Server) handleSyncDiff(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, out)
 }
 
+// handleSyncRebuild drops an instance's mirror and rebuilds it from Plane.
+//
+// This exists to keep the central claim honest: the mirror is a PROJECTION, and
+// deleting it must cost a backfill and nothing else. If this ever loses
+// something, that something was in the wrong table — which is exactly why the
+// outbox lives with the overlay rather than here (Phase 5).
+func (s *Server) handleSyncRebuild(w http.ResponseWriter, r *http.Request) {
+	inst, ok := s.syncInstance(w, r)
+	if !ok {
+		return
+	}
+	if err := s.mirror.Reset(inst.Slug); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	res, err := s.syncer.Backfill(r.Context(), inst)
+	if err != nil {
+		// The mirror is now empty and the rebuild failed. Say so plainly: the
+		// board will be thin until a later pass succeeds.
+		http.Error(w, "mirror cleared but the rebuild failed: "+err.Error(), http.StatusBadGateway)
+		return
+	}
+	writeJSON(w, http.StatusOK, domain.SyncResult{
+		Instance: res.Instance, Full: res.Full, Projects: res.Projects,
+		Modules: res.Modules, Items: res.Items, Comments: res.Comments,
+		Pruned: res.Pruned, TookMS: res.Took.Milliseconds(),
+		Watermark: rfc3339(res.Watermark),
+		Partial:   res.Partial, Errors: res.Errors,
+	})
+}
+
 // handleSyncBackfill forces a complete walk of one instance.
 func (s *Server) handleSyncBackfill(w http.ResponseWriter, r *http.Request) {
 	inst, ok := s.syncInstance(w, r)

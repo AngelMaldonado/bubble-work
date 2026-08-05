@@ -683,7 +683,39 @@ func icon(l domain.Lifecycle) string {
 }
 
 // Ls renders bubbles hottest-first — the "tend what floats at the top" view.
+// warnIfStale prints a line before a board listing when the server is serving
+// from an ageing mirror. A stale board that says nothing is the failure mode the
+// mirror introduces (docs/PLANE-SYNC.md Phase 7); best-effort, never fatal.
+func warnIfStale(cfg config.Config) {
+	var st domain.ServiceStatus
+	if err := getJSON(cfg.ActiveServer()+"/api/status", cfg.ActiveToken(), &st); err != nil {
+		return
+	}
+	if st.Stale {
+		fmt.Printf("⧗ %s\n", st.Reason)
+		for _, i := range st.Instances {
+			if !i.Stale {
+				continue
+			}
+			if i.LastOK == "" {
+				fmt.Printf("  %s: never synced\n", i.Instance)
+			} else {
+				fmt.Printf("  %s: last synced %s ago\n", i.Instance,
+					(time.Duration(i.BehindSeconds) * time.Second).Round(time.Second))
+			}
+			if i.LastError != "" {
+				fmt.Printf("    ↳ %s\n", i.LastError)
+			}
+		}
+		fmt.Println()
+	}
+	if st.UnsentDrafts > 0 {
+		fmt.Printf("⧗ %d unsent comment(s) — see `bubble thread <id> --comments`\n\n", st.UnsentDrafts)
+	}
+}
+
 func Ls(cfg config.Config) error {
+	warnIfStale(cfg)
 	var vs []domain.BubbleView
 	if err := getJSON(cfg.ActiveServer()+"/api/bubbles", cfg.ActiveToken(), &vs); err != nil {
 		return err

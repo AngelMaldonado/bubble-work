@@ -40,6 +40,11 @@ const (
 // polling of a local file is latency for no reason.
 func (s *Syncer) OnChange(fn func(slug string)) { s.onChange = fn }
 
+// OnReconciled registers a callback fired after a COMPLETE walk — the only point
+// at which the mirror's contents are authoritative enough to delete anything on
+// the strength of them.
+func (s *Syncer) OnReconciled(fn func(slug string)) { s.onReconciled = fn }
+
 // Run keeps every configured instance's mirror current until ctx is done.
 //
 // Everything here is background work in the Phase 0 sense: when the rate budget
@@ -99,6 +104,9 @@ func (s *Syncer) pass(ctx context.Context, instances func() ([]domain.Instance, 
 		// Nudge the board only when the mirror actually moved.
 		if s.onChange != nil && (res.Items > 0 || res.Pruned > 0 || res.Full) {
 			s.onChange(inst.Slug)
+		}
+		if s.onReconciled != nil && res.Full && !res.Partial {
+			s.onReconciled(inst.Slug)
 		}
 	}
 }

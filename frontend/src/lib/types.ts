@@ -187,6 +187,26 @@ export interface AdminInstance {
 // ---- Plane mirror (docs/PLANE-SYNC.md) ----
 
 /** One instance's mirror census and cursor. Cheap: no Plane calls. */
+/** One instance's sync freshness. */
+export interface InstanceStatus {
+  instance: string;
+  stale: boolean;
+  last_ok?: string;
+  behind_seconds?: number;
+  last_error?: string;
+}
+
+/** Whether what you are looking at can be trusted to be current
+ *  (PLANE-SYNC.md Phase 7). Reads come from a local mirror, so a stopped sync
+ *  would otherwise leave the board rendering confidently from ageing data.
+ *  Being behind is fine; being behind silently is not. */
+export interface ServiceStatus {
+  stale: boolean;
+  reason?: string;
+  instances?: InstanceStatus[];
+  unsent_drafts?: number;
+}
+
 /** One write that has not reached Plane. */
 export interface OutboxItem {
   id: number;

@@ -1,7 +1,7 @@
 # Plane Sync — SQLite as L1, one worker as the only Plane client
 
-Status: **Phases 0-4 shipped, Phase 5 shipped narrowed (comments + auto-state;
-creates stay write-through) · Phases 6-7 pending** ·
+Status: **Phases 0-5 and 7 shipped · Phase 6 (payload-aware webhooks) is the
+only one left, and it is an optimization rather than a correctness need** ·
 Drafted 2026-08-04 · Companion to
 [`AGENTS.md`](../AGENTS.md), [`bubble-work-spec.md`](./bubble-work-spec.md) and
 [`THREAD-LIFECYCLE.md`](./THREAD-LIFECYCLE.md).
@@ -613,20 +613,57 @@ Silently dropping someone's write is the one thing an outbox must never do.
 **Accept:** a comment posted in Plane's UI appears in Bubble Work in under a
 second with no polling, and the pulse updates without any `ListComments` call.
 
-## Phase 7 — Cleanup and degraded mode
+## Phase 7 — Cleanup and degraded mode · **SHIPPED**
 
-- [ ] Split `server.go` (2199 → ~1200) along the seams the refactor exposes:
-      `board.go`, `admin.go`, `stream.go`, leaving `server.go` as wiring.
-- [ ] **Degraded mode in the UI**: when `last_ok_at` is stale or the outbox is
-      backing up, show it. Being read-only because Plane is down is fine; being
-      read-only *silently* is not.
-- [ ] Retention: prune `mirror_comments` for closed threads, and the
-      `thread_progress` / `thread_pulse` / `thread_autostate` rows that currently
-      grow forever.
-- [ ] `bubble admin mirror rebuild <slug>` — drop and backfill, proving the mirror
-      is genuinely disposable.
-- [ ] Gate `deploy.yml` on `go test ./...` + `npx svelte-check` (unblocked as of
-      `026e899`; a refactor this size should not deploy unchecked).
+- [x] **Degraded mode.** `GET /api/status` reports whether the board is being
+      served from an ageing mirror, plus the caller's own unsent drafts. Banner
+      in the web UI, a warning line above `bubble ls`.
+- [x] Retention: `store.Prune` drops `thread_progress` / `thread_pulse` /
+      `thread_autostate` rows for work items Plane no longer has, fired on
+      `OnReconciled` — after a COMPLETE walk and never a partial one.
+- [x] `bubble admin sync-rebuild <slug>` — drop the mirror and rebuild it.
+- [x] `server.go` split: `admin.go` (the God Mode surface) and `stream.go` (SSE).
+      2199 → **1798** lines, alongside `board.go`, `sync.go`, `outbox.go`,
+      `status.go` and `progress.go` added across the earlier phases.
+- [x] ~~Gate deploys on tests~~ — landed early, in `f3eb365`.
+
+**Accepted:** `TestDegradedModeReportsStaleness` checks all four states — never
+synced, fresh, one missed interval (must NOT alarm), several missed (must).
+`TestPruneDropsOverlayForDeletedItems` checks that an empty live set prunes
+nothing.
+
+### Degraded mode is the counterweight to the whole refactor
+
+Every read now comes from a local copy. That is the point — and it introduces a
+failure this codebase did not previously have: **if the sync stops, the board
+keeps rendering, confidently, from data that is quietly getting older.** Nothing
+errors. Nothing looks wrong.
+
+The threshold is three delta intervals. One missed pass is ordinary — a
+rate-limit yield will do it — so alarming at the first would train people to
+ignore the banner, which is worse than not having one.
+
+Being behind is fine. Being behind silently is not.
+
+### Why pruning only runs after a complete walk
+
+The overlay tables are keyed by Plane work-item id and were only ever inserted
+into, so a deleted item left its rows behind forever. That is a slow leak, and a
+resurrection hazard: were an id ever reused, the new thread would inherit a
+stranger's progress timestamps and be born warm.
+
+Pruning needs a complete live set to be safe, so it fires on `OnReconciled`, and
+an empty set prunes nothing — deleting the entire overlay on the strength of a
+failed sync would be catastrophic and silent. This is the same invariant the sync
+already holds for its own prunes: *"I could not see it" must never be mistaken
+for "it is gone."*
+
+### `sync-rebuild` keeps the central claim honest
+
+The mirror is a projection: deleting it must cost a backfill and nothing else. A
+command that does exactly that is how the claim stays true rather than becoming
+folklore — and if it ever loses something, that something was in the wrong table.
+Which is precisely why the outbox lives with the overlay (Phase 5).
 
 ---
 

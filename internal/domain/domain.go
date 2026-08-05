@@ -568,6 +568,27 @@ type RateBudget struct {
 
 // ---- Plane mirror (docs/PLANE-SYNC.md) ----
 
+// InstanceStatus is one instance's sync freshness.
+type InstanceStatus struct {
+	Instance      string `json:"instance"`
+	Stale         bool   `json:"stale"`
+	LastOK        string `json:"last_ok,omitempty"`
+	BehindSeconds int    `json:"behind_seconds,omitempty"`
+	LastError     string `json:"last_error,omitempty"`
+}
+
+// ServiceStatus tells a client whether what it is showing can be trusted to be
+// current (docs/PLANE-SYNC.md Phase 7). Reads come from a local mirror now, so
+// a stopped sync would otherwise leave the board rendering confidently from data
+// that is quietly getting older. Being behind is fine; being behind silently is
+// not.
+type ServiceStatus struct {
+	Stale        bool             `json:"stale"`
+	Reason       string           `json:"reason,omitempty"`
+	Instances    []InstanceStatus `json:"instances,omitempty"`
+	UnsentDrafts int              `json:"unsent_drafts,omitempty"` // the caller's own
+}
+
 // OutboxItem is one write that has not reached Plane.
 type OutboxItem struct {
 	ID        int64  `json:"id"`

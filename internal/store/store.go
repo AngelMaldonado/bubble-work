@@ -943,3 +943,37 @@ func placeholders(n int) string {
 	}
 	return strings.Repeat("?, ", n-1) + "?"
 }
+
+// Prune deletes overlay rows about work items that no longer exist, and returns
+// how many went (docs/PLANE-SYNC.md Phase 7).
+//
+// thread_progress, thread_pulse and thread_autostate are keyed by Plane work-item
+// id and were only ever inserted into. A deleted work item left its rows behind
+// forever — a slow leak, and worse, a resurrection hazard: recreating an id would
+// inherit a stranger's progress timestamps and be born warm.
+//
+// live is every work-item id the mirror currently knows about, so the caller
+// MUST pass a complete set. An empty set is treated as "the mirror is not ready"
+// and prunes nothing, because deleting the entire overlay on the strength of a
+// failed sync would be catastrophic and silent.
+func (s *Store) Prune(live []string) (int, error) {
+	if len(live) == 0 {
+		return 0, nil
+	}
+	placeholders := "?" + strings.Repeat(",?", len(live)-1)
+	args := make([]any, 0, len(live))
+	for _, id := range live {
+		args = append(args, id)
+	}
+	total := 0
+	for _, table := range []string{"thread_progress", "thread_pulse", "thread_autostate"} {
+		res, err := s.db.Exec(
+			`DELETE FROM `+table+` WHERE thread_id NOT IN (`+placeholders+`)`, args...)
+		if err != nil {
+			return total, fmt.Errorf("prune %s: %w", table, err)
+		}
+		n, _ := res.RowsAffected()
+		total += int(n)
+	}
+	return total, nil
+}

@@ -47,6 +47,13 @@
       return () => clearTimeout(t);
     }
   });
+
+  // "3m" reads better than "180 seconds" in a banner someone glances at.
+  function fmtBehind(sec: number): string {
+    if (sec < 90) return `${Math.max(1, Math.round(sec))}s`;
+    if (sec < 5400) return `${Math.round(sec / 60)}m`;
+    return `${Math.round(sec / 3600)}h`;
+  }
 </script>
 
 <svelte:window onkeydown={onKey} />
@@ -75,6 +82,27 @@
     </button>
   {/if}
 
+  {#if store.status?.stale}
+    <!-- The board renders from a local mirror, so a stopped sync would leave it
+         looking perfectly healthy while quietly ageing. Being behind is fine;
+         being behind silently is not (PLANE-SYNC.md Phase 7). -->
+    <div class="banner stale" role="status">
+      ⧗ {store.status.reason || 'Plane sync is behind — this may be older data'}
+      {#each store.status.instances ?? [] as i (i.instance)}
+        {#if i.stale}
+          <span class="stale-inst">
+            {i.instance}: {i.last_ok ? `last synced ${fmtBehind(i.behind_seconds ?? 0)} ago` : 'never synced'}
+          </span>
+        {/if}
+      {/each}
+    </div>
+  {/if}
+  {#if store.status?.unsent_drafts}
+    <div class="banner unsent" role="status">
+      ⧗ {store.status.unsent_drafts} unsent comment{store.status.unsent_drafts === 1 ? '' : 's'} —
+      open the thread to retry or discard.
+    </div>
+  {/if}
   {#if store.error}
     <div class="banner">{store.error}</div>
   {/if}
@@ -264,6 +292,23 @@
     border: 1px solid color-mix(in oklab, var(--wip) 40%, transparent);
     border-radius: 999px;
     padding: 0.05rem 0.4rem;
+  }
+
+  /* stale: the board is real but ageing. Distinct from .banner (an error),
+     because "slightly behind" and "broken" deserve different alarm. */
+  .banner.stale,
+  .banner.unsent {
+    background: var(--warn-bg, rgba(217, 119, 6, 0.12));
+    color: var(--warn, #b45309);
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    align-items: baseline;
+  }
+  .stale-inst {
+    font-size: 0.72rem;
+    opacity: 0.85;
+    font-variant-numeric: tabular-nums;
   }
 
   .banner {

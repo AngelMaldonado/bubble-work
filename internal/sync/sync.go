@@ -46,10 +46,11 @@ const (
 
 // Syncer keeps one server's mirror current.
 type Syncer struct {
-	m        *mirror.Mirror
-	now      func() time.Time
-	onChange func(slug string) // see OnChange
-	locks    LockFunc          // see SetLocks
+	m            *mirror.Mirror
+	now          func() time.Time
+	onChange     func(slug string) // see OnChange
+	onReconciled func(slug string) // see OnReconciled
+	locks        LockFunc          // see SetLocks
 }
 
 // LockFunc reports which mirror columns must not be overwritten for which work

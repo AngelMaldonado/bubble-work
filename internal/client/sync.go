@@ -41,6 +41,20 @@ func AdminSync(cfg config.Config, token, cmd, instance string) error {
 			return fmt.Errorf("%d finding(s) — the mirror does not match Plane", len(d.Findings))
 		}
 		return nil
+	case "sync-rebuild":
+		var r domain.SyncResult
+		// Destructive-looking but safe by construction: the mirror is a
+		// projection, so this costs a backfill and nothing else.
+		if err := postLong(cfg, "/api/admin/sync/"+instance+"/rebuild", token, &r); err != nil {
+			return err
+		}
+		fmt.Printf("rebuilt %s from scratch: %d projects, %d modules, %d items, %d comments in %s\n",
+			r.Instance, r.Projects, r.Modules, r.Items, r.Comments,
+			(time.Duration(r.TookMS) * time.Millisecond).Round(time.Millisecond))
+		if r.Partial {
+			fmt.Printf("PARTIAL — %d project(s) incomplete; a later pass will finish them\n", len(r.Errors))
+		}
+		return nil
 	case "sync-backfill":
 		var r domain.SyncResult
 		if err := postLong(cfg, "/api/admin/sync/"+instance+"/backfill", token, &r); err != nil {

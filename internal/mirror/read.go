@@ -244,6 +244,25 @@ func (m *Mirror) LastCommentAt(instance, itemID string) (time.Time, error) {
 	return parseTS(s.String), nil
 }
 
+// AllItemIDs returns every mirrored work-item id for an instance — the live set
+// the overlay retention prunes against.
+func (m *Mirror) AllItemIDs(instance string) ([]string, error) {
+	rows, err := m.db.Query(`SELECT id FROM mirror_items WHERE instance = ?`, instance)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
 // Counts is a coarse census, for sync-diff and the admin surface.
 type Counts struct {
 	Projects int

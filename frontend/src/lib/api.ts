@@ -17,6 +17,7 @@ import type {
   SyncDiff,
   SyncResult,
   OutboxView,
+  ServiceStatus,
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
@@ -83,6 +84,8 @@ export const api = {
   threads: (q: string) =>
     req<ThreadHit[]>('GET', `/api/threads?q=${encodeURIComponent(q)}`),
   inbox: () => req<Inbox>('GET', '/api/notifications'),
+  // cheap: two indexed sqlite queries, no Plane traffic (PLANE-SYNC.md Phase 7)
+  status: () => req<ServiceStatus>('GET', '/api/status'),
 
   // interior read model (INTERIOR-PLAN.md)
   timeline: (bubbleId: string) =>

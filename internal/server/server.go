@@ -7,9 +7,7 @@ package server
 import (
 	"context"
 	"crypto/hmac"
-	"crypto/rand"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -191,6 +189,11 @@ func New(st *store.Store, cycle time.Duration) *Server {
 				log.Printf("rebuild after sync %s: %v", slug, err)
 			}
 		})
+		// After a COMPLETE walk — and only then — the mirror's item set is
+		// authoritative, so overlay rows about work items that no longer exist
+		// can go. Doing this on a partial pass would delete real state on the
+		// strength of data we failed to fetch (Phase 7).
+		s.syncer.OnReconciled(func(slug string) { s.pruneOverlay(slug) })
 	}
 	return s
 }
@@ -247,34 +250,6 @@ func (s *Server) loadTuning() {
 		return
 	}
 	s.tuning = t.Sanitize()
-}
-
-// subscribe registers an SSE listener; unsubscribe removes it. broadcast nudges
-// every listener non-blockingly (a full buffer means an update is already
-// pending, so the drop is harmless).
-func (s *Server) subscribe() chan struct{} {
-	ch := make(chan struct{}, 1)
-	s.subsMu.Lock()
-	s.subs[ch] = struct{}{}
-	s.subsMu.Unlock()
-	return ch
-}
-
-func (s *Server) unsubscribe(ch chan struct{}) {
-	s.subsMu.Lock()
-	delete(s.subs, ch)
-	s.subsMu.Unlock()
-}
-
-func (s *Server) broadcast() {
-	s.subsMu.Lock()
-	defer s.subsMu.Unlock()
-	for ch := range s.subs {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
-	}
 }
 
 // loadPersistedSnapshots warms the in-memory snapshot from sqlite at boot (F2),
@@ -464,6 +439,7 @@ func (s *Server) scopeActor(id identity) (domain.Actor, error) {
 func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/whoami", s.restAuth(s.handleWhoami))
+	mux.HandleFunc("GET /api/status", s.restAuth(s.handleStatus))
 	mux.HandleFunc("POST /api/workspaces", s.restAuth(s.handleCreateWorkspace))
 	mux.HandleFunc("POST /api/bubbles", s.restAuth(s.handleCreateBubble))
 	mux.HandleFunc("GET /api/bubbles", s.restAuth(s.handleBubbles))
@@ -501,6 +477,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/admin/sync/{slug}", s.adminOnly(s.handleSyncStatus))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/diff", s.adminOnly(s.handleSyncDiff))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/backfill", s.adminOnly(s.handleSyncBackfill))
+	mux.HandleFunc("POST /api/admin/sync/{slug}/rebuild", s.adminOnly(s.handleSyncRebuild))
 	mux.HandleFunc("GET /api/admin/tuning", s.adminOnly(s.handleGetTuning))
 	mux.HandleFunc("PUT /api/admin/tuning", s.adminOnly(s.handleSetTuning))
 	mux.HandleFunc("GET /api/admin/kiosk", s.adminOnly(s.handleListKiosk))
@@ -853,6 +830,32 @@ func (s *Server) Bubbles(ctx context.Context) ([]domain.BubbleView, error) {
 // AllBubbles returns bubbles across EVERY instance (service-admin, bypasses scope).
 func (s *Server) AllBubbles(ctx context.Context) []domain.BubbleView {
 	return s.toViews(s.collectAll(ctx))
+}
+
+// pruneOverlay drops overlay rows for work items Plane no longer has. Those
+// tables are keyed by work-item id and were only ever inserted into, so a
+// deleted item left its rows behind forever — a slow leak, and a resurrection
+// hazard if an id were ever reused (Phase 7).
+func (s *Server) pruneOverlay(slug string) {
+	if s.mirror == nil {
+		return
+	}
+	live, err := s.mirror.AllItemIDs(slug)
+	if err != nil {
+		log.Printf("prune %s: reading live items: %v", slug, err)
+		return
+	}
+	if len(live) == 0 {
+		return // an empty mirror is never authority to delete the overlay
+	}
+	n, err := s.store.Prune(live)
+	if err != nil {
+		log.Printf("prune %s: %v", slug, err)
+		return
+	}
+	if n > 0 {
+		log.Printf("prune %s: dropped %d stale overlay row(s)", slug, n)
+	}
 }
 
 // flushCaches clears the identity and bubble caches (service-admin refresh).
@@ -1611,62 +1614,6 @@ func (s *Server) handleBubbles(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, vs)
 }
 
-// handleStream is a Server-Sent Events stream of the caller's bubbles (F4). It
-// pushes the current board on connect and whenever the snapshot changes, so the
-// UI doesn't have to poll. A heartbeat keeps intermediaries from timing out.
-func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
-		http.Error(w, "streaming unsupported", http.StatusInternalServerError)
-		return
-	}
-	h := w.Header()
-	h.Set("Content-Type", "text/event-stream")
-	h.Set("Cache-Control", "no-cache")
-	h.Set("Connection", "keep-alive")
-	h.Set("X-Accel-Buffering", "no") // stop reverse proxies buffering the stream
-
-	sub := s.subscribe()
-	defer s.unsubscribe(sub)
-
-	send := func() bool {
-		vs, err := s.Bubbles(r.Context())
-		if err != nil {
-			return true // transient upstream — keep the connection, retry next nudge
-		}
-		data, err := json.Marshal(vs)
-		if err != nil {
-			return true
-		}
-		if _, err := fmt.Fprintf(w, "event: bubbles\ndata: %s\n\n", data); err != nil {
-			return false
-		}
-		flusher.Flush()
-		return true
-	}
-	if !send() { // initial board on connect
-		return
-	}
-
-	ping := time.NewTicker(25 * time.Second)
-	defer ping.Stop()
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-sub:
-			if !send() {
-				return
-			}
-		case <-ping.C:
-			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {
-				return
-			}
-			flusher.Flush()
-		}
-	}
-}
-
 func (s *Server) handleHeat(w http.ResponseWriter, r *http.Request) {
 	v, err := s.Heat(r.Context(), r.PathValue("id"))
 	if writeErr(w, err) {
@@ -1848,246 +1795,4 @@ func (s *Server) handleTick(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]int{"new_notifications": n})
-}
-
-func (s *Server) handleAdminInstances(w http.ResponseWriter, r *http.Request) {
-	insts, err := s.store.ListInstances()
-	if writeErr(w, err) {
-		return
-	}
-	out := make([]domain.AdminInstance, 0, len(insts))
-	s.bubblesMu.Lock()
-	for _, i := range insts {
-		_, cached := s.bubblesCache[i.Slug]
-		out = append(out, domain.AdminInstance{
-			Slug: i.Slug, Name: i.Name, BaseURL: i.BaseURL, Workspace: i.Workspace,
-			Project: i.Project, HasWebhook: i.WebhookSecret != "", Cached: cached,
-			AutoState: i.AutoState,
-		})
-	}
-	s.bubblesMu.Unlock()
-	writeJSON(w, http.StatusOK, out)
-}
-
-func (s *Server) handleAdminBubbles(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, s.AllBubbles(r.Context()))
-}
-
-func (s *Server) handleAdminRefresh(w http.ResponseWriter, r *http.Request) {
-	s.flushCaches()
-	// Re-warm the snapshot in the background so the next read isn't a cold fetch.
-	// Deliberately NOT plane.Background: an admin asked for this and is watching
-	// for it, so it keeps interactive priority even though it is detached.
-	go s.RefreshAll(context.Background())
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-func (s *Server) handleAdminStats(w http.ResponseWriter, r *http.Request) {
-	insts, _ := s.store.ListInstances()
-	s.bubblesMu.Lock()
-	cachedInst := len(s.bubblesCache)
-	s.bubblesMu.Unlock()
-	s.mu.Lock()
-	cachedIdents := len(s.cache)
-	s.mu.Unlock()
-	st := domain.AdminStats{
-		Instances: len(insts), CachedInstances: cachedInst, CachedIdents: cachedIdents,
-		StartedAt: s.startedAt.Format(time.RFC3339),
-	}
-	for _, i := range insts {
-		b := plane.BudgetFor(i.BaseURL, i.APIKey)
-		st.RateBudgets = append(st.RateBudgets, domain.RateBudget{
-			Instance: i.Slug, Known: b.Known, Remaining: b.Remaining, Limit: b.Limit,
-			ResetIn: b.ResetIn, Throttled: b.Throttled, Waits: b.Waits,
-			Spent: b.Spent, Floor: b.Floor,
-		})
-	}
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, kv := range bi.Settings {
-			switch kv.Key {
-			case "vcs.revision":
-				st.Revision = kv.Value
-			case "vcs.time":
-				st.Built = kv.Value
-			}
-		}
-	}
-	writeJSON(w, http.StatusOK, st)
-}
-
-// handleAdminMembers returns each instance's Plane members (read-only). Bubble
-// doesn't own membership — Plane does — so this is a viewer, not a manager. An
-// instance whose member fetch fails is included with an error rather than
-// failing the whole call.
-// handleSetAutoState opts one instance in or out of writing derived levels back
-// to Plane (Phase B). This is the switch that turns Bubble from a lens into
-// something that edits your tracker, so it is service-admin only and audited.
-func (s *Server) handleSetAutoState(w http.ResponseWriter, r *http.Request) {
-	slug := r.PathValue("slug")
-	var req struct {
-		Enabled bool `json:"enabled"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeErr(w, fmt.Errorf("%w: %v", errBadRequest, err))
-		return
-	}
-	ok, err := s.store.SetAutoState(slug, req.Enabled)
-	if writeErr(w, err) {
-		return
-	}
-	if !ok {
-		writeErr(w, errNotFound)
-		return
-	}
-	s.dropInstanceCache(slug)
-	actor, _ := domain.ActorFrom(r.Context())
-	log.Printf("ADMIN %s set auto-state for %s = %v", actor.Label(), slug, req.Enabled)
-	writeJSON(w, http.StatusOK, map[string]any{"instance": slug, "auto_state": req.Enabled})
-}
-
-// handleGetTuning returns the live buoyancy calibration, alongside the defaults
-// so a client can show what "stock" looks like and offer a reset.
-func (s *Server) handleGetTuning(w http.ResponseWriter, r *http.Request) {
-	writeJSON(w, http.StatusOK, domain.TuningView{
-		Tuning:   s.Tuning(),
-		Defaults: domain.DefaultTuning(),
-		Fields:   domain.TuningFields(),
-	})
-}
-
-// handleSetTuning replaces the calibration. The body is decoded ONTO the current
-// values, so a partial edit only changes the fields it names.
-func (s *Server) handleSetTuning(w http.ResponseWriter, r *http.Request) {
-	t := s.Tuning()
-	if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
-		writeErr(w, fmt.Errorf("%w: %v", errBadRequest, err))
-		return
-	}
-	applied, err := s.SetTuning(t)
-	if writeErr(w, err) {
-		return
-	}
-	actor, _ := domain.ActorFrom(r.Context())
-	log.Printf("tuning updated by %s: %+v", actor.Label(), applied)
-	writeJSON(w, http.StatusOK, domain.TuningView{
-		Tuning:   applied,
-		Defaults: domain.DefaultTuning(),
-		Fields:   domain.TuningFields(),
-	})
-}
-
-func (s *Server) handleAdminMembers(w http.ResponseWriter, r *http.Request) {
-	insts, err := s.store.ListInstances()
-	if writeErr(w, err) {
-		return
-	}
-	out := make([]domain.InstanceMembers, 0, len(insts))
-	for _, inst := range insts {
-		im := domain.InstanceMembers{Instance: inst.Slug, Name: inst.Name, Members: []domain.Member{}}
-		ms, err := s.mirror.Members(inst.Slug)
-		if err != nil {
-			im.Error = err.Error()
-			out = append(out, im)
-			continue
-		}
-		for _, m := range ms {
-			name := m.DisplayName
-			if name == "" {
-				name = m.Email
-			}
-			im.Members = append(im.Members, domain.Member{
-				ID: m.ID, Name: name, Email: m.Email, Role: m.Role, Admin: m.Role >= plane.RoleAdmin,
-			})
-		}
-		// Map iteration is random; a viewer list that reshuffles on every refresh
-		// is just noise.
-		sort.Slice(im.Members, func(a, b int) bool { return im.Members[a].Name < im.Members[b].Name })
-		out = append(out, im)
-	}
-	writeJSON(w, http.StatusOK, out)
-}
-
-// newKioskToken mints a random, URL-safe read-only display credential.
-func newKioskToken() (string, error) {
-	b := make([]byte, 24)
-	if _, err := rand.Read(b); err != nil {
-		return "", err
-	}
-	return kioskTokenPrefix + base64.RawURLEncoding.EncodeToString(b), nil
-}
-
-func (s *Server) handleListKiosk(w http.ResponseWriter, r *http.Request) {
-	tokens, err := s.store.ListKioskTokens()
-	if writeErr(w, err) {
-		return
-	}
-	if tokens == nil {
-		tokens = []store.KioskToken{}
-	}
-	writeJSON(w, http.StatusOK, tokens)
-}
-
-func (s *Server) handleCreateKiosk(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		Instance string `json:"instance"`
-		Name     string `json:"name"`
-	}
-	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
-		return
-	}
-	in.Instance = strings.TrimSpace(in.Instance)
-	if in.Instance == "" {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "instance is required"})
-		return
-	}
-	if ok, err := s.store.InstanceExists(in.Instance); writeErr(w, err) {
-		return
-	} else if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such instance: " + in.Instance})
-		return
-	}
-	token, err := newKioskToken()
-	if writeErr(w, err) {
-		return
-	}
-	k := store.KioskToken{
-		Token: token, Instance: in.Instance, Name: strings.TrimSpace(in.Name),
-		CreatedAt: s.now().Format(time.RFC3339),
-	}
-	if writeErr(w, s.store.AddKioskToken(k)) {
-		return
-	}
-	actor, _ := domain.ActorFrom(r.Context())
-	log.Printf("kiosk token minted for %s by %s", in.Instance, actor.Label())
-	writeJSON(w, http.StatusCreated, k)
-}
-
-func (s *Server) handleRevokeKiosk(w http.ResponseWriter, r *http.Request) {
-	ok, err := s.store.RemoveKioskToken(r.PathValue("token"))
-	if writeErr(w, err) {
-		return
-	}
-	if !ok {
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": "no such kiosk token"})
-		return
-	}
-	writeJSON(w, http.StatusOK, map[string]bool{"ok": true})
-}
-
-// writeErr maps a backend error to an HTTP response; returns true if it wrote one.
-func writeErr(w http.ResponseWriter, err error) bool {
-	switch {
-	case err == nil:
-		return false
-	case errors.Is(err, errForbid):
-		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
-	case errors.Is(err, errNotFound):
-		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
-	case errors.Is(err, errAmbig), errors.Is(err, errBadRequest):
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
-	default:
-		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": err.Error()})
-	}
-	return true
 }

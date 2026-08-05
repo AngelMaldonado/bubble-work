@@ -9,7 +9,7 @@ import {
   setKioskToken,
   clearKioskToken,
 } from './api';
-import type { Actor, BubbleView, Inbox, Level } from './types';
+import type { Actor, BubbleView, Inbox, Level, ServiceStatus } from './types';
 
 // ArtSel identifies one artifact within a thread's interior (work file, the
 // logbook, or a revision), used by the route, pins, and scroll restoration.
@@ -30,6 +30,10 @@ class Store {
 
   loading = $state(true);
   error = $state<string | null>(null);
+  /** whether the board is being served from an ageing mirror, and how far
+   *  behind (PLANE-SYNC.md Phase 7). Fetched alongside the board because a
+   *  stale board that says nothing is the failure mode the mirror introduces. */
+  status = $state<ServiceStatus | null>(null);
   flash = $state<string | null>(null); // transient info notice (e.g. godmode readouts)
   authed = $state<boolean>(!!getToken());
 
@@ -189,12 +193,15 @@ class Store {
     this.polling = true;
     const crossOrg = this.allOrgs && this.godmode;
     try {
-      const [bubbles, inbox] = await Promise.all([
+      const [bubbles, inbox, status] = await Promise.all([
         crossOrg ? api.adminBubbles() : api.bubbles(),
         api.inbox().catch(() => null),
+        // never let a status failure break the board it is describing
+        api.status().catch(() => null),
       ]);
       this.bubbles = bubbles;
       this.inbox = inbox;
+      this.status = status;
       this.error = null;
     } catch (e) {
       if (e instanceof ApiError && (e.status === 401 || e.status === 403)) {

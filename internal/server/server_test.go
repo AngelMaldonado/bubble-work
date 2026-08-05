@@ -22,6 +22,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
+	planesync "github.com/AngelMaldonado/bubble-work/internal/sync"
 )
 
 // fakePlane emulates the minimal Plane REST surface: /users/me (identifies any
@@ -1983,5 +1984,111 @@ func TestQueuedWriteIsShieldedFromSync(t *testing.T) {
 	after, _ := st.ListOutbox(10)
 	if len(after) != 1 || after[0].Status != store.OutAbandoned {
 		t.Errorf("abandoned entry should remain visible: %+v", after)
+	}
+}
+
+// TestDegradedModeReportsStaleness covers the failure this whole refactor
+// introduced (docs/PLANE-SYNC.md Phase 7): reads come from a local mirror, so a
+// stopped sync leaves the board rendering confidently from ageing data. Being
+// behind is fine. Being behind silently is not.
+func TestDegradedModeReportsStaleness(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	actor := domain.Actor{Email: "owner@x", Instances: []string{"ws"}}
+
+	// Never synced is stale, and is the worse kind — there is no data at all.
+	got := srv.Status(actor)
+	if !got.Stale {
+		t.Error("a mirror that has never synced reports healthy")
+	}
+
+	warmMirror(t, srv)
+	if got := srv.Status(actor); got.Stale {
+		t.Errorf("a freshly synced mirror reports stale: %+v", got)
+	}
+
+	// One missed pass is ordinary — a rate-limit yield will do it — so the
+	// threshold must not cry wolf at the first one.
+	srv.now = func() time.Time { return time.Now().Add(planesync.DeltaInterval + time.Second) }
+	if got := srv.Status(actor); got.Stale {
+		t.Error("one missed sync interval should not raise the alarm")
+	}
+
+	// Three in a row means something is actually wrong.
+	srv.now = func() time.Time { return time.Now().Add(4 * planesync.DeltaInterval) }
+	got = srv.Status(actor)
+	if !got.Stale {
+		t.Fatal("the board did not report itself stale after several missed passes")
+	}
+	if got.Reason == "" || len(got.Instances) != 1 || !got.Instances[0].Stale {
+		t.Errorf("stale status is not actionable: %+v", got)
+	}
+	if got.Instances[0].BehindSeconds < int(3*planesync.DeltaInterval/time.Second) {
+		t.Errorf("behind_seconds understates the lag: %+v", got.Instances[0])
+	}
+}
+
+// A person is told about their own unsent words, and only their own: a global
+// queue depth is not something they can act on.
+func TestStatusCountsOnlyYourOwnDrafts(t *testing.T) {
+	st := openStore(t)
+	srv := New(st, time.Hour)
+	for _, who := range []string{"owner@x", "owner@x", "someone@else"} {
+		if _, err := st.Enqueue(store.OutboxEntry{
+			Instance: "ws", Kind: store.OutComment, TargetID: "wi-1",
+			Payload: map[string]string{"body": "hi"}, AuthorEmail: who, CreatedAt: time.Now(),
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if n := srv.Status(domain.Actor{Email: "owner@x"}).UnsentDrafts; n != 2 {
+		t.Errorf("unsent drafts = %d, want 2 (mine only)", n)
+	}
+	if n := srv.Status(domain.Actor{Email: "someone@else"}).UnsentDrafts; n != 1 {
+		t.Errorf("unsent drafts = %d, want 1", n)
+	}
+}
+
+// Overlay rows are keyed by Plane work-item id and were only ever inserted into,
+// so a deleted item left them behind forever — a slow leak, and a resurrection
+// hazard if an id were reused.
+func TestPruneDropsOverlayForDeletedItems(t *testing.T) {
+	st := openStore(t)
+	now := time.Now()
+	for _, id := range []string{"wi-1", "wi-2", "gone"} {
+		if err := st.SaveThreadProgress([]store.ThreadProgress{{
+			ThreadID: id, LogbookHash: "h", DoneTodos: 1, LogbookAt: now,
+		}}); err != nil {
+			t.Fatal(err)
+		}
+		if err := st.RecordPulse(id, now, now); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// An EMPTY live set must prune nothing: it means the mirror is not ready,
+	// and deleting the whole overlay on the strength of a failed sync would be
+	// catastrophic and silent.
+	if n, err := st.Prune(nil); err != nil || n != 0 {
+		t.Fatalf("an empty live set pruned %d rows (%v); it must prune none", n, err)
+	}
+	n, err := st.Prune([]string{"wi-1", "wi-2"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 { // one thread_progress + one thread_pulse row for "gone"
+		t.Errorf("pruned %d rows, want 2", n)
+	}
+	if p, _ := st.ThreadProgressFor([]string{"gone"}); len(p) != 0 {
+		t.Error("a deleted item kept its progress row")
+	}
+	if p, _ := st.ThreadProgressFor([]string{"wi-1"}); len(p) != 1 {
+		t.Error("prune removed a live item's progress")
 	}
 }

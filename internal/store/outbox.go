@@ -134,6 +134,17 @@ func (s *Store) Draft(id int64, authorEmail string) (OutboxEntry, bool, error) {
 	return e, err == nil, err
 }
 
+// CountDraftsBy counts one person's unsent comments — a number they can act on,
+// unlike a global queue depth.
+func (s *Store) CountDraftsBy(authorEmail string) (int, error) {
+	var n int
+	err := s.db.QueryRow(`
+		SELECT count(*) FROM outbox
+		WHERE kind = ? AND status = ? AND author_email = ?`,
+		OutComment, OutPending, strings.ToLower(authorEmail)).Scan(&n)
+	return n, err
+}
+
 // ListOutbox returns every entry for the admin surface, newest first.
 func (s *Store) ListOutbox(limit int) ([]OutboxEntry, error) {
 	rows, err := s.db.Query(`SELECT `+outboxCols+` FROM outbox ORDER BY id DESC LIMIT ?`, limit)

@@ -126,7 +126,7 @@ Usage:
   bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list;
                                    --tokens shows keys masked, add --reveal for full)
-  bubble workspace new|rename      create or retitle a Plane project — our Workspace
+  bubble workspace new|list|rename  a Plane project — our Workspace
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble new|set|close|open create a bubble or set its contract (§4)
   bubble instance add|list|remove  manage Plane instances (run on the server host)
@@ -385,6 +385,15 @@ func cmdWorkspace(args []string) {
 	}
 	switch args[0] {
 	case "new":
+	case "list", "ls":
+		cfg, err := config.Load()
+		if err != nil {
+			log.Fatalf("config: %v", err)
+		}
+		if err := client.ListWorkspaces(cfg); err != nil {
+			log.Fatalf("workspace list: %v", err)
+		}
+		return
 	case "rename":
 		cmdWorkspaceRename(args[1:])
 		return
@@ -441,6 +450,7 @@ func workspaceUsage() {
 Usage:
   bubble workspace new --instance <slug> --name <name> [--identifier <ID>] \
                        [--no-cycles] [--no-pages] [--views] [--intake]
+  bubble workspace list
   bubble workspace rename --id <instance>:<project-id> --name <name>
 
 Modules, Cycles and Pages are enabled by default; Views/Intake are opt-in.

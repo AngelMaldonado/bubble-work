@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"sort"
 	"strings"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
@@ -158,6 +159,62 @@ func (s *Server) handleMoveThread(w http.ResponseWriter, r *http.Request) {
 // (AGENTS.md vocabulary — not a Plane "workspace"). Creating one already
 // existed; renaming and deleting did not, so the outermost container was the
 // one thing you could make and never revise.
+
+// Workspaces lists the workspaces the caller can see.
+//
+// The board could never answer this. It is assembled from BUBBLES, and
+// buildInstance skips a project with no modules outright — so a workspace with
+// nothing in it yet does not exist as far as the board is concerned. Anything
+// deriving its list of workspaces from the board therefore cannot show a
+// freshly created one, which also means you cannot put the first bubble in it.
+// This reads the mirror's projects directly instead.
+func (s *Server) Workspaces(ctx context.Context) ([]domain.Workspace, error) {
+	if s.mirror == nil {
+		return nil, fmt.Errorf("mirror unavailable")
+	}
+	actor, _ := domain.ActorFrom(ctx)
+	insts, err := s.Instances()
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.Workspace{}
+	for _, inst := range insts {
+		if !actor.CanSee(inst.Slug) {
+			continue
+		}
+		ps, err := s.mirror.Projects(inst.Slug)
+		if err != nil {
+			return nil, err
+		}
+		for _, p := range ps {
+			// A pinned instance shows only its project, exactly as the board does.
+			if inst.Project != "" && p.ID != inst.Project {
+				continue
+			}
+			if !actor.CanSeeProject(inst.Slug, p.ID) {
+				continue
+			}
+			out = append(out, domain.Workspace{
+				ID: p.ID, Name: p.Name, Identifier: p.Identifier, Instance: inst.Slug,
+			})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Instance != out[j].Instance {
+			return out[i].Instance < out[j].Instance
+		}
+		return strings.ToLower(out[i].Name) < strings.ToLower(out[j].Name)
+	})
+	return out, nil
+}
+
+func (s *Server) handleWorkspaces(w http.ResponseWriter, r *http.Request) {
+	ws, err := s.Workspaces(r.Context())
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, ws)
+}
 
 // wsParts splits a namespaced workspace id and authorizes it.
 func (s *Server) wsParts(ctx context.Context, id string) (domain.Instance, string, error) {

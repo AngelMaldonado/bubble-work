@@ -20,6 +20,7 @@ import type {
   SyncResult,
   OutboxView,
   ServiceStatus,
+  Workspace,
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
@@ -152,6 +153,11 @@ export const api = {
 
   // A Workspace is the boundary for a body of work — a Plane PROJECT, not a
   // Plane workspace. Its id is namespaced "<instance>:<project>".
+  //
+  // This is the ONLY list that includes an empty workspace. The board is built
+  // from bubbles and skips a project with no modules, so a workspace nothing has
+  // been put in yet cannot be inferred from it.
+  workspaces: () => req<Workspace[]>('GET', '/api/workspaces'),
   createWorkspace: (input: { instance: string; name: string; identifier?: string }) =>
     req<{ id: string; name: string; identifier: string; instance: string }>(
       'POST',

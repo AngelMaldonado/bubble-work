@@ -485,10 +485,25 @@ the subject. `store.activeProject` encodes that: the filtered one, or the only
 one there is, and otherwise null, in which case rename and delete are disabled
 and say why rather than guessing.
 
-A newly created workspace **holds no bubbles**, and the board derives its project
-list from bubbles — so it does not appear until it has one. The form says that
-outright instead of leaving someone hunting the filter for a workspace that
-really was created.
+### An empty workspace was invisible everywhere
+
+A newly created workspace holds no bubbles, and `buildInstance` skips a project
+with no modules — so the board cannot know it exists. Everything that listed
+workspaces derived that list from the board, which made a fresh one unreachable:
+not in the filter, and not in the new-bubble picker either, so you could not put
+the first bubble in it and make it appear. Creating a workspace from MCP or the
+CLI produced something the web could never show.
+
+`GET /api/workspaces` reads the mirror's projects instead, so it includes the
+empty ones — with project membership still the boundary, so this cannot become a
+way to see a project the board would have hidden. Parity: `bubble workspace
+list`, MCP `list_workspaces`, and the web filter and the new-bubble picker both
+read it, falling back to the bubble-derived list only while it loads.
+
+`create_workspace` now also fetches the new project's **members** and mirrors
+them. Project membership is what authorizes a workspace, and it is otherwise
+refreshed only on the slow structure cadence — so without it the creator would
+be refused their own new workspace for up to ten minutes.
 
 ## Open
 

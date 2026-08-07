@@ -52,8 +52,7 @@
   }
 
   function wsIdOf(projectId: string): string {
-    const b = store.bubbles.find((x) => x.project === projectId);
-    return `${b?.instance ?? store.instance}:${projectId}`;
+    return `${store.instanceOf(projectId)}:${projectId}`;
   }
 
   function armWorkspaceDelete(): void {

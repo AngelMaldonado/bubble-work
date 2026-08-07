@@ -9,7 +9,7 @@ import {
   setKioskToken,
   clearKioskToken,
 } from './api';
-import type { Actor, BubbleView, Inbox, Level, ServiceStatus } from './types';
+import type { Actor, BubbleView, Inbox, Level, ServiceStatus, Workspace } from './types';
 
 // ArtSel identifies one artifact within a thread's interior (work file, the
 // logbook, or a revision), used by the route, pins, and scroll restoration.
@@ -109,8 +109,23 @@ class Store {
     this.scope = m ? 'member' : 'workspace';
   }
 
-  // projects present within the current instance scope (id + display name)
+  // The workspaces the server knows about, INCLUDING empty ones. The board is
+  // assembled from bubbles and skips a project with no modules, so a workspace
+  // nothing has been put in yet cannot be inferred from it — which used to make
+  // a newly created one invisible, and therefore impossible to put a first
+  // bubble into from here.
+  workspaces = $state<Workspace[]>([]);
+
+  // projects present within the current instance scope (id + display name).
+  // Falls back to what the bubbles imply while the real list is still loading,
+  // so the filter never blinks empty on a cold start.
   get projects(): { id: string; name: string }[] {
+    if (this.workspaces.length) {
+      return this.workspaces
+        .filter((w) => !this.instance || w.instance === this.instance)
+        .map((w) => ({ id: w.id, name: w.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
     const seen = new Map<string, string>();
     for (const b of this.bubbles) {
       if (this.instance && b.instance !== this.instance) continue;
@@ -119,6 +134,13 @@ class Store {
     return [...seen.entries()]
       .map(([id, name]) => ({ id, name }))
       .sort((a, b) => a.name.localeCompare(b.name));
+  }
+
+  /** The instance a workspace belongs to — needed to address it as slug:project. */
+  instanceOf(projectId: string): string {
+    const w = this.workspaces.find((x) => x.id === projectId);
+    if (w) return w.instance;
+    return this.bubbles.find((b) => b.project === projectId)?.instance ?? this.instance;
   }
 
   // The workspace the UI is acting ON, which is not quite the filter: when there
@@ -205,13 +227,16 @@ class Store {
     this.polling = true;
     const crossOrg = this.allOrgs && this.godmode;
     try {
-      const [bubbles, inbox, status] = await Promise.all([
+      const [bubbles, inbox, status, workspaces] = await Promise.all([
         crossOrg ? api.adminBubbles() : api.bubbles(),
         api.inbox().catch(() => null),
         // never let a status failure break the board it is describing
         api.status().catch(() => null),
+        // nor a workspace-list failure: the filter falls back to the bubbles
+        api.workspaces().catch(() => null),
       ]);
       this.bubbles = bubbles;
+      if (workspaces) this.workspaces = workspaces;
       this.inbox = inbox;
       this.status = status;
       this.error = null;

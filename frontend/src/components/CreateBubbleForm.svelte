@@ -14,9 +14,16 @@
   let busy = $state(false);
   let err = $state<string | null>(null);
 
-  // Projects available for the chosen instance, derived from existing bubbles
-  // (a bubble is a module inside a project). New bubbles land in active projects.
+  // Every workspace in the chosen instance, EMPTY ONES INCLUDED. Deriving this
+  // from existing bubbles was a dead end: a workspace with no bubbles yet was
+  // not offered here, so the first bubble could never be put into it.
   const projects = $derived.by<{ id: string; name: string }[]>(() => {
+    if (store.workspaces.length) {
+      return store.workspaces
+        .filter((w) => w.instance === fInstance)
+        .map((w) => ({ id: w.id, name: w.name }))
+        .sort((a, b) => a.name.localeCompare(b.name));
+    }
     const seen = new Map<string, string>();
     for (const b of store.bubbles) {
       if (b.instance !== fInstance) continue;

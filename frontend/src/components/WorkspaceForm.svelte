@@ -57,10 +57,10 @@
           name: trimmed,
           identifier: identifier.trim() || undefined,
         });
-        // A brand-new workspace holds no bubbles, and the board derives its
-        // project list from bubbles — so it will not appear until it has one.
-        // Say that, instead of leaving someone hunting for it.
-        store.flash = t('ws.createdNeedsBubble', { name: ws.name });
+        // It holds no bubbles yet, so it is nowhere on the BOARD — but the
+        // filter lists workspaces the server knows rather than ones the bubbles
+        // imply, so it is selectable straight away. Point at the next step.
+        store.flash = t('ws.created', { name: ws.name });
       } else {
         await api.renameWorkspace(id, trimmed);
         store.flash = t('ws.renamed', { name: trimmed });

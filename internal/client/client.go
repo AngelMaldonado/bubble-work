@@ -551,6 +551,24 @@ func CreateWorkspace(cfg config.Config, req domain.CreateWorkspaceRequest) error
 	return nil
 }
 
+// ListWorkspaces shows every Workspace you can see, including empty ones. The
+// board cannot show those — it is built from bubbles — so this is the only
+// place a workspace with nothing in it yet is visible.
+func ListWorkspaces(cfg config.Config) error {
+	var ws []domain.Workspace
+	if err := getJSON(cfg.ActiveServer()+"/api/workspaces", cfg.ActiveToken(), &ws); err != nil {
+		return err
+	}
+	if len(ws) == 0 {
+		fmt.Println("no workspaces")
+		return nil
+	}
+	for _, w := range ws {
+		fmt.Printf("%-40s  %-8s  %s:%s\n", w.Name, w.Identifier, w.Instance, w.ID)
+	}
+	return nil
+}
+
 // RenameWorkspace retitles a Workspace (a Plane project).
 func RenameWorkspace(cfg config.Config, id, name string) error {
 	var ws domain.Workspace

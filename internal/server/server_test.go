@@ -3313,3 +3313,90 @@ func TestWorkspaceRenameAndDelete(t *testing.T) {
 		t.Error("deleting a workspace twice succeeded twice")
 	}
 }
+
+// An empty workspace is invisible everywhere the board is the source: buildInstance
+// skips a project with no modules, so a workspace nothing has been put in yet
+// cannot be inferred from bubbles. That made a freshly created one unreachable —
+// you could not even put its first bubble in, because every picker was derived
+// from the board.
+func TestWorkspacesListsEmptyOnes(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/projects/p1/members/"),
+			strings.HasSuffix(p, "/projects/empty/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"}]`)
+		case strings.HasSuffix(p, "/projects/secret/members/"):
+			io.WriteString(w, `[{"id":"u9","email":"someone@else","display_name":"Else"}]`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Has bubbles","identifier":"HB"},
+			                              {"id":"empty","name":"Brand new","identifier":"BN"},
+			                              {"id":"secret","name":"Not yours","identifier":"NY"}],
+			                   "next_page_results":false}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.Contains(p, "/projects/p1/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/projects/p1/work-items/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":"<p>x</p>",
+			  "created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],
+			  "next_page_results":false}`)
+		default:
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// The board only knows the project that has a bubble in it — that is the bug.
+	var board []domain.BubbleView
+	_, bb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	json.Unmarshal(bb, &board)
+	for _, b := range board {
+		if b.Project == "empty" {
+			t.Fatal("the board should not know an empty workspace; the fixture is wrong")
+		}
+	}
+
+	var ws []domain.Workspace
+	code, wb := do(t, http.MethodGet, ts.URL+"/api/workspaces", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("list workspaces: %d %s", code, wb)
+	}
+	json.Unmarshal(wb, &ws)
+	got := map[string]bool{}
+	for _, w := range ws {
+		got[w.ID] = true
+		if w.Instance != "ws" {
+			t.Errorf("%s came back without its instance", w.ID)
+		}
+	}
+	if !got["empty"] {
+		t.Error("an empty workspace is still invisible — that is the whole point of this list")
+	}
+	if !got["p1"] {
+		t.Error("the workspace that does have bubbles went missing")
+	}
+	// Membership is still the boundary: this list must not become a way to see
+	// projects the board would have hidden.
+	if got["secret"] {
+		t.Error("a project the caller is not a member of leaked into the workspace list")
+	}
+}

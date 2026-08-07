@@ -20,6 +20,7 @@ import (
 type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
 	CreateWorkspace(ctx context.Context, req domain.CreateWorkspaceRequest) (domain.Workspace, error)
+	Workspaces(ctx context.Context) ([]domain.Workspace, error)
 	RenameWorkspace(ctx context.Context, id, name string) (domain.Workspace, error)
 	DeleteWorkspace(ctx context.Context, id string) (int, int, error)
 	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
@@ -404,6 +405,16 @@ func Handler(b Backend) http.Handler {
 				return nil, domain.ThreadDetail{}, err
 			}
 			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "list_workspaces", Description: "List the workspaces you can see — the bodies of work, each a Plane project. Unlike list_bubbles this also shows an EMPTY workspace, one with no bubbles in it yet, which is otherwise invisible everywhere. Read it to get the instance and project ids create_bubble needs."},
+		func(ctx context.Context, req *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, []domain.Workspace, error) {
+			ws, err := b.Workspaces(withActor(ctx, req))
+			if err != nil {
+				return nil, nil, err
+			}
+			return nil, ws, nil
 		})
 
 	sdk.AddTool(srv,

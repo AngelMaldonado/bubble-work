@@ -399,7 +399,7 @@ const en = {
   'ws.renameBtn': 'Rename',
   'ws.saving': 'saving…',
   'ws.renamed': 'renamed to {name}',
-  'ws.createdNeedsBubble': '{name} created — add a bubble to it and it appears on the board',
+  'ws.created': '{name} created — pick it in the workspace filter and give it a bubble',
   'ws.deleted': 'deleted {name} — {b} bubble(s), {n} thread(s)',
   'del.workspace':
     'The whole workspace goes: {b} bubble(s) and {n} thread(s), with every artifact and comment in them.',
@@ -802,7 +802,7 @@ const es: Record<MsgKey, string> = {
   'ws.renameBtn': 'Renombrar',
   'ws.saving': 'guardando…',
   'ws.renamed': 'renombrado a {name}',
-  'ws.createdNeedsBubble': '{name} creado — agrégale una burbuja y aparecerá en el tablero',
+  'ws.created': '{name} creado — elígelo en el filtro y dale una burbuja',
   'ws.deleted': 'eliminado {name} — {b} burbuja(s), {n} hilo(s)',
   'del.workspace':
     'Se va el espacio completo: {b} burbuja(s) y {n} hilo(s), con todos sus artefactos y comentarios.',

@@ -475,6 +475,7 @@ func (s *Server) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/whoami", s.restAuth(s.handleWhoami))
 	mux.HandleFunc("GET /api/status", s.restAuth(s.handleStatus))
+	mux.HandleFunc("GET /api/workspaces", s.restAuth(s.handleWorkspaces))
 	mux.HandleFunc("POST /api/workspaces", s.restAuth(s.handleCreateWorkspace))
 	mux.HandleFunc("PATCH /api/workspaces/{id}", s.restAuth(s.handleRenameWorkspace))
 	mux.HandleFunc("DELETE /api/workspaces/{id}", s.restAuth(s.handleDeleteWorkspace))
@@ -1166,6 +1167,23 @@ func (s *Server) CreateWorkspace(ctx context.Context, req domain.CreateWorkspace
 		if err := s.mirror.UpsertProjects(req.Instance,
 			[]mirror.Project{{ID: p.ID, Name: p.Name, Identifier: p.Identifier}}, s.now()); err != nil {
 			log.Printf("mirror: record new workspace %s: %v", p.ID, err)
+		}
+	}
+	// And its MEMBERS, for the same reason. Project membership is what authorizes
+	// a workspace (CanSeeProject), and it is otherwise only refreshed on the slow
+	// structure cadence — so without this the creator would be refused their own
+	// new workspace for up to ten minutes.
+	if s.mirror != nil {
+		if ms, merr := cl.ListProjectMembers(ctx, p.ID); merr != nil {
+			log.Printf("mirror: read members of new workspace %s: %v", p.ID, merr)
+		} else {
+			ids := make([]string, 0, len(ms))
+			for _, m := range ms {
+				ids = append(ids, m.ID)
+			}
+			if err := s.mirror.SetProjectMembers(req.Instance, p.ID, ids); err != nil {
+				log.Printf("mirror: record members of new workspace %s: %v", p.ID, err)
+			}
 		}
 	}
 	s.dropInstanceCache(req.Instance)

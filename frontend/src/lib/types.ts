@@ -115,6 +115,14 @@ export interface EditableRegion {
 
 export type RegionName = 'brief' | 'logbook' | 'dod';
 
+/** A body of work — a Plane project. Includes ones holding no bubbles yet. */
+export interface Workspace {
+  id: string;
+  name: string;
+  identifier: string;
+  instance: string;
+}
+
 export interface ThreadDetail extends Buoyancy {
   id: string;
   seq: number;

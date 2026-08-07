@@ -26,6 +26,9 @@ type Backend interface {
 	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
 	UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error)
+	DeleteBubble(ctx context.Context, bubbleID string) (int, error)
+	DeleteThread(ctx context.Context, threadID string) (int, error)
+	DeleteRegion(ctx context.Context, threadID string, region md.Region) (domain.ThreadDetail, error)
 	ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error)
 	AddRevision(ctx context.Context, threadID, title, body string) (domain.ThreadDetail, error)
 	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
@@ -73,6 +76,17 @@ type toggleTodoIn struct {
 	Region   string `json:"region,omitempty" jsonschema:"logbook (default) or dod"`
 }
 
+// deleteIn asks for the thing's own id. There is deliberately no "force" flag:
+// the guard is that a caller has to name what it is destroying.
+type deleteIn struct {
+	ID string `json:"id" jsonschema:"the namespaced id of the thing to delete"`
+}
+
+type deleteRegionIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Region   string `json:"region" jsonschema:"logbook, dod, or brief (the document)"`
+}
+
 type addRevisionIn struct {
 	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
 	Title    string `json:"title" jsonschema:"what this revision is, e.g. 'first pass' — a 'rev:' prefix is added if missing"`
@@ -114,6 +128,14 @@ type markReadIn struct {
 	ThreadID   string   `json:"thread_id" jsonschema:"the thread id whose comments to mark read"`
 	CommentIDs []string `json:"comment_ids" jsonschema:"ids of comments you've read (not your own)"`
 }
+
+// deletedOut reports what a delete cost: threads unbubbled, or revisions taken
+// down with a thread.
+type deletedOut struct {
+	OK       bool `json:"ok"`
+	Affected int  `json:"affected"`
+}
+
 type okOut struct {
 	OK bool `json:"ok"`
 }
@@ -243,6 +265,40 @@ func Handler(b Backend) http.Handler {
 				region = md.RegionLogbook
 			}
 			d, err := b.ToggleTodo(withActor(ctx, req), in.ThreadID, region, in.Index, in.Text, in.Done)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_bubble", Description: "PERMANENTLY delete a bubble from Plane. IRREVERSIBLE. Its threads survive but end up in no bubble, which also removes them from the board. §5.3 says a bubble should normally die by being CLOSED — that keeps the record of what was done — so prefer close_bubble unless this bubble should never have existed. Ask the person first."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteIn) (*sdk.CallToolResult, deletedOut, error) {
+			n, err := b.DeleteBubble(withActor(ctx, req), in.ID)
+			if err != nil {
+				return nil, deletedOut{}, err
+			}
+			return nil, deletedOut{OK: true, Affected: n}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_thread", Description: "PERMANENTLY delete a thread — or a revision, which is also a work item — from Plane, taking its Brief, Logbook, comments and revisions with it. IRREVERSIBLE, and it erases evidence of work that actually happened. Ask the person first."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteIn) (*sdk.CallToolResult, deletedOut, error) {
+			n, err := b.DeleteThread(withActor(ctx, req), in.ID)
+			if err != nil {
+				return nil, deletedOut{}, err
+			}
+			return nil, deletedOut{OK: true, Affected: n}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_artifact", Description: "Remove one artifact from a thread's page — its Logbook, its Definition of Done, or its document — heading and all. The thread itself survives. Everything you do not name keeps its exact bytes, so images and mentions elsewhere on the page are untouched."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteRegionIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			region := md.Region(in.Region)
+			if region == "brief" {
+				region = md.RegionDocument
+			}
+			d, err := b.DeleteRegion(withActor(ctx, req), in.ThreadID, region)
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err
 			}

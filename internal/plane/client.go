@@ -222,6 +222,28 @@ func (c *Client) patch(ctx context.Context, path string, body, out any) error {
 	return c.send(ctx, http.MethodPatch, path, body, out)
 }
 
+func (c *Client) del(ctx context.Context, path string) error {
+	return c.send(ctx, http.MethodDelete, path, nil, nil)
+}
+
+// DeleteModule removes a bubble from Plane. Plane keeps the work items that
+// were in it — a module is a grouping, not a container — so they survive,
+// belonging to no bubble.
+//
+// IRREVERSIBLE. §5.3 says a bubble should normally die by being CLOSED, which
+// keeps the record of what was done; this is for the ones that should never
+// have existed.
+func (c *Client) DeleteModule(ctx context.Context, moduleID string) error {
+	return c.del(ctx, c.projectBase()+"/modules/"+moduleID+"/")
+}
+
+// DeleteWorkItem removes a thread — or a revision, which is a sub-work-item —
+// from Plane, taking its Brief, Logbook, comments and children with it.
+// IRREVERSIBLE.
+func (c *Client) DeleteWorkItem(ctx context.Context, workItemID string) error {
+	return c.del(ctx, c.projectBase()+"/work-items/"+workItemID+"/")
+}
+
 // CreateProject creates a Plane project (our Workspace) and enables the given
 // feature toggles (module_view etc.). Minimal by default: modules on, rest off.
 func (c *Client) CreateProject(ctx context.Context, name, identifier string, features map[string]bool) (Project, error) {

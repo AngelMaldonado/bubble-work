@@ -149,28 +149,38 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 
 	// Written with the caller's own key, so Plane attributes the edit to the
 	// person (or the human an agent is impersonating), exactly like a comment.
-	updatedAt, err := wcl.SetWorkItemBody(ctx, wid, body)
-	if err != nil {
+	// writeBody also puts it in the mirror, rather than waiting for a delta pass
+	// to rediscover a change the server itself just made.
+	if err := s.writeBody(ctx, wcl, inst, it, body); err != nil {
 		return domain.ThreadDetail{}, err
-	}
-
-	// Write it into the mirror NOW rather than waiting for a delta pass to
-	// rediscover our own write. Not optimistic: Plane accepted it, so this is
-	// what Plane holds. Without this the board would be up to a delta interval
-	// behind a change the server itself just made.
-	it.DescriptionHTML = body
-	it.DescriptionHash = mirror.HashBody(body)
-	if !updatedAt.IsZero() {
-		it.UpdatedAt = updatedAt
-	}
-	if err := s.mirror.UpsertItems(inst.Slug, []mirror.Item{it}, s.now()); err != nil {
-		log.Printf("mirror: record thread update %s: %v", wid, err)
 	}
 	// A Logbook change is production (§5.1). Rebuilding the snapshot is what
 	// turns it into heat and pushes it to every open board.
 	s.rebuildAndNotify(inst, wid, production)
 
 	return s.ThreadDetail(ctx, full)
+}
+
+// writeBody pushes a new description to Plane and records it locally.
+//
+// Shared by every path that rewrites a body — editing a region, ticking a todo,
+// deleting a section — so the mirror write-through can never be forgotten by one
+// of them. Not optimistic: Plane accepted the write and returned the row, so
+// this IS what Plane holds.
+func (s *Server) writeBody(ctx context.Context, cl *plane.Client, inst domain.Instance, it mirror.Item, html string) error {
+	updatedAt, err := cl.SetWorkItemBody(ctx, it.ID, html)
+	if err != nil {
+		return err
+	}
+	it.DescriptionHTML = html
+	it.DescriptionHash = mirror.HashBody(html)
+	if !updatedAt.IsZero() {
+		it.UpdatedAt = updatedAt
+	}
+	if err := s.mirror.UpsertItems(inst.Slug, []mirror.Item{it}, s.now()); err != nil {
+		log.Printf("mirror: record body write %s: %v", it.ID, err)
+	}
+	return nil
 }
 
 // checkBase enforces optimistic concurrency for one region. An absent base means

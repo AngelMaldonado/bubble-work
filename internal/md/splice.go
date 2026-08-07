@@ -427,6 +427,29 @@ func splitMarkdownBlocks(markdown string) []string {
 	return out
 }
 
+// RemoveRegion deletes a region outright — for a section, its heading goes with
+// it, which is what distinguishes deleting a Logbook from emptying one.
+//
+// The document region keeps nothing to delete but its blocks: it has no heading
+// of its own, being defined as "everything before the first special section".
+func RemoveRegion(descriptionHTML string, region Region) (string, error) {
+	if region != RegionDocument && region != RegionLogbook && region != RegionDoD {
+		return "", fmt.Errorf("unknown region %q", region)
+	}
+	bs := Blocks(descriptionHTML)
+	lo, hi, found := regionRange(bs, region)
+	if !found {
+		return descriptionHTML, nil // nothing there is already the desired state
+	}
+	if region != RegionDocument {
+		lo-- // take the heading with it
+	}
+	if lo >= hi || lo < 0 {
+		return descriptionHTML, nil
+	}
+	return strings.TrimSpace(descriptionHTML[:bs[lo].Start] + descriptionHTML[bs[hi-1].End:]), nil
+}
+
 // Hash fingerprints a region's markdown so an editor can prove it is writing
 // over what it read. Exact, not whitespace-normalised: this answers "did this
 // change under me", where LogbookFingerprint answers "did the plan change" and

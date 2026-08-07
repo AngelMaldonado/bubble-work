@@ -2651,3 +2651,140 @@ func TestNewBubblesAndThreadsAreVisibleImmediately(t *testing.T) {
 		t.Errorf("a thread born a moment ago is not in its bubble: %+v", threads)
 	}
 }
+
+// Deleting is irreversible and it deletes from PLANE, so the things worth
+// pinning are what it takes with it and what it leaves alone.
+func TestDeleteRemovesFromPlaneAndEverywhereElse(t *testing.T) {
+	var mu sync.Mutex
+	deleted := map[string]bool{}
+	body := `<p data-id="p1">The brief.</p>` +
+		`<h2>Logbook</h2><ul data-type="taskList">` +
+		`<li data-type="taskItem" data-checked="false"><div><p>do it</p></div></li></ul>`
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur, gone := body, map[string]bool{}
+		for k, v := range deleted {
+			gone[k] = v
+		}
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodDelete:
+			mu.Lock()
+			for _, id := range []string{"m1", "wi-1", "rev-1"} {
+				if strings.Contains(p, "/"+id+"/") {
+					deleted[id] = true
+				}
+			}
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			if gone["m1"] {
+				io.WriteString(w, `{"results":[]}`)
+				return
+			}
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				DescriptionHTML *string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			if in.DescriptionHTML != nil {
+				body = *in.DescriptionHTML
+			}
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[
+			  {"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}},
+			  {"id":"rev-1","name":"rev: findings","parent":"wi-1","description_html":"<p>notes</p>","created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}
+			],"next_page_results":false}`, cur)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	// 1. Deleting an ARTIFACT takes the section and its heading, and nothing else.
+	if code, b := do(t, http.MethodDelete, ts.URL+thread+"/regions/logbook", key, ""); code != http.StatusOK {
+		t.Fatalf("delete region: %d %s", code, b)
+	}
+	mu.Lock()
+	after := body
+	mu.Unlock()
+	if strings.Contains(after, "Logbook") || strings.Contains(after, "do it") {
+		t.Errorf("the Logbook survived its own deletion:\n%s", after)
+	}
+	if !strings.Contains(after, `<p data-id="p1">The brief.</p>`) {
+		t.Errorf("deleting the Logbook disturbed the Brief:\n%s", after)
+	}
+
+	// 2. Deleting a THREAD takes its revisions with it, in Plane.
+	code, rb := do(t, http.MethodDelete, ts.URL+thread, key, "")
+	if code != http.StatusOK {
+		t.Fatalf("delete thread: %d %s", code, rb)
+	}
+	var out map[string]int
+	json.Unmarshal(rb, &out)
+	if out["deleted_revisions"] != 1 {
+		t.Errorf("revisions taken down with the thread: want 1, got %d", out["deleted_revisions"])
+	}
+	mu.Lock()
+	killedThread, killedRev := deleted["wi-1"], deleted["rev-1"]
+	mu.Unlock()
+	if !killedThread || !killedRev {
+		t.Errorf("Plane was not asked to delete both: thread=%v revision=%v", killedThread, killedRev)
+	}
+	// The overlay must not keep a baseline for a thread that no longer exists.
+	if p, err := st.ThreadProgressFor([]string{"wi-1"}); err == nil {
+		if _, stale := p["wi-1"]; stale {
+			t.Error("a deleted thread left its progress baseline behind")
+		}
+	}
+
+	// 3. Deleting a BUBBLE reports what it unbubbled, and leaves the board.
+	code, rb = do(t, http.MethodDelete, ts.URL+"/api/bubbles/ws:p1:m1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("delete bubble: %d %s", code, rb)
+	}
+	mu.Lock()
+	killedModule := deleted["m1"]
+	mu.Unlock()
+	if !killedModule {
+		t.Error("Plane was not asked to delete the module")
+	}
+	var board []domain.BubbleView
+	_, bb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	json.Unmarshal(bb, &board)
+	for _, b := range board {
+		if b.ID == "ws:p1:m1" {
+			t.Error("a deleted bubble is still on the board")
+		}
+	}
+	if _, ok, _ := st.GetContract("ws:p1:m1"); ok {
+		t.Error("a deleted bubble left its contract behind")
+	}
+}

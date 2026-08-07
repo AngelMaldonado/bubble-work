@@ -990,6 +990,45 @@ func UpdateThread(cfg config.Config, id string, edit domain.ThreadEdit) error {
 	return nil
 }
 
+// Delete removes a bubble, a thread or one artifact. IRREVERSIBLE: it deletes
+// from Plane, which is the system of record.
+func Delete(cfg config.Config, path, what string) error {
+	var out map[string]int
+	if err := deleteJSON(cfg, path, &out); err != nil {
+		return err
+	}
+	fmt.Printf("deleted %s\n", what)
+	if n := out["unbubbled_threads"]; n > 0 {
+		fmt.Printf("  %d thread(s) now belong to no bubble — they are still in Plane\n", n)
+	}
+	if n := out["deleted_revisions"]; n > 0 {
+		fmt.Printf("  %d revision(s) went with it\n", n)
+	}
+	return nil
+}
+
+func deleteJSON(cfg config.Config, path string, out any) error {
+	req, err := http.NewRequest(http.MethodDelete, cfg.ActiveServer()+path, nil)
+	if err != nil {
+		return err
+	}
+	if tok := cfg.Token; tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return serverError(resp, path)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
 // ToggleTodo ticks one checklist item. text guards index: the server refuses
 // rather than ticking the wrong box if the list moved under us.
 func ToggleTodo(cfg config.Config, id string, region string, index int, text string, done bool) error {

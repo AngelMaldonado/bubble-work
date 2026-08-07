@@ -331,3 +331,47 @@ func (m *Mirror) batch(fn func(*sql.Tx) error) error {
 	}
 	return tx.Commit()
 }
+
+// DeleteModule drops a bubble's rows: the module itself and every membership
+// row pointing at it. The ITEMS survive — a module is a grouping, not a
+// container, and Plane keeps them too (docs/ARTIFACT-EDITING.md).
+func (m *Mirror) DeleteModule(instance, moduleID string) error {
+	return m.batch(func(tx *sql.Tx) error {
+		for _, q := range []string{
+			`DELETE FROM mirror_module_items WHERE instance = ? AND module_id = ?`,
+			`DELETE FROM mirror_modules WHERE instance = ? AND id = ?`,
+		} {
+			if _, err := tx.Exec(q, instance, moduleID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}
+
+// DeleteItems drops work items and everything that hangs off them: their
+// comments and their membership of any bubble.
+//
+// The mirror is a projection, so this is not the source of truth — but leaving
+// the rows behind would keep a deleted thread on the board until a full
+// reconcile pruned it, which is the same "the local copy is confidently wrong"
+// failure the write-through fixes exist to avoid.
+func (m *Mirror) DeleteItems(instance string, itemIDs []string) error {
+	if len(itemIDs) == 0 {
+		return nil
+	}
+	return m.batch(func(tx *sql.Tx) error {
+		for _, id := range itemIDs {
+			for _, q := range []string{
+				`DELETE FROM mirror_comments WHERE instance = ? AND item_id = ?`,
+				`DELETE FROM mirror_module_items WHERE instance = ? AND item_id = ?`,
+				`DELETE FROM mirror_items WHERE instance = ? AND id = ?`,
+			} {
+				if _, err := tx.Exec(q, instance, id); err != nil {
+					return err
+				}
+			}
+		}
+		return nil
+	})
+}

@@ -10,6 +10,7 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"os/signal"
 	"path/filepath"
@@ -57,6 +58,8 @@ func main() {
 		cmdDoD(os.Args[2:])
 	case "rename":
 		cmdRename(os.Args[2:])
+	case "delete", "rm":
+		cmdDelete(os.Args[2:])
 	case "todo":
 		cmdTodo(os.Args[2:])
 	case "revision":
@@ -107,6 +110,7 @@ Usage:
   bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
   bubble dod <id> [text|-]         rewrite a thread's Definition of Done
   bubble rename <id> <title>       retitle a thread or a revision
+  bubble delete <kind> <id> [-y]   PERMANENTLY delete a bubble/thread/artifact
   bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
   bubble revision <id> <title> [-] attach a revision artifact to a thread
   bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
@@ -1126,6 +1130,61 @@ func cmdRename(args []string) {
 	title := strings.Join(args[1:], " ")
 	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{Title: &title}); err != nil {
 		log.Fatalf("rename: %v", err)
+	}
+}
+
+// cmdDelete removes a bubble, a thread or one artifact — from PLANE, which is
+// the system of record. There is no undo, so it asks first unless -y is given.
+func cmdDelete(args []string) {
+	yes := false
+	var rest []string
+	for _, a := range args {
+		if a == "-y" || a == "--yes" {
+			yes = true
+			continue
+		}
+		rest = append(rest, a)
+	}
+	if len(rest) < 2 {
+		log.Fatal("usage: bubble delete <bubble|thread|artifact> <id> [logbook|dod|brief] [-y]")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+
+	kind, id := rest[0], rest[1]
+	var path, what, warning string
+	switch kind {
+	case "bubble":
+		path, what = "/api/bubbles/"+url.PathEscape(id), "bubble "+id
+		warning = "Its threads survive in Plane but will belong to no bubble, so they leave the board.\n" +
+			"Closing a bubble (bubble bubble close) keeps the record of what was done."
+	case "thread":
+		path, what = "/api/threads/"+url.PathEscape(id), "thread "+id
+		warning = "Its Brief, Logbook, comments and revisions go with it."
+	case "artifact", "region":
+		if len(rest) < 3 {
+			log.Fatal("usage: bubble delete artifact <thread-id> <logbook|dod|brief> [-y]")
+		}
+		path = "/api/threads/" + url.PathEscape(id) + "/regions/" + url.PathEscape(rest[2])
+		what = rest[2] + " of " + id
+		warning = "The thread survives; only this section is removed."
+	default:
+		log.Fatalf("delete what? bubble, thread or artifact — not %q", kind)
+	}
+
+	if !yes {
+		fmt.Printf("Delete %s from Plane? This cannot be undone.\n%s\n\nType 'yes' to continue: ", what, warning)
+		var answer string
+		fmt.Scanln(&answer)
+		if strings.TrimSpace(strings.ToLower(answer)) != "yes" {
+			fmt.Println("left alone")
+			return
+		}
+	}
+	if err := client.Delete(cfg, path, what); err != nil {
+		log.Fatalf("delete: %v", err)
 	}
 }
 

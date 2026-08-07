@@ -2,6 +2,7 @@
   import { bubbleMenu } from '../lib/contextmenu.svelte';
   import { store } from '../lib/store.svelte';
   import { t } from '../lib/i18n.svelte';
+  import ConfirmDelete from './ConfirmDelete.svelte';
   import { api, ApiError } from '../lib/api';
   import type { BubbleView } from '../lib/types';
 
@@ -25,6 +26,30 @@
       await store.refresh();
     } catch (e) {
       store.error = e instanceof ApiError ? e.message : String(e);
+    }
+  }
+
+  // Deleting is irreversible, so the menu only ARMS it — the dialog is the act.
+  let pendingDelete = $state<BubbleView | null>(null);
+  let deleting = $state(false);
+
+  function armDelete(): void {
+    pendingDelete = bubbleMenu.bubble ?? null;
+    bubbleMenu.hide();
+  }
+
+  async function confirmDelete(): Promise<void> {
+    const b = pendingDelete;
+    if (!b) return;
+    deleting = true;
+    try {
+      await api.deleteBubble(b.id);
+      pendingDelete = null;
+      await store.refresh();
+    } catch (e) {
+      store.error = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      deleting = false;
     }
   }
 
@@ -103,5 +128,23 @@
     <button class="ctxmenu-item" role="menuitem" onclick={copyId}>
       <span class="ctxmenu-ic">🔗</span> Copy id
     </button>
+    {#if !store.kiosk}
+      <button class="ctxmenu-item danger" role="menuitem" onclick={armDelete}>
+        <span class="ctxmenu-ic">🗑</span> {t('bubble.delete')}
+      </button>
+    {/if}
   </div>
+{/if}
+
+{#if pendingDelete}
+  <ConfirmDelete
+    what={pendingDelete.name}
+    detail={pendingDelete.threads > 0
+      ? t('del.bubble', { n: pendingDelete.threads })
+      : t('del.bubbleEmpty')}
+    prefer={t('del.prefer')}
+    busy={deleting}
+    oncancel={() => (pendingDelete = null)}
+    onconfirm={confirmDelete}
+  />
 {/if}

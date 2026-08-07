@@ -457,6 +457,11 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/threads/{id}", s.restAuth(s.handleUpdateThread))
 	mux.HandleFunc("POST /api/threads/{id}/revisions", s.restAuth(s.handleAddRevision))
 	mux.HandleFunc("POST /api/threads/{id}/todo", s.restAuth(s.handleToggleTodo))
+	// Deleting is irreversible and deletes from Plane; §5.3 prefers CLOSING a
+	// bubble, which keeps the record of what was done.
+	mux.HandleFunc("DELETE /api/bubbles/{id}", s.restAuth(s.handleDeleteBubble))
+	mux.HandleFunc("DELETE /api/threads/{id}", s.restAuth(s.handleDeleteThread))
+	mux.HandleFunc("DELETE /api/threads/{id}/regions/{region}", s.restAuth(s.handleDeleteRegion))
 	mux.HandleFunc("POST /api/threads/{id}/comments", s.restAuth(s.handlePostComment))
 	mux.HandleFunc("POST /api/threads/{id}/comments/read", s.restAuth(s.handleMarkCommentsRead))
 	mux.HandleFunc("POST /api/threads/{id}/drafts/{draft}/retry", s.restAuth(s.handleRetryDraft))

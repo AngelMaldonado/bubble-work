@@ -1,6 +1,6 @@
 # Artifact editing — writing a thread's page from the board
 
-Status: **Phases 0-6 shipped · 7 started** · only the live demo pass is left · Drafted 2026-08-07 · Companion
+Status: **Phases 0-6 shipped · 7 started · editing, renaming and deleting all live** · Drafted 2026-08-07 · Companion
 to [`MCP-ACCESS.md`](./MCP-ACCESS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -377,6 +377,40 @@ Writing both `data-checked` on the `li` and `checked` on the `input` turned out
 to be free: the toggle rewrites markdown and re-renders through
 `RenderPlaneHTML`, which emits Plane's shape with both (Phase 2).
 
+
+## Deleting
+
+Permanent, in Plane, guarded by an explicit confirmation and open to any member
+— the same reach as close and reopen. §5.3 still prefers a bubble dying by being
+CLOSED, which keeps the record of what was done; this is for the things that
+should never have existed.
+
+| | takes | leaves |
+|---|---|---|
+| **bubble** | the Plane module | its threads — a module is a grouping, not a container, so they survive belonging to no bubble, which also removes them from the board |
+| **thread** | its Brief, Logbook, comments and revisions | nothing |
+| **artifact** | one region, heading and all | the thread, and every byte outside that region |
+
+Children are deleted **explicitly and first** rather than trusting Plane to
+cascade: whether it orphans or removes them is its business, and leaving that
+undecided would leave sub-items pointing at a parent that no longer exists.
+
+Every delete clears the **mirror** and the **overlay** too, for the same reason
+creates write through — a projection that still lists a deleted thread is the
+local copy being confidently wrong. The overlay matters more than it looks: a
+stale `thread_progress` row is the baseline that answers "has this produced
+anything since we last looked", so a reused id would be measured against a dead
+thread's history.
+
+The confirmation says what goes and what stays rather than "are you sure?", and
+for a bubble it counts the threads it will unbubble — the consequence nobody
+expects. Focus lands on Cancel, so an errant Enter destroys nothing.
+
+Surface parity: `DELETE /api/bubbles/{id}`, `DELETE /api/threads/{id}`,
+`DELETE /api/threads/{id}/regions/{region}` · `bubble delete <kind> <id> [-y]`,
+which prompts unless `-y` · MCP `delete_bubble`, `delete_thread` and
+`delete_artifact`, each described to agents as irreversible and told to ask the
+person first.
 
 ## Open
 

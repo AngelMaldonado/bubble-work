@@ -9,6 +9,7 @@
   import type { ThreadDetail, Comment, RegionName } from '../lib/types';
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
   import ArtifactEditor from './ArtifactEditor.svelte';
+  import ConfirmDelete from './ConfirmDelete.svelte';
 
   type Sel = ArtSel;
 
@@ -118,6 +119,48 @@
       await reloadDetail();
     } finally {
       ticking = null;
+    }
+  }
+
+  // ---- deleting (docs/ARTIFACT-EDITING.md) ----
+  //
+  // Irreversible, and it deletes from Plane. The menu only ARMS it; the dialog
+  // is the act, and it says what goes and what stays rather than "are you sure".
+  type Pending = { kind: 'thread' } | { kind: 'region'; region: RegionName };
+  let pending = $state<Pending | null>(null);
+  let deleting = $state(false);
+
+  const pendingWhat = $derived(
+    !pending || !detail
+      ? ''
+      : pending.kind === 'thread'
+        ? detail.title
+        : pending.region === 'logbook'
+          ? t('thread.logbook')
+          : pending.region === 'dod'
+            ? t('thread.dod')
+            : detail.title,
+  );
+
+  async function confirmDelete(): Promise<void> {
+    const p = pending;
+    if (!p || !detail) return;
+    deleting = true;
+    try {
+      if (p.kind === 'thread') {
+        await api.deleteThread(detail.id);
+        pending = null;
+        close(); // the thread is gone — there is nothing left to look at
+        await store.refresh();
+      } else {
+        detail = await api.deleteRegion(detail.id, p.region);
+        pending = null;
+        editing = false;
+      }
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      deleting = false;
     }
   }
 
@@ -725,6 +768,18 @@
       <main class="content" bind:this={contentEl}>
         {#if canEdit && !store.kiosk}
           <div class="edit-bar">
+            {#if editRegion && detail.regions?.[editRegion]}
+              <button
+                class="danger"
+                onclick={() => (pending = { kind: 'region', region: editRegion })}
+                title={t('thread.deleteRegion')}>🗑</button
+              >
+            {/if}
+            <button
+              class="danger"
+              onclick={() => (pending = { kind: 'thread' })}
+              title={t('thread.delete')}>🗑 {t('del.threadWord')}</button
+            >
             <div class="seg" role="group" aria-label={t('thread.viewMode')}>
               <button
                 class:on={!editing}
@@ -832,6 +887,16 @@
         <ThreadToc {headings} />
       {/if}
     </div>
+
+    {#if pending}
+      <ConfirmDelete
+        what={pendingWhat}
+        detail={pending.kind === 'thread' ? t('del.thread') : t('del.region')}
+        busy={deleting}
+        oncancel={() => (pending = null)}
+        onconfirm={confirmDelete}
+      />
+    {/if}
 
     <!-- bottom-right discussion chat (Plane work-item comments) -->
     <div class="chat">
@@ -1318,6 +1383,22 @@
   }
   .edit-bar > * {
     pointer-events: auto;
+  }
+  .edit-bar .danger {
+    padding: 0.32rem 0.7rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 0.74rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .edit-bar .danger:hover {
+    color: oklch(0.98 0 0);
+    background: oklch(0.55 0.2 25);
+    border-color: transparent;
   }
   .seg {
     display: inline-flex;

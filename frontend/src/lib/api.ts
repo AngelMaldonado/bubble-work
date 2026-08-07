@@ -146,6 +146,15 @@ export const api = {
     small_thread: boolean;
   }) => req<{ thread_id: string; created: boolean; message: string }>('POST', '/api/threads/birth', input),
 
+  // Deleting is IRREVERSIBLE and deletes from Plane. Closing a bubble keeps the
+  // record of what was done and is almost always the right verb.
+  deleteBubble: (id: string) =>
+    req<{ unbubbled_threads: number }>('DELETE', `/api/bubbles/${encodeURIComponent(id)}`),
+  deleteThread: (id: string) =>
+    req<{ deleted_revisions: number }>('DELETE', `/api/threads/${encodeURIComponent(id)}`),
+  deleteRegion: (id: string, region: RegionName) =>
+    req<ThreadDetail>('DELETE', `/api/threads/${encodeURIComponent(id)}/regions/${region}`),
+
   review: (id: string) => req<void>('POST', `/api/bubbles/${id}/review`),
   unreview: (id: string) => req<void>('POST', `/api/bubbles/${id}/unreview`),
   close: (id: string) => req<void>('POST', `/api/bubbles/${id}/close`),

@@ -977,3 +977,39 @@ func (s *Store) Prune(live []string) (int, error) {
 	}
 	return total, nil
 }
+
+// ForgetBubble drops a bubble's overlay: its contract, closure, stage and
+// derived lifecycle. Called when a bubble is deleted from Plane, so a module id
+// that Plane later reuses cannot inherit a dead bubble's outcome and owner.
+func (s *Store) ForgetBubble(bubbleID string) error {
+	for _, q := range []string{
+		`DELETE FROM bubble_contracts WHERE bubble_id = ?`,
+		`DELETE FROM bubble_state WHERE bubble_id = ?`,
+	} {
+		if _, err := s.db.Exec(q, bubbleID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// ForgetThreads drops the overlay for deleted threads: their progress baseline,
+// their comment pulse and any pending auto-state write.
+//
+// The progress baseline matters most. It is what "has this thread produced
+// anything since we last looked" is measured against, so a stale row for a
+// recreated id would compare new work against a dead thread's history.
+func (s *Store) ForgetThreads(threadIDs []string) error {
+	for _, id := range threadIDs {
+		for _, q := range []string{
+			`DELETE FROM thread_progress WHERE thread_id = ?`,
+			`DELETE FROM thread_pulse WHERE thread_id = ?`,
+			`DELETE FROM thread_autostate WHERE thread_id = ?`,
+		} {
+			if _, err := s.db.Exec(q, id); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}

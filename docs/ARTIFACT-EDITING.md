@@ -406,11 +406,20 @@ The confirmation says what goes and what stays rather than "are you sure?", and
 for a bubble it counts the threads it will unbubble — the consequence nobody
 expects. Focus lands on Cancel, so an errant Enter destroys nothing.
 
-Surface parity: `DELETE /api/bubbles/{id}`, `DELETE /api/threads/{id}`,
+Surfaces: `DELETE /api/bubbles/{id}`, `DELETE /api/threads/{id}`,
 `DELETE /api/threads/{id}/regions/{region}` · `bubble delete <kind> <id> [-y]`,
-which prompts unless `-y` · MCP `delete_bubble`, `delete_thread` and
-`delete_artifact`, each described to agents as irreversible and told to ask the
-person first.
+which prompts unless `-y` · **and deliberately NOT MCP.**
+
+That last one is the one exception to surface parity in this document, so it is
+worth stating why. Parity exists so a capability does not drift between the
+REST, CLI and MCP surfaces — not so that every capability is equally reachable
+from each. The web and the CLI both put a person in the loop before a delete: a
+dialog naming what goes, or a typed confirmation. MCP has no such step. An agent
+calling `delete_thread` would destroy a Brief, a Logbook, its comments and its
+revisions with nothing between it and the act but a tool description asking it
+to check first, which is not a guard. Agents keep every read and every
+*constructive* write — `update_thread`, `toggle_todo`, `add_revision`,
+`post_comment`. Destruction stays with a human.
 
 ## Open
 

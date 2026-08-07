@@ -12,8 +12,8 @@
   type Opt = { value: string; label: string };
 
   const options = $derived<Opt[]>([
-    { value: 'workspace', label: 'Everyone' },
-    ...(store.kiosk ? [] : [{ value: 'mine', label: 'Mine' }]),
+    { value: 'workspace', label: t('combo.everyone') },
+    ...(store.kiosk ? [] : [{ value: 'mine', label: t('combo.mine') }]),
     ...store.members.map((m) => ({ value: 'm:' + m, label: m })),
   ]);
 

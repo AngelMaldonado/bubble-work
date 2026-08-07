@@ -51,43 +51,43 @@
   const cmdQuery = $derived(query.trim());
 
   const COMMANDS: Cmd[] = [
-    { id: 'refresh', label: 'refresh', hint: 're-poll the server', run: () => store.refresh() },
+    { id: 'refresh', label: t('cmd.refresh'), hint: t('cmd.refreshHint'), run: () => store.refresh() },
     {
       id: 'newbubble',
-      label: 'new bubble…',
-      hint: 'create a bubble (Plane module)',
+      label: t('cmd.newBubble'),
+      hint: t('cmd.newBubbleHint'),
       run: () => onnewbubble(),
     },
     {
       id: 'birth',
-      label: 'birth thread…',
-      hint: 'enforces Brief + Definition of Done',
+      label: t('cmd.birth'),
+      hint: t('cmd.birthHint'),
       needsBubble: true,
       run: (b) => b && onbirth(b),
     },
     {
       id: 'review',
-      label: 'mark reviewed…',
+      label: t('cmd.review'),
       hint: '→ 👀',
       needsBubble: true,
       run: (b) => b && api.review(b.id).then(() => store.refresh()),
     },
     {
       id: 'unreview',
-      label: 'un-review…',
+      label: t('cmd.unreview'),
       needsBubble: true,
       run: (b) => b && api.unreview(b.id).then(() => store.refresh()),
     },
     {
       id: 'close',
-      label: 'close bubble (done)…',
+      label: t('cmd.close'),
       hint: '→ 🏆',
       needsBubble: true,
       run: (b) => b && api.close(b.id).then(() => store.refresh()),
     },
     {
       id: 'owner',
-      label: 'set owner…',
+      label: t('cmd.setOwner'),
       needsBubble: true,
       needsInput: 'owner name / email',
       run: (b, v) => {
@@ -99,7 +99,7 @@
     },
     {
       id: 'outcome',
-      label: 'set outcome…',
+      label: t('cmd.setOutcome'),
       needsBubble: true,
       needsInput: 'the intended outcome',
       run: (b, v) => {
@@ -111,7 +111,7 @@
     },
     {
       id: 'signout',
-      label: 'sign out',
+      label: t('cmd.signOut'),
       run: () => store.signOut(),
     },
   ];
@@ -120,13 +120,13 @@
   const instanceCmds = $derived<Cmd[]>([
     {
       id: 'inst:all',
-      label: 'view all instances',
+      label: t('cmd.viewAll'),
       hint: store.instance === '' ? 'active' : '',
       run: () => void (store.instance = ''),
     },
     ...store.instances.map((slug) => ({
       id: `inst:${slug}`,
-      label: `switch to ${slug}`,
+      label: t('cmd.switchTo', { slug }),
       hint: store.instance === slug ? 'active' : '',
       run: () => void (store.instance = slug),
     })),
@@ -138,14 +138,14 @@
       ? [
           {
             id: 'god:panel',
-            label: 'godmode: open panel',
-            hint: 'all admin options (/god-mode)',
+            label: t('cmd.godPanel'),
+            hint: t('cmd.godPanelHint'),
             run: () => store.openGodMode(),
           },
           {
             id: 'god:allorgs',
             label: store.allOrgs ? 'godmode: my orgs only' : 'godmode: all orgs',
-            hint: 'cross-org bubble view',
+            hint: t('cmd.godCrossOrg'),
             run: () => {
               store.allOrgs = !store.allOrgs;
               return store.refresh();
@@ -153,7 +153,7 @@
           },
           {
             id: 'god:stats',
-            label: 'godmode: stats',
+            label: t('cmd.godStats'),
             run: () =>
               api.adminStats().then((s) => {
                 store.flash = `godmode · ${s.instances} instances · ${s.cached_instances} cached · ${s.cached_identities} ids · rev ${s.revision.slice(0, 7)}`;
@@ -161,7 +161,7 @@
           },
           {
             id: 'god:instances',
-            label: 'godmode: instances',
+            label: t('cmd.godInstances'),
             run: () =>
               api.adminInstances().then((list) => {
                 store.flash =
@@ -171,21 +171,21 @@
           },
           {
             id: 'god:refresh',
-            label: 'godmode: refresh caches',
+            label: t('cmd.godRefresh'),
             run: () =>
               api
                 .adminRefresh()
                 .then(() => store.refresh())
                 .then(() => {
-                  store.flash = 'caches refreshed';
+                  store.flash = t('toast.cachesRefreshed');
                 }),
           },
           {
             id: 'god:tick',
-            label: 'godmode: tick now',
+            label: t('cmd.godTick'),
             run: () =>
               api.adminTick().then(() => {
-                store.flash = 'cooling sweep triggered';
+                store.flash = t('toast.tickTriggered');
               }),
           },
         ]

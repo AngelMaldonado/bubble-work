@@ -66,7 +66,7 @@
     try {
       await api.adminOutboxDrop(id);
       outbox = await api.adminOutbox();
-      flash(`dropped outbox entry ${id}`);
+      flash(t('toast.outboxDropped', { id }));
     } catch (e) {
       fail(e);
     } finally {
@@ -80,7 +80,11 @@
     try {
       syncDiffs[slug] = await api.adminSyncDiff(slug);
       syncStatus[slug] = await api.adminSync(slug);
-      flash(syncDiffs[slug].clean ? `${slug}: mirror matches Plane` : `${slug}: ${syncDiffs[slug].findings?.length ?? 0} finding(s)`);
+      flash(
+        syncDiffs[slug].clean
+          ? t('toast.mirrorMatches', { slug })
+          : t('toast.mirrorFindings', { slug, n: syncDiffs[slug].findings?.length ?? 0 }),
+      );
     } catch (e) {
       fail(e);
     } finally {
@@ -163,39 +167,39 @@
       await api.adminRefresh();
       await store.refresh();
       await loadAll();
-      flash('caches refreshed');
+      flash(t('toast.cachesRefreshed'));
     });
 
   const tick = () =>
     run('tick', async () => {
       await api.adminTick();
-      flash('cooling sweep triggered');
+      flash(t('toast.tickTriggered'));
     });
 
   const toggleAllOrgs = () =>
     run('allorgs', async () => {
       store.allOrgs = !store.allOrgs;
       await store.refresh();
-      flash(store.allOrgs ? 'cross-org board on' : 'cross-org board off');
+      flash(t(store.allOrgs ? 'toast.crossOrgOn' : 'toast.crossOrgOff'));
     });
 
   const mintKiosk = () =>
     run('mint', async () => {
       if (!mintInstance) {
-        error = 'pick an instance';
+        error = t('toast.pickInstance');
         return;
       }
       const k = await api.adminKioskCreate(mintInstance, mintName.trim());
       tokens = [...tokens, k];
       mintName = '';
-      flash('kiosk token minted');
+      flash(t('toast.kioskMinted'));
     });
 
-  const revokeKiosk = (t: KioskToken) =>
-    run('revoke:' + t.token, async () => {
-      await api.adminKioskRevoke(t.token);
-      tokens = tokens.filter((x) => x.token !== t.token);
-      flash('kiosk token revoked');
+  const revokeKiosk = (tok: KioskToken) =>
+    run('revoke:' + tok.token, async () => {
+      await api.adminKioskRevoke(tok.token);
+      tokens = tokens.filter((x) => x.token !== tok.token);
+      flash(t('toast.kioskRevoked'));
     });
 
   // Turning this on lets the cooling sweep move cards in Plane: 😴 → Backlog,
@@ -213,7 +217,7 @@
       }
       const res = await api.adminAutoState(i.slug, !i.auto_state);
       instances = instances.map((x) => (x.slug === i.slug ? { ...x, auto_state: res.auto_state } : x));
-      flash(res.auto_state ? `${i.slug}: now writing state to Plane` : `${i.slug}: read-only again`);
+      flash(t(res.auto_state ? 'toast.autoStateOn' : 'toast.autoStateOff', { slug: i.slug }));
     });
 
   // ---- buoyancy tuning (THREAD-LIFECYCLE.md) ----
@@ -247,7 +251,7 @@
       tuning = await api.adminTuningSet(patch);
       draft = { ...tuning.tuning }; // the server may have clamped a value
       await store.refresh();
-      flash(`applied ${changed.length} change(s) — the board is already using them`);
+      flash(t('toast.applied', { n: changed.length }));
     });
 
   const resetTuning = () =>
@@ -256,19 +260,19 @@
       tuning = await api.adminTuningSet({ ...tuning.defaults });
       draft = { ...tuning.tuning };
       await store.refresh();
-      flash('calibration reset to defaults');
+      flash(t('toast.calibrationReset'));
     });
 
-  function kioskUrl(t: KioskToken): string {
-    return `${location.origin}/?kiosk=${encodeURIComponent(t.token)}`;
+  function kioskUrl(tok: KioskToken): string {
+    return `${location.origin}/?kiosk=${encodeURIComponent(tok.token)}`;
   }
 
   async function copy(text: string): Promise<void> {
     try {
       await navigator.clipboard.writeText(text);
-      flash('copied to clipboard');
+      flash(t('toast.copied'));
     } catch {
-      flash('copy failed — select and copy manually');
+      flash(t('toast.copyFailed'));
     }
   }
 </script>
@@ -576,7 +580,7 @@
             <div class="tgroup">
               <div class="tgroup-head">
                 <span class="tgroup-name">{i18n.tuning(`group.${g.key}`, g.label)}</span>
-                <span class="dim">{g.hint}</span>
+                <span class="dim">{i18n.tuning(`hint.${g.key}`, g.hint)}</span>
               </div>
               {#each fieldsIn(g.key) as f (f.key)}
                 <div class="knob" class:dirty={draft[f.key] !== tuning.tuning[f.key]}>
@@ -607,7 +611,7 @@
                       <span class="chip" title={t('god.differsDefault')}>{t('god.modified')}</span>
                     {/if}
                   </div>
-                  <p class="knob-help">{f.help}</p>
+                  <p class="knob-help">{i18n.tuning(`help.${f.key}`, f.help)}</p>
                   <code class="knob-key">{f.key}</code>
                 </div>
               {/each}

@@ -9,7 +9,7 @@
   import { store } from '../lib/store.svelte';
 
   type Opt = { value: string; label: string };
-  const ALL: Opt = { value: '', label: 'All projects' };
+  const ALL: Opt = $derived({ value: '', label: t('combo.allProjects') });
 
   const options = $derived<Opt[]>([ALL, ...store.projects.map((p) => ({ value: p.id, label: p.name }))]);
 

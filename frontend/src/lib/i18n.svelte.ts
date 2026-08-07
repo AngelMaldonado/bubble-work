@@ -196,22 +196,9 @@ const en = {
   'god.copyKiosk': 'copy kiosk URL',
   'god.revoke': 'revoke',
 
-  // tuning groups + knobs — keyed by the server's stable field key, falling back
-  // to the server's own English when a key is unknown (same contract as reasons)
   'tune.group.pulse': 'Pulse',
   'tune.group.bubble': 'Bubbles',
   'tune.group.thread': 'Threads',
-  'tune.cycle_hours': 'Cycle length (hours)',
-  'tune.dormant_cycles': 'Cycles before dormant',
-  'tune.decay_cycles': 'Score decay (cycles)',
-  'tune.ownerless_is_dormant': 'No owner sinks to dormant',
-  'tune.bubble_rip_needs_owner': 'Dormant + ownerless reads as RIP',
-  'tune.bubble_level_rollup': 'Bubble band = hottest thread',
-  'tune.thread_birth_heats': 'Creating a thread heats it',
-  'tune.thread_grace_cycles': 'Newborn grace (cycles)',
-  'tune.thread_rip_needs_owner': 'Unassigned + dormant reads as RIP',
-  'tune.pulse_cycles': 'Comment keeps a thread alive (cycles)',
-  'tune.thread_terminal_state_wins': "Plane's done/cancelled columns win",
 
   'god.allOrgs': 'all orgs',
   'god.revision': 'revision',
@@ -237,6 +224,57 @@ const en = {
   'omni.applyHint': '⏎ apply · esc back',
   'omni.navHint': '↑↓ move · ⏎ open · esc close · type',
   'omni.forCommands': 'for commands',
+
+  // combobox OPTIONS — built in script, so a markup grep never sees them
+  'combo.allProjects': 'All projects',
+  'combo.everyone': 'Everyone',
+  'combo.mine': 'Mine',
+
+  // command palette
+  'cmd.refresh': 'refresh',
+  'cmd.refreshHint': 're-poll the server',
+  'cmd.newBubble': 'new bubble…',
+  'cmd.newBubbleHint': 'create a bubble (Plane module)',
+  'cmd.birth': 'birth thread…',
+  'cmd.birthHint': 'enforces Brief + Definition of Done',
+  'cmd.review': 'mark reviewed…',
+  'cmd.unreview': 'un-review…',
+  'cmd.close': 'close bubble (done)…',
+  'cmd.setOwner': 'set owner…',
+  'cmd.setOutcome': 'set outcome…',
+  'cmd.signOut': 'sign out',
+  'cmd.viewAll': 'view all instances',
+  'cmd.switchTo': 'switch to {slug}',
+  'cmd.godPanel': 'godmode: open panel',
+  'cmd.godPanelHint': 'all admin options (/god-mode)',
+  'cmd.godCrossOrg': 'cross-org bubble view',
+  'cmd.godStats': 'godmode: stats',
+  'cmd.godInstances': 'godmode: instances',
+  'cmd.godRefresh': 'godmode: refresh caches',
+  'cmd.godTick': 'godmode: tick now',
+
+  // toasts
+  'toast.cachesRefreshed': 'caches refreshed',
+  'toast.tickTriggered': 'cooling sweep triggered',
+  'toast.calibrationReset': 'calibration reset to defaults',
+  'toast.copied': 'copied to clipboard',
+  'toast.copyFailed': 'copy failed — select and copy manually',
+  'toast.kioskMinted': 'kiosk token minted',
+  'toast.kioskRevoked': 'kiosk token revoked',
+  'toast.applied': 'applied {n} change(s) — the board is already using them',
+  'toast.outboxDropped': 'dropped outbox entry {id}',
+  'toast.crossOrgOn': 'cross-org board on',
+  'toast.crossOrgOff': 'cross-org board off',
+  'toast.autoStateOn': '{slug}: now writing state to Plane',
+  'toast.autoStateOff': '{slug}: read-only again',
+  'toast.mirrorMatches': '{slug}: mirror matches Plane',
+  'toast.mirrorFindings': '{slug}: {n} finding(s)',
+  'toast.pickInstance': 'pick an instance',
+
+  // knob help + group hints, keyed like the labels above
+  'tune.hint.pulse': 'the rhythm both grains are measured against',
+  'tune.hint.bubble': 'how a bubble reaches 🪦 vs 😴',
+  'tune.hint.thread': 'how a single work item moves between bands',
 } as const;
 
 export type MsgKey = keyof typeof en;
@@ -428,17 +466,6 @@ const es: Record<MsgKey, string> = {
   'tune.group.pulse': 'Pulso',
   'tune.group.bubble': 'Burbujas',
   'tune.group.thread': 'Hilos',
-  'tune.cycle_hours': 'Duración del ciclo (horas)',
-  'tune.dormant_cycles': 'Ciclos antes de quedar dormida',
-  'tune.decay_cycles': 'Decaimiento del puntaje (ciclos)',
-  'tune.ownerless_is_dormant': 'Sin responsable pasa a dormida',
-  'tune.bubble_rip_needs_owner': 'Dormida y sin responsable se lee como abandonada',
-  'tune.bubble_level_rollup': 'La banda de la burbuja = su hilo más activo',
-  'tune.thread_birth_heats': 'Crear un hilo lo calienta',
-  'tune.thread_grace_cycles': 'Gracia para recién creados (ciclos)',
-  'tune.thread_rip_needs_owner': 'Sin asignar y dormido se lee como abandonado',
-  'tune.pulse_cycles': 'Un comentario mantiene vivo el hilo (ciclos)',
-  'tune.thread_terminal_state_wins': 'Las columnas terminadas/canceladas de Plane mandan',
 
   'god.allOrgs': 'todas las orgs',
   'god.revision': 'revisión',
@@ -464,9 +491,97 @@ const es: Record<MsgKey, string> = {
   'omni.applyHint': '⏎ aplicar · esc volver',
   'omni.navHint': '↑↓ mover · ⏎ abrir · esc cerrar · escribe',
   'omni.forCommands': 'para comandos',
+
+  'combo.allProjects': 'Todos los proyectos',
+  'combo.everyone': 'Todos',
+  'combo.mine': 'Míos',
+
+  'cmd.refresh': 'actualizar',
+  'cmd.refreshHint': 'volver a consultar el servidor',
+  'cmd.newBubble': 'nueva burbuja…',
+  'cmd.newBubbleHint': 'crear una burbuja (módulo de Plane)',
+  'cmd.birth': 'crear hilo…',
+  'cmd.birthHint': 'exige Brief + Definición de Terminado',
+  'cmd.review': 'marcar revisado…',
+  'cmd.unreview': 'quitar revisión…',
+  'cmd.close': 'cerrar burbuja (terminada)…',
+  'cmd.setOwner': 'asignar responsable…',
+  'cmd.setOutcome': 'definir resultado…',
+  'cmd.signOut': 'cerrar sesión',
+  'cmd.viewAll': 'ver todas las instancias',
+  'cmd.switchTo': 'cambiar a {slug}',
+  'cmd.godPanel': 'modo dios: abrir panel',
+  'cmd.godPanelHint': 'todas las opciones de admin (/god-mode)',
+  'cmd.godCrossOrg': 'vista de burbujas entre orgs',
+  'cmd.godStats': 'modo dios: estadísticas',
+  'cmd.godInstances': 'modo dios: instancias',
+  'cmd.godRefresh': 'modo dios: limpiar cachés',
+  'cmd.godTick': 'modo dios: barrer ahora',
+
+  'toast.cachesRefreshed': 'cachés limpiadas',
+  'toast.tickTriggered': 'barrido de enfriamiento lanzado',
+  'toast.calibrationReset': 'calibración restaurada a valores de fábrica',
+  'toast.copied': 'copiado al portapapeles',
+  'toast.copyFailed': 'no se pudo copiar — selecciona y copia a mano',
+  'toast.kioskMinted': 'token de kiosco generado',
+  'toast.kioskRevoked': 'token de kiosco revocado',
+  'toast.applied': 'se aplicaron {n} cambio(s) — el tablero ya los está usando',
+  'toast.outboxDropped': 'entrada {id} de la cola descartada',
+  'toast.crossOrgOn': 'vista entre orgs activada',
+  'toast.crossOrgOff': 'vista entre orgs desactivada',
+  'toast.autoStateOn': '{slug}: ahora escribe el estado en Plane',
+  'toast.autoStateOff': '{slug}: de nuevo en solo lectura',
+  'toast.mirrorMatches': '{slug}: el espejo coincide con Plane',
+  'toast.mirrorFindings': '{slug}: {n} hallazgo(s)',
+  'toast.pickInstance': 'elige una instancia',
+
+  'tune.hint.pulse': 'el ritmo contra el que se miden ambos niveles',
+  'tune.hint.bubble': 'cómo una burbuja llega a 🪦 en vez de 😴',
+  'tune.hint.thread': 'cómo un work item se mueve entre bandas',
 };
 
 const catalogues: Record<Lang, Record<MsgKey, string>> = { en, es };
+
+// Calibration knobs are the one place the SERVER owns the English: TuningFields
+// exists so the CLI and God Mode cannot drift. So only the other languages get
+// entries here — an English copy would be a second source of truth that silently
+// falls out of step with the server's wording. Keyed by the server's stable
+// field key, with "help." prefixing the explanatory paragraph.
+const tuneEs: Record<string, string> = {
+  cycle_hours: 'Duración del ciclo (horas)',
+  dormant_cycles: 'Ciclos antes de quedar dormida',
+  decay_cycles: 'Decaimiento del puntaje (ciclos)',
+  ownerless_is_dormant: 'Sin responsable pasa a dormida',
+  bubble_rip_needs_owner: 'Dormida y sin responsable se lee como 🪦',
+  bubble_level_rollup: 'La banda de la burbuja = su hilo más activo',
+  thread_birth_heats: 'Crear un hilo lo calienta',
+  thread_grace_cycles: 'Gracia para recién creados (ciclos)',
+  thread_rip_needs_owner: 'Sin asignar y dormido se lee como 🪦',
+  pulse_cycles: 'Un comentario mantiene vivo el hilo (ciclos)',
+  thread_terminal_state_wins: 'Las columnas terminado/cancelado de Plane mandan',
+
+  'help.cycle_hours':
+    'El pulso contra el que se mide la recencia. Solo se usa cuando el proyecto no tiene un ciclo activo en Plane — un ciclo real siempre manda.',
+  'help.dormant_cycles':
+    'Cuántos ciclos de silencio dejan algo dormido. 2 = «nada este ciclo ni el anterior». Más bajo hunde el tablero más rápido.',
+  'help.decay_cycles':
+    'Escala el puntaje de flotabilidad usado para ordenar. Más alto mantiene las cosas flotando más tiempo; no cambia las bandas.',
+  'help.ownerless_is_dormant':
+    'Algo sin nadie que responda queda dormido una vez que se calla. Lo que sigue produciendo se mantiene caliente igual.',
+  'help.bubble_level_rollup':
+    'La burbuja se sitúa en la banda de su hilo sin terminar más activo. Apagado, se clasifica por la unión de su evidencia — que cuenta la creación de un hilo como salida de la burbuja, así que una burbuja llena de work items nuevos sin tocar se lee 🔥. Cerrar y revisar explícitamente siempre mandan.',
+  'help.bubble_rip_needs_owner':
+    'Una burbuja dormida sin responsable se lee 🪦 en vez de 😴. Una que nunca produjo nada es 🪦 de todas formas. Solo se usa cuando la banda NO viene de sus hilos.',
+  'help.thread_birth_heats':
+    'Apagado por defecto: nacer no es producir. Encenderlo hace que cada work item nuevo se lea 🔥 durante un ciclo entero, aunque siga intacto en Backlog. Una creación siempre calienta su burbuja.',
+  'help.thread_grace_cycles':
+    'Cuánto tiempo un hilo nuevo que no ha producido nada sigue 😴 antes de llamarse 🪦. 0 = sin gracia.',
+  'help.thread_rip_needs_owner': 'Un hilo dormido sin asignar se lee 🪦 en vez de 😴.',
+  'help.pulse_cycles':
+    'Cuánto tiempo un comentario mantiene un hilo fuera de 🪦. Los comentarios son presencia, no producción — nunca calientan un hilo a 🔥, pero no declaramos algo abandonado mientras la gente sigue discutiéndolo. 0 apaga el pulso.',
+  'help.thread_terminal_state_wins':
+    'Deja que Plane decida los dos estados terminales: completado → 🏆, cancelado → 🪦. Cancelar se deshace con producción real (una edición de bitácora o una revisión resucitan el hilo) pero nunca con comentarios. Las demás columnas se ignoran igual — mover una tarjeta es movimiento, no evidencia.',
+};
 
 function detect(): Lang {
   const stored = localStorage.getItem(KEY);
@@ -543,8 +658,13 @@ class I18n {
    *  English (so the CLI and God Mode cannot drift), we translate by its stable
    *  key, and a knob this build has not heard of shows the server's own words. */
   tuning(key: string, fallback: string): string {
+    // Group labels/hints are client-owned and live in the shared catalogue.
     const k = `tune.${key}` as MsgKey;
-    return k in en ? this.t(k) : fallback;
+    if (k in en) return this.t(k);
+    // Field labels and help are server-owned: English comes straight from it,
+    // and an unknown key in any language shows the server's own words.
+    if (this.lang === 'es') return tuneEs[key] ?? fallback;
+    return fallback;
   }
 
   reason(code: string | undefined, fallback: string, args?: Record<string, string>): string {

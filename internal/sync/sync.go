@@ -210,7 +210,16 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 	// what decides who may see which board, so waiting an hour to notice that
 	// somebody was added to — or removed from — a project is too long. It is one
 	// cheap call per project, ten minutes apart.
-	if freshStructure {
+	// ...and when it is not yet KNOWN at all, regardless of the cadence. The
+	// mirror survives a deploy, so the first pass after this shipped comes up
+	// with a recent structure cursor and would otherwise skip the fetch that
+	// authorization now depends on, refusing every board until the cadence came
+	// round.
+	membershipKnown, err := s.m.ProjectMembershipKnown(inst.Slug)
+	if err != nil {
+		return res, fmt.Errorf("read project membership state: %w", err)
+	}
+	if freshStructure || !membershipKnown {
 		for _, p := range projects {
 			ms, err := base.ListProjectMembers(ctx, p.ID)
 			if err != nil {

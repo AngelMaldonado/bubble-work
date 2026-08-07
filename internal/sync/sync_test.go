@@ -625,3 +625,45 @@ func TestCommentFailureDoesNotBlockTheProject(t *testing.T) {
 		t.Error("watermark held back by a comment failure alone")
 	}
 }
+
+// The deploy case, which is not hypothetical: the mirror SURVIVES a deploy, so
+// the first pass after project-level authorization shipped comes up with a
+// recent structure cursor. If membership only rode the structure cadence it
+// would be skipped, and — because an unknown membership is deliberately not
+// answered as "you belong to nothing" — every board would be refused until the
+// cadence came round. A self-inflicted outage on every upgrade.
+func TestProjectMembershipIgnoresTheCadenceWhenUnknown(t *testing.T) {
+	f := newFakePlane(t)
+	f.modules = []map[string]any{{"id": "m1", "name": "Bubble One"}}
+	s, m := newTestSyncer(t)
+
+	// Stand in for a mirror a previous release left behind: structure synced a
+	// moment ago, project membership never fetched because it did not exist.
+	if err := m.SetCursor("cuby", "structure", mirror.Cursor{LastOK: time.Now()}); err != nil {
+		t.Fatal(err)
+	}
+	if known, err := m.ProjectMembershipKnown("cuby"); err != nil || known {
+		t.Fatalf("setup: membership should be unknown (known=%v err=%v)", known, err)
+	}
+
+	if _, err := s.Delta(context.Background(), inst(f)); err != nil {
+		t.Fatalf("delta: %v", err)
+	}
+
+	known, err := m.ProjectMembershipKnown("cuby")
+	if err != nil || !known {
+		t.Fatalf("a fresh structure cursor skipped the membership fetch: known=%v err=%v", known, err)
+	}
+	// And the member can see the project they belong to, which is the whole
+	// point — knowing the answer is not the same as it being right.
+	vis, known, err := m.ProjectsFor("cuby", "u1")
+	if err != nil || !known {
+		t.Fatalf("ProjectsFor: known=%v err=%v", known, err)
+	}
+	if len(vis) == 0 {
+		t.Error("membership was recorded as known, but the member sees no project")
+	}
+
+	// Once known it goes back to riding the structure cadence — asserted by
+	// TestDeltaDoesNotRefetchStructure, which counts what a quiet delta spends.
+}

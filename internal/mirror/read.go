@@ -329,3 +329,18 @@ func (m *Mirror) ProjectsFor(instance, memberID string) (projects map[string]boo
 	}
 	return projects, true, rows.Err()
 }
+
+// ProjectMembershipKnown reports whether any project's membership has been read
+// for an instance.
+//
+// It exists for the bootstrap case, which is not hypothetical: the mirror
+// survives a deploy, so a server that gains project-level authorization comes up
+// with a RECENT structure cursor and would therefore skip the very fetch that
+// authorization now depends on — leaving every board refused until the cadence
+// came round. Membership being unknown has to override the cadence.
+func (m *Mirror) ProjectMembershipKnown(instance string) (bool, error) {
+	var n int
+	err := m.db.QueryRow(
+		`SELECT COUNT(*) FROM mirror_project_member_sync WHERE instance = ?`, instance).Scan(&n)
+	return n > 0, err
+}

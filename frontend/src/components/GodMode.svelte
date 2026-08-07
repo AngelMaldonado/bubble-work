@@ -16,6 +16,7 @@
     TuningView,
     SyncStatus,
     SyncDiff,
+    SyncFidelity,
     OutboxView,
   } from '../lib/types';
 
@@ -45,6 +46,7 @@
   // are explicit because both walk Plane completely and cost real rate budget.
   let syncStatus = $state<Record<string, SyncStatus>>({});
   let syncDiffs = $state<Record<string, SyncDiff>>({});
+  let syncFidelity = $state<Record<string, SyncFidelity>>({});
   // Writes that have not reached Plane (PLANE-SYNC.md Phase 5).
   let outbox = $state<OutboxView | null>(null);
 
@@ -85,6 +87,22 @@
           ? t('toast.mirrorMatches', { slug })
           : t('toast.mirrorFindings', { slug, n: syncDiffs[slug].findings?.length ?? 0 }),
       );
+    } catch (e) {
+      fail(e);
+    } finally {
+      busy = null;
+    }
+  }
+
+  // Mirror-only, so unlike diff and backfill this costs no Plane calls and can
+  // be re-run freely after any change to the markdown bridge.
+  async function runSyncFidelity(slug: string): Promise<void> {
+    busy = 'fidelity:' + slug;
+    error = null;
+    try {
+      const f = await api.adminSyncFidelity(slug);
+      syncFidelity[slug] = f;
+      flash(t('god.fidelitySurvive', { stable: f.stable, bodies: f.bodies }));
     } catch (e) {
       fail(e);
     } finally {
@@ -448,7 +466,36 @@
                 <button onclick={() => runSyncBackfill(i.slug)} disabled={busy !== null}>
                   {busy === 'backfill:' + i.slug ? 'walking…' : 'Backfill'}
                 </button>
+                <button onclick={() => runSyncFidelity(i.slug)} disabled={busy !== null}>
+                  {busy === 'fidelity:' + i.slug
+                    ? t('god.fidelityRunning')
+                    : t('god.fidelity')}
+                </button>
               </div>
+              {@const fid = syncFidelity[i.slug]}
+              {#if fid}
+                {#if fid.stable === fid.bodies && fid.mentions === 0 && fid.assets === 0}
+                  <p class="bok">{t('god.fidelityOk', { n: fid.bodies })}</p>
+                {:else}
+                  <p class="bwarn">
+                    {t('god.fidelitySurvive', { stable: fid.stable, bodies: fid.bodies })}
+                  </p>
+                  {#if fid.mentions > 0 || fid.assets > 0}
+                    <p class="bwarn">
+                      {t('god.fidelityLost', { mentions: fid.mentions, assets: fid.assets })}
+                    </p>
+                    <p class="bmeta">{t('god.fidelityHint')}</p>
+                  {/if}
+                  <ul class="findings">
+                    {#each fid.unstable ?? [] as u (u.thread_id)}
+                      <li>{u.title} — line {u.line}</li>
+                    {/each}
+                  </ul>
+                  {#if (fid.elided ?? 0) > 0}
+                    <p class="bmeta">…and {fid.elided} more</p>
+                  {/if}
+                {/if}
+              {/if}
               {#if d}
                 {#if d.clean}
                   <p class="bok">✓ mirror matches Plane ({d.items} items compared)</p>

@@ -139,6 +139,29 @@ export interface Comment {
   error?: string;
 }
 
+/** Round-trip fidelity over an instance's mirrored bodies
+ *  (docs/ARTIFACT-EDITING.md Phase 0). Mirror-only, so it costs no Plane budget. */
+export interface SyncFidelity {
+  instance: string;
+  bodies: number;
+  stable: number;
+  mentions: number; // <mention-component> nodes a write would delete
+  assets: number; // <image-component> nodes a write would break
+  unstable?: FidelityIssue[];
+  elided?: number;
+  took_ms: number;
+}
+
+export interface FidelityIssue {
+  thread_id: string;
+  title: string;
+  line: number;
+  before: string;
+  after: string;
+  mentions?: number;
+  assets?: number;
+}
+
 export interface Notification {
   id: number;
   at: string;

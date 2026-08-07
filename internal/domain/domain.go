@@ -682,6 +682,33 @@ type SyncDiff struct {
 	TookMS    int64         `json:"took_ms"`
 }
 
+// SyncFidelity measures what a read→write round trip would do to an instance's
+// bodies (docs/ARTIFACT-EDITING.md Phase 0). Cheap — it reads the mirror and
+// costs no Plane calls — so it can be re-run after every change to the markdown
+// bridge rather than measured once and asserted forever.
+type SyncFidelity struct {
+	Instance string `json:"instance"`
+	Bodies   int    `json:"bodies"`   // bodies with enough content to be worth checking
+	Stable   int    `json:"stable"`   // survive a round trip unchanged
+	Mentions int    `json:"mentions"` // <mention-component> nodes a write would delete
+	Assets   int    `json:"assets"`   // <image-component> nodes a write would break
+	// Threads that would be damaged, most-damaged first, capped for readability.
+	Unstable []FidelityIssue `json:"unstable,omitempty"`
+	Elided   int             `json:"elided,omitempty"` // unstable threads not listed
+	TookMS   int64           `json:"took_ms"`
+}
+
+// FidelityIssue is one thread whose body does not survive a round trip.
+type FidelityIssue struct {
+	ThreadID string `json:"thread_id"`
+	Title    string `json:"title"`
+	Line     int    `json:"line"`
+	Before   string `json:"before"`
+	After    string `json:"after"`
+	Mentions int    `json:"mentions,omitempty"`
+	Assets   int    `json:"assets,omitempty"`
+}
+
 // Notification records a bubble crossing into a colder state (§5) — the push
 // side of the buoyancy model: it tells you what's sinking without you looking.
 type Notification struct {

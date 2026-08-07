@@ -478,6 +478,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("DELETE /api/admin/outbox/{id}", s.adminOnly(s.handleDropOutbox))
 	mux.HandleFunc("GET /api/admin/sync/{slug}", s.adminOnly(s.handleSyncStatus))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/diff", s.adminOnly(s.handleSyncDiff))
+	// GET, unlike diff: fidelity reads only the mirror, so it costs no Plane budget.
+	mux.HandleFunc("GET /api/admin/sync/{slug}/fidelity", s.adminOnly(s.handleSyncFidelity))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/backfill", s.adminOnly(s.handleSyncBackfill))
 	mux.HandleFunc("POST /api/admin/sync/{slug}/rebuild", s.adminOnly(s.handleSyncRebuild))
 	mux.HandleFunc("GET /api/admin/tuning", s.adminOnly(s.handleGetTuning))

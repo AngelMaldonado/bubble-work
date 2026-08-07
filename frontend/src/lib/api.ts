@@ -15,6 +15,7 @@ import type {
   TuningView,
   SyncStatus,
   SyncDiff,
+  SyncFidelity,
   SyncResult,
   OutboxView,
   ServiceStatus,
@@ -159,6 +160,9 @@ export const api = {
     req<SyncStatus>('GET', `/api/admin/sync/${encodeURIComponent(slug)}`),
   adminSyncDiff: (slug: string) =>
     req<SyncDiff>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/diff`),
+  // GET, unlike diff: fidelity reads only the mirror, so it spends no rate budget.
+  adminSyncFidelity: (slug: string) =>
+    req<SyncFidelity>('GET', `/api/admin/sync/${encodeURIComponent(slug)}/fidelity`),
   adminSyncBackfill: (slug: string) =>
     req<SyncResult>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/backfill`),
   adminOutbox: () => req<OutboxView>('GET', '/api/admin/outbox'),

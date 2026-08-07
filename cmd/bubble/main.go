@@ -506,7 +506,7 @@ func cmdAdmin(args []string) {
 		err = cmdAdminTuning(cfg, token, args[1:])
 	case "outbox":
 		err = client.AdminOutbox(cfg, token, args[1:])
-	case "sync", "sync-diff", "sync-backfill", "sync-rebuild":
+	case "sync", "sync-diff", "sync-fidelity", "sync-backfill", "sync-rebuild":
 		if len(args) < 2 {
 			err = fmt.Errorf("usage: bubble admin %s <instance>", args[0])
 			break
@@ -599,6 +599,7 @@ Usage:
   bubble admin autostate <inst> off  stop writing to Plane (default)
   bubble admin sync <inst>           mirror census + cursor (no Plane calls)
   bubble admin sync-diff <inst>      compare the mirror against a live fetch
+  bubble admin sync-fidelity <inst>  what a write would do to mirrored bodies
   bubble admin sync-backfill <inst>  force a complete re-walk of one instance
   bubble admin sync-rebuild <inst>   drop the local mirror and rebuild it
   bubble admin outbox                writes that have not reached Plane

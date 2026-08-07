@@ -5,6 +5,7 @@
 package md
 
 import (
+	"bytes"
 	"regexp"
 	"strconv"
 	"strings"
@@ -85,7 +86,7 @@ func (c *htmlConv) block(n *html.Node) {
 				c.sb.WriteString("\n\n")
 			}
 		case atom.Ul, atom.Ol:
-			c.list(n, n.DataAtom == atom.Ol, 0)
+			c.list(n, n.DataAtom == atom.Ol, "")
 			c.sb.WriteByte('\n')
 		case atom.Blockquote:
 			var inner htmlConv
@@ -137,13 +138,61 @@ func (c *htmlConv) block(n *html.Node) {
 	}
 }
 
+// hardBreak is the markdown for a <br>: two spaces then a newline.
+const hardBreak = "  \n"
+
+// inlineBuf assembles inline renderings under one rule the round trip depends on:
+// a hard break OWNS the whitespace on both sides of it.
+//
+// RenderHTML emits "  \n" as "<br>\n". Read back, the source newline AFTER the
+// <br> collapses to a leading space, and any spaces BEFORE it are re-emitted on
+// top of the "  " the break already carries. Left alone, "a   \nb" returns as
+// "a  \n b", then as "a  \nb" — a body that rewrites itself every time it is
+// saved, which is exactly what an editor must not do.
+type inlineBuf struct {
+	b          []byte
+	afterBreak bool
+}
+
+func (ib *inlineBuf) add(s string) {
+	if s == "" {
+		return
+	}
+	if s == hardBreak {
+		ib.b = bytes.TrimRight(ib.b, " \t")
+		ib.b = append(ib.b, s...)
+		ib.afterBreak = true
+		return
+	}
+	// After a break, or against whitespace already in the buffer, drop the
+	// leading run. collapseWS only sees one text node at a time, so two runs
+	// meeting at an inline boundary — "ser: " + <span> + " 1 se" — survive as a
+	// double space that HTML never rendered and that collapses on the next read.
+	if ib.afterBreak || endsWithSpace(ib.b) {
+		if s = strings.TrimLeft(s, " \t"); s == "" {
+			return
+		}
+	}
+	ib.b = append(ib.b, s...)
+	ib.afterBreak = strings.HasSuffix(s, "\n")
+}
+
+func endsWithSpace(b []byte) bool {
+	if len(b) == 0 {
+		return false
+	}
+	return b[len(b)-1] == ' ' || b[len(b)-1] == '\t'
+}
+
+func (ib *inlineBuf) String() string { return string(ib.b) }
+
 // inline renders the inline children of n to a single string.
 func (c *htmlConv) inline(n *html.Node) string {
-	var b strings.Builder
+	var ib inlineBuf
 	for ch := n.FirstChild; ch != nil; ch = ch.NextSibling {
-		b.WriteString(c.inlineNode(ch))
+		ib.add(c.inlineNode(ch))
 	}
-	return b.String()
+	return ib.String()
 }
 
 func (c *htmlConv) inlineNode(n *html.Node) string {
@@ -198,55 +247,83 @@ func wrap(delim, inner string) string {
 	return delim + inner + delim
 }
 
-func (c *htmlConv) list(n *html.Node, ordered bool, depth int) {
-	idx := 1
-	indent := strings.Repeat("  ", depth)
+// list renders a <ul>/<ol>. indent is the prefix every item of this list carries;
+// a nested list is indented to its parent item's CONTENT column, which is what
+// GFM requires — not a fixed two spaces. Under "- " that is the same thing, but
+// under "3. " two spaces is one short of nesting, so the child list was being
+// flattened into its parent and renumbered on the way through.
+func (c *htmlConv) list(n *html.Node, ordered bool, indent string) {
+	idx := listStart(n, ordered)
 	for li := n.FirstChild; li != nil; li = li.NextSibling {
 		if li.Type != html.ElementNode || li.DataAtom != atom.Li {
 			continue
 		}
 		checked, isTask := taskState(li)
-		var marker string
+		// bullet is the list marker alone; marker includes the checkbox, which is
+		// content rather than part of the marker and so does not shift the column
+		// a nested list has to reach.
+		var marker, bullet string
 		switch {
 		case isTask && checked:
-			marker = "- [x] "
+			marker, bullet = "- [x] ", "- "
 		case isTask:
-			marker = "- [ ] "
+			marker, bullet = "- [ ] ", "- "
 		case ordered:
 			marker = strconv.Itoa(idx) + ". "
+			bullet = marker
+			idx++
 		default:
-			marker = "- "
+			marker, bullet = "- ", "- "
 		}
-		idx++
 		c.sb.WriteString(indent)
 		c.sb.WriteString(marker)
 		c.sb.WriteString(strings.TrimSpace(c.liText(li)))
 		c.sb.WriteByte('\n')
 		// Nested lists render one level deeper.
+		child := indent + strings.Repeat(" ", len(bullet))
 		for ch := li.FirstChild; ch != nil; ch = ch.NextSibling {
 			if ch.Type == html.ElementNode && (ch.DataAtom == atom.Ul || ch.DataAtom == atom.Ol) {
-				c.list(ch, ch.DataAtom == atom.Ol, depth+1)
+				c.list(ch, ch.DataAtom == atom.Ol, child)
 			}
 		}
 	}
 }
 
+// listStart reads an <ol start="N">. goldmark emits one whenever a list does not
+// begin at 1, so honouring it is what keeps "3. 4. 5." from resetting to "1.".
+func listStart(n *html.Node, ordered bool) int {
+	if !ordered {
+		return 1
+	}
+	if s := attr(n, "start"); s != "" {
+		if v, err := strconv.Atoi(strings.TrimSpace(s)); err == nil && v > 0 {
+			return v
+		}
+	}
+	return 1
+}
+
 // liText gathers a list item's inline text, skipping nested lists (rendered
 // separately) and unwrapping the p/div/label wrappers ProseMirror nests inside.
+//
+// It assembles through inlineBuf for the same reason inline does: a task item
+// whose text carries a hard break is common (Plane's editor makes one on every
+// shift-enter), and joining the pieces raw reintroduced the leading space the
+// paragraph path had just been taught to drop.
 func (c *htmlConv) liText(li *html.Node) string {
-	var b strings.Builder
+	var ib inlineBuf
 	for ch := li.FirstChild; ch != nil; ch = ch.NextSibling {
 		if ch.Type == html.ElementNode && (ch.DataAtom == atom.Ul || ch.DataAtom == atom.Ol) {
 			continue
 		}
 		if ch.Type == html.ElementNode &&
 			(ch.DataAtom == atom.P || ch.DataAtom == atom.Div || ch.DataAtom == atom.Label || ch.DataAtom == atom.Span) {
-			b.WriteString(c.inline(ch))
+			ib.add(c.inline(ch))
 		} else {
-			b.WriteString(c.inlineNode(ch))
+			ib.add(c.inlineNode(ch))
 		}
 	}
-	return b.String()
+	return ib.String()
 }
 
 // taskState reports whether a list item is a task item and, if so, its checked

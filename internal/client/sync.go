@@ -41,6 +41,14 @@ func AdminSync(cfg config.Config, token, cmd, instance string) error {
 			return fmt.Errorf("%d finding(s) — the mirror does not match Plane", len(d.Findings))
 		}
 		return nil
+	case "sync-fidelity":
+		var f domain.SyncFidelity
+		// Mirror-only, so no long timeout and no rate budget spent.
+		if err := getJSON(cfg.ActiveServer()+"/api/admin/sync/"+instance+"/fidelity", token, &f); err != nil {
+			return err
+		}
+		printSyncFidelity(f)
+		return nil
 	case "sync-rebuild":
 		var r domain.SyncResult
 		// Destructive-looking but safe by construction: the mirror is a
@@ -108,6 +116,40 @@ func printSyncDiff(d domain.SyncDiff) {
 	}
 	fmt.Println("\n  A stale watermark explains most field differences — try")
 	fmt.Printf("  `bubble admin sync-backfill %s` and re-run.\n", d.Instance)
+}
+
+func printSyncFidelity(f domain.SyncFidelity) {
+	took := (time.Duration(f.TookMS) * time.Millisecond).Round(time.Millisecond)
+	fmt.Printf("sync-fidelity %s — round-tripped %d bodies in %s\n", f.Instance, f.Bodies, took)
+	if f.Bodies == 0 {
+		fmt.Println("\n  (nothing mirrored yet)")
+		return
+	}
+	pct := float64(f.Stable) / float64(f.Bodies) * 100
+	fmt.Printf("\n  survive a write : %d/%d  (%.1f%%)\n", f.Stable, f.Bodies, pct)
+	fmt.Printf("  mentions lost   : %d\n", f.Mentions)
+	fmt.Printf("  images broken   : %d\n", f.Assets)
+
+	if f.Stable == f.Bodies && f.Mentions == 0 && f.Assets == 0 {
+		fmt.Println("\n  ✓ every body survives a read→write round trip")
+		return
+	}
+	if len(f.Unstable) > 0 {
+		fmt.Printf("\n  %d thread(s) would change on a write:\n", len(f.Unstable)+f.Elided)
+		for _, u := range f.Unstable {
+			fmt.Printf("\n    · %s  (line %d)\n", u.Title, u.Line)
+			fmt.Printf("        was: %s\n", u.Before)
+			fmt.Printf("        now: %s\n", u.After)
+		}
+		if f.Elided > 0 {
+			fmt.Printf("\n    … and %d more\n", f.Elided)
+		}
+	}
+	if f.Mentions > 0 || f.Assets > 0 {
+		fmt.Println("\n  Mentions and images are not carried by the markdown bridge yet")
+		fmt.Println("  (docs/ARTIFACT-EDITING.md Phase 2). Until they are, a whole-body")
+		fmt.Println("  write destroys them — which is why writes splice blocks instead.")
+	}
 }
 
 // postLong is postTok with a timeout that suits a full Plane walk.

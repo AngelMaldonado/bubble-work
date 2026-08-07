@@ -2,6 +2,7 @@
   import { store } from '../lib/store.svelte';
   import { i18n, t } from '../lib/i18n.svelte';
   import { theme } from '../lib/theme.svelte';
+  import { tour } from '../lib/tour.svelte';
   import { LEVELS } from '../lib/types';
   import type { BubbleView } from '../lib/types';
   import Band from './Band.svelte';
@@ -77,7 +78,12 @@
       <span class="kiosk-tag">{t('chrome.kioskBadge')}</span>
     </div>
   {:else}
-    <button class="brand" onclick={() => (omni = true)} title={t('chrome.searchCommands')}>
+    <button
+      class="brand"
+      data-tour="brand"
+      onclick={() => (omni = true)}
+      title={t('chrome.searchCommands')}
+    >
       <span class="orb"></span>
       <span class="wordmark">bubble.work</span>
     </button>
@@ -188,6 +194,12 @@
         </button>
       {:else}
         <span class="hint">{t('chrome.searchHint')} · <b>&gt;</b> {t('chrome.commandsHint')}</span>
+      {/if}
+      <!-- the tour lives with the display badges: it is help, not an action -->
+      {#if !kiosk}
+        <button class="theme tour" onclick={() => tour.start()} title={t('tour.start')}>
+          <span class="tico">?</span>
+        </button>
       {/if}
       <!-- language sits immediately left of the theme badge and shares its
            shape: two adjacent display preferences should read as one pair. -->

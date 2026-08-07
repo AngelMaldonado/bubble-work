@@ -682,7 +682,7 @@
     <p class="err pad">{error}</p>
   {:else if detail}
     <div class="body">
-      <nav class="side" class:collapsed={sideCollapsed}>
+      <nav class="side" class:collapsed={sideCollapsed} data-tour="artifacts">
         <div class="side-head">
           {#if !sideCollapsed}<span class="side-title">{t('thread.contents')}</span>{/if}
           <button
@@ -780,7 +780,7 @@
               onclick={() => (pending = { kind: 'thread' })}
               title={t('thread.delete')}>🗑 {t('del.threadWord')}</button
             >
-            <div class="seg" role="group" aria-label={t('thread.viewMode')}>
+            <div class="seg" role="group" aria-label={t('thread.viewMode')} data-tour="viewmode">
               <button
                 class:on={!editing}
                 aria-pressed={!editing}
@@ -846,7 +846,7 @@
             <h1>{t('thread.logbook')}</h1>
             <!-- svelte-ignore a11y_click_events_have_key_events -->
             <!-- svelte-ignore a11y_no_static_element_interactions -->
-            <div data-region="logbook" onclick={onProseClick}>
+            <div data-region="logbook" data-tour="logbook" onclick={onProseClick}>
               {#if detail.logbook.html}
                 {@html detail.logbook.html}
               {:else}

@@ -1,10 +1,17 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { store } from './lib/store.svelte';
+  import { tour } from './lib/tour.svelte';
   import AuthGate from './components/AuthGate.svelte';
   import Workspace from './components/Workspace.svelte';
   import ThreadView from './components/ThreadView.svelte';
   import GodMode from './components/GodMode.svelte';
+
+  // The tour runs itself once, and only after the board has something to point
+  // at — starting it against an empty screen would highlight nothing.
+  $effect(() => {
+    if (store.authed && !store.loading && !store.threadId) tour.maybeAutoStart();
+  });
 
   onMount(() => {
     void store.boot();

@@ -31,6 +31,7 @@
   <header>
     <button
       class="title"
+      data-tour={level === 'in_progress' ? 'band' : undefined}
       onclick={() => collapsible && (expanded = !expanded)}
       class:static={!collapsible}
     >

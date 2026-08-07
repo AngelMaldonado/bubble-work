@@ -72,6 +72,7 @@
   class:pinned
   style="--d: {delay}s"
   id="bw-{bubble.id}"
+  data-tour={index === 0 ? 'orb' : undefined}
   bind:this={wrapEl}
   onmouseenter={place}
   onfocusin={place}
@@ -443,5 +444,10 @@
     .wrap {
       animation: none;
     }
+  }
+  /* driver.js cuts a STATIC hole in its overlay, so a bobbing orb drifts out of
+     its own highlight. The tour reuses the switch reduced-motion already has. */
+  :global(html[data-tour]) .wrap {
+    animation: none;
   }
 </style>

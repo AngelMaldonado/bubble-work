@@ -202,3 +202,63 @@ textarea {
   margin: 0.25rem 0.3rem;
   background: var(--line);
 }
+
+/* ---- the product tour (lib/tour.svelte.ts) ----
+   driver.js ships a serviceable light popover; these make it the app's. Global
+   because driver.js appends its DOM to <body>, outside every component. */
+.driver-popover.bw-tour {
+  max-width: 22rem;
+  padding: 1rem 1.1rem;
+  border-radius: 16px;
+  background: var(--surface-solid);
+  border: 1px solid color-mix(in oklab, var(--wip) 32%, var(--line));
+  box-shadow: 0 26px 60px var(--shadow-strong);
+  color: var(--text);
+  font-family: var(--sans);
+}
+.driver-popover.bw-tour .driver-popover-title {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--text);
+}
+.driver-popover.bw-tour .driver-popover-description {
+  margin-top: 0.4rem;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--muted);
+}
+.driver-popover.bw-tour .driver-popover-description b {
+  color: var(--text);
+  font-weight: 700;
+}
+.driver-popover.bw-tour .driver-popover-progress-text {
+  font-size: 0.72rem;
+  color: var(--faint);
+}
+.driver-popover.bw-tour .driver-popover-navigation-btns button {
+  padding: 0.35rem 0.9rem;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: color-mix(in oklab, var(--text) 6%, transparent);
+  color: var(--text);
+  font-family: var(--sans);
+  font-size: 0.8rem;
+  font-weight: 700;
+  text-shadow: none;
+}
+.driver-popover.bw-tour .driver-popover-navigation-btns button:last-child {
+  color: oklch(0.16 0.02 265);
+  background: var(--wip);
+  border-color: transparent;
+}
+.driver-popover.bw-tour .driver-popover-close-btn {
+  color: var(--faint);
+}
+.driver-popover.bw-tour .driver-popover-arrow {
+  border-color: color-mix(in oklab, var(--wip) 32%, var(--line));
+}
+/* The cutout should read as the app's focus ring, not a plain hole. */
+.driver-active .driver-overlay,
+.driver-active * {
+  transition-duration: 180ms;
+}

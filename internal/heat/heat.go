@@ -12,16 +12,39 @@ package heat
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+)
+
+// Reason codes. Reason carries the English sentence — the CLI, MCP and logs read
+// it and are unaffected by any of this — while Code and Args say the same thing
+// structurally so a client can render it in its own language.
+//
+// Deliberately NOT a translation layer in here: the heat model has no business
+// knowing what language anyone reads. It states what it concluded; presentation
+// is the client's problem.
+const (
+	ReasonHotCurrent       = "hot_current"       // output in the current cycle
+	ReasonWarmPrevious     = "warm_previous"     // output last cycle, threads still open
+	ReasonCooling          = "cooling"           // nothing this cycle or last
+	ReasonDormantOwnerless = "dormant_ownerless" // nobody accountable
+	ReasonDormantNever     = "dormant_never"     // nothing ever produced
+	ReasonDormantSilent    = "dormant_silent"    // silent for {cycles}+ cycles
+	ReasonThreadWarmOpen   = "thread_warm_open"  // thread wording for Warm
+	ReasonThreadNewborn    = "thread_newborn"    // born recently, nothing yet
+	ReasonClosedBubble     = "closed_bubble"     // outcome reached or abandoned
+	ReasonClosedThread     = "closed_thread"     // the work item is complete
 )
 
 // Result is the derived temperature of a bubble or thread.
 type Result struct {
 	Lifecycle domain.Lifecycle
 	Score     float64 // 0..1, higher = hotter = floats higher
-	Reason    string
+	Reason    string  // English, for the CLI and logs
+	Code      string  // stable key for clients that translate (see above)
+	Args      map[string]string
 }
 
 // Window is the resolved heat window recency is measured against: the current
@@ -74,7 +97,7 @@ func WindowFor(b domain.Bubble, tun domain.Tuning, now time.Time) Window {
 // owner.
 func Classify(b domain.Bubble, tun domain.Tuning, now time.Time) Result {
 	if b.Closed {
-		return Result{domain.Closed, 0, "outcome reached or explicitly abandoned"}
+		return Result{domain.Closed, 0, "outcome reached or explicitly abandoned", ReasonClosedBubble, nil}
 	}
 	active := false
 	for _, t := range b.Threads {
@@ -101,7 +124,7 @@ func Classify(b domain.Bubble, tun domain.Tuning, now time.Time) Result {
 // cycle while sitting untouched in Backlog.
 func ClassifyThread(t domain.Thread, ev []domain.EvidenceEvent, w Window, tun domain.Tuning, now time.Time) Result {
 	if !t.Active || t.CompletedAt != nil {
-		return Result{domain.Closed, 0, "thread completed"}
+		return Result{domain.Closed, 0, "thread completed", ReasonClosedThread, nil}
 	}
 	// Only production heats a thread. Comments are stripped always (presence), and
 	// the thread's own birth unless the calibration says otherwise.
@@ -119,9 +142,10 @@ func ClassifyThread(t domain.Thread, ev []domain.EvidenceEvent, w Window, tun do
 	r := classify(progress, w, ownerless, t.Active, tun, now)
 	switch {
 	case r.Lifecycle == domain.Warm:
-		r.Reason = "progress last cycle; still open" // the bubble wording doesn't fit a thread
+		// the bubble wording doesn't fit a thread
+		r.Reason, r.Code = "progress last cycle; still open", ReasonThreadWarmOpen
 	case len(progress) == 0 && Newborn(t, w, tun, now):
-		r.Reason = "born recently; nothing produced yet"
+		r.Reason, r.Code = "born recently; nothing produced yet", ReasonThreadNewborn
 	}
 	return r
 }
@@ -219,23 +243,26 @@ func classify(evidence []domain.EvidenceEvent, w Window, ownerless, active bool,
 	// nobody named as owner. Ownerlessness sinks what has already gone quiet.
 	switch {
 	case inCurrent:
-		return Result{domain.Hot, score, "meaningful output in the current cycle"}
+		return Result{domain.Hot, score, "meaningful output in the current cycle", ReasonHotCurrent, nil}
 	case inPrevious && active:
-		return Result{domain.Warm, score, "output last cycle; active threads remain"}
+		return Result{domain.Warm, score, "output last cycle; active threads remain", ReasonWarmPrevious, nil}
 	case latest.IsZero() || latest.Before(w.PrevStart) || ownerless:
-		return Result{domain.Dormant, score, dormantReason(latest, ownerless, tun.DormantCycles)}
+		r := Result{Lifecycle: domain.Dormant, Score: score}
+		r.Reason, r.Code, r.Args = dormantReason(latest, ownerless, tun.DormantCycles)
+		return r
 	default:
-		return Result{domain.Cooling, score, "no meaningful output this cycle or last"}
+		return Result{domain.Cooling, score, "no meaningful output this cycle or last", ReasonCooling, nil}
 	}
 }
 
-func dormantReason(latest time.Time, ownerless bool, cycles float64) string {
+func dormantReason(latest time.Time, ownerless bool, cycles float64) (text, code string, args map[string]string) {
 	switch {
 	case ownerless:
-		return "no active owner"
+		return "no active owner", ReasonDormantOwnerless, nil
 	case latest.IsZero():
-		return "no meaningful output ever recorded"
+		return "no meaningful output ever recorded", ReasonDormantNever, nil
 	default:
-		return fmt.Sprintf("silent for %g+ cycles", cycles)
+		n := strconv.FormatFloat(cycles, 'g', -1, 64)
+		return fmt.Sprintf("silent for %s+ cycles", n), ReasonDormantSilent, map[string]string{"cycles": n}
 	}
 }

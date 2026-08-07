@@ -3,6 +3,7 @@
   import { store, type ArtSel } from '../lib/store.svelte';
   import { pins, type Pin } from '../lib/pins.svelte';
   import { api, ApiError } from '../lib/api';
+  import { t } from '../lib/i18n.svelte';
   import { levelIcon, levelLabel } from '../lib/types';
   import type { ThreadDetail, Comment } from '../lib/types';
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
@@ -555,21 +556,21 @@
       {#if chatOpen}
         <div class="chat-panel" transition:slide={{ duration: 180, axis: 'y' }}>
           <header class="chat-head">
-            <span class="chat-title">Discussion</span>
+            <span class="chat-title">{t('chat.title')}</span>
             <button class="chat-x" onclick={toggleChat} aria-label="close discussion">×</button>
           </header>
           <div class="chat-scroll" bind:this={chatScroll}>
             {#if chatLoading}
-              <p class="dim chat-empty">Loading…</p>
+              <p class="dim chat-empty">{t('board.loading')}</p>
             {:else if comments.length === 0}
-              <p class="dim chat-empty">No comments yet — start the discussion.</p>
+              <p class="dim chat-empty">{t('chat.empty')}</p>
             {:else}
               {#each comments as c (c.id)}
                 <div class="msg" class:mine={isMine(c)} class:unsent={c.pending}>
                   <div class="msg-meta">
                     <span class="msg-who">{c.author}</span>
                     {#if c.pending}
-                      <span class="msg-unsent" title={c.error}>⧗ unsent</span>
+                      <span class="msg-unsent" title={c.error}>⧗ {t('chat.unsent')}</span>
                     {:else}
                       <span class="msg-age">{fmtTime(c.created_at)}</span>
                     {/if}
@@ -581,12 +582,12 @@
                          from here, with the live session — which is also what
                          makes Plane record the right author. -->
                     <div class="msg-draft">
-                      <span class="draft-why">{c.error || 'could not reach Plane'}</span>
+                      <span class="draft-why">{c.error || t('chat.unreachable')}</span>
                       <button onclick={() => retryDraft(c)} disabled={draftBusy === c.draft_id}>
-                        {draftBusy === c.draft_id ? '…' : 'Retry'}
+                        {draftBusy === c.draft_id ? '…' : t('chat.retry')}
                       </button>
                       <button class="link" onclick={() => discardDraft(c)} disabled={draftBusy === c.draft_id}>
-                        Discard
+                        {t('chat.discard')}
                       </button>
                     </div>
                   {/if}
@@ -602,7 +603,7 @@
           </div>
           {#if chatErr}<p class="err chat-err">{chatErr}</p>{/if}
           {#if store.kiosk}
-            <p class="dim chat-readonly">Read-only display — sign in to comment.</p>
+            <p class="dim chat-readonly">{t('chat.readonly')}</p>
           {:else}
           <div class="chat-compose">
             <div class="fmt-bar">
@@ -653,11 +654,11 @@
                 bind:this={composeEl}
                 bind:value={draft}
                 onkeydown={onDraftKey}
-                placeholder="Write a comment… (Markdown; Enter to send, Shift+Enter for newline)"
+                placeholder={t('chat.placeholder')}
                 rows="2"
               ></textarea>
               <button class="chat-send" onclick={postComment} disabled={posting || !draft.trim()}>
-                {posting ? '…' : 'Send'}
+                {posting ? '…' : t('chat.send')}
               </button>
             </div>
           </div>

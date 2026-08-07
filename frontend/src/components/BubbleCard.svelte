@@ -1,5 +1,6 @@
 <script lang="ts">
   import { levelIcon, levelLabel, rollup } from '../lib/types';
+  import { i18n, t } from '../lib/i18n.svelte';
   import type { BubbleView } from '../lib/types';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
@@ -79,31 +80,31 @@
       <span class="dname">{bubble.name}</span>
       <span class="dinstance">{bubble.instance}</span>
     </div>
-    <p class="why">{bubble.reason}</p>
+    <p class="why">{i18n.reason(bubble.reason_code, bubble.reason, bubble.reason_args)}</p>
     <div class="stats">
-      <span>{bubble.threads} thread{bubble.threads === 1 ? '' : 's'}</span>
+      <span>{i18n.plural('bubble.threads', bubble.threads)}</span>
       <!-- how those threads are doing individually (THREAD-LIFECYCLE.md) -->
       {#each rollup(bubble.thread_levels) as [lv, n] (lv)}
         <span class="tally" title="{n} {levelLabel(lv)}">{levelIcon(lv)}{n}</span>
       {/each}
-      {#if bubble.owner}<span title="owner">· 👤 {bubble.owner}</span>{/if}
+      {#if bubble.owner}<span title={t('bubble.owner')}>· 👤 {bubble.owner}</span>{/if}
       {#if people.length}
-        <span class="dim" title="everyone involved">· {people.length} involved</span>
+        <span class="dim">· {i18n.plural('bubble.involved', people.length)}</span>
       {/if}
     </div>
     {#if bubble.outcome}<p class="outcome">🎯 {bubble.outcome}</p>{/if}
 
     <div class="acts">
-      <button class="open" onclick={() => store.openDetail(bubble)}>🔎 open</button>
+      <button class="open" onclick={() => store.openDetail(bubble)}>🔎 {t('bubble.open')}</button>
       {#if !isDone}
         {#if isReviewed}
-          <button onclick={() => act(() => api.unreview(bubble.id))}>↩ un-review</button>
+          <button onclick={() => act(() => api.unreview(bubble.id))}>↩ {t('bubble.unreview')}</button>
         {:else}
-          <button onclick={() => act(() => api.review(bubble.id))}>👀 reviewed</button>
+          <button onclick={() => act(() => api.review(bubble.id))}>👀 {t('bubble.markReviewed')}</button>
         {/if}
-        <button onclick={() => act(() => api.close(bubble.id))}>🏆 done</button>
+        <button onclick={() => act(() => api.close(bubble.id))}>🏆 {t('bubble.done')}</button>
       {:else}
-        <button onclick={() => act(() => api.reopen(bubble.id))}>↩ reopen</button>
+        <button onclick={() => act(() => api.reopen(bubble.id))}>↩ {t('bubble.reopen')}</button>
       {/if}
     </div>
   </div>

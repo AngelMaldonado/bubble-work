@@ -1,6 +1,7 @@
 <script lang="ts">
   import { bubbleMenu } from '../lib/contextmenu.svelte';
   import { store } from '../lib/store.svelte';
+  import { t } from '../lib/i18n.svelte';
   import { api, ApiError } from '../lib/api';
   import type { BubbleView } from '../lib/types';
 
@@ -67,33 +68,33 @@
   <div class="ctxmenu" style="left: {px}px; top: {py}px" role="menu">
     <div class="ctxmenu-head" title={b.name}>{b.name}</div>
     <button class="ctxmenu-item" role="menuitem" onclick={openTimeline}>
-      <span class="ctxmenu-ic">🫧</span> Open timeline
+      <span class="ctxmenu-ic">🫧</span> {t('bubble.openTimeline')}
     </button>
 
     {#if !store.kiosk}
       <button class="ctxmenu-item" role="menuitem" onclick={birth}>
-        <span class="ctxmenu-ic">➕</span> Birth thread…
+        <span class="ctxmenu-ic">➕</span> {t('bubble.birthThread')}
       </button>
 
       <div class="ctxmenu-sep"></div>
 
       {#if b.level === 'reviewed'}
         <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.unreview(x.id))}>
-          <span class="ctxmenu-ic">↩</span> Un-review
+          <span class="ctxmenu-ic">↩</span> {t('bubble.unreview')}
         </button>
       {:else}
         <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.review(x.id))}>
-          <span class="ctxmenu-ic">👀</span> Mark reviewed
+          <span class="ctxmenu-ic">👀</span> {t('bubble.markReviewed')}
         </button>
       {/if}
 
       {#if b.level === 'done'}
         <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.reopen(x.id))}>
-          <span class="ctxmenu-ic">♻️</span> Reopen
+          <span class="ctxmenu-ic">♻️</span> {t('bubble.reopen')}
         </button>
       {:else}
         <button class="ctxmenu-item" role="menuitem" onclick={() => act((x) => api.close(x.id))}>
-          <span class="ctxmenu-ic">🏆</span> Close (done)
+          <span class="ctxmenu-ic">🏆</span> {t('bubble.done')}
         </button>
       {/if}
     {/if}

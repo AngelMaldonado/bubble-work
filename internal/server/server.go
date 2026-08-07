@@ -700,14 +700,22 @@ func (s *Server) threadBuoyancy(b domain.Bubble) map[string]domain.Buoyancy {
 		ev := byThread[t.ID]
 		r := heat.ClassifyThread(t, ev, win, tun, now)
 		out[t.ID] = domain.Buoyancy{
-			Lifecycle: r.Lifecycle,
-			Level:     threadLevel(t, ev, r.Lifecycle, win, tun, now),
-			Score:     r.Score,
-			Reason:    r.Reason,
+			Lifecycle:  r.Lifecycle,
+			Level:      threadLevel(t, ev, r.Lifecycle, win, tun, now),
+			Score:      r.Score,
+			Reason:     r.Reason,
+			ReasonCode: r.Code,
+			ReasonArgs: r.Args,
 		}
 	}
 	return out
 }
+
+// Reason codes the roll-up produces itself (the classifier's live in heat).
+const (
+	reasonAllThreadsDone = "all_threads_done"
+	reasonNoThreads      = "no_threads"
+)
 
 // levelRank orders the bands from hottest to coldest, for rolling threads up.
 // "done" is absent on purpose: a finished thread never sets its bubble's band.
@@ -753,14 +761,17 @@ func (s *Server) bubbleHeat(b domain.Bubble, tun domain.Tuning, now time.Time) (
 	}
 	switch {
 	case found:
-		return heat.Result{Lifecycle: hottest.Lifecycle, Score: hottest.Score, Reason: hottest.Reason}, hottest.Level, buoy
+		return heat.Result{Lifecycle: hottest.Lifecycle, Score: hottest.Score,
+			Reason: hottest.Reason, Code: hottest.ReasonCode, Args: hottest.ReasonArgs}, hottest.Level, buoy
 	case len(b.Threads) > 0:
 		// Every thread finished. Not 🏆 — that band means "closed", and closing is
 		// a human decision (§4). Surface it as needing one.
 		return heat.Result{Lifecycle: domain.Dormant, Score: res.Score,
-			Reason: "every thread is finished — close or redefine this bubble"}, "zzzz", buoy
+			Reason: "every thread is finished — close or redefine this bubble",
+			Code:   reasonAllThreadsDone}, "zzzz", buoy
 	default:
-		return heat.Result{Lifecycle: domain.Dormant, Score: 0, Reason: "no threads yet"}, "rip", buoy
+		return heat.Result{Lifecycle: domain.Dormant, Score: 0,
+			Reason: "no threads yet", Code: reasonNoThreads}, "rip", buoy
 	}
 }
 
@@ -774,7 +785,7 @@ func (s *Server) toViews(bubbles []domain.Bubble) []domain.BubbleView {
 			ID: b.ID, Name: b.Name, Instance: b.Instance,
 			Project: b.Project, ProjectName: b.ProjectName,
 			Lifecycle: r.Lifecycle, Level: level,
-			Score: r.Score, Reason: r.Reason,
+			Score: r.Score, Reason: r.Reason, ReasonCode: r.Code, ReasonArgs: r.Args,
 			Outcome: b.Outcome, Owner: b.Owner, Members: bubbleMembers(b),
 			Threads: len(b.Threads), ThreadLevels: levelCounts(buoy),
 		})

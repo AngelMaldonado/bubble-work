@@ -1,5 +1,6 @@
 <script lang="ts">
   import { store } from '../lib/store.svelte';
+  import { i18n, t } from '../lib/i18n.svelte';
   import { theme } from '../lib/theme.svelte';
   import { LEVELS } from '../lib/types';
   import type { BubbleView } from '../lib/types';
@@ -87,11 +88,13 @@
          looking perfectly healthy while quietly ageing. Being behind is fine;
          being behind silently is not (PLANE-SYNC.md Phase 7). -->
     <div class="banner stale" role="status">
-      ⧗ {store.status.reason || 'Plane sync is behind — this may be older data'}
+      ⧗ {t('status.stale')}
       {#each store.status.instances ?? [] as i (i.instance)}
         {#if i.stale}
           <span class="stale-inst">
-            {i.instance}: {i.last_ok ? `last synced ${fmtBehind(i.behind_seconds ?? 0)} ago` : 'never synced'}
+            {i.instance}: {i.last_ok
+              ? t('status.lastSynced', { ago: fmtBehind(i.behind_seconds ?? 0) })
+              : t('status.neverSynced')}
           </span>
         {/if}
       {/each}
@@ -99,8 +102,7 @@
   {/if}
   {#if store.status?.unsent_drafts}
     <div class="banner unsent" role="status">
-      ⧗ {store.status.unsent_drafts} unsent comment{store.status.unsent_drafts === 1 ? '' : 's'} —
-      open the thread to retry or discard.
+      ⧗ {i18n.plural('status.unsent', store.status.unsent_drafts)}
     </div>
   {/if}
   {#if store.error}
@@ -163,7 +165,7 @@
       </span>
 
       {#if unread > 0}
-        <span class="chip alert" title="unread notices">✉ {unread}</span>
+        <span class="chip alert" title={t('board.unreadNotices')}>✉ {unread}</span>
       {/if}
 
       {#if store.godmode}

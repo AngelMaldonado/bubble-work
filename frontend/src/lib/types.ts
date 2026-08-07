@@ -1,4 +1,5 @@
 // Mirrors the server's JSON contracts (internal/domain/domain.go).
+import { i18n, type MsgKey } from './i18n.svelte';
 
 export type Level = 'in_progress' | 'reviewed' | 'zzzz' | 'rip' | 'done';
 
@@ -24,7 +25,9 @@ export interface BubbleView {
   lifecycle: Lifecycle;
   level: Level;
   score: number;
-  reason: string;
+  reason: string; // English, from the server
+  reason_code?: string;
+  reason_args?: Record<string, string>;
   outcome?: string;
   owner?: string;
   members?: string[]; // thread assignees + contract owner (per-assignee boards)
@@ -50,7 +53,11 @@ export interface Buoyancy {
   lifecycle: Lifecycle;
   level: Level;
   score: number;
-  reason: string;
+  reason: string; // English, from the server
+  /** stable key + params so the client renders the sentence in its own
+   *  language (internal/heat: Reason* codes) */
+  reason_code?: string;
+  reason_args?: Record<string, string>;
 }
 
 export interface ThreadNode extends Buoyancy {
@@ -370,8 +377,13 @@ export function levelIcon(level?: string): string {
   return BY_LEVEL.get(level ?? '')?.icon ?? '•';
 }
 
+/** Band name in the reader's language. LEVELS keeps the English label as the
+ *  fallback so a level this build does not know still renders as something. */
 export function levelLabel(level?: string): string {
-  return BY_LEVEL.get(level ?? '')?.label ?? '—';
+  const l = BY_LEVEL.get(level ?? '');
+  if (!l) return '—';
+  const key = `band.${l.key}` as MsgKey;
+  return i18n.t(key);
 }
 
 /** Ordered [level, count] pairs from a thread-level roll-up, hottest first. */

@@ -2,6 +2,7 @@
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
   import { levelIcon, levelLabel, rollup } from '../lib/types';
+  import { t } from '../lib/i18n.svelte';
   import type { ThreadNode } from '../lib/types';
 
   // store.detail is guaranteed non-null while this component is mounted.
@@ -59,7 +60,7 @@
   </header>
 
   {#if loading}
-    <p class="dim">Loading timeline…</p>
+    <p class="dim">{t('board.loading')}</p>
   {:else if error}
     <p class="err">{error}</p>
   {:else if nodes.length === 0}

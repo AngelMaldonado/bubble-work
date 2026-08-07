@@ -232,6 +232,11 @@ type Buoyancy struct {
 	Level     string    `json:"level"` // in_progress | zzzz | rip | done
 	Score     float64   `json:"score"` // 0..1, decayed recency of the last progress
 	Reason    string    `json:"reason"`
+	// ReasonCode says the same thing structurally so a client can render it in
+	// its own language; Reason stays the English sentence the CLI and logs read.
+	// The heat model has no business knowing what language anyone reads.
+	ReasonCode string            `json:"reason_code,omitempty"`
+	ReasonArgs map[string]string `json:"reason_args,omitempty"`
 }
 
 // Instance is a configured Plane deployment the server federates over. Each maps
@@ -355,10 +360,13 @@ type BubbleView struct {
 	Level       string    `json:"level"` // UI band: in_progress|zzzz|rip|reviewed|done
 	Score       float64   `json:"score"` // 0..1 buoyancy score, for ordering
 	Reason      string    `json:"reason"`
-	Outcome     string    `json:"outcome,omitempty"`
-	Owner       string    `json:"owner,omitempty"`
-	Members     []string  `json:"members,omitempty"` // distinct thread assignees + contract owner (Phase 9)
-	Threads     int       `json:"threads"`
+	// see Buoyancy.ReasonCode — a stable key + params so clients can translate.
+	ReasonCode string            `json:"reason_code,omitempty"`
+	ReasonArgs map[string]string `json:"reason_args,omitempty"`
+	Outcome    string            `json:"outcome,omitempty"`
+	Owner      string            `json:"owner,omitempty"`
+	Members    []string          `json:"members,omitempty"` // distinct thread assignees + contract owner (Phase 9)
+	Threads    int               `json:"threads"`
 	// ThreadLevels rolls the bubble's threads up by their own derived level
 	// (THREAD-LIFECYCLE.md Phase A) — e.g. {"in_progress":2,"zzzz":1}.
 	ThreadLevels map[string]int `json:"thread_levels,omitempty"`

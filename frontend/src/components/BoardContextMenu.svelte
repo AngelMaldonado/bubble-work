@@ -2,14 +2,15 @@
   import { boardMenu } from '../lib/contextmenu.svelte';
   import { store } from '../lib/store.svelte';
   import { theme } from '../lib/theme.svelte';
-  import { LEVELS } from '../lib/types';
+  import { LEVELS, levelLabel } from '../lib/types';
+  import { i18n, t } from '../lib/i18n.svelte';
   import { ApiError } from '../lib/api';
 
   // Both open forms are owned by Workspace, so the menu just asks for them.
   let { onnewbubble, onsearch }: { onnewbubble: () => void; onsearch: () => void } = $props();
 
   const MENU_W = 230;
-  const MENU_H = 330;
+  const MENU_H = 366; // grew by one row when the language toggle landed
   const px = $derived(Math.max(8, Math.min(boardMenu.x, window.innerWidth - MENU_W - 8)));
   const py = $derived(Math.max(8, Math.min(boardMenu.y, window.innerHeight - MENU_H - 8)));
 
@@ -37,7 +38,7 @@
     busy = true;
     try {
       await store.refresh();
-      store.flash = 'board refreshed';
+      store.flash = t('board.refreshed');
     } catch (e) {
       store.error = e instanceof ApiError ? e.message : String(e);
     } finally {
@@ -65,10 +66,10 @@
 
   <div class="ctxmenu" style="left: {px}px; top: {py}px" role="menu">
     {#if bands.length}
-      <div class="ctxmenu-head">Jump to band</div>
+      <div class="ctxmenu-head">{t('menu.jumpToBand')}</div>
       <div class="jump">
         {#each bands as b (b.key)}
-          <button class="band" onclick={() => goBand(b.key)} title="{b.n} {b.label}">
+          <button class="band" onclick={() => goBand(b.key)} title="{b.n} {levelLabel(b.key)}">
             <span class="bico">{b.icon}</span>
             <span class="bn">{b.n}</span>
           </button>
@@ -79,17 +80,17 @@
 
     {#if !kiosk}
       <button class="ctxmenu-item" role="menuitem" onclick={() => pick(onnewbubble)}>
-        <span class="ctxmenu-ic">🫧</span> New bubble…
+        <span class="ctxmenu-ic">🫧</span> {t('bubble.newBubble')}
       </button>
       <button class="ctxmenu-item" role="menuitem" onclick={() => pick(onsearch)}>
-        <span class="ctxmenu-ic">🔍</span> Search &amp; commands
+        <span class="ctxmenu-ic">🔍</span> {t('menu.search')}
         <span class="ctxmenu-hint">⌘K</span>
       </button>
       <div class="ctxmenu-sep"></div>
     {/if}
 
     <button class="ctxmenu-item" role="menuitem" onclick={refresh}>
-      <span class="ctxmenu-ic">↻</span> Refresh now
+      <span class="ctxmenu-ic">↻</span> {t('menu.refreshNow')}
       <span class="ctxmenu-hint">{busy ? '…' : ''}</span>
     </button>
 
@@ -100,13 +101,18 @@
         onclick={() => pick(() => store.setScope(mine ? 'workspace' : 'mine'))}
       >
         <span class="ctxmenu-ic">{mine ? '👥' : '👤'}</span>
-        {mine ? 'Show everyone' : 'Only my bubbles'}
+        {mine ? t('menu.showEveryone') : t('menu.onlyMine')}
       </button>
     {/if}
 
     <button class="ctxmenu-item" role="menuitem" onclick={() => pick(() => theme.cycle())}>
-      <span class="ctxmenu-ic">{theme.icon}</span> Theme
+      <span class="ctxmenu-ic">{theme.icon}</span> {t('menu.theme')}
       <span class="ctxmenu-hint">{theme.choice}</span>
+    </button>
+
+    <button class="ctxmenu-item" role="menuitem" onclick={() => pick(() => i18n.toggle())}>
+      <span class="ctxmenu-ic">🌐</span> {t('menu.language')}
+      <span class="ctxmenu-hint">{i18n.label}</span>
     </button>
 
     {#if store.godmode || kiosk}
@@ -114,12 +120,12 @@
     {/if}
     {#if store.godmode}
       <button class="ctxmenu-item" role="menuitem" onclick={() => pick(() => store.openGodMode())}>
-        <span class="ctxmenu-ic">⚡</span> God Mode
+        <span class="ctxmenu-ic">⚡</span> {t('menu.godMode')}
       </button>
     {/if}
     {#if kiosk}
       <button class="ctxmenu-item" role="menuitem" onclick={() => pick(() => store.exitKiosk())}>
-        <span class="ctxmenu-ic">⎋</span> Exit kiosk
+        <span class="ctxmenu-ic">⎋</span> {t('menu.exitKiosk')}
       </button>
     {/if}
   </div>

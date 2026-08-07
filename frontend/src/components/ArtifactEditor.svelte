@@ -535,7 +535,6 @@
     display: flex;
     flex-direction: column;
     gap: 0.5rem;
-    height: 100%;
     min-height: 0;
   }
   .bar {
@@ -610,7 +609,16 @@
   .field {
     position: relative;
     flex: 1;
-    min-height: 24rem;
+    /* A DEFINITE height, not min-height.
+       CodeMirror sizes itself with `height: 100%`, which resolves against its
+       parent — and every ancestor here is auto-height, so it resolved to
+       "as tall as the content". The editor grew without bound, its internal
+       scroller never engaged, and the toolbar and save status scrolled off the
+       top of a long Logbook. Bounding the box is what gives CodeMirror
+       something to scroll inside.
+       Two editors stack when a Logbook has a DoD, so this is deliberately not
+       a full viewport each. */
+    height: clamp(18rem, calc(100dvh - 21rem), 46rem);
     display: flex;
     border-radius: 12px;
     border: 1px solid var(--line);
@@ -625,7 +633,10 @@
   .cm {
     flex: 1;
     min-width: 0;
-    overflow: auto;
+    /* hidden, not auto: CodeMirror has its own scroller (.cm-scroller) and a
+       second one here would fight it — you would get an outer scrollbar that
+       moves nothing. */
+    overflow: hidden;
     border-radius: 12px; /* what .field's overflow used to do */
   }
   .loading {

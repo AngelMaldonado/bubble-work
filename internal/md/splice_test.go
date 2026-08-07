@@ -433,3 +433,109 @@ func TestToggleTodoInTheDocumentRegion(t *testing.T) {
 		t.Errorf("ticking a todo disturbed the paragraph above it:\n%s", out)
 	}
 }
+
+// Replacing a whole region to change one line is how sections get paraphrased,
+// truncated, or appended to twice. An edit says WHICH TEXT changes.
+func TestApplyEdits(t *testing.T) {
+	const src = "- [ ] measure the drop-off\n- [ ] rewrite the validation\n- [ ] ship it"
+
+	got, err := ApplyEdits(src, []Edit{{Old: "- [ ] ship it", New: "- [x] ship it"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "- [ ] measure the drop-off\n- [ ] rewrite the validation\n- [x] ship it" {
+		t.Errorf("one line changed, the rest should be untouched: %q", got)
+	}
+
+	// Edits see each other, so a rename then an edit of the renamed line works.
+	got, err = ApplyEdits(src, []Edit{
+		{Old: "ship it", New: "ship the thing"},
+		{Old: "- [ ] ship the thing", New: "- [x] ship the thing"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "- [x] ship the thing") {
+		t.Errorf("edits do not compose: %q", got)
+	}
+
+	// An empty Old appends — the one case with nothing to match.
+	got, err = ApplyEdits(src, []Edit{{New: "- [ ] and one more"}})
+	if err != nil || !strings.HasSuffix(got, "\n\n- [ ] and one more") {
+		t.Errorf("append: %q (%v)", got, err)
+	}
+
+	// An empty New deletes.
+	got, err = ApplyEdits(src, []Edit{{Old: "\n- [ ] ship it", New: ""}})
+	if err != nil || strings.Contains(got, "ship it") {
+		t.Errorf("delete: %q (%v)", got, err)
+	}
+}
+
+// The guards. Both refusals exist because the alternative is silently editing
+// something the caller did not mean — the same reasoning as toggle_todo's text.
+func TestApplyEditsRefusesRatherThanGuesses(t *testing.T) {
+	const src = "- [ ] review the diff\n- [ ] review the docs"
+
+	// Quoting something that is not there means the caller is looking at a stale
+	// copy. Writing anything at that point would be a guess.
+	_, err := ApplyEdits(src, []Edit{{Old: "- [ ] review the tests", New: "x"}})
+	if !errors.Is(err, ErrEditNotFound) {
+		t.Errorf("a missing match was accepted: %v", err)
+	}
+
+	// "review the" matches twice. Picking the first is a question the caller
+	// cannot know it answered wrongly.
+	_, err = ApplyEdits(src, []Edit{{Old: "review the", New: "re-review the"}})
+	if !errors.Is(err, ErrEditAmbiguous) {
+		t.Errorf("an ambiguous match was accepted: %v", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "2 times") {
+		t.Errorf("the refusal should say how many it found: %v", err)
+	}
+	// ...unless the caller says it means all of them.
+	got, err := ApplyEdits(src, []Edit{{Old: "review the", New: "re-review the", All: true}})
+	if err != nil || strings.Count(got, "re-review the") != 2 {
+		t.Errorf("All: %q (%v)", got, err)
+	}
+
+	// A failure part-way applies NOTHING: half a patch is worse than none,
+	// because the caller cannot tell which half landed.
+	_, err = ApplyEdits(src, []Edit{
+		{Old: "review the diff", New: "review the patch"},
+		{Old: "not in here at all", New: "x"},
+	})
+	if err == nil {
+		t.Fatal("a set with a bad edit was accepted")
+	}
+	if !strings.Contains(err.Error(), "edit 2") {
+		t.Errorf("the refusal should say WHICH edit failed: %v", err)
+	}
+}
+
+// An edit still goes through the splice, so untouched blocks keep their bytes.
+func TestEditThenSpliceKeepsUntouchedBytes(t *testing.T) {
+	current, _ := RegionMarkdown(planeBody, RegionLogbook)
+	next, err := ApplyEdits(current, []Edit{
+		{Old: "- [ ] rewrite the validation", New: "- [x] rewrite the validation"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Splice(planeBody, RegionLogbook, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, must := range []string{
+		`<mention-component id="m1" entity_identifier="u1" entity_name="user_mention"></mention-component>`,
+		`<image-component data-id="i1" src="7fce8f23-4354-4e9a-9313-415d5e4c9ea3" width="269px"></image-component>`,
+		`<p class="editor-paragraph-block" data-id="p3">Submissions stop being lost.</p>`,
+	} {
+		if !strings.Contains(out, must) {
+			t.Errorf("a one-line edit disturbed the rest of the page:\n  lost %s", must)
+		}
+	}
+	if got, _ := RegionMarkdown(out, RegionLogbook); !strings.Contains(got, "- [x] rewrite the validation") {
+		t.Errorf("the edit did not land: %q", got)
+	}
+}

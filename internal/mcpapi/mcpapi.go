@@ -94,6 +94,18 @@ type updateThreadIn struct {
 	Logbook  *string `json:"logbook,omitempty" jsonschema:"replace the Logbook section: the plan in phases, its todos, current owner and state. Markdown"`
 	Brief    *string `json:"brief,omitempty" jsonschema:"replace the Brief section: problem, intended outcome, constraints, links. Rarely what an agent should touch"`
 	DoD      *string `json:"dod,omitempty" jsonschema:"replace the Definition of Done: the checklist that says the work is finished. Markdown"`
+	// Edits are the PREFERRED way to change an existing section.
+	Edits []editIn `json:"edits,omitempty" jsonschema:"change PART of a section instead of replacing it. Strongly preferred for an existing section: quote the exact text to change rather than reproducing the whole thing, which is how sections get paraphrased, truncated, or appended to twice"`
+}
+
+// editIn is one find-and-replace. Old is the guard, exactly as text guards the
+// index in toggle_todo: quoting what is there is how the caller proves it is
+// looking at the current version.
+type editIn struct {
+	Old    string `json:"old" jsonschema:"the exact text to replace, copied from read_thread. Must appear EXACTLY ONCE in the section — include surrounding words if it would otherwise be ambiguous. Leave empty to append instead"`
+	New    string `json:"new" jsonschema:"what it becomes. Empty deletes the matched text"`
+	Region string `json:"region,omitempty" jsonschema:"logbook (default), dod, or brief"`
+	All    bool   `json:"all,omitempty" jsonschema:"replace every occurrence instead of refusing an ambiguous match"`
 }
 
 // toggleTodoIn ticks one checklist item. Text guards Index: an index alone is a
@@ -273,10 +285,17 @@ func Handler(b Backend) http.Handler {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. Only the sections you pass are touched, and within a section only the blocks you actually changed are rewritten — so images, mentions and formatting elsewhere on the page survive. To tick a single existing todo, prefer toggle_todo."},
+		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. PREFER `edits` for anything that already exists: quote the exact text and say what it becomes, and everything else stays untouched. Passing a whole section replaces it, which is how sections get paraphrased, truncated, or appended to twice — only do that when writing one from scratch. Within a section only the blocks you actually changed are rewritten, so images, mentions and formatting elsewhere survive either way. To tick a single existing todo, prefer toggle_todo."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			edits := make([]domain.RegionEdit, 0, len(in.Edits))
+			for _, e := range in.Edits {
+				edits = append(edits, domain.RegionEdit{
+					Region: e.Region, Old: e.Old, New: e.New, All: e.All,
+				})
+			}
 			d, err := b.UpdateThread(withActor(ctx, req), in.ThreadID, domain.ThreadEdit{
 				Title: in.Title, Brief: in.Brief, Logbook: in.Logbook, DoD: in.DoD,
+				Edits: edits,
 			})
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err

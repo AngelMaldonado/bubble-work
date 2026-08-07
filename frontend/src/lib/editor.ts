@@ -91,10 +91,14 @@ function theme(dark: boolean): Extension {
         fontSize: '0.88rem',
         height: '100%',
       },
+      // The scroller is CodeMirror's own, and it is the one that should move.
+      // overflow is explicit because the host element hides its overflow: with
+      // both set to auto you get an outer scrollbar that scrolls nothing.
       '.cm-scroller': {
         fontFamily: 'var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace)',
         lineHeight: '1.7',
         padding: '0.9rem 0',
+        overflow: 'auto',
       },
       '.cm-content': { padding: '0 1rem', caretColor: 'var(--wip)' },
       '&.cm-focused': { outline: 'none' },

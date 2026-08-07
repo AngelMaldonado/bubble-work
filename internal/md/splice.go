@@ -577,3 +577,79 @@ func matchBlocks(have, want []string) []int {
 	}
 	return out
 }
+
+// ---- surgical edits ----
+//
+// Replacing a whole region to change one line is expensive and, worse, unsafe:
+// an agent that has to reproduce a 200-line Logbook to tick one box will
+// paraphrase, drop a phase, or simply append its addition to a stale copy. The
+// splice already means "only the blocks you changed are rewritten"; this is the
+// same idea one level up — say WHICH TEXT to change, not what the whole section
+// should now say.
+//
+// The guard is the same one toggle_todo uses: the caller must quote what is
+// there. A miss refuses, and so does an ambiguous match, because "the first of
+// three" is a question the caller cannot know it answered wrongly.
+
+// Edit replaces one exact run of text within a region.
+type Edit struct {
+	// Old must appear EXACTLY once, unless All. Empty means append.
+	Old string
+	New string
+	// All replaces every occurrence, for a caller that means it.
+	All bool
+}
+
+// ErrEditNotFound reports that the quoted text is not in the region.
+var ErrEditNotFound = errors.New("that text is not in this section")
+
+// ErrEditAmbiguous reports that the quoted text appears more than once.
+var ErrEditAmbiguous = errors.New("that text appears more than once — quote more of it")
+
+// ApplyEdits runs edits against a region's markdown, in order.
+//
+// In order matters: a later edit sees the result of an earlier one, so a caller
+// can rename something and then edit the renamed line. It also means a failure
+// part-way leaves NOTHING applied — the whole set is rejected, because half a
+// patch is worse than none.
+func ApplyEdits(markdown string, edits []Edit) (string, error) {
+	out := markdown
+	for i, e := range edits {
+		// An empty Old is an append, which is the one case where there is
+		// nothing to match and nothing to get wrong.
+		if e.Old == "" {
+			if strings.TrimSpace(e.New) == "" {
+				continue
+			}
+			if strings.TrimSpace(out) == "" {
+				out = e.New
+			} else {
+				out = strings.TrimRight(out, "\n") + "\n\n" + e.New
+			}
+			continue
+		}
+		n := strings.Count(out, e.Old)
+		switch {
+		case n == 0:
+			return "", fmt.Errorf("edit %d: %w: %q", i+1, ErrEditNotFound, clipEdit(e.Old))
+		case n > 1 && !e.All:
+			return "", fmt.Errorf("edit %d: %w (%d times): %q", i+1, ErrEditAmbiguous, n, clipEdit(e.Old))
+		}
+		if e.All {
+			out = strings.ReplaceAll(out, e.Old, e.New)
+		} else {
+			out = strings.Replace(out, e.Old, e.New, 1)
+		}
+	}
+	return out, nil
+}
+
+func clipEdit(s string) string {
+	const max = 80
+	s = strings.Join(strings.Fields(s), " ")
+	r := []rune(s)
+	if len(r) <= max {
+		return s
+	}
+	return string(r[:max]) + "…"
+}

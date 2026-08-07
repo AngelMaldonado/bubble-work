@@ -464,15 +464,35 @@ type ThreadEdit struct {
 	Brief   *string `json:"brief,omitempty"`
 	Logbook *string `json:"logbook,omitempty"`
 	DoD     *string `json:"dod,omitempty"`
+	// Edits change PART of a region instead of replacing it.
+	//
+	// Replacing a whole region to change one line is expensive and unsafe: a
+	// caller that must reproduce a long Logbook to tick one box will paraphrase
+	// it, drop a phase, or append to a stale copy. An edit says which text to
+	// change and leaves the rest alone — the same idea as the block splice, one
+	// level up.
+	//
+	// Applied BEFORE the whole-region fields, so naming both for one region is
+	// rejected rather than silently resolved.
+	Edits []RegionEdit `json:"edits,omitempty"`
 	// Base carries the region hashes the editor read, keyed by region name.
 	// Absent means "I did not look" — accepted, because CLI and MCP callers
 	// legitimately write without having loaded the page first.
 	Base map[string]string `json:"base,omitempty"`
 }
 
+// RegionEdit is one find-and-replace inside a region.
+type RegionEdit struct {
+	Region string `json:"region"`
+	// Old must appear exactly once in the region unless All. Empty appends.
+	Old string `json:"old"`
+	New string `json:"new"`
+	All bool   `json:"all,omitempty"`
+}
+
 // Empty reports whether an edit names nothing to change.
 func (e ThreadEdit) Empty() bool {
-	return e.Title == nil && e.Brief == nil && e.Logbook == nil && e.DoD == nil
+	return e.Title == nil && e.Brief == nil && e.Logbook == nil && e.DoD == nil && len(e.Edits) == 0
 }
 
 // Comment is one rendered entry in a thread's comment feed (Phase 12). HTML is

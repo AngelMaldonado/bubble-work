@@ -117,10 +117,30 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 
 	body := it.DescriptionHTML
 	production := false
+
+	// Surgical edits first, resolved against what is CURRENTLY there. Each one
+	// produces the new whole-region markdown, which then goes through the same
+	// splice as any other write — so an edit still only rewrites the blocks it
+	// actually touched.
+	patched, err := applyRegionEdits(body, edit.Edits)
+	if err != nil {
+		return domain.ThreadDetail{}, err
+	}
+
 	for _, r := range editRegions {
 		want := map[string]*string{
 			"brief": edit.Brief, "logbook": edit.Logbook, "dod": edit.DoD,
 		}[r.name]
+		if p, ok := patched[r.name]; ok {
+			if want != nil {
+				// Naming both for one region is a contradiction, not something to
+				// resolve by picking an order.
+				return domain.ThreadDetail{}, fmt.Errorf(
+					"%w: %s was given both a replacement and an edit — send one or the other",
+					errBadRequest, r.name)
+			}
+			want = &p
+		}
 		if want == nil {
 			continue
 		}
@@ -181,6 +201,50 @@ func (s *Server) writeBody(ctx context.Context, cl *plane.Client, inst domain.In
 		log.Printf("mirror: record body write %s: %v", it.ID, err)
 	}
 	return nil
+}
+
+// applyRegionEdits turns find-and-replace edits into new region markdown.
+//
+// Everything is resolved before ANY write: a set that fails half way through
+// leaves nothing applied, because a partly-applied patch is worse than a
+// refused one — the caller cannot tell which half landed.
+func applyRegionEdits(descriptionHTML string, edits []domain.RegionEdit) (map[string]string, error) {
+	if len(edits) == 0 {
+		return nil, nil
+	}
+	byRegion := map[string][]md.Edit{}
+	order := []string{}
+	for _, e := range edits {
+		name := strings.TrimSpace(strings.ToLower(e.Region))
+		if name == "" {
+			name = "logbook" // where an agent almost always means
+		}
+		if _, ok := regionByName(name); !ok {
+			return nil, fmt.Errorf("%w: unknown region %q", errBadRequest, e.Region)
+		}
+		if _, seen := byRegion[name]; !seen {
+			order = append(order, name)
+		}
+		byRegion[name] = append(byRegion[name], md.Edit{Old: e.Old, New: e.New, All: e.All})
+	}
+
+	out := map[string]string{}
+	for _, name := range order {
+		region, _ := regionByName(name)
+		current, found := md.RegionMarkdown(descriptionHTML, region)
+		if !found {
+			return nil, fmt.Errorf("%w: this thread has no %s to edit", errNotFound, name)
+		}
+		next, err := md.ApplyEdits(current, byRegion[name])
+		if err != nil {
+			// A miss or an ambiguity is the caller quoting something that is not
+			// there, which is a bad request rather than a server failure — and
+			// the message already says which text and why.
+			return nil, fmt.Errorf("%w: %s: %v", errBadRequest, name, err)
+		}
+		out[name] = next
+	}
+	return out, nil
 }
 
 // checkBase enforces optimistic concurrency for one region. An absent base means

@@ -2440,6 +2440,42 @@ func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
 		t.Errorf("an empty title was accepted: %d", code)
 	}
 
+	// 4d. A surgical EDIT: quote one line, change it, leave the rest alone. This
+	//     is what stops a caller from having to reproduce a whole section — the
+	//     failure mode being that it paraphrases or appends to a stale copy.
+	before4d := read().Regions["logbook"].Markdown
+	edits, _ := json.Marshal(map[string]any{
+		"edits": []map[string]any{
+			{"region": "logbook", "old": "wire it up", "new": "wire it up properly"},
+		},
+	})
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(edits)); code != http.StatusOK {
+		t.Fatalf("edit: %d %s", code, b)
+	}
+	if !strings.Contains(sent(), "read the report") || !strings.Contains(sent(), mention) {
+		t.Error("an edit disturbed content it did not name")
+	}
+	after4d := read().Regions["logbook"].Markdown
+	if !strings.Contains(after4d, "wire it up properly") {
+		t.Errorf("the edit did not land: %q", after4d)
+	}
+	// Everything the edit did not quote is still exactly as it was.
+	if want := strings.Replace(before4d, "wire it up", "wire it up properly", 1); after4d != want {
+		t.Errorf("an edit changed more than it quoted:\n  want %q\n  got  %q", want, after4d)
+	}
+
+	// Quoting something that is not there is refused, and writes nothing.
+	beforeMiss := writes()
+	miss, _ := json.Marshal(map[string]any{
+		"edits": []map[string]any{{"region": "logbook", "old": "- [ ] never existed", "new": "x"}},
+	})
+	if code, body := do(t, http.MethodPatch, ts.URL+thread, key, string(miss)); code != http.StatusBadRequest {
+		t.Errorf("a stale quote was accepted: %d %s", code, body)
+	}
+	if writes() != beforeMiss {
+		t.Error("a refused edit still wrote to Plane")
+	}
+
 	// 5. The Definition of Done is writable in its own right.
 	dod, _ := json.Marshal(domain.ThreadEdit{DoD: strPtr("- [ ] it works\n- [ ] somebody said so")})
 	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(dod)); code != http.StatusOK {

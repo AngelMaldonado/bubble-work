@@ -49,6 +49,9 @@ func (s *Server) SyncFidelity(slug string) (domain.SyncFidelity, error) {
 			f := md.Check(it.DescriptionHTML)
 			out.Mentions += f.Mentions
 			out.Assets += f.Assets
+			if f.SpliceClean {
+				out.SpliceClean++
+			}
 			if f.Stable {
 				out.Stable++
 				continue

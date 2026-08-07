@@ -145,6 +145,7 @@ export interface SyncFidelity {
   instance: string;
   bodies: number;
   stable: number;
+  splice_clean: number; // bodies whose regions splice back to identical bytes
   mentions: number; // <mention-component> nodes a write would delete
   assets: number; // <image-component> nodes a write would break
   unstable?: FidelityIssue[];

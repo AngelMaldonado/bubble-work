@@ -474,6 +474,9 @@
               </div>
               {@const fid = syncFidelity[i.slug]}
               {#if fid}
+                <p class={fid.splice_clean === fid.bodies ? 'bok' : 'bwarn'}>
+                  {t('god.fidelitySplice', { clean: fid.splice_clean, bodies: fid.bodies })}
+                </p>
                 {#if fid.stable === fid.bodies && fid.mentions === 0 && fid.assets === 0}
                   <p class="bok">{t('god.fidelityOk', { n: fid.bodies })}</p>
                 {:else}

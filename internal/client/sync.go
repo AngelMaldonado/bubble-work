@@ -127,9 +127,14 @@ func printSyncFidelity(f domain.SyncFidelity) {
 	}
 	pct := float64(f.Stable) / float64(f.Bodies) * 100
 	fmt.Printf("\n  survive a write : %d/%d  (%.1f%%)\n", f.Stable, f.Bodies, pct)
+	fmt.Printf("  splice cleanly  : %d/%d\n", f.SpliceClean, f.Bodies)
 	fmt.Printf("  mentions lost   : %d\n", f.Mentions)
 	fmt.Printf("  images broken   : %d\n", f.Assets)
 
+	if f.SpliceClean < f.Bodies {
+		// The round trip is a health signal; this is the actual gate.
+		fmt.Printf("\n  ✖ %d body(ies) do NOT splice back to identical bytes\n", f.Bodies-f.SpliceClean)
+	}
 	if f.Stable == f.Bodies && f.Mentions == 0 && f.Assets == 0 {
 		fmt.Println("\n  ✓ every body survives a read→write round trip")
 		return

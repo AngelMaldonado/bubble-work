@@ -25,6 +25,11 @@ type Fidelity struct {
 	// <img src="plane-asset:…">, which Plane cannot render — so a write breaks
 	// every one. Phase 2 drives this to zero too.
 	Assets int
+	// SpliceClean is true when every region of the body splices its own current
+	// markdown back to the IDENTICAL BYTES. This is the gate that matters: it is
+	// what makes saving an untouched region a no-op on Plane, and what keeps an
+	// edit to one region from disturbing another.
+	SpliceClean bool
 	// Line, Before and After locate the first difference, empty when Stable.
 	Line   int
 	Before string
@@ -34,9 +39,10 @@ type Fidelity struct {
 // Check round-trips one description_html and reports what changed.
 func Check(descriptionHTML string) Fidelity {
 	f := Fidelity{
-		Stable:   true,
-		Mentions: strings.Count(descriptionHTML, "<mention-component"),
-		Assets:   strings.Count(descriptionHTML, "<image-component"),
+		Stable:      true,
+		SpliceClean: spliceIsNoop(descriptionHTML),
+		Mentions:    strings.Count(descriptionHTML, "<mention-component"),
+		Assets:      strings.Count(descriptionHTML, "<image-component"),
 	}
 	before := FromHTML(descriptionHTML)
 	after := FromHTML(RenderHTML(before))
@@ -64,6 +70,22 @@ func Check(descriptionHTML string) Fidelity {
 		}
 	}
 	return f
+}
+
+// spliceIsNoop reports whether every region of a body, spliced back with the
+// markdown it currently holds, returns the body unchanged byte for byte.
+func spliceIsNoop(descriptionHTML string) bool {
+	for _, r := range []Region{RegionDocument, RegionLogbook, RegionDoD} {
+		current, found := RegionMarkdown(descriptionHTML, r)
+		if !found {
+			continue
+		}
+		out, err := Splice(descriptionHTML, r, current)
+		if err != nil || out != descriptionHTML {
+			return false
+		}
+	}
+	return true
 }
 
 func clip(s string) string {

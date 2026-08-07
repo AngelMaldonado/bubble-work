@@ -688,10 +688,13 @@ type SyncDiff struct {
 // bridge rather than measured once and asserted forever.
 type SyncFidelity struct {
 	Instance string `json:"instance"`
-	Bodies   int    `json:"bodies"`   // bodies with enough content to be worth checking
-	Stable   int    `json:"stable"`   // survive a round trip unchanged
-	Mentions int    `json:"mentions"` // <mention-component> nodes a write would delete
-	Assets   int    `json:"assets"`   // <image-component> nodes a write would break
+	Bodies   int    `json:"bodies"` // bodies with enough content to be worth checking
+	Stable   int    `json:"stable"` // survive a round trip unchanged
+	// SpliceClean counts bodies where every region splices its own markdown
+	// back to identical bytes. This is the gate an editor depends on.
+	SpliceClean int `json:"splice_clean"`
+	Mentions    int `json:"mentions"` // <mention-component> nodes a write would delete
+	Assets      int `json:"assets"`   // <image-component> nodes a write would break
 	// Threads that would be damaged, most-damaged first, capped for readability.
 	Unstable []FidelityIssue `json:"unstable,omitempty"`
 	Elided   int             `json:"elided,omitempty"` // unstable threads not listed

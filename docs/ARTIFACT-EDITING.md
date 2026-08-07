@@ -1,6 +1,6 @@
 # Artifact editing — writing a thread's page from the board
 
-Status: **Phase 0 shipped · Phases 1-7 pending** · Drafted 2026-08-07 · Companion
+Status: **Phases 0-1 shipped · Phases 2-7 pending** · Drafted 2026-08-07 · Companion
 to [`MCP-ACCESS.md`](./MCP-ACCESS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -174,15 +174,42 @@ sloppy, and worth naming:
   item, so it flattens and renumbers on alternate passes. The only body of 96,
   and confined to that block once splicing lands.
 
-### Phase 1 — the block splice engine
+### Phase 1 — the block splice engine ✅
 
-- [ ] `internal/md/splice.go`: `Blocks(html) []Block` (byte range + derived
-      markdown), `Regions(html)`, `Splice(html, region, markdown) (string, error)`.
-      Tokenizer-based, because `html.Parse` + re-serialize cannot be byte-exact.
-- [ ] LCS block diff with byte reuse for unchanged blocks.
-- [ ] Tests: untouched blocks are byte-identical; an image/mention block survives
-      an edit elsewhere; insert, delete, reorder; a body with no Logbook; a body
-      with content *after* the Logbook (1 of the 4 has this).
+- [x] `internal/md/splice.go`: `Blocks`, `RegionMarkdown`, `Splice`.
+      Tokenizer-based, because `html.Parse` + re-serialise normalises attribute
+      order and quoting — a "byte-identical" splice built that way would not be.
+- [x] LCS block alignment, so inserting a paragraph at the top costs one
+      rendered block instead of re-rendering everything below it.
+- [x] Regions: `document` (everything before the first special section),
+      `logbook`, `dod`. A section's heading is excluded from its editable content
+      — the heading is the marker, and editing a Logbook must not rename it.
+
+**The gate: every region of all 96 real bodies splices its own current markdown
+back to byte-identical output — 101/101 regions, 100%.** That is what makes an
+untouched save a no-op on Plane, and what keeps an edit to one region from
+disturbing another.
+
+Getting there took three fixes the synthetic tests could not have found. The
+first pass scored **63%**, and every failure lost exactly 85 bytes or a multiple
+of it — a signature, not noise:
+
+- **Empty spacer paragraphs** (37 bodies). Plane's editor leaves `<p></p>`
+  behind as spacing. They carry no markdown, so the editor cannot show them and
+  the submitted text cannot mention them — and a diff that only saw content
+  deleted every one on the first save. They now ride along, anchored to the
+  block they follow.
+- **`<img>` swallowed the block after it.** The tokenizer reports `<img …>` as a
+  *start* tag and no end tag ever follows, so the generic path opened a block
+  that never closed. Void elements are their own block now.
+- **A double `<br>` tore a paragraph apart.** Pressing enter twice in Plane
+  renders as `"  \n  \n"`, whose middle line is two spaces. Splitting blocks on
+  any blank-*ish* line split that paragraph into pieces that matched nothing and
+  were re-rendered on every save. Blocks are joined with a bare `"\n\n"`, so the
+  separator to recognise is always *exactly* empty.
+
+All three are pinned as named tests, and `sync-fidelity` now reports the splice
+gate alongside the round trip, so it stays measured rather than asserted.
 
 ### Phase 2 — Plane's node vocabulary, both directions
 

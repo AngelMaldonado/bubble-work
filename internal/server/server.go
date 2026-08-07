@@ -44,6 +44,10 @@ var (
 	errAmbig    = errors.New("ambiguous id")
 	// errBadRequest is a client input error (empty/invalid payload) → 400.
 	errBadRequest = errors.New("bad request")
+	// errConflict is a lost-update guard: the caller is writing over something
+	// that changed since they read it → 409. Never a merge, and never a silent
+	// overwrite (docs/ARTIFACT-EDITING.md).
+	errConflict = errors.New("changed since you read it")
 	// errUpstream is a transient Plane failure during resolution. It must map to
 	// 5xx (not 401) so callers retry instead of signing out, and it is never
 	// cached — see resolveUncached.
@@ -452,6 +456,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/threads/{id}/comments", s.restAuth(s.handleThreadComments))
 	mux.HandleFunc("PATCH /api/threads/{id}", s.restAuth(s.handleUpdateThread))
 	mux.HandleFunc("POST /api/threads/{id}/revisions", s.restAuth(s.handleAddRevision))
+	mux.HandleFunc("POST /api/threads/{id}/todo", s.restAuth(s.handleToggleTodo))
 	mux.HandleFunc("POST /api/threads/{id}/comments", s.restAuth(s.handlePostComment))
 	mux.HandleFunc("POST /api/threads/{id}/comments/read", s.restAuth(s.handleMarkCommentsRead))
 	mux.HandleFunc("POST /api/threads/{id}/drafts/{draft}/retry", s.restAuth(s.handleRetryDraft))

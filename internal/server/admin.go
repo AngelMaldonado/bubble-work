@@ -258,6 +258,8 @@ func writeErr(w http.ResponseWriter, err error) bool {
 		writeJSON(w, http.StatusForbidden, map[string]string{"error": err.Error()})
 	case errors.Is(err, errNotFound):
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": err.Error()})
+	case errors.Is(err, errConflict):
+		writeJSON(w, http.StatusConflict, map[string]string{"error": err.Error()})
 	case errors.Is(err, errAmbig), errors.Is(err, errBadRequest):
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": err.Error()})
 	default:

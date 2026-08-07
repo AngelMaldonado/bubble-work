@@ -100,6 +100,17 @@ export interface Logbook {
   phased: boolean;
 }
 
+/** One writable part of a thread's page (docs/ARTIFACT-EDITING.md). Distinct
+ *  from Artifact, which is the RENDERED read model: this is the exact markdown a
+ *  splice diffs against, and `hash` is what proves an edit is writing over what
+ *  it read — the server answers 409 when it is not. */
+export interface EditableRegion {
+  markdown: string;
+  hash: string;
+}
+
+export type RegionName = 'brief' | 'logbook' | 'dod';
+
 export interface ThreadDetail extends Buoyancy {
   id: string;
   seq: number;
@@ -113,6 +124,7 @@ export interface ThreadDetail extends Buoyancy {
   artifacts: Artifact[];
   logbook?: Logbook;
   revisions: Artifact[];
+  regions?: Partial<Record<RegionName, EditableRegion>>;
   created_at: string;
   completed_at?: string;
 }

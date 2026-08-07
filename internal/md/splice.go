@@ -1,6 +1,9 @@
 package md
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -422,6 +425,88 @@ func splitMarkdownBlocks(markdown string) []string {
 	}
 	flush()
 	return out
+}
+
+// Hash fingerprints a region's markdown so an editor can prove it is writing
+// over what it read. Exact, not whitespace-normalised: this answers "did this
+// change under me", where LogbookFingerprint answers "did the plan change" and
+// deliberately forgives a reflow.
+func Hash(markdown string) string {
+	sum := sha256.Sum256([]byte(markdown))
+	return hex.EncodeToString(sum[:8])
+}
+
+// ErrTodoMoved reports that the item at the given index is not the one the
+// caller meant to tick.
+var ErrTodoMoved = errors.New("that todo is no longer at that position")
+
+// ErrNoSuchTodo reports an index past the end of a section's checklist.
+var ErrNoSuchTodo = errors.New("no todo at that position")
+
+// ToggleTodo flips the checked state of the nth checklist item in a section.
+//
+// wantText GUARDS the index. An index alone is a question the caller cannot
+// actually answer — the list it counted may have been re-ordered by anyone since
+// it was rendered — and ticking the wrong box is worse than refusing, because it
+// is silent and it manufactures evidence of production. Pass "" only when the
+// caller genuinely has no text to check against.
+//
+// Items are counted exactly the way ParseTodos counts them, so an index taken
+// from a rendered Logbook means the same thing here. A plain bullet becomes a
+// checkbox: ticking one is a real edit somebody asked for, and the alternative
+// is a checkbox in the UI that refuses to work.
+func ToggleTodo(section string, index int, wantText string, done bool) (string, error) {
+	lines := strings.Split(section, "\n")
+
+	var at []int
+	for i, ln := range lines {
+		if taskRe.MatchString(ln) {
+			at = append(at, i)
+		}
+	}
+	if len(at) == 0 {
+		for i, ln := range lines {
+			if bulletRe.MatchString(ln) {
+				at = append(at, i)
+			}
+		}
+	}
+	if index < 0 || index >= len(at) {
+		return "", ErrNoSuchTodo
+	}
+
+	i := at[index]
+	line := lines[i]
+	text := ""
+	if m := taskRe.FindStringSubmatch(line); m != nil {
+		text = strings.TrimSpace(m[2])
+	} else if m := bulletRe.FindStringSubmatch(line); m != nil {
+		text = strings.TrimSpace(m[1])
+	}
+	if strings.TrimSpace(wantText) != "" && !sameTodoText(text, wantText) {
+		return "", ErrTodoMoved
+	}
+
+	trimmed := strings.TrimLeft(line, " \t")
+	indent := line[:len(line)-len(trimmed)]
+	marker := "-"
+	if trimmed != "" {
+		marker = trimmed[:1]
+	}
+	box := "[ ]"
+	if done {
+		box = "[x]"
+	}
+	lines[i] = indent + marker + " " + box + " " + text
+	return strings.Join(lines, "\n"), nil
+}
+
+// sameTodoText compares two todo texts the way a person would: spacing is
+// cosmetic, everything else is the item.
+func sameTodoText(a, b string) bool {
+	return strings.EqualFold(
+		strings.Join(strings.Fields(a), " "),
+		strings.Join(strings.Fields(b), " "))
 }
 
 // matchBlocks aligns the submitted blocks against the ones already there and

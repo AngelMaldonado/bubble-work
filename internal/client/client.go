@@ -981,19 +981,28 @@ func printPosted(id string, c domain.Comment) {
 // UpdateThread rewrites a thread's Logbook (and optionally its Brief). Only the
 // sections you pass are touched — an agent or a hurried human revising a plan
 // should not be able to erase the Brief.
-func UpdateThread(cfg config.Config, id string, brief, logbook *string) error {
-	body := map[string]*string{}
-	if brief != nil {
-		body["brief"] = brief
-	}
-	if logbook != nil {
-		body["logbook"] = logbook
-	}
+func UpdateThread(cfg config.Config, id string, edit domain.ThreadEdit) error {
 	var d domain.ThreadDetail
-	if err := patchJSON(cfg, "/api/threads/"+url.PathEscape(id), body, &d); err != nil {
+	if err := patchJSON(cfg, "/api/threads/"+url.PathEscape(id), edit, &d); err != nil {
 		return err
 	}
 	fmt.Printf("updated %s · %s\n", d.Title, d.Level)
+	return nil
+}
+
+// ToggleTodo ticks one checklist item. text guards index: the server refuses
+// rather than ticking the wrong box if the list moved under us.
+func ToggleTodo(cfg config.Config, id string, region string, index int, text string, done bool) error {
+	in := map[string]any{"region": region, "index": index, "text": text, "done": done}
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/todo", in, &d); err != nil {
+		return err
+	}
+	mark := "☐"
+	if done {
+		mark = "☑"
+	}
+	fmt.Printf("%s %s · %s\n", mark, d.Title, d.Level)
 	return nil
 }
 

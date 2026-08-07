@@ -1,6 +1,7 @@
 package md
 
 import (
+	"errors"
 	"strings"
 	"testing"
 )
@@ -323,5 +324,77 @@ func TestSplitMarkdownBlocksKeepsFencesWhole(t *testing.T) {
 	}
 	if !strings.Contains(got[1], "y := 2") {
 		t.Errorf("a blank line split a fenced block: %q", got[1])
+	}
+}
+
+// An index alone is a question the caller cannot answer: the list may have been
+// re-ordered since it was rendered. Ticking the wrong box is worse than
+// refusing, because it is silent AND it manufactures evidence of production.
+func TestToggleTodoRefusesWhenTheItemMoved(t *testing.T) {
+	section := "- [ ] wire it up\n- [ ] ship it"
+
+	if _, err := ToggleTodo(section, 1, "wire it up", true); !errors.Is(err, ErrTodoMoved) {
+		t.Errorf("a mismatched text was accepted: %v", err)
+	}
+	if _, err := ToggleTodo(section, 7, "ship it", true); !errors.Is(err, ErrNoSuchTodo) {
+		t.Errorf("an out-of-range index was accepted: %v", err)
+	}
+
+	got, err := ToggleTodo(section, 1, "ship it", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "- [ ] wire it up\n- [x] ship it" {
+		t.Errorf("toggle: %q", got)
+	}
+	// Un-ticking is the same operation in reverse.
+	back, err := ToggleTodo(got, 1, "ship it", false)
+	if err != nil || back != section {
+		t.Errorf("un-tick: %q (%v)", back, err)
+	}
+}
+
+// Spacing is cosmetic, so a reflowed item is still the same item.
+func TestToggleTodoForgivesReflowedText(t *testing.T) {
+	if _, err := ToggleTodo("- [ ] ship   it", 0, "ship it", true); err != nil {
+		t.Errorf("a reflow was treated as a different todo: %v", err)
+	}
+}
+
+// Indentation and the bullet character are the author's, not ours.
+func TestToggleTodoKeepsIndentationAndMarker(t *testing.T) {
+	got, err := ToggleTodo("* [ ] top\n  * [ ] nested", 1, "nested", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "* [ ] top\n  * [x] nested" {
+		t.Errorf("toggle reformatted the list: %q", got)
+	}
+}
+
+// ParseTodos falls back to plain bullets when a section has no checkboxes, so
+// the UI renders checkboxes for them. Ticking one has to work, or the fallback
+// produces a control that refuses to do anything.
+func TestToggleTodoUpgradesAPlainBullet(t *testing.T) {
+	got, err := ToggleTodo("- just a bullet", 0, "just a bullet", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "- [x] just a bullet" {
+		t.Errorf("toggle: %q", got)
+	}
+}
+
+func TestHashChangesWithTheMarkdown(t *testing.T) {
+	if Hash("a") == Hash("b") {
+		t.Error("different markdown hashed the same")
+	}
+	if Hash("a") != Hash("a") {
+		t.Error("hash is not stable")
+	}
+	// Exact, not normalised: this answers "did it change under me", where
+	// LogbookFingerprint answers "did the plan change" and forgives a reflow.
+	if Hash("- a") == Hash("-  a") {
+		t.Error("hash forgave a whitespace change it should have caught")
 	}
 }

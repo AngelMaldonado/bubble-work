@@ -267,6 +267,17 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 		log.DoDHTML = display(log.DoDHTML)
 	}
 
+	// What an editor loads and writes back. Deliberately NOT derived from
+	// Artifacts: those are the rendered read model, while a splice diffs against
+	// exactly this markdown, and the hash is what proves an edit is writing over
+	// what it read (docs/ARTIFACT-EDITING.md Phase 3).
+	regions := map[string]domain.EditableRegion{}
+	for _, r := range editRegions {
+		if m, ok := md.RegionMarkdown(it.DescriptionHTML, r.region); ok {
+			regions[r.name] = domain.EditableRegion{Markdown: m, Hash: md.Hash(m)}
+		}
+	}
+
 	revisions := s.revisions(inst, projID, wid, names)
 
 	// Normalize to non-nil slices so the JSON is arrays, never null (the web
@@ -296,6 +307,7 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 		Artifacts:   arts,
 		Logbook:     log,
 		Revisions:   revisions,
+		Regions:     regions,
 		CreatedAt:   it.CreatedAt,
 		CompletedAt: it.CompletedAt,
 	}, nil

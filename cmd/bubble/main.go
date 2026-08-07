@@ -53,6 +53,10 @@ func main() {
 		cmdComment(os.Args[2:])
 	case "logbook":
 		cmdLogbook(os.Args[2:])
+	case "dod":
+		cmdDoD(os.Args[2:])
+	case "todo":
+		cmdTodo(os.Args[2:])
 	case "revision":
 		cmdRevision(os.Args[2:])
 	case "search":
@@ -99,6 +103,8 @@ Usage:
   bubble show <id>                 a bubble's thread timeline (git-log-oneline)
   bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
   bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
+  bubble dod <id> [text|-]         rewrite a thread's Definition of Done
+  bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
   bubble revision <id> <title> [-] attach a revision artifact to a thread
   bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
                                    --retry/--discard <draft> for an unsent one
@@ -1076,8 +1082,68 @@ func cmdLogbook(args []string) {
 		}
 		body = string(b)
 	}
-	if err := client.UpdateThread(cfg, args[0], nil, &body); err != nil {
+	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{Logbook: &body}); err != nil {
 		log.Fatalf("logbook: %v", err)
+	}
+}
+
+// A Definition of Done is a Logbook's sibling: same shape, same write path,
+// different section. It is what closes a Brief (§ thread birth rule).
+func cmdDoD(args []string) {
+	if len(args) < 2 {
+		log.Fatal("usage: bubble dod <id> <text...>   (or '-' to read stdin)")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	body := strings.Join(args[1:], " ")
+	if body == "-" {
+		b, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			log.Fatalf("dod: reading stdin: %v", rerr)
+		}
+		body = string(b)
+	}
+	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{DoD: &body}); err != nil {
+		log.Fatalf("dod: %v", err)
+	}
+}
+
+// cmdTodo ticks one checklist item. The text is REQUIRED, not decoration: it is
+// what stops a stale index from ticking somebody else's todo.
+func cmdTodo(args []string) {
+	if len(args) < 3 {
+		log.Fatal("usage: bubble todo <id> <n> <done|open> <text...>  [--dod]")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	n, err := strconv.Atoi(args[1])
+	if err != nil {
+		log.Fatalf("todo: %q is not a position", args[1])
+	}
+	var done bool
+	switch strings.ToLower(args[2]) {
+	case "done", "x", "tick":
+		done = true
+	case "open", "untick", "-":
+		done = false
+	default:
+		log.Fatalf("todo: say 'done' or 'open', not %q", args[2])
+	}
+	region := "logbook"
+	var words []string
+	for _, a := range args[3:] {
+		if a == "--dod" {
+			region = "dod"
+			continue
+		}
+		words = append(words, a)
+	}
+	if err := client.ToggleTodo(cfg, args[0], region, n, strings.Join(words, " "), done); err != nil {
+		log.Fatalf("todo: %v", err)
 	}
 }
 

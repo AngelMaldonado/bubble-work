@@ -2223,3 +2223,182 @@ func TestRewriteMentionsNamesThePerson(t *testing.T) {
 		t.Error("a body without mentions was rewritten")
 	}
 }
+
+// The Phase 3 write path (docs/ARTIFACT-EDITING.md): splicing, optimistic
+// concurrency, and a todo toggle that refuses rather than ticking the wrong box.
+// One fake Plane, four guarantees, because they all turn on the same write.
+func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
+	var mu sync.Mutex
+	const mention = `<mention-component id="n1" entity_identifier="u1" entity_name="user_mention"></mention-component>`
+	const image = `<image-component data-id="i1" src="asset-7" width="269px"></image-component>`
+	body := `<h1 class="editor-heading-block" data-id="h1">First thread</h1>` +
+		`<p class="editor-paragraph-block" data-id="p1">The pull is real.</p>` +
+		`<p class="editor-paragraph-block" data-id="p2">` + mention + ` owns this.</p>` +
+		image +
+		`<h2 class="editor-heading-block" data-id="h2">Logbook</h2>` +
+		`<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><div><p>wire it up</p></div></li></ul>` +
+		`<h2 class="editor-heading-block" data-id="h3">Definition of Done</h2>` +
+		`<p class="editor-paragraph-block" data-id="p3">It works.</p>`
+	patched := 0
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur := body
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				DescriptionHTML string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			body, patched = in.DescriptionHTML, patched+1
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, cur)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	read := func() domain.ThreadDetail {
+		t.Helper()
+		var d domain.ThreadDetail
+		code, rb := do(t, http.MethodGet, ts.URL+thread, key, "")
+		if code != http.StatusOK {
+			t.Fatalf("read: %d %s", code, rb)
+		}
+		if err := json.Unmarshal(rb, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+	sent := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return body
+	}
+	writes := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return patched
+	}
+
+	if code, b := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, ""); code != http.StatusOK {
+		t.Fatalf("board: %d %s", code, b)
+	}
+
+	d := read()
+	if d.Regions == nil {
+		t.Fatal("the read model exposes no editable regions")
+	}
+	for _, r := range []string{"brief", "logbook", "dod"} {
+		if d.Regions[r].Hash == "" {
+			t.Errorf("region %q has no hash to write against", r)
+		}
+	}
+
+	// 1. Saving a region you did not change costs NOTHING. Autosave fires on
+	//    focus and blur; if that wrote, it would burn rate budget and, for a
+	//    Logbook, stamp production for work nobody did.
+	before := writes()
+	payload, _ := json.Marshal(domain.ThreadEdit{
+		Logbook: strPtr(d.Regions["logbook"].Markdown),
+		Base:    map[string]string{"logbook": d.Regions["logbook"].Hash},
+	})
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(payload)); code != http.StatusOK {
+		t.Fatalf("no-op save: %d %s", code, b)
+	}
+	if writes() != before {
+		t.Errorf("saving an unchanged region wrote to Plane %d time(s)", writes()-before)
+	}
+
+	// 2. A real Logbook edit lands, and the mention and image elsewhere on the
+	//    page SURVIVE it. Before splicing, this write destroyed both.
+	payload, _ = json.Marshal(domain.ThreadEdit{
+		Logbook: strPtr("- [x] wire it up\n- [ ] ship it"),
+		Base:    map[string]string{"logbook": d.Regions["logbook"].Hash},
+	})
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(payload)); code != http.StatusOK {
+		t.Fatalf("logbook edit: %d %s", code, b)
+	}
+	for _, must := range []string{mention, image, "The pull is real.", "It works."} {
+		if !strings.Contains(sent(), must) {
+			t.Errorf("a Logbook edit destroyed bytes it had no business touching:\n  lost %s", must)
+		}
+	}
+	if !strings.Contains(sent(), "ship it") {
+		t.Errorf("the edit did not land:\n%s", sent())
+	}
+
+	// 3. The base hash we just used is now stale, so re-using it must 409
+	//    rather than silently overwriting whatever changed.
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(payload)); code != http.StatusConflict {
+		t.Errorf("a stale base hash was accepted: %d %s", code, b)
+	}
+
+	// 4. A todo toggle whose text no longer matches is REFUSED, and writes
+	//    nothing. Ticking the wrong box is worse than failing: it is silent, and
+	//    it manufactures evidence of production.
+	before = writes()
+	bad, _ := json.Marshal(map[string]any{
+		"region": "logbook", "index": 1, "text": "something else entirely", "done": true,
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(bad)); code != http.StatusConflict {
+		t.Errorf("toggling a moved todo was accepted: %d %s", code, b)
+	}
+	if writes() != before {
+		t.Error("a refused toggle still wrote to Plane")
+	}
+
+	// ...and the same toggle with the right text works.
+	good, _ := json.Marshal(map[string]any{
+		"region": "logbook", "index": 1, "text": "ship it", "done": true,
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(good)); code != http.StatusOK {
+		t.Fatalf("toggle: %d %s", code, b)
+	}
+	if d := read(); d.Logbook == nil || !strings.Contains(d.Logbook.Markdown, "[x] ship it") {
+		t.Errorf("the todo was not ticked: %+v", d.Logbook)
+	}
+
+	// 5. The Definition of Done is writable in its own right.
+	dod, _ := json.Marshal(domain.ThreadEdit{DoD: strPtr("- [ ] it works\n- [ ] somebody said so")})
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(dod)); code != http.StatusOK {
+		t.Fatalf("dod edit: %d %s", code, b)
+	}
+	if !strings.Contains(sent(), "somebody said so") {
+		t.Errorf("the DoD edit did not land:\n%s", sent())
+	}
+	if !strings.Contains(sent(), mention) {
+		t.Error("a DoD edit destroyed the mention")
+	}
+}
+
+func strPtr(s string) *string { return &s }

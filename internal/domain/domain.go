@@ -416,8 +416,36 @@ type ThreadDetail struct {
 	Revisions   []md.Artifact `json:"revisions"`
 	CreatedAt   time.Time     `json:"created_at"`
 	CompletedAt *time.Time    `json:"completed_at,omitempty"`
-	Buoyancy                  // lifecycle/level/score/reason, flattened into the JSON
+	// Regions is what an editor loads and writes back, keyed by region name
+	// (docs/ARTIFACT-EDITING.md). Distinct from Artifacts, which is the RENDERED
+	// read model: this is the exact markdown a splice will diff against.
+	Regions  map[string]EditableRegion `json:"regions,omitempty"`
+	Buoyancy                           // lifecycle/level/score/reason, flattened into the JSON
 }
+
+// EditableRegion is one writable part of a thread's page.
+type EditableRegion struct {
+	Markdown string `json:"markdown"`
+	// Hash fingerprints Markdown. Sending it back with an edit proves the editor
+	// is writing over what it read; the server answers 409 when it is not.
+	Hash string `json:"hash"`
+}
+
+// ThreadEdit is a write to a thread's artifact page. A nil field is left exactly
+// as it was — an agent revising a plan must not be able to erase the human's
+// Brief, so the shape makes "touch only what you name" the default.
+type ThreadEdit struct {
+	Brief   *string `json:"brief,omitempty"`
+	Logbook *string `json:"logbook,omitempty"`
+	DoD     *string `json:"dod,omitempty"`
+	// Base carries the region hashes the editor read, keyed by region name.
+	// Absent means "I did not look" — accepted, because CLI and MCP callers
+	// legitimately write without having loaded the page first.
+	Base map[string]string `json:"base,omitempty"`
+}
+
+// Empty reports whether an edit names nothing to change.
+func (e ThreadEdit) Empty() bool { return e.Brief == nil && e.Logbook == nil && e.DoD == nil }
 
 // Comment is one rendered entry in a thread's comment feed (Phase 12). HTML is
 // the goldmark render for the chat UI; Markdown serves CLI/MCP. Mine marks the

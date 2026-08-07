@@ -1,6 +1,6 @@
 # Artifact editing — writing a thread's page from the board
 
-Status: **Phases 0-2 shipped · Phases 3-7 pending** · Drafted 2026-08-07 · Companion
+Status: **Phases 0-3 shipped · Phases 4-7 pending** · Drafted 2026-08-07 · Companion
 to [`MCP-ACCESS.md`](./MCP-ACCESS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -260,17 +260,41 @@ Still open: whether Plane's editor renders **our** old plain
 question for everything written from here on, but bodies written before this
 still carry the plain shape.
 
-### Phase 3 — the write path
+### Phase 3 — the write path ✅
 
-- [ ] `UpdateThread` splices instead of re-rendering — this is the fix for the
-      live data-loss bug, and it lands for MCP and CLI at the same time.
-- [ ] Add the `dod` region; add per-region base hashes and 409 on conflict.
-- [ ] `ToggleTodo(region, index, text, done)` — **guarded by text, not index
-      alone**. A stale index must refuse rather than tick the wrong box. This is
-      the same bug class PLANE-SYNC kept hitting: a local copy confidently
-      answering a question it does not actually know.
-- [ ] Surface parity: REST + `bubble thread edit` / `bubble thread todo` + MCP
-      (`update_thread` gains `dod`, new `toggle_todo`).
+- [x] **`UpdateThread` splices instead of re-rendering.** This retires the live
+      data-loss bug, for the web, the CLI and MCP at once: editing a Logbook no
+      longer destroys the images and mentions elsewhere on the page.
+- [x] It reads the **current** body from the mirror rather than trusting a copy
+      the caller loaded, so two people editing different regions cannot lose each
+      other's work.
+- [x] The `dod` region, alongside `brief` (which is the API's word for the
+      document) and `logbook`.
+- [x] **Per-region base hashes, 409 on conflict.** An absent base means "I did
+      not read the page first" — legitimate for CLI and MCP writes — and is
+      accepted rather than guessed at. `ThreadDetail.regions` carries the exact
+      markdown a splice will diff against, plus its hash.
+- [x] **A no-op save costs nothing.** Submitting a region unchanged makes no
+      Plane call at all. Autosave fires on focus and blur; if that wrote, it
+      would burn rate budget and, for a Logbook, stamp production for work nobody
+      did.
+- [x] **Only production rebuilds the board.** A Brief edit cannot change any
+      band, so it broadcasts to the open thread and skips the instance rebuild.
+      Logbook and DoD edits still rebuild.
+- [x] `ToggleTodo(region, index, text, done)` — **guarded by text, not index
+      alone**. A refused toggle writes nothing. This is the same failure the
+      mirror work kept hitting: a local copy confidently answering a question it
+      does not actually know. Ticking the wrong box is worse than failing,
+      because it is silent *and* it manufactures evidence of production.
+- [x] Surface parity: `PATCH /api/threads/{id}` and `POST /api/threads/{id}/todo`
+      · `bubble logbook` / `bubble dod` / `bubble todo` · MCP `update_thread`
+      (gains `dod`) and a new `toggle_todo`.
+
+`TestArtifactWritesAreSplicedGuardedAndIdempotent` asserts all five guarantees
+end to end through the real HTTP surface against a fake Plane: the no-op save
+writes nothing, a Logbook edit leaves the mention and image untouched, a stale
+base hash 409s, a mismatched todo text 409s **and writes nothing**, and the DoD
+is writable in its own right.
 
 ### Phase 4 — the editor
 
@@ -293,6 +317,8 @@ still carry the plain shape.
 
 ### Phase 6 — inline checkboxes
 
+- [x] The server primitive landed in Phase 3: `ToggleTodo` + `POST /api/threads/{id}/todo`
+      + `bubble todo` + the `toggle_todo` MCP tool. What is left is the UI.
 - [ ] Tick a todo straight from the rendered view. One narrow write, immediate
       heat, independent of everything above.
 - [ ] Must update **both** `data-checked` on the `li` and `checked` on the

@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -21,15 +22,34 @@ import (
 // the primary evidence of production, made an agent structurally incapable of
 // warming a thread it was working on.
 
+// editRegions maps the write API's field names onto the splice engine's regions.
+// "brief" is the API's word for the document — the part of the page that is not
+// the Logbook or the DoD — and it stays, because it is what agents already know.
+var editRegions = []struct {
+	name   string
+	region md.Region
+}{
+	{"brief", md.RegionDocument},
+	{"logbook", md.RegionLogbook},
+	{"dod", md.RegionDoD},
+}
+
 // UpdateThread rewrites parts of a thread's artifact page.
 //
-// It is SECTION-SCOPED on purpose. The Brief and the Logbook share one Plane
-// description (§3: one page, not a second tracker), so a whole-body write is the
-// obvious shape and the wrong one: the Brief is the human's statement of intent,
-// and an agent revising a plan should not be able to erase it. A nil field is
-// left exactly as it was.
-func (s *Server) UpdateThread(ctx context.Context, threadID string, brief, logbook *string) (domain.ThreadDetail, error) {
-	if brief == nil && logbook == nil {
+// It is REGION-SCOPED, and it SPLICES rather than re-rendering. Both matter:
+//
+// The regions share one Plane description (§3: one page, not a second tracker),
+// so a whole-body write is the obvious shape and the wrong one — the Brief is
+// the human's statement of intent, and an agent revising a plan must not be able
+// to erase it. A nil field is left exactly as it was.
+//
+// And within a region, only the BLOCKS that actually changed are re-rendered.
+// Until this, editing a Logbook re-derived the whole body from markdown, which
+// silently destroyed every image and mention on the page (48 mentions and 193
+// images across a live workspace). A block nobody edited now keeps its original
+// bytes (docs/ARTIFACT-EDITING.md Phase 1).
+func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error) {
+	if edit.Empty() {
 		return domain.ThreadDetail{}, fmt.Errorf("%w: nothing to update", errBadRequest)
 	}
 	full, err := s.resolveThreadID(ctx, threadID)
@@ -37,6 +57,113 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, brief, logbo
 		return domain.ThreadDetail{}, err
 	}
 	_, inst, _, projID, wid, err := s.interiorClient(ctx, full)
+	if err != nil {
+		return domain.ThreadDetail{}, err
+	}
+	if s.mirror == nil {
+		return domain.ThreadDetail{}, fmt.Errorf("mirror unavailable")
+	}
+	// Read the CURRENT body rather than trusting a copy the caller loaded, so two
+	// people editing different regions cannot lose each other's work.
+	it, ok, err := s.mirror.Item(inst.Slug, wid)
+	if err != nil {
+		return domain.ThreadDetail{}, err
+	}
+	if !ok {
+		return domain.ThreadDetail{}, errNotFound
+	}
+
+	body := it.DescriptionHTML
+	production := false
+	for _, r := range editRegions {
+		want := map[string]*string{
+			"brief": edit.Brief, "logbook": edit.Logbook, "dod": edit.DoD,
+		}[r.name]
+		if want == nil {
+			continue
+		}
+		if err := checkBase(body, r.region, edit.Base[r.name]); err != nil {
+			return domain.ThreadDetail{}, err
+		}
+		spliced, err := md.Splice(body, r.region, *want)
+		if err != nil {
+			return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errBadRequest, err)
+		}
+		if spliced != body {
+			body = spliced
+			// Only the Logbook and the DoD are production (§5.1); a Brief edit is
+			// not, and progressEvidenceFromMirror agrees by fingerprinting only
+			// those two.
+			production = production || r.region != md.RegionDocument
+		}
+	}
+
+	if body == it.DescriptionHTML {
+		// Every region was submitted unchanged. Writing would cost a Plane call
+		// and, for a Logbook, would stamp production for work nobody did — which
+		// is exactly what autosave must not do.
+		return s.ThreadDetail(ctx, full)
+	}
+
+	// Written with the caller's own key, so Plane attributes the edit to the
+	// person (or the human an agent is impersonating), exactly like a comment.
+	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
+	updatedAt, err := wcl.SetWorkItemBody(ctx, wid, body)
+	if err != nil {
+		return domain.ThreadDetail{}, err
+	}
+
+	// Write it into the mirror NOW rather than waiting for a delta pass to
+	// rediscover our own write. Not optimistic: Plane accepted it, so this is
+	// what Plane holds. Without this the board would be up to a delta interval
+	// behind a change the server itself just made.
+	it.DescriptionHTML = body
+	it.DescriptionHash = mirror.HashBody(body)
+	if !updatedAt.IsZero() {
+		it.UpdatedAt = updatedAt
+	}
+	if err := s.mirror.UpsertItems(inst.Slug, []mirror.Item{it}, s.now()); err != nil {
+		log.Printf("mirror: record thread update %s: %v", wid, err)
+	}
+	// A Logbook change is production (§5.1). Rebuilding the snapshot is what
+	// turns it into heat and pushes it to every open board.
+	s.rebuildAndNotify(inst, wid, production)
+
+	return s.ThreadDetail(ctx, full)
+}
+
+// checkBase enforces optimistic concurrency for one region. An absent base means
+// the caller did not read the page first — legitimate for CLI and MCP writes —
+// and is accepted rather than guessed at.
+func checkBase(descriptionHTML string, region md.Region, base string) error {
+	if base == "" {
+		return nil
+	}
+	current, _ := md.RegionMarkdown(descriptionHTML, region)
+	if md.Hash(current) != base {
+		return fmt.Errorf("%w: the %s changed while you were editing it", errConflict, region)
+	}
+	return nil
+}
+
+// ToggleTodo ticks or un-ticks one checklist item, which is the smallest real
+// piece of evidence a thread can produce.
+//
+// text guards index. An index alone is a question the caller cannot answer —
+// the list it counted may have been re-ordered by anyone since it rendered — and
+// ticking the wrong box is worse than refusing, because it is silent AND it
+// manufactures evidence of production. This is the same failure the mirror work
+// kept running into: a local copy confidently answering a question it does not
+// actually know (docs/PLANE-SYNC.md).
+func (s *Server) ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error) {
+	if region != md.RegionLogbook && region != md.RegionDoD {
+		return domain.ThreadDetail{}, fmt.Errorf("%w: todos live in the logbook or the dod", errBadRequest)
+	}
+	full, err := s.resolveThreadID(ctx, threadID)
+	if err != nil {
+		return domain.ThreadDetail{}, err
+	}
+	_, inst, _, _, wid, err := s.interiorClient(ctx, full)
 	if err != nil {
 		return domain.ThreadDetail{}, err
 	}
@@ -51,40 +178,33 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, brief, logbo
 		return domain.ThreadDetail{}, errNotFound
 	}
 
-	body := md.FromHTML(it.DescriptionHTML)
-	if brief != nil {
-		body = md.ReplaceSection(body, "Brief", *brief)
+	current, found := md.RegionMarkdown(it.DescriptionHTML, region)
+	if !found {
+		return domain.ThreadDetail{}, fmt.Errorf("%w: this thread has no %s", errNotFound, region)
 	}
-	if logbook != nil {
-		body = md.ReplaceSection(body, "Logbook", *logbook)
-	}
-	html := md.RenderPlaneHTML(body)
-
-	// Written with the caller's own key, so Plane attributes the edit to the
-	// person (or the human an agent is impersonating), exactly like a comment.
-	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
-	updatedAt, err := wcl.SetWorkItemBody(ctx, wid, html)
-	if err != nil {
+	next, err := md.ToggleTodo(current, index, text, done)
+	switch {
+	case errors.Is(err, md.ErrTodoMoved):
+		return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errConflict, err)
+	case errors.Is(err, md.ErrNoSuchTodo):
+		return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errBadRequest, err)
+	case err != nil:
 		return domain.ThreadDetail{}, err
 	}
-
-	// Write it into the mirror NOW rather than waiting for a delta pass to
-	// rediscover our own write. Not optimistic: Plane accepted it, so this is
-	// what Plane holds. Without this the board would be up to a delta interval
-	// behind a change the server itself just made.
-	it.DescriptionHTML = html
-	it.DescriptionHash = mirror.HashBody(html)
-	if !updatedAt.IsZero() {
-		it.UpdatedAt = updatedAt
+	if next == current {
+		return s.ThreadDetail(ctx, full) // already in that state
 	}
-	if err := s.mirror.UpsertItems(inst.Slug, []mirror.Item{it}, s.now()); err != nil {
-		log.Printf("mirror: record thread update %s: %v", wid, err)
-	}
-	// A Logbook change is production (§5.1). Rebuilding the snapshot is what
-	// turns it into heat and pushes it to every open board.
-	s.rebuildAndNotify(inst, wid)
+	return s.UpdateThread(ctx, full, domain.ThreadEdit{
+		Logbook: pick(region == md.RegionLogbook, next),
+		DoD:     pick(region == md.RegionDoD, next),
+	})
+}
 
-	return s.ThreadDetail(ctx, full)
+func pick(when bool, v string) *string {
+	if !when {
+		return nil
+	}
+	return &v
 }
 
 // AddRevision hangs a revision artifact off a thread. A revision IS a
@@ -136,32 +256,58 @@ func (s *Server) AddRevision(ctx context.Context, threadID, title, body string) 
 	}}, now); err != nil {
 		log.Printf("mirror: record revision %s: %v", childID, err)
 	}
-	s.rebuildAndNotify(inst, wid)
+	s.rebuildAndNotify(inst, wid, true)
 
 	return s.ThreadDetail(ctx, full)
 }
 
 // rebuildAndNotify recomputes the instance snapshot from the mirror and nudges
-// every open client. Cheap since Phase 2 — a handful of SQLite queries and no
-// network — which is what makes it reasonable to do on a write path at all.
-func (s *Server) rebuildAndNotify(inst domain.Instance, threadID string) {
-	if _, err := s.refreshInstance(context.Background(), inst); err != nil {
-		log.Printf("rebuild after artifact write: %v", err)
-		return
+// every open client. Cheap since PLANE-SYNC Phase 2 — a handful of SQLite
+// queries and no network — which is what makes it reasonable on a write path.
+//
+// production says whether the write could have changed the board. Only a Logbook
+// or DoD edit can; a Brief edit cannot, and autosave means those arrive every
+// few seconds while somebody types. Skipping the rebuild for them still
+// repaints the open thread, which is the part anyone would notice.
+func (s *Server) rebuildAndNotify(inst domain.Instance, threadID string, production bool) {
+	if production {
+		if _, err := s.refreshInstance(context.Background(), inst); err != nil {
+			log.Printf("rebuild after artifact write: %v", err)
+			return
+		}
 	}
 	s.broadcastThread(threadID)
 }
 
 func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request) {
+	var in domain.ThreadEdit
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	d, err := s.UpdateThread(r.Context(), r.PathValue("id"), in)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, d)
+}
+
+func (s *Server) handleToggleTodo(w http.ResponseWriter, r *http.Request) {
 	var in struct {
-		Brief   *string `json:"brief,omitempty"`
-		Logbook *string `json:"logbook,omitempty"`
+		Region string `json:"region"`
+		Index  int    `json:"index"`
+		Text   string `json:"text"`
+		Done   bool   `json:"done"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
-	d, err := s.UpdateThread(r.Context(), r.PathValue("id"), in.Brief, in.Logbook)
+	region := md.Region(in.Region)
+	if region == "" {
+		region = md.RegionLogbook
+	}
+	d, err := s.ToggleTodo(r.Context(), r.PathValue("id"), region, in.Index, in.Text, in.Done)
 	if writeErr(w, err) {
 		return
 	}

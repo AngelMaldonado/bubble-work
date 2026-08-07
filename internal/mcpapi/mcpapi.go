@@ -10,6 +10,7 @@ import (
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 )
 
 // Backend is the server capability set the MCP tools call into. Keeping it an
@@ -24,7 +25,8 @@ type Backend interface {
 	ThreadDetail(ctx context.Context, threadID string) (domain.ThreadDetail, error)
 	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
-	UpdateThread(ctx context.Context, threadID string, brief, logbook *string) (domain.ThreadDetail, error)
+	UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error)
+	ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error)
 	AddRevision(ctx context.Context, threadID, title, body string) (domain.ThreadDetail, error)
 	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
 }
@@ -55,7 +57,19 @@ func withActor(ctx context.Context, req *sdk.CallToolRequest) context.Context {
 type updateThreadIn struct {
 	ThreadID string  `json:"thread_id" jsonschema:"the namespaced thread id"`
 	Logbook  *string `json:"logbook,omitempty" jsonschema:"replace the Logbook section: the plan in phases, its todos, current owner and state. Markdown"`
-	Brief    *string `json:"brief,omitempty" jsonschema:"replace the Brief section: problem, intended outcome, constraints, Definition of Done. Rarely what an agent should touch"`
+	Brief    *string `json:"brief,omitempty" jsonschema:"replace the Brief section: problem, intended outcome, constraints, links. Rarely what an agent should touch"`
+	DoD      *string `json:"dod,omitempty" jsonschema:"replace the Definition of Done: the checklist that says the work is finished. Markdown"`
+}
+
+// toggleTodoIn ticks one checklist item. Text guards Index: an index alone is a
+// question the caller cannot answer, because the list may have been re-ordered
+// since it was read, and ticking the wrong box silently manufactures evidence.
+type toggleTodoIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Index    int    `json:"index" jsonschema:"zero-based position of the item within the section, as read_thread lists them"`
+	Text     string `json:"text" jsonschema:"the item's text as you read it — the write is REFUSED if it no longer matches, rather than ticking the wrong box"`
+	Done     bool   `json:"done" jsonschema:"true to tick, false to un-tick"`
+	Region   string `json:"region,omitempty" jsonschema:"logbook (default) or dod"`
 }
 
 type addRevisionIn struct {
@@ -199,9 +213,11 @@ func Handler(b Backend) http.Handler {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook (and rarely its Brief). This is how an agent records that the plan changed — ticking a todo, re-phasing, noting a decision. A Logbook change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. Only the sections you pass are touched."},
+		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. Only the sections you pass are touched, and within a section only the blocks you actually changed are rewritten — so images, mentions and formatting elsewhere on the page survive. To tick a single existing todo, prefer toggle_todo."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
-			d, err := b.UpdateThread(withActor(ctx, req), in.ThreadID, in.Brief, in.Logbook)
+			d, err := b.UpdateThread(withActor(ctx, req), in.ThreadID, domain.ThreadEdit{
+				Brief: in.Brief, Logbook: in.Logbook, DoD: in.DoD,
+			})
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err
 			}
@@ -212,6 +228,20 @@ func Handler(b Backend) http.Handler {
 		&sdk.Tool{Name: "add_revision", Description: "Attach a revision artifact to a thread (a Plane sub-work-item): a findings write-up, a review pass, a deliverable. Landing one is evidence of production (§5.1) and warms the thread."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in addRevisionIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.AddRevision(withActor(ctx, req), in.ThreadID, in.Title, in.Body)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "toggle_todo", Description: "Tick or un-tick one checklist item in a thread's Logbook or Definition of Done. A completed todo is EVIDENCE of production (§5.1): it warms the thread and its bubble. Pass the item's text as you read it — if it no longer matches that position the write is refused rather than ticking the wrong box."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in toggleTodoIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			region := md.Region(in.Region)
+			if region == "" {
+				region = md.RegionLogbook
+			}
+			d, err := b.ToggleTodo(withActor(ctx, req), in.ThreadID, region, in.Index, in.Text, in.Done)
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err
 			}

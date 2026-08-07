@@ -11,6 +11,7 @@ import type {
   KioskToken,
   ThreadNode,
   ThreadDetail,
+  RegionName,
   Comment,
   TuningView,
   SyncStatus,
@@ -102,6 +103,27 @@ export const api = {
     req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}/retry`),
   discardDraft: (id: string, draftId: number) =>
     req<void>('DELETE', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}`),
+  // Artifact editing (docs/ARTIFACT-EDITING.md). A field you omit is untouched;
+  // `base` carries the region hashes read, so a write that lost a race gets a
+  // 409 instead of silently clobbering somebody else's edit.
+  updateThread: (
+    id: string,
+    edit: {
+      brief?: string;
+      logbook?: string;
+      dod?: string;
+      base?: Partial<Record<RegionName, string>>;
+    },
+  ) => req<ThreadDetail>('PATCH', `/api/threads/${encodeURIComponent(id)}`, edit),
+  // text guards index: the server refuses rather than ticking the wrong box.
+  toggleTodo: (id: string, region: RegionName, index: number, text: string, done: boolean) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/todo`, {
+      region,
+      index,
+      text,
+      done,
+    }),
+
   markCommentsRead: (id: string, commentIds: string[]) =>
     req<{ ok: boolean }>('POST', `/api/threads/${encodeURIComponent(id)}/comments/read`, {
       comment_ids: commentIds,

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   // Heading rail / minimap for the thread interior — mirrors the board's Minimap
   // (fixed to the right, vertically centered, expands IN PLACE on hover), but
   // observes a scroll CONTAINER instead of the window.
@@ -54,9 +55,9 @@
   }
 </script>
 
-<aside class="rail" aria-label="On this page">
+<aside class="rail" aria-label={t('thread.onThisPage')}>
   <div class="inner">
-    <div class="head">On this page</div>
+    <div class="head">{t('thread.onThisPage')}</div>
     <div class="list">
       {#each headings as h, i (h.id)}
         <button

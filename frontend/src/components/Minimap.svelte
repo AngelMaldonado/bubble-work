@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import { onMount } from 'svelte';
   import { store } from '../lib/store.svelte';
   import { LEVELS } from '../lib/types';
@@ -54,7 +55,7 @@
   });
 </script>
 
-<aside class="minimap" aria-label="Navigate bubbles">
+<aside class="minimap" aria-label={t('chrome.navigate')}>
   <div class="inner">
     <div class="list">
       {#each groups as g (g.key)}

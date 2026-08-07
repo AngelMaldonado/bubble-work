@@ -56,7 +56,7 @@
         {bubble.instance}{bubble.project_name ? ' · ' + bubble.project_name : ''}
       </span>
     </div>
-    <button class="x" onclick={close} aria-label="close">✕</button>
+    <button class="x" onclick={close} aria-label={t('detail.close')}>✕</button>
   </header>
 
   {#if loading}
@@ -64,7 +64,7 @@
   {:else if error}
     <p class="err">{error}</p>
   {:else if nodes.length === 0}
-    <p class="dim">No threads in this bubble yet.</p>
+    <p class="dim">{t('detail.noThreads')}</p>
   {:else}
     <p class="count">
       {nodes.length} thread{nodes.length === 1 ? '' : 's'} · newest first
@@ -76,7 +76,7 @@
       {#each nodes as n (n.id)}
         <li class="node" class:done={!n.active}>
           <span class="dot"></span>
-          <button class="body" onclick={() => store.openThread(n.id)} title="open thread">
+          <button class="body" onclick={() => store.openThread(n.id)} title={t('detail.openThread')}>
             <div class="line1">
               <span class="seq">#{n.seq}</span>
               <span class="title">{n.title}</span>
@@ -86,7 +86,7 @@
               <span class="lvl lvl-{n.level}" title={n.reason}>
                 {levelIcon(n.level)} {levelLabel(n.level)}
               </span>
-              {#if n.state}<span class="meta" title="Plane state">· {n.state}</span>{/if}
+              {#if n.state}<span class="meta" title={t('detail.planeState')}>· {n.state}</span>{/if}
               {#if n.owner}<span class="meta">· {n.owner}</span>{/if}
               <span class="meta">· {age(n.created_at)}</span>
             </div>

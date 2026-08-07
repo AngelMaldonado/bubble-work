@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import type { BubbleView } from '../lib/types';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
@@ -63,42 +64,42 @@
 <div class="scrim" role="button" tabindex="-1" onclick={onclose} onkeydown={(e) => e.key === 'Escape' && onclose()}></div>
 <form class="modal" onsubmit={submit}>
   <header>
-    <h2>birth a thread</h2>
-    <span class="into">into <b>{bubble.name}</b> · {bubble.instance}</span>
+    <h2>{t('form.birthThread')}</h2>
+    <span class="into">{t('form.into')} <b>{bubble.name}</b> · {bubble.instance}</span>
   </header>
 
-  <label for="bf-name">Title</label>
-  <input id="bf-name" bind:value={name} placeholder="Design the signup screen" disabled={busy} />
+  <label for="bf-name">{t('form.title')}</label>
+  <input id="bf-name" bind:value={name} placeholder={t('form.titlePlaceholder')} disabled={busy} />
 
   <div class="two">
     <div>
-      <label for="bf-problem">Problem / opportunity</label>
-      <textarea id="bf-problem" bind:value={problem} rows="3" placeholder="what's the pull?" disabled={busy}></textarea>
+      <label for="bf-problem">{t('form.problem')}</label>
+      <textarea id="bf-problem" bind:value={problem} rows="3" placeholder={t('form.problemPlaceholder')} disabled={busy}></textarea>
     </div>
     <div>
-      <label for="bf-outcome">Intended outcome</label>
-      <textarea id="bf-outcome" bind:value={outcome} rows="3" placeholder="what changes when done?" disabled={busy}></textarea>
+      <label for="bf-outcome">{t('form.intended')}</label>
+      <textarea id="bf-outcome" bind:value={outcome} rows="3" placeholder={t('form.intendedPlaceholder')} disabled={busy}></textarea>
     </div>
   </div>
 
-  <label for="bf-dod">Definition of Done <span class="req">required</span></label>
-  <textarea id="bf-dod" bind:value={dod} rows="3" placeholder="the checklist that says it's finished" disabled={busy}></textarea>
+  <label for="bf-dod">{t('form.dod')} <span class="req">{t('form.required')}</span></label>
+  <textarea id="bf-dod" bind:value={dod} rows="3" placeholder={t('form.dodPlaceholder')} disabled={busy}></textarea>
 
   <label class="check">
     <input type="checkbox" bind:checked={small} disabled={busy} />
-    small thread — skip the logbook, close with a short paragraph
+    {t('form.smallThread')}
   </label>
 
   {#if !small}
-    <label for="bf-logbook">Logbook <span class="req">plan · ≥1 todo · owner · state</span></label>
+    <label for="bf-logbook">{t('form.logbook')} <span class="req">{t('form.logbookHint')}</span></label>
     <textarea id="bf-logbook" bind:value={logbook} rows="4" placeholder={'## Plan\n- [ ] first actionable todo\n\nOwner: …\nState: planning'} disabled={busy}></textarea>
   {/if}
 
   {#if err}<p class="err">{err}</p>{/if}
 
   <div class="actions">
-    <button type="button" class="ghost" onclick={onclose} disabled={busy}>cancel</button>
-    <button type="submit" class="go" disabled={!ready || busy}>{busy ? 'birthing…' : 'birth thread'}</button>
+    <button type="button" class="ghost" onclick={onclose} disabled={busy}>{t('form.cancel')}</button>
+    <button type="submit" class="go" disabled={!ready || busy}>{busy ? t('form.birthing') : t('form.birth')}</button>
   </div>
 </form>
 

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { i18n, t } from '../lib/i18n.svelte';
   import { onMount } from 'svelte';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
@@ -272,39 +273,39 @@
   }
 </script>
 
-<div class="screen" aria-label="god mode">
+<div class="screen" aria-label={t('god.aria')}>
   <div class="topbar">
-    <button class="back" onclick={() => store.closeGodMode()} aria-label="back to board">
+    <button class="back" onclick={() => store.closeGodMode()} aria-label={t('thread.back')}>
       <span aria-hidden="true">←</span> board
     </button>
     <span class="bolt" aria-hidden="true">⚡</span>
-    <h2 class="ttl">God Mode</h2>
-    {#if store.allOrgs}<span class="chip on">all orgs</span>{/if}
+    <h2 class="ttl">{t('god.title')}</h2>
+    {#if store.allOrgs}<span class="chip on">{t('god.allOrgs')}</span>{/if}
     {#if toast}<span class="toast" role="status">{toast}</span>{/if}
   </div>
 
   {#if !store.godmode}
-    <p class="pad dim">Service admin only.</p>
+    <p class="pad dim">{t('god.adminOnly')}</p>
   {:else if loading}
-    <p class="pad dim">Loading…</p>
+    <p class="pad dim">{t('board.loading')}</p>
   {:else}
     {#if error}<p class="err pad">{error}</p>{/if}
 
     <div class="grid">
       <!-- stats -->
       <section class="card">
-        <h3>Server</h3>
+        <h3>{t('god.server')}</h3>
         {#if stats}
           <dl class="kv">
-            <dt>revision</dt>
+            <dt>{t('god.revision')}</dt>
             <dd>{stats.revision ? stats.revision.slice(0, 10) : '—'}</dd>
-            <dt>built</dt>
+            <dt>{t('god.built')}</dt>
             <dd>{stats.built || '—'}</dd>
-            <dt>started</dt>
+            <dt>{t('god.started')}</dt>
             <dd>{new Date(stats.started_at).toLocaleString()}</dd>
-            <dt>instances</dt>
+            <dt>{t('god.instances')}</dt>
             <dd>{stats.instances} ({stats.cached_instances} cached)</dd>
-            <dt>identities</dt>
+            <dt>{t('god.identities')}</dt>
             <dd>{stats.cached_identities} cached</dd>
           </dl>
         {/if}
@@ -312,7 +313,7 @@
 
       <!-- plane rate budget -->
       <section class="card">
-        <h3>Plane rate budget</h3>
+        <h3>{t('god.rateBudget')}</h3>
         {#if stats?.rate_budgets?.length}
           {#each stats.rate_budgets as b (b.instance)}
             <div class="budget">
@@ -349,7 +350,7 @@
                   {b.waits === 1 ? 'yield' : 'yields'}
                 </p>
                 {#if b.remaining <= b.floor}
-                  <p class="bwarn">At the floor — background work is yielding to keep pages fast.</p>
+                  <p class="bwarn">{t('god.atFloor')}</p>
                 {/if}
               {:else}
                 <p class="bmeta">
@@ -359,7 +360,7 @@
             </div>
           {/each}
         {:else}
-          <p class="bmeta">No instances configured.</p>
+          <p class="bmeta">{t('god.noInstances')}</p>
         {/if}
       </section>
 
@@ -374,7 +375,7 @@
           {/if}
         </h3>
         {#if !outbox || !outbox.entries?.length}
-          <p class="bmeta">Empty — every write has reached Plane.</p>
+          <p class="bmeta">{t('god.outboxEmpty')}</p>
         {:else}
           <p class="bmeta">
             Auto-state moves retry on their own. Comment drafts hold no credential by
@@ -404,7 +405,7 @@
 
       <!-- plane mirror (PLANE-SYNC.md) -->
       <section class="card wide">
-        <h3>Plane mirror</h3>
+        <h3>{t('god.mirror')}</h3>
         <p class="bmeta">
           A local SQLite copy of Plane, kept current by one background worker. In
           shadow mode nothing reads from it yet — <em>sync-diff</em> is the gate that
@@ -419,7 +420,7 @@
               {#if st}
                 <span class="bnum">{st.items} items · {st.modules} bubbles</span>
               {:else}
-                <span class="bnum unknown">no mirror</span>
+                <span class="bnum unknown">{t('god.noMirror')}</span>
               {/if}
             </div>
             {#if st}
@@ -466,7 +467,7 @@
 
       <!-- maintenance -->
       <section class="card">
-        <h3>Maintenance</h3>
+        <h3>{t('god.maintenance')}</h3>
         <div class="actions">
           <button onclick={refreshCaches} disabled={busy === 'refresh'}>
             {busy === 'refresh' ? '…' : 'Refresh caches'}
@@ -490,7 +491,7 @@
         <div class="tablewrap">
           <table>
             <thead>
-              <tr><th>slug</th><th>base url</th><th>workspace</th><th>project</th><th>webhook</th><th>cached</th><th>writes to Plane</th></tr>
+              <tr><th>{t('god.slug')}</th><th>{t('god.baseUrl')}</th><th>{t('god.workspace')}</th><th>{t('god.projectCol')}</th><th>{t('god.webhook')}</th><th>{t('god.cached')}</th><th>{t('god.writesToPlane')}</th></tr>
             </thead>
             <tbody>
               {#each instances as i (i.slug)}
@@ -523,7 +524,7 @@
 
       <!-- members (read-only; Plane owns membership) -->
       <section class="card wide">
-        <h3>Members</h3>
+        <h3>{t('god.members')}</h3>
         <p class="hint" style="margin-top:0">
           Membership is managed in Plane — this is a read-only view of who has access.
         </p>
@@ -540,7 +541,7 @@
               <div class="tablewrap">
                 <table>
                   <thead>
-                    <tr><th>name</th><th>email</th><th>role</th></tr>
+                    <tr><th>{t('god.nameCol')}</th><th>{t('god.emailCol')}</th><th>{t('god.roleCol')}</th></tr>
                   </thead>
                   <tbody>
                     {#each g.members as m (m.id)}
@@ -563,7 +564,7 @@
 
       <!-- buoyancy calibration: the thresholds behind every band -->
       <section class="card wide">
-        <h3>Buoyancy calibration</h3>
+        <h3>{t('god.calibration')}</h3>
         <p class="hint" style="margin-top:0">
           The thresholds that decide how bubbles <em>and</em> individual threads move between 🔥 😴 🪦 🏆.
           Everything is derived at read time, so a change lands on the board immediately — nothing is
@@ -574,7 +575,7 @@
           {#each TUNING_GROUPS as g (g.key)}
             <div class="tgroup">
               <div class="tgroup-head">
-                <span class="tgroup-name">{g.label}</span>
+                <span class="tgroup-name">{i18n.tuning(`group.${g.key}`, g.label)}</span>
                 <span class="dim">{g.hint}</span>
               </div>
               {#each fieldsIn(g.key) as f (f.key)}
@@ -587,11 +588,11 @@
                           checked={draft[f.key] as boolean}
                           onchange={(e) => setKnob(f.key, e.currentTarget.checked)}
                         />
-                        <span>{f.label}</span>
+                        <span>{i18n.tuning(f.key, f.label)}</span>
                       </label>
                     {:else}
                       <label class="num">
-                        <span>{f.label}</span>
+                        <span>{i18n.tuning(f.key, f.label)}</span>
                         <input
                           type="number"
                           min={f.min}
@@ -603,7 +604,7 @@
                       </label>
                     {/if}
                     {#if !isDefault(f.key)}
-                      <span class="chip" title="differs from the stock default">modified</span>
+                      <span class="chip" title={t('god.differsDefault')}>{t('god.modified')}</span>
                     {/if}
                   </div>
                   <p class="knob-help">{f.help}</p>
@@ -615,11 +616,11 @@
 
           <div class="actions tune-actions">
             <button onclick={applyTuning} disabled={busy === 'tuning' || changed.length === 0}>
-              {busy === 'tuning' ? '…' : changed.length ? `Apply ${changed.length} change(s)` : 'No changes'}
+              {busy === 'tuning' ? '…' : changed.length ? t('god.applyChanges', { n: changed.length }) : t('god.noChanges')}
             </button>
-            <button onclick={revertDraft} disabled={changed.length === 0}>Discard edits</button>
+            <button onclick={revertDraft} disabled={changed.length === 0}>{t('god.discardEdits')}</button>
             <button class="mini danger" onclick={resetTuning} disabled={busy === 'tuning-reset'}>
-              {busy === 'tuning-reset' ? '…' : 'Reset to defaults'}
+              {busy === 'tuning-reset' ? '…' : t('god.resetDefaults')}
             </button>
           </div>
         {/if}
@@ -629,36 +630,36 @@
       <section class="card wide">
         <h3>Kiosk display tokens ({tokens.length})</h3>
         <div class="mint">
-          <select bind:value={mintInstance} aria-label="instance">
+          <select bind:value={mintInstance} aria-label={t('god.instance')}>
             {#each instances as i (i.slug)}
               <option value={i.slug}>{i.slug}</option>
             {/each}
           </select>
-          <input placeholder="label (e.g. lobby screen)" bind:value={mintName} />
+          <input placeholder={t('god.kioskLabel')} bind:value={mintName} />
           <button onclick={mintKiosk} disabled={busy === 'mint'}>
-            {busy === 'mint' ? '…' : 'Mint token'}
+            {busy === 'mint' ? '…' : t('god.mintToken')}
           </button>
         </div>
 
         {#if tokens.length === 0}
-          <p class="hint">No kiosk tokens. Mint one to boot a read-only display board.</p>
+          <p class="hint">{t('god.noKiosk')}</p>
         {:else}
           <ul class="tokens">
-            {#each tokens as t (t.token)}
+            {#each tokens as tok (tok.token)}
               <li>
                 <div class="tok-main">
-                  <span class="tok-name">{t.name || '(unnamed)'}</span>
-                  <span class="chip">{t.instance}</span>
-                  <span class="dim tok-when">{new Date(t.created_at).toLocaleDateString()}</span>
+                  <span class="tok-name">{tok.name || '(unnamed)'}</span>
+                  <span class="chip">{tok.instance}</span>
+                  <span class="dim tok-when">{new Date(tok.created_at).toLocaleDateString()}</span>
                 </div>
                 <div class="tok-url">
-                  <code>{kioskUrl(t)}</code>
-                  <button class="mini" onclick={() => copy(kioskUrl(t))} title="copy kiosk URL">copy</button>
+                  <code>{kioskUrl(tok)}</code>
+                  <button class="mini" onclick={() => copy(kioskUrl(tok))} title={t('god.copyKiosk')}>{t('god.copyKiosk')}</button>
                   <button
                     class="mini danger"
-                    onclick={() => revokeKiosk(t)}
-                    disabled={busy === 'revoke:' + t.token}
-                    title="revoke">revoke</button
+                    onclick={() => revokeKiosk(tok)}
+                    disabled={busy === 'revoke:' + tok.token}
+                    title={t('god.revoke')}>{t('god.revoke')}</button
                   >
                 </div>
               </li>

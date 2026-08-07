@@ -395,9 +395,9 @@
 
 <svelte:window onkeydown={onKey} onscroll={onScroll} />
 
-<div class="screen" aria-label="thread">
+<div class="screen" aria-label={t('thread.aria')}>
   <div class="topbar">
-    <button class="back" onclick={close} aria-label="back to board">
+    <button class="back" onclick={close} aria-label={t('thread.back')}>
       <span aria-hidden="true">←</span> board
     </button>
     {#if detail}
@@ -433,14 +433,14 @@
   </div>
 
   {#if loading}
-    <p class="dim pad">Loading thread…</p>
+    <p class="dim pad">{t('thread.loading')}</p>
   {:else if error}
     <p class="err pad">{error}</p>
   {:else if detail}
     <div class="body">
       <nav class="side" class:collapsed={sideCollapsed}>
         <div class="side-head">
-          {#if !sideCollapsed}<span class="side-title">Contents</span>{/if}
+          {#if !sideCollapsed}<span class="side-title">{t('thread.contents')}</span>{/if}
           <button
             class="side-toggle"
             onclick={() => (sideCollapsed = !sideCollapsed)}
@@ -474,7 +474,7 @@
                   <button
                     class="pin-x"
                     onclick={() => pins.remove(p)}
-                    title="unpin"
+                    title={t('thread.unpin')}
                     aria-label="unpin {p.title}">×</button
                   >
                 </div>
@@ -482,7 +482,7 @@
             {/if}
 
             {#if detail.artifacts?.length}
-              <div class="sect">Work</div>
+              <div class="sect">{t('thread.work')}</div>
               {#each detail.artifacts as a, i (i)}
                 <button
                   class="item"
@@ -495,7 +495,7 @@
             {/if}
 
             {#if detail.logbook}
-              <div class="sect">Logbook</div>
+              <div class="sect">{t('thread.logbook')}</div>
               <button
                 class="item"
                 class:active={sel.kind === 'logbook'}
@@ -506,7 +506,7 @@
             {/if}
 
             {#if detail.revisions?.length}
-              <div class="sect">Revisions</div>
+              <div class="sect">{t('thread.revisions')}</div>
               {#each detail.revisions as r, i (i)}
                 <button
                   class="item"
@@ -525,14 +525,14 @@
         {#if sel.kind === 'logbook' && detail.logbook}
           <!-- rendered through the same goldmark/prose pipeline as the rest -->
           <article class="prose">
-            <h1>Logbook</h1>
+            <h1>{t('thread.logbook')}</h1>
             {#if detail.logbook.html}
               {@html detail.logbook.html}
             {:else}
-              <p class="dim">No tasks recorded.</p>
+              <p class="dim">{t('thread.noTasks')}</p>
             {/if}
             {#if detail.logbook.dod_html}
-              <h2>Definition of Done</h2>
+              <h2>{t('thread.dod')}</h2>
               {@html detail.logbook.dod_html}
             {/if}
           </article>
@@ -542,7 +542,7 @@
             {@html current.html}
           </article>
         {:else}
-          <p class="dim">Nothing to show.</p>
+          <p class="dim">{t('thread.nothing')}</p>
         {/if}
       </main>
 
@@ -557,7 +557,7 @@
         <div class="chat-panel" transition:slide={{ duration: 180, axis: 'y' }}>
           <header class="chat-head">
             <span class="chat-title">{t('chat.title')}</span>
-            <button class="chat-x" onclick={toggleChat} aria-label="close discussion">×</button>
+            <button class="chat-x" onclick={toggleChat} aria-label={t('thread.closeChat')}>×</button>
           </header>
           <div class="chat-scroll" bind:this={chatScroll}>
             {#if chatLoading}
@@ -610,7 +610,7 @@
               <!-- onmousedown+preventDefault keeps the textarea selection intact -->
               <button
                 type="button"
-                title="Bold (**)"
+                title={t('fmt.bold')}
                 onmousedown={(e) => {
                   e.preventDefault();
                   wrapSel('**');
@@ -618,7 +618,7 @@
               >
               <button
                 type="button"
-                title="Italic (*)"
+                title={t('fmt.italic')}
                 onmousedown={(e) => {
                   e.preventDefault();
                   wrapSel('*');
@@ -626,7 +626,7 @@
               >
               <button
                 type="button"
-                title="Inline code (`)"
+                title={t('fmt.code')}
                 onmousedown={(e) => {
                   e.preventDefault();
                   wrapSel('`', 'code');
@@ -634,7 +634,7 @@
               >
               <button
                 type="button"
-                title="Link"
+                title={t('fmt.link')}
                 onmousedown={(e) => {
                   e.preventDefault();
                   insertLink();
@@ -642,7 +642,7 @@
               >
               <button
                 type="button"
-                title="Bullet list"
+                title={t('fmt.list')}
                 onmousedown={(e) => {
                   e.preventDefault();
                   prefixLines('- ');
@@ -665,7 +665,7 @@
           {/if}
         </div>
       {:else}
-        <button class="chat-fab" onclick={toggleChat} aria-label="open discussion">
+        <button class="chat-fab" onclick={toggleChat} aria-label={t('thread.openChat')}>
           <span aria-hidden="true">💬</span>
           {#if unread}<span class="chat-badge">{unread}</span>{/if}
         </button>

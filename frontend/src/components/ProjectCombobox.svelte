@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import {
     Combobox,
     Portal,
@@ -44,8 +45,8 @@
 
 <Combobox
   class="proj-cb"
-  aria-label="Project filter"
-  placeholder="Project"
+  aria-label={t('combo.projectFilter')}
+  placeholder={t('combo.project')}
   {collection}
   {value}
   {inputValue}
@@ -57,8 +58,8 @@
   closeOnSelect
 >
   <Combobox.Control class="proj-cb-control">
-    <Combobox.Input class="proj-cb-input" aria-label="Project filter" />
-    <Combobox.Trigger class="proj-cb-trigger" aria-label="Open projects">
+    <Combobox.Input class="proj-cb-input" aria-label={t('combo.projectFilter')} />
+    <Combobox.Trigger class="proj-cb-trigger" aria-label={t('combo.openProjects')}>
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
     </Combobox.Trigger>
   </Combobox.Control>

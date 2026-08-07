@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
   import Combo from './Combo.svelte';
@@ -80,14 +81,14 @@
 ></div>
 <form class="modal" onsubmit={submit}>
   <header>
-    <h2>new bubble</h2>
-    <span class="into">a durable grouping of work · maps to a Plane module</span>
+    <h2>{t('form.newBubble')}</h2>
+    <span class="into">{t('form.newBubbleHint')}</span>
   </header>
 
   <div class="two">
     {#if store.instances.length > 1}
       <div>
-        <label for="cb-inst">Instance</label>
+        <label for="cb-inst">{t('form.instance')}</label>
         <select id="cb-inst" bind:value={fInstance} disabled={busy}>
           {#each store.instances as slug (slug)}
             <option value={slug}>{slug}</option>
@@ -96,31 +97,31 @@
       </div>
     {/if}
     <div>
-      <label for="cb-proj">Project</label>
+      <label for="cb-proj">{t('form.project')}</label>
       {#if projects.length}
-        <Combo options={projectOpts} bind:value={fProject} ariaLabel="project" placeholder="pick a project" />
+        <Combo options={projectOpts} bind:value={fProject} ariaLabel="project" placeholder={t('form.pickProject')} />
       {:else}
-        <p class="empty">No projects here yet — create one with <code>bubble workspace</code>.</p>
+        <p class="empty">{t('form.noProjects')} <code>bubble workspace</code>.</p>
       {/if}
     </div>
   </div>
 
-  <label for="cb-name">Name</label>
-  <input id="cb-name" bind:value={name} placeholder="Onboarding revamp" disabled={busy} />
+  <label for="cb-name">{t('form.name')}</label>
+  <input id="cb-name" bind:value={name} placeholder={t('form.namePlaceholder')} disabled={busy} />
 
-  <label for="cb-outcome">Outcome <span class="req">optional · what “done” looks like</span></label>
-  <input id="cb-outcome" bind:value={outcome} placeholder="signups convert 20% better" disabled={busy} />
+  <label for="cb-outcome">{t('form.outcome')} <span class="req">{t('form.optionalDone')}</span></label>
+  <input id="cb-outcome" bind:value={outcome} placeholder={t('form.outcomePlaceholder')} disabled={busy} />
 
-  <label for="cb-owner">Owner <span class="req">optional · who's accountable</span></label>
-  <Combo options={memberOpts} bind:value={owner} ariaLabel="owner" placeholder="search members…" allowCustom />
+  <label for="cb-owner">{t('form.owner')} <span class="req">{t('form.optionalOwner')}</span></label>
+  <Combo options={memberOpts} bind:value={owner} ariaLabel="owner" placeholder={t('form.ownerPlaceholder')} allowCustom />
 
 
   {#if err}<p class="err">{err}</p>{/if}
 
   <div class="actions">
-    <button type="button" class="ghost" onclick={onclose} disabled={busy}>cancel</button>
+    <button type="button" class="ghost" onclick={onclose} disabled={busy}>{t('form.cancel')}</button>
     <button type="submit" class="go" disabled={!ready || busy}>
-      {busy ? 'creating…' : 'create bubble'}
+      {busy ? t('form.creating') : t('form.createBubble')}
     </button>
   </div>
 </form>

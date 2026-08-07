@@ -71,13 +71,13 @@
   <!-- the one fixed floating bubble, top-left; doubles as the ⌘K launcher
        (a kiosk display is passive, so it's just a mark there) -->
   {#if kiosk}
-    <div class="brand" aria-label="bubble.work kiosk">
+    <div class="brand" aria-label={t('chrome.kiosk')}>
       <span class="orb"></span>
       <span class="wordmark">bubble.work</span>
-      <span class="kiosk-tag">kiosk</span>
+      <span class="kiosk-tag">{t('chrome.kioskBadge')}</span>
     </div>
   {:else}
-    <button class="brand" onclick={() => (omni = true)} title="search · commands (⌘K)">
+    <button class="brand" onclick={() => (omni = true)} title={t('chrome.searchCommands')}>
       <span class="orb"></span>
       <span class="wordmark">bubble.work</span>
     </button>
@@ -128,8 +128,8 @@
 
     {#if store.visible.length === 0}
       <div class="hollow">
-        <p>No bubbles here yet.</p>
-        <p class="dim">Press <b>⌘K</b>, type <b>&gt;</b>, and choose <b>new bubble</b> — then birth threads into it.</p>
+        <p>{t('chrome.noBubbles')}</p>
+        <p class="dim">{t('chrome.press')} <b>⌘K</b>, {t('chrome.emptyHint', { cmd: '>', new: t('chrome.newBubbleCmd') })}</p>
       </div>
     {/if}
   </main>
@@ -141,9 +141,9 @@
           class="picker"
           value={store.instance}
           onchange={(e) => store.selectInstance(e.currentTarget.value)}
-          aria-label="instance filter"
+          aria-label={t('combo.instanceFilter')}
         >
-          <option value="">all instances</option>
+          <option value="">{t('combo.allInstances')}</option>
           {#each store.instances as slug (slug)}
             <option value={slug}>{slug}</option>
           {/each}
@@ -172,7 +172,7 @@
         <button
           class="god-enter"
           onclick={() => store.openGodMode()}
-          title="open God Mode (/god-mode)"
+          title={t('chrome.openGodMode')}
         >
           ⚡ God Mode{store.allOrgs ? ' · all orgs' : ''}
         </button>
@@ -181,13 +181,13 @@
 
     <div class="side right">
       {#if kiosk}
-        <span class="hint">read-only display</span>
-        <button class="theme" onclick={() => store.exitKiosk()} title="exit kiosk mode">
+        <span class="hint">{t('chrome.readonly')}</span>
+        <button class="theme" onclick={() => store.exitKiosk()} title={t('chrome.exitKiosk')}>
           <span class="tico">⎋</span>
-          <span class="tlabel">exit kiosk</span>
+          <span class="tlabel">{t('chrome.exitKioskShort')}</span>
         </button>
       {:else}
-        <span class="hint">⌘K search · <b>&gt;</b> commands</span>
+        <span class="hint">{t('chrome.searchHint')} · <b>&gt;</b> {t('chrome.commandsHint')}</span>
       {/if}
       <!-- language sits immediately left of the theme badge and shares its
            shape: two adjacent display preferences should read as one pair. -->

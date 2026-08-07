@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import {
     Combobox,
     Portal,
@@ -55,8 +56,8 @@
 
 <Combobox
   class="proj-cb"
-  aria-label="View scope"
-  placeholder="View"
+  aria-label={t('combo.viewScope')}
+  placeholder={t('combo.view')}
   {collection}
   {value}
   {inputValue}
@@ -68,8 +69,8 @@
   closeOnSelect
 >
   <Combobox.Control class="proj-cb-control">
-    <Combobox.Input class="proj-cb-input" aria-label="View scope" />
-    <Combobox.Trigger class="proj-cb-trigger" aria-label="Open view scopes">
+    <Combobox.Input class="proj-cb-input" aria-label={t('combo.viewScope')} />
+    <Combobox.Trigger class="proj-cb-trigger" aria-label={t('combo.openViews')}>
       <svg viewBox="0 0 16 16" aria-hidden="true"><path d="m4 6 4 4 4-4" /></svg>
     </Combobox.Trigger>
   </Combobox.Control>

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import { store } from '../lib/store.svelte';
   import BubblePool from './BubblePool.svelte';
 
@@ -26,7 +27,7 @@
   <h1 class="title">bubble.work</h1>
 
   <form class="entry" onsubmit={submit}>
-    <label for="key">Plane API key</label>
+    <label for="key">{t('form.apiKey')}</label>
     <div class="row">
       <input
         id="key"
@@ -37,7 +38,7 @@
         disabled={busy}
       />
       <button type="submit" class="go" disabled={busy || !key.trim()}>
-        {busy ? '…' : 'log in'}
+        {busy ? '…' : t('form.login')}
       </button>
     </div>
     {#if err}<p class="err">{err}</p>{/if}

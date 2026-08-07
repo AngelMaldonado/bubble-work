@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { t } from '../lib/i18n.svelte';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
   import { fuzzyFilter } from '../lib/fuzzy';
@@ -354,7 +355,7 @@
   <div class="palette" role="dialog" aria-modal="true">
     <div class="omnifield">
       {#if isCommand || stage !== 'root'}
-        <span class="glyph cmd" aria-label="command mode">›</span>
+        <span class="glyph cmd" aria-label={t('chrome.commandMode')}>›</span>
       {:else}
         <span class="glyph">⌘K</span>
       {/if}
@@ -421,9 +422,9 @@
       {#if stage === 'pick'}
         <span>↑↓ move · ⏎ pick bubble · esc back</span>
       {:else if stage === 'input'}
-        <span>⏎ apply · esc back</span>
+        <span>{t('omni.applyHint')}</span>
       {:else}
-        <span>↑↓ move · ⏎ open · esc close · type <b>&gt;</b> for commands</span>
+        <span>{t('omni.navHint')} <b>&gt;</b> {t('omni.forCommands')}</span>
       {/if}
     </div>
   </div>

@@ -1044,7 +1044,13 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	if err != nil {
 		return domain.BirthResult{}, fmt.Errorf("resolve state: %w", err)
 	}
-	wid, err := cl.CreateWorkItem(ctx, req.Name, briefLogbookHTML(req.Brief, req.Logbook), state)
+	// NOTE: birth is deliberately NOT linted against the §3.1 template. Its gate
+	// (above) accepts a Definition of Done written as prose and a Logbook that is
+	// a sentence, which is looser than the template — but it is the established
+	// contract, and tightening it would reject payloads today's callers send.
+	// Malformed EDITS are refused; see UpdateThread.
+	page := briefLogbookHTML(req.Brief, req.Logbook)
+	wid, err := cl.CreateWorkItem(ctx, req.Name, page, state)
 	if err != nil {
 		return domain.BirthResult{}, fmt.Errorf("create work item: %w", err)
 	}
@@ -1059,7 +1065,7 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	// until then.
 	if s.mirror != nil {
 		now := s.now()
-		html := briefLogbookHTML(req.Brief, req.Logbook)
+		html := page
 		if err := s.mirror.UpsertItems(slug, []mirror.Item{{
 			ID: wid, ProjectID: projectID, Name: req.Name,
 			DescriptionHTML: html, DescriptionHash: mirror.HashBody(html),

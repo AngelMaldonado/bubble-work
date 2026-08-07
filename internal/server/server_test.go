@@ -3075,3 +3075,106 @@ func lastSegment(path string) string {
 	}
 	return parts[len(parts)-1]
 }
+
+// The house standard (spec §3.1, §3.2) is enforced server-side, so no client can
+// bypass it — including MCP, where §9.3 makes an agent deliberately
+// indistinguishable from the person it acts for.
+func TestMarkdownStandardIsEnforcedOnWrites(t *testing.T) {
+	var mu sync.Mutex
+	body := `<h2>Brief</h2><p>why this exists.</p>` +
+		`<h2>Definition of Done</h2><ul data-type="taskList">` +
+		`<li data-type="taskItem" data-checked="false"><div><p>it works</p></div></li></ul>`
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur := body
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				DescriptionHTML *string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			if in.DescriptionHTML != nil {
+				body = *in.DescriptionHTML
+			}
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, cur)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	// The reported case: a write that introduces a second level-1 heading.
+	bad, _ := json.Marshal(domain.ThreadEdit{
+		Brief: strPtr("# One\n\nwhy this exists.\n\n# Two\n\nmore"),
+	})
+	code, resp := do(t, http.MethodPatch, ts.URL+thread, key, string(bad))
+	if code != http.StatusBadRequest {
+		t.Fatalf("multiple H1s were accepted: %d %s", code, resp)
+	}
+	for _, want := range []string{"level-1", "§3.1"} {
+		if !strings.Contains(string(resp), want) {
+			t.Errorf("the refusal should say what to change and cite the standard: %s", resp)
+		}
+	}
+	mu.Lock()
+	untouched := body
+	mu.Unlock()
+	if strings.Contains(untouched, "# Two") || strings.Contains(untouched, "<h1") {
+		t.Error("a refused write still reached Plane")
+	}
+
+	// The editor opts out: it warns instead, because autosave that stops
+	// mid-sentence is its own kind of broken.
+	lenient, _ := json.Marshal(domain.ThreadEdit{
+		Brief:   strPtr("# One\n\nwhy this exists.\n\n# Two\n\nmore"),
+		Lenient: true,
+	})
+	code, resp = do(t, http.MethodPatch, ts.URL+thread, key, string(lenient))
+	if code != http.StatusOK {
+		t.Fatalf("the lenient path refused: %d %s", code, resp)
+	}
+	var d domain.ThreadDetail
+	json.Unmarshal(resp, &d)
+	if len(d.Warnings) != 1 || d.Warnings[0].Rule != "one-h1" {
+		t.Errorf("a lenient write should report what it let through: %+v", d.Warnings)
+	}
+
+	// And now that the page ALREADY has two H1s, an unrelated edit is not
+	// punished for somebody else's mess.
+	ok, _ := json.Marshal(domain.ThreadEdit{
+		Edits: []domain.RegionEdit{{Region: "brief", Old: "why this exists.", New: "why this really exists."}},
+	})
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(ok)); code != http.StatusOK {
+		t.Errorf("an unrelated edit was blocked by a pre-existing violation: %d %s", code, b)
+	}
+}

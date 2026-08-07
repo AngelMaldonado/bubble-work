@@ -160,6 +160,28 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 		}
 	}
 
+	// The house standard (spec §3.1, §3.2), checked on the RESULT rather than on
+	// what was sent: an edit changes part of a page, and whether the page still
+	// holds together is a property of the whole thing.
+	//
+	// Refused by default on every surface. §9.3 makes an agent deliberately
+	// indistinguishable from the person it acts for, so there is no "is this an
+	// agent" to branch on — strict is the default and the web editor opts out,
+	// because autosave that stops mid-sentence is its own kind of broken.
+	var warnings []md.Finding
+	if body != it.DescriptionHTML {
+		// Only what this write INTRODUCED. A page that was already messy is not
+		// this caller's fault, and refusing their one-line fix over it would make
+		// the tool unusable on everything that already exists.
+		broke := md.NewFindings(md.Lint(md.FromHTML(it.DescriptionHTML)), md.Lint(md.FromHTML(body)))
+		if len(broke) > 0 {
+			if !edit.Lenient {
+				return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errBadRequest, md.LintError(broke))
+			}
+			warnings = broke
+		}
+	}
+
 	if body == it.DescriptionHTML {
 		// Every region was submitted unchanged. Writing would cost a Plane call
 		// and, for a Logbook, would stamp production for work nobody did — which
@@ -178,7 +200,12 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 	// turns it into heat and pushes it to every open board.
 	s.rebuildAndNotify(inst, wid, production)
 
-	return s.ThreadDetail(ctx, full)
+	d, err := s.ThreadDetail(ctx, full)
+	if err != nil {
+		return d, err
+	}
+	d.Warnings = warnings
+	return d, nil
 }
 
 // writeBody pushes a new description to Plane and records it locally.

@@ -441,8 +441,11 @@ type ThreadDetail struct {
 	// Regions is what an editor loads and writes back, keyed by region name
 	// (docs/ARTIFACT-EDITING.md). Distinct from Artifacts, which is the RENDERED
 	// read model: this is the exact markdown a splice will diff against.
-	Regions  map[string]EditableRegion `json:"regions,omitempty"`
-	Buoyancy                           // lifecycle/level/score/reason, flattened into the JSON
+	Regions map[string]EditableRegion `json:"regions,omitempty"`
+	// Warnings are markdown-standard violations on a write that was allowed
+	// through leniently — the editor shows them next to the save status.
+	Warnings []md.Finding `json:"warnings,omitempty"`
+	Buoyancy              // lifecycle/level/score/reason, flattened into the JSON
 }
 
 // EditableRegion is one writable part of a thread's page.
@@ -475,6 +478,12 @@ type ThreadEdit struct {
 	// Applied BEFORE the whole-region fields, so naming both for one region is
 	// rejected rather than silently resolved.
 	Edits []RegionEdit `json:"edits,omitempty"`
+	// Lenient downgrades a markdown-standard violation from a refusal to a
+	// warning. The web editor sets it because autosave that stops mid-sentence
+	// is its own kind of broken; nothing else does, so the standard is enforced
+	// by default on every other surface — including MCP, where §9.3 makes an
+	// agent deliberately indistinguishable from the person it acts for.
+	Lenient bool `json:"lenient,omitempty"`
 	// Base carries the region hashes the editor read, keyed by region name.
 	// Absent means "I did not look" — accepted, because CLI and MCP callers
 	// legitimately write without having loaded the page first.

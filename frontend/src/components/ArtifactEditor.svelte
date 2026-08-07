@@ -65,6 +65,8 @@
   let saved = $state(untrack(() => initial)); // what the server last confirmed it holds
   let status = $state<State>('clean');
   let message = $state<string | null>(null);
+  // House-standard violations this write introduced (spec §3.1, §3.2).
+  let lint = $state<{ rule: string; message: string; line?: number }[]>([]);
 
   let host = $state<HTMLElement | null>(null);
   let cm: MarkdownEditor | null = null;
@@ -172,9 +174,14 @@
       const d = await api.updateThread(threadId, {
         [region]: sending,
         base: { [region]: base },
+        // Warn, do not refuse: someone half-way through typing a heading is not
+        // yet in violation of anything, and a save that starts failing mid-
+        // sentence teaches people to distrust autosave.
+        lenient: true,
       } as Parameters<typeof api.updateThread>[1]);
       lastWrite = Date.now();
       saved = sending;
+      lint = d.warnings ?? [];
       // Adopt the server's hash: it is the authority on what the body now is,
       // and the next write has to be based on THAT, not on what we sent.
       base = d.regions?.[region]?.hash ?? base;
@@ -473,6 +480,14 @@
     <span class="status" class:warn={status === 'conflict' || status === 'error'}>{label}</span>
   </div>
 
+  {#if lint.length}
+    <ul class="lint">
+      {#each lint as f (f.rule)}
+        <li>{f.message}</li>
+      {/each}
+    </ul>
+  {/if}
+
   {#if message}
     <p class="msg" class:warn={status === 'conflict' || status === 'error'}>
       {message}
@@ -587,6 +602,17 @@
   }
   .status.warn {
     color: oklch(0.72 0.19 25);
+  }
+  .lint {
+    margin: 0;
+    padding: 0.45rem 0.7rem 0.45rem 1.6rem;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklab, oklch(0.78 0.16 85) 40%, var(--line));
+    background: color-mix(in oklab, oklch(0.78 0.16 85) 9%, transparent);
+    font-family: var(--sans);
+    font-size: 0.76rem;
+    line-height: 1.5;
+    color: var(--text);
   }
   .msg {
     margin: 0;

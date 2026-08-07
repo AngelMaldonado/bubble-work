@@ -129,6 +129,9 @@ export interface ThreadDetail extends Buoyancy {
   logbook?: Logbook;
   revisions: Artifact[];
   regions?: Partial<Record<RegionName, EditableRegion>>;
+  /** markdown-standard violations this write introduced (spec §3.1, §3.2).
+   *  Only present when the write was allowed through leniently. */
+  warnings?: { rule: string; message: string; line?: number }[];
   created_at: string;
   completed_at?: string;
 }

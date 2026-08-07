@@ -114,6 +114,10 @@ export const api = {
       logbook?: string;
       dod?: string;
       base?: Partial<Record<RegionName, string>>;
+      /** Downgrade a markdown-standard violation to a warning. The editor sets
+       *  it because autosave that stops mid-sentence is its own kind of broken;
+       *  every other surface is refused, agents included. */
+      lenient?: boolean;
     },
   ) => req<ThreadDetail>('PATCH', `/api/threads/${encodeURIComponent(id)}`, edit),
   // text guards index: the server refuses rather than ticking the wrong box.

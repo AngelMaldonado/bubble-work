@@ -7,10 +7,17 @@
   import ThreadView from './components/ThreadView.svelte';
   import GodMode from './components/GodMode.svelte';
 
-  // The tour runs itself once, and only after the board has something to point
-  // at — starting it against an empty screen would highlight nothing.
+  // The tour runs itself once, and only once the board is real.
+  //
+  // Gating on store.authed alone is not enough: it is seeded from token
+  // PRESENCE, not validity, so an unreachable server leaves it optimistically
+  // true — and the tour would open over a board that failed to load, whose
+  // empty-workspace branch would helpfully suggest creating a bubble. store.actor
+  // is only set once whoami has actually answered, so that is the real gate.
   $effect(() => {
-    if (store.authed && !store.loading && !store.threadId) tour.maybeAutoStart();
+    if (store.actor && !store.loading && !store.error && !store.threadId) {
+      tour.maybeAutoStart();
+    }
   });
 
   onMount(() => {

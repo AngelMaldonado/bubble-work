@@ -87,7 +87,10 @@ class Tour {
 
   /** Runs once, the first time somebody signs in. */
   maybeAutoStart(): void {
-    if (this.seen || store.kiosk || !store.authed) return;
+    // store.actor, not store.authed: authed is seeded from token presence and
+    // stays true when the server is simply unreachable. An actor means whoami
+    // answered, so we know who this is and the board is genuinely loaded.
+    if (this.seen || store.kiosk || !store.actor) return;
     this.markSeen();
     // Let the board paint and settle before pointing at anything on it.
     setTimeout(() => void this.start(), 900);

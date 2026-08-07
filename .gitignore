@@ -7,3 +7,6 @@
 # needs no JS toolchain; only the dev artifacts are ignored.
 /frontend/node_modules/
 /frontend/.vite-dist/
+
+# the frontend uses bun; a stray npm lockfile would resolve different versions
+frontend/package-lock.json

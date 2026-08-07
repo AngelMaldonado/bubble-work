@@ -190,7 +190,10 @@ connect panel: the server URL (derived from wherever you are browsing, so it is
 right for localhost and for the deployed host without configuration), your
 token, and three ways to use them — the `claude mcp add` one-liner, a global
 config block, and **a prompt to paste into an assistant** so it does the
-configuration itself rather than you hunting for the right config path.
+configuration itself rather than you hunting for the right config path. The
+prompt names no client: it gives the transport, the URL and the header, and
+tells the assistant to work out the right config file for whatever client is
+actually in use.
 
 Nothing is minted. The token is the Plane key this browser already holds, which
 is why option A needed no server work at all — but it also means the panel has

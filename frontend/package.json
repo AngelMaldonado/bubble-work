@@ -9,6 +9,13 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@codemirror/commands": "^6.10.4",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/state": "^6.7.1",
+    "@codemirror/view": "^6.43.8",
+    "@lezer/highlight": "^1.2.3",
+    "@replit/codemirror-vim": "^6.4.0",
     "@skeletonlabs/skeleton": "5.0.0",
     "@skeletonlabs/skeleton-svelte": "5.0.0",
     "mermaid": "^11.16.0"

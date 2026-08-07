@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Editing a thread's artifacts from the board (docs/ARTIFACT-EDITING.md Phase 4).
+  // Editing a thread's artifacts from the board (docs/ARTIFACT-EDITING.md).
   //
   // The editor is MARKDOWN SOURCE, not WYSIWYG, and that is a decision rather
   // than a shortcut: everything downstream already speaks markdown (the TOC, the
@@ -7,15 +7,24 @@
   // description images only to a web session — so a WYSIWYG here would be a
   // WYSIWYG that cannot show you the pictures.
   //
+  // The surface underneath is CodeMirror 6, loaded on demand. A <textarea> was
+  // the honest first cut and a poor one: no highlighting, no list continuation,
+  // no undo grouping, and a hand-rolled hidden-div measurement to find the
+  // caret. @codemirror/lang-markdown ships the two commands that make markdown
+  // editing feel like markdown — Enter continues a list or checkbox, Backspace
+  // unwinds the marker — and coordsAtPos retires the measurement hack.
+  //
   // Saving is autosave, which forces two rules the server enforces too: a region
   // submitted unchanged writes nothing at all, and every write carries the hash
   // of what was read so a lost update becomes a 409 instead of a silent
   // overwrite.
   import { onDestroy, untrack } from 'svelte';
   import { api, ApiError } from '../lib/api';
-  import { caretPoint } from '../lib/caret';
-  import { findSlash } from '../lib/slash';
+  import type { MarkdownEditor } from '../lib/editor';
   import { t } from '../lib/i18n.svelte';
+  import { findSlash } from '../lib/slash';
+  import { theme } from '../lib/theme.svelte';
+  import { vimPref } from '../lib/vim.svelte';
   import type { RegionName, ThreadDetail } from '../lib/types';
 
   let {
@@ -25,6 +34,7 @@
     hash,
     onsaved,
     onreload,
+    ondone,
   }: {
     threadId: string;
     region: RegionName;
@@ -34,6 +44,8 @@
     onsaved: (d: ThreadDetail) => void;
     /** Asked for after a conflict: take whatever the server holds. */
     onreload: () => void;
+    /** Esc: commit and hand the reader back their rendered view. */
+    ondone: () => void;
   } = $props();
 
   // Idle before we consider a write, and the floor between two writes. Plane
@@ -47,33 +59,67 @@
 
   // The buffer is SEEDED from the props and then owned here. untrack says that
   // outright: a later `initial` must not silently overwrite what someone is
-  // typing — only an explicit reset does, below.
+  // typing — only an explicit reset does.
   let text = $state(untrack(() => initial));
   let base = $state(untrack(() => hash));
   let saved = $state(untrack(() => initial)); // what the server last confirmed it holds
   let status = $state<State>('clean');
   let message = $state<string | null>(null);
-  let box = $state<HTMLTextAreaElement | null>(null);
+
+  let host = $state<HTMLElement | null>(null);
+  let cm: MarkdownEditor | null = null;
+  let ready = $state(false);
 
   let idle: ReturnType<typeof setTimeout> | null = null;
   let lastWrite = 0;
   let inflight = false;
 
-  // A thread or region switch has to reset everything, or the next one inherits
-  // the previous buffer and base hash — and writes it over the wrong thread.
-  let loadedFor = $state(untrack(() => `${threadId}:${region}`));
+  // Dynamic import so none of CodeMirror lands in the main bundle: the editor
+  // only exists once somebody switches to Markdown, the same way mermaid only
+  // loads for a document that actually has a diagram.
+  // Extensions are fixed at construction, so flipping vim means rebuilding the
+  // editor. Reading vimPref.on HERE is what makes that happen; the caret is
+  // carried across so the switch is not also a jump to the top of the document.
   $effect(() => {
-    const key = `${threadId}:${region}`;
-    if (key === loadedFor) return;
-    untrack(() => {
-      cancel();
-      loadedFor = key;
-      text = initial;
-      saved = initial;
-      base = hash;
-      status = 'clean';
-      message = null;
-    });
+    const el = host;
+    const wantVim = vimPref.on;
+    if (!el) return;
+    const at = cm?.cursor();
+    cm?.destroy();
+    cm = null;
+    ready = false;
+    let cancelled = false;
+    void (async () => {
+      const { createMarkdownEditor } = await import('../lib/editor');
+      if (cancelled || !host) return;
+      cm = await createMarkdownEditor({
+        parent: el,
+        doc: untrack(() => text),
+        vim: wantVim,
+        cursor: at,
+        // untracked: this effect must not re-run on a theme switch. Most of
+        // the editor's colour comes from CSS vars and follows the theme on its
+        // own; the flag only picks CodeMirror's internal defaults.
+        dark: untrack(() => theme.resolved === 'dark'),
+        placeholder: t('editor.placeholder'),
+        onChange: onDocChanged,
+        onKey: onEditorKey,
+        onSave: () => void save(),
+        onEscape,
+        onBlur: () => {
+          slash = null;
+          flush();
+        },
+      });
+      ready = true;
+      cm.focus();
+    })();
+    return () => {
+      cancelled = true;
+      cm?.destroy();
+      cm = null;
+      ready = false;
+    };
   });
 
   function cancel(): void {
@@ -88,12 +134,24 @@
     idle = setTimeout(() => void save(), wait);
   }
 
-  function onInput(): void {
+  function onDocChanged(doc: string): void {
+    text = doc;
     detectSlash();
     if (status === 'conflict') return; // resolve it before typing over it again
     status = text === saved ? 'clean' : 'dirty';
     message = null;
     if (status === 'dirty') schedule();
+  }
+
+  function onEscape(): void {
+    // Esc means "I am done here" — but only once the menu is out of the way, so
+    // the first press never costs you the block you were inserting.
+    if (slash) {
+      slash = null;
+      return;
+    }
+    void save();
+    ondone();
   }
 
   export async function save(): Promise<void> {
@@ -142,11 +200,6 @@
     }
   }
 
-  function onBlur(): void {
-    slash = null;
-    flush();
-  }
-
   // Leaving without flushing is how autosave loses work, so blur, navigation and
   // closing the tab all force one.
   function flush(): void {
@@ -162,63 +215,9 @@
     flush();
   });
 
-  /** Discard local edits and take whatever the server holds. */
-  export function reload(next: string, nextHash: string): void {
-    cancel();
-    text = next;
-    saved = next;
-    base = nextHash;
-    status = 'clean';
-    message = null;
-  }
-
   /** True while there is unsaved work — the caller uses it to refuse a clobber. */
   export function isDirty(): boolean {
     return text !== saved;
-  }
-
-  // ---- markdown helpers, the same shape the comment composer already uses ----
-  function restoreSel(start: number, end: number): void {
-    requestAnimationFrame(() => {
-      if (!box) return;
-      box.focus();
-      box.selectionStart = start;
-      box.selectionEnd = end;
-    });
-  }
-  function wrapSel(marker: string, placeholder: string): void {
-    if (!box) return;
-    const s = box.selectionStart;
-    const e = box.selectionEnd;
-    const chosen = text.slice(s, e) || placeholder;
-    text = text.slice(0, s) + marker + chosen + marker + text.slice(e);
-    restoreSel(s + marker.length, s + marker.length + chosen.length);
-    onInput();
-  }
-  function prefixLines(prefix: string): void {
-    if (!box) return;
-    const s = box.selectionStart;
-    const e = box.selectionEnd;
-    const lineStart = text.lastIndexOf('\n', s - 1) + 1;
-    const replaced = text
-      .slice(lineStart, e)
-      .split('\n')
-      .map((l) => prefix + l)
-      .join('\n');
-    text = text.slice(0, lineStart) + replaced + text.slice(e);
-    restoreSel(lineStart, lineStart + replaced.length);
-    onInput();
-  }
-  function insertLink(): void {
-    if (!box) return;
-    const s = box.selectionStart;
-    const e = box.selectionEnd;
-    const label = text.slice(s, e) || t('editor.linkText');
-    const snippet = `[${label}](url)`;
-    text = text.slice(0, s) + snippet + text.slice(e);
-    const at = s + snippet.indexOf('url');
-    restoreSel(at, at + 3);
-    onInput();
   }
 
   // ---- the slash menu (docs/ARTIFACT-EDITING.md Phase 5) ----
@@ -246,10 +245,31 @@
     { id: 'h2', label: () => t('cmd.h2'), glyph: 'H2', text: '## ', caret: 3, alias: 'heading' },
     { id: 'h3', label: () => t('cmd.h3'), glyph: 'H3', text: '### ', caret: 4, alias: 'heading' },
     { id: 'bullet', label: () => t('cmd.bullet'), glyph: '•', text: '- ', caret: 2, alias: 'list ul' },
-    { id: 'numbered', label: () => t('cmd.numbered'), glyph: '1.', text: '1. ', caret: 3, alias: 'list ol ordered' },
-    { id: 'todo', label: () => t('cmd.todo'), glyph: '☐', text: '- [ ] ', caret: 6, alias: 'task checkbox tick' },
+    {
+      id: 'numbered',
+      label: () => t('cmd.numbered'),
+      glyph: '1.',
+      text: '1. ',
+      caret: 3,
+      alias: 'list ol ordered',
+    },
+    {
+      id: 'todo',
+      label: () => t('cmd.todo'),
+      glyph: '☐',
+      text: '- [ ] ',
+      caret: 6,
+      alias: 'task checkbox tick',
+    },
     { id: 'quote', label: () => t('cmd.quote'), glyph: '❝', text: '> ', caret: 2, alias: 'blockquote' },
-    { id: 'code', label: () => t('cmd.code'), glyph: '</>', text: '```\n\n```\n', caret: 4, alias: 'pre fence' },
+    {
+      id: 'code',
+      label: () => t('cmd.code'),
+      glyph: '</>',
+      text: '```\n\n```\n',
+      caret: 4,
+      alias: 'pre fence',
+    },
     {
       id: 'mermaid',
       label: () => t('cmd.mermaid'),
@@ -272,8 +292,65 @@
 
   // at is the index of the "/" itself, so running a command can replace the
   // whole token rather than leaving it behind.
-  let slash = $state<{ at: number; query: string; top: number; left: number } | null>(null);
+  let slash = $state<{
+    at: number;
+    query: string;
+    /** just below the caret — where the menu sits when it opens downwards */
+    top: number;
+    /** the caret's own top — where the menu's BOTTOM goes when it flips up */
+    caretTop: number;
+    left: number;
+  } | null>(null);
   let picked = $state(0);
+  let menuEl = $state<HTMLElement | null>(null);
+  let menuBox = $state<HTMLElement | null>(null);
+  let fieldEl = $state<HTMLElement | null>(null);
+  let itemEls = $state<HTMLElement[]>([]);
+
+  // Where the menu actually lands. A caret near the bottom of the editor has no
+  // room beneath it, so the menu flips above the caret rather than being cut off
+  // by the editor's own box; a caret near the right edge shifts left. Measured
+  // rather than assumed, because the menu's height depends on how many commands
+  // survived the filter.
+  let place = $state<{ top: number; left: number } | null>(null);
+
+  $effect(() => {
+    const s = slash;
+    const box = menuBox;
+    const field = fieldEl;
+    // matches is a dependency on purpose: filtering changes the height.
+    void matches.length;
+    if (!s) {
+      // Clear it, or the next open flashes at the previous caret's position.
+      untrack(() => (place = null));
+      return;
+    }
+    if (!box || !field) return;
+    const h = box.offsetHeight;
+    const w = box.offsetWidth;
+    const roomBelow = field.clientHeight - s.top;
+    const flip = h > roomBelow && s.caretTop > h;
+    const left = Math.max(0, Math.min(s.left, field.clientWidth - w));
+    untrack(() => {
+      place = { top: flip ? s.caretTop - h : s.top, left };
+    });
+  });
+
+  // Keep the highlighted command visible. Deliberately container maths rather
+  // than scrollIntoView: that walks every scrollable ancestor and would nudge
+  // the page behind the menu.
+  $effect(() => {
+    const list = menuEl;
+    const el = itemEls[picked];
+    if (!slash || !list || !el) return;
+    const top = el.offsetTop;
+    const bottom = top + el.offsetHeight;
+    if (top < list.scrollTop) {
+      list.scrollTop = top;
+    } else if (bottom > list.scrollTop + list.clientHeight) {
+      list.scrollTop = bottom - list.clientHeight;
+    }
+  });
 
   const matches = $derived(
     slash
@@ -286,63 +363,66 @@
   );
 
   function detectSlash(): void {
-    if (!box) {
+    if (!cm) return;
+    const found = findSlash(text, cm.cursor());
+    const point = found ? cm.caret() : null;
+    if (!found || !point) {
       slash = null;
       return;
     }
-    const found = findSlash(text, box.selectionStart);
-    if (!found) {
-      slash = null;
-      return;
-    }
-    const point = caretPoint(box, found.at);
-    slash = { ...found, top: point.top + point.line, left: point.left };
+    slash = {
+      ...found,
+      top: point.top + point.line,
+      caretTop: point.top,
+      left: point.left,
+    };
     picked = 0;
   }
 
   function runCommand(c: Command): void {
-    if (!slash || !box) return;
-    const end = box.selectionStart;
-    const before = text.slice(0, slash.at);
-    const after = text.slice(end);
+    if (!slash || !cm) return;
+    const end = cm.cursor();
     // Every one of these is a block, so it starts its own line — otherwise
     // "note /todo" would render as one paragraph rather than a checkbox.
+    const before = text.slice(0, slash.at);
     const lead = before === '' || before.endsWith('\n') ? '' : '\n';
-    text = before + lead + c.text + after;
-    const caret = slash.at + lead.length + c.caret;
+    cm.replace(slash.at, end, lead + c.text, lead.length + c.caret);
     slash = null;
-    restoreSel(caret, caret);
-    onInput();
   }
 
-  function onKeydown(e: KeyboardEvent): void {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
-      e.preventDefault();
-      void save();
-      return;
-    }
-    if (!slash) return;
-    switch (e.key) {
+  /** Keys the menu owns while it is open. Returns true when it consumed one. */
+  function onEditorKey(key: string): boolean {
+    if (!slash) return false;
+    switch (key) {
       case 'ArrowDown':
-        e.preventDefault();
         picked = matches.length ? (picked + 1) % matches.length : 0;
-        break;
+        return true;
       case 'ArrowUp':
-        e.preventDefault();
         picked = matches.length ? (picked - 1 + matches.length) % matches.length : 0;
-        break;
+        return true;
       case 'Enter':
       case 'Tab':
-        if (matches[picked]) {
-          e.preventDefault();
-          runCommand(matches[picked]);
-        }
-        break;
+        if (!matches[picked]) return false;
+        runCommand(matches[picked]);
+        return true;
       case 'Escape':
-        e.preventDefault();
         slash = null;
-        break;
+        return true;
     }
+    return false;
+  }
+
+  // ---- toolbar ----
+  function wrapSel(marker: string, placeholder: string): void {
+    cm?.wrap(marker, placeholder);
+  }
+  function prefixLines(prefix: string): void {
+    cm?.prefix(prefix);
+  }
+  function insertLink(): void {
+    if (!cm) return;
+    const at = cm.cursor();
+    cm.replace(at, at, `[${t('editor.linkText')}](url)`, 1);
   }
 
   const label = $derived(
@@ -363,19 +443,33 @@
 <div class="editor">
   <div class="bar">
     <button type="button" onclick={() => prefixLines('## ')} title={t('editor.heading')}>H</button>
-    <button type="button" onclick={() => wrapSel('**', t('editor.boldText'))} title={t('editor.bold')}
-      ><b>B</b></button
+    <button
+      type="button"
+      onclick={() => wrapSel('**', t('editor.boldText'))}
+      title={t('editor.bold')}><b>B</b></button
     >
-    <button type="button" onclick={() => wrapSel('*', t('editor.italicText'))} title={t('editor.italic')}
-      ><i>I</i></button
+    <button
+      type="button"
+      onclick={() => wrapSel('*', t('editor.italicText'))}
+      title={t('editor.italic')}><i>I</i></button
     >
     <button type="button" onclick={() => prefixLines('- ')} title={t('editor.bullet')}>•</button>
     <button type="button" onclick={() => prefixLines('- [ ] ')} title={t('editor.todo')}>☐</button>
     <button type="button" onclick={() => prefixLines('> ')} title={t('editor.quote')}>❝</button>
-    <button type="button" onclick={() => wrapSel('`', 'code')} title={t('editor.code')}>{'</>'}</button>
+    <button type="button" onclick={() => wrapSel('`', 'code')} title={t('editor.code')}
+      >{'</>'}</button
+    >
     <button type="button" onclick={insertLink} title={t('editor.link')}>🔗</button>
 
     <span class="grow"></span>
+    <button
+      type="button"
+      class="vim"
+      class:on={vimPref.on}
+      onclick={() => vimPref.toggle()}
+      title={t('editor.vimTitle')}>vim</button
+    >
+    <span class="esc">{vimPref.on ? t('editor.vimHint') : t('editor.escHint')}</span>
     <span class="status" class:warn={status === 'conflict' || status === 'error'}>{label}</span>
   </div>
 
@@ -383,49 +477,53 @@
     <p class="msg" class:warn={status === 'conflict' || status === 'error'}>
       {message}
       {#if status === 'conflict'}
-        <button type="button" class="link" onclick={onreload}>
-          {t('editor.reload')}
-        </button>
+        <button type="button" class="link" onclick={onreload}>{t('editor.reload')}</button>
       {/if}
     </p>
   {/if}
 
-  <div class="field">
-    <textarea
-      bind:this={box}
-      bind:value={text}
-      oninput={onInput}
-      onclick={detectSlash}
-      onblur={onBlur}
-      onkeydown={onKeydown}
-      spellcheck="false"
-      aria-label={t('editor.aria')}
-    ></textarea>
+  <div class="field" bind:this={fieldEl}>
+    <div class="cm" bind:this={host}></div>
+    {#if !ready}
+      <p class="loading">{t('board.loading')}</p>
+    {/if}
 
     {#if slash}
       <!-- Anchored AT the caret, which is the whole difference between this and
            a command palette. -->
-      <div class="slash" style="top:{slash.top}px; left:{slash.left}px" role="listbox" tabindex="-1">
-        {#if matches.length === 0}
-          <p class="slash-none">{t('cmd.none')}</p>
-        {:else}
-          {#each matches as c, i (c.id)}
+      <div
+        class="slash"
+        style="top:{place?.top ?? slash.top}px; left:{place?.left ?? slash.left}px; visibility:{place
+          ? 'visible'
+          : 'hidden'}"
+        role="listbox"
+        tabindex="-1"
+        bind:this={menuBox}
+      >
+        <div class="slash-list" bind:this={menuEl}>
+          {#if matches.length === 0}
+            <p class="slash-none">{t('cmd.none')}</p>
+          {:else}
+            {#each matches as c, i (c.id)}
             <button
               type="button"
               class="slash-item"
               class:on={i === picked}
+              bind:this={itemEls[i]}
               role="option"
               aria-selected={i === picked}
               onmouseenter={() => (picked = i)}
               onmousedown={(e) => {
-                e.preventDefault(); // keep focus in the textarea
+                e.preventDefault(); // keep focus in the editor
                 runCommand(c);
               }}
             >
-              <span class="slash-glyph">{c.glyph}</span>{c.label()}
-            </button>
-          {/each}
-        {/if}
+                <span class="slash-glyph">{c.glyph}</span>{c.label()}
+              </button>
+            {/each}
+          {/if}
+        </div>
+        <!-- outside the scroller, so the keys stay readable while you scroll -->
         <p class="slash-hint">{t('cmd.hint')}</p>
       </div>
     {/if}
@@ -464,6 +562,24 @@
   .grow {
     flex: 1;
   }
+  .vim {
+    min-width: auto !important;
+    font-family: var(--sans);
+    font-size: 0.68rem !important;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+  }
+  .vim.on {
+    color: oklch(0.16 0.02 265);
+    background: var(--wip);
+    border-color: transparent;
+  }
+  .esc {
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    color: var(--faint);
+    white-space: nowrap;
+  }
   .status {
     font-size: 0.72rem;
     color: var(--muted);
@@ -494,20 +610,49 @@
   .field {
     position: relative;
     flex: 1;
+    min-height: 24rem;
     display: flex;
-    min-height: 0;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: color-mix(in oklab, var(--text) 4%, transparent);
+    /* NOT hidden: this box is the slash menu's positioning parent, and clipping
+       it cropped the menu the moment the caret neared an edge. */
+    overflow: visible;
+  }
+  .field:focus-within {
+    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
+  }
+  .cm {
+    flex: 1;
+    min-width: 0;
+    overflow: auto;
+    border-radius: 12px; /* what .field's overflow used to do */
+  }
+  .loading {
+    position: absolute;
+    top: 0.9rem;
+    left: 1rem;
+    margin: 0;
+    font-size: 0.82rem;
+    color: var(--faint);
   }
   .slash {
     position: absolute;
     z-index: 20;
+    display: flex;
+    flex-direction: column;
     min-width: 13rem;
     max-height: 15rem;
-    overflow-y: auto;
     padding: 0.3rem;
     border-radius: 12px;
     border: 1px solid var(--line);
     background: var(--surface-solid);
     box-shadow: 0 18px 40px var(--shadow-strong);
+  }
+  .slash-list {
+    position: relative; /* the offsetParent the scroll maths measures against */
+    overflow-y: auto;
+    min-height: 0;
   }
   .slash-item {
     display: flex;
@@ -548,26 +693,8 @@
     color: var(--muted);
   }
   .slash-hint {
+    flex: none;
     border-top: 1px solid var(--line);
     margin-top: 0.25rem;
-  }
-  textarea {
-    flex: 1;
-    min-height: 22rem;
-    width: 100%;
-    resize: vertical;
-    padding: 0.9rem 1rem;
-    border-radius: 12px;
-    border: 1px solid var(--line);
-    background: color-mix(in oklab, var(--text) 4%, transparent);
-    color: var(--text);
-    outline: none;
-    font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-    font-size: 0.86rem;
-    line-height: 1.65;
-    tab-size: 2;
-  }
-  textarea:focus {
-    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
   }
 </style>

@@ -18,13 +18,12 @@ type Fidelity struct {
 	// Stable is true when reading the body and writing it back is a no-op —
 	// FromHTML(RenderHTML(FromHTML(html))) == FromHTML(html).
 	Stable bool
-	// Mentions counts <mention-component> nodes. FromHTML drops them today, so
-	// every one of these is deleted by a write. Phase 2 drives this to zero.
+	// Mentions and Assets count the <mention-component> and <image-component>
+	// nodes a write would LOSE — measured by round-tripping and counting what
+	// came back, not assumed. Both were non-zero until Phase 2 taught the bridge
+	// Plane's own node vocabulary.
 	Mentions int
-	// Assets counts <image-component> nodes. RenderHTML turns them into
-	// <img src="plane-asset:…">, which Plane cannot render — so a write breaks
-	// every one. Phase 2 drives this to zero too.
-	Assets int
+	Assets   int
 	// SpliceClean is true when every region of the body splices its own current
 	// markdown back to the IDENTICAL BYTES. This is the gate that matters: it is
 	// what makes saving an untouched region a no-op on Plane, and what keeps an
@@ -38,14 +37,17 @@ type Fidelity struct {
 
 // Check round-trips one description_html and reports what changed.
 func Check(descriptionHTML string) Fidelity {
-	f := Fidelity{
-		Stable:      true,
-		SpliceClean: spliceIsNoop(descriptionHTML),
-		Mentions:    strings.Count(descriptionHTML, "<mention-component"),
-		Assets:      strings.Count(descriptionHTML, "<image-component"),
-	}
+	f := Fidelity{Stable: true, SpliceClean: spliceIsNoop(descriptionHTML)}
+
 	before := FromHTML(descriptionHTML)
-	after := FromHTML(RenderHTML(before))
+	written := RenderPlaneHTML(before)
+	after := FromHTML(written)
+
+	// Count what survives rather than what is present: the question is not "does
+	// this body contain mentions" but "would writing it lose any".
+	f.Mentions = lost(descriptionHTML, written, "<mention-component")
+	f.Assets = lost(descriptionHTML, written, "<image-component")
+
 	if before == after {
 		return f
 	}
@@ -70,6 +72,15 @@ func Check(descriptionHTML string) Fidelity {
 		}
 	}
 	return f
+}
+
+// lost counts how many occurrences of a node did not survive a write. Never
+// negative: gaining nodes is not a fidelity failure.
+func lost(before, after, node string) int {
+	if n := strings.Count(before, node) - strings.Count(after, node); n > 0 {
+		return n
+	}
+	return 0
 }
 
 // spliceIsNoop reports whether every region of a body, spliced back with the

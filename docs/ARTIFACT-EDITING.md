@@ -1,6 +1,6 @@
 # Artifact editing — writing a thread's page from the board
 
-Status: **Phases 0-1 shipped · Phases 2-7 pending** · Drafted 2026-08-07 · Companion
+Status: **Phases 0-2 shipped · Phases 3-7 pending** · Drafted 2026-08-07 · Companion
 to [`MCP-ACCESS.md`](./MCP-ACCESS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -211,18 +211,54 @@ of it — a signature, not noise:
 All three are pinned as named tests, and `sync-fidelity` now reports the splice
 gate alongside the round trip, so it stays measured rather than asserted.
 
-### Phase 2 — Plane's node vocabulary, both directions
+### Phase 2 — Plane's node vocabulary, both directions ✅
 
-- [ ] `image-component` ↔ `![](plane-asset:UUID)`.
-- [ ] `mention-component` ↔ `@[Name](plane-mention:UUID)`, resolving the id
-      against `mirror_members`. Today mentions vanish on read; this makes all 48
-      visible in the interior for the first time, and makes them movable rather
-      than merely survivable.
-- [ ] Emit Plane's `taskList` / `taskItem` shape on render so Plane's own editor
-      agrees with ours about what a checkbox is. **Unverified and worth one live
-      test:** whether Plane's TipTap renders our `<ul><li><input type="checkbox">`
-      as checkboxes or drops the inputs. The Logbook is the heat source, so this
-      matters more than it looks.
+`RenderHTML` renders for **our** view and is unchanged. A new `RenderPlaneHTML`
+renders for **Plane**, mapping our markdown markers back onto Plane's own nodes.
+Splicing, `birth`, `add_revision` and comment posting all write through it. It
+re-serialises through the HTML parser, which is free here: a write produces new
+bytes either way, and splicing is what preserves the old ones.
+
+- [x] `image-component` ↔ `![](plane-asset:UUID)`. A real external URL stays an
+      ordinary `<img>`.
+- [x] `mention-component` ↔ `[@mention](plane-mention:UUID)`. The label is
+      decoration — only the link target survives a write — so any surface that
+      knows the person's name may substitute it freely.
+- [x] Plane's `taskList` / `taskItem` shape on write, so a Logbook we save is a
+      Logbook Plane can render **and tick**. Not cosmetic: a checkbox Plane drops
+      is a todo that stops counting, and ticked todos are the primary evidence of
+      production.
+- [x] `rewriteMentions` in the display path, alongside `rewriteAssets` — and the
+      Logbook now goes through both, which it never did before (an image in a
+      plan rendered as a broken `<img>`). An unresolved id degrades to
+      "@someone" rather than vanishing again.
+- [x] **`briefLogbookHTML` renders Markdown.** It used to HTML-escape the birth
+      artifacts and turn newlines into `<br/>`, so a birthed Logbook was one long
+      paragraph — no headings, and no checkboxes for the todos. Both fields are
+      Markdown by definition (§ thread birth rule), and a todo Plane cannot
+      render is a todo nobody can tick.
+
+**Measured**, same 96 bodies:
+
+| | before | after |
+|---|---|---|
+| mentions destroyed by a write | 48 | **0** |
+| images broken by a write | 193 | **0** |
+| bodies splicing back byte-identically | 96/96 | **96/96** |
+| whole bodies surviving a round trip | 90/96 | 90/96 — the same six |
+
+`Fidelity` now *measures* what a write loses by round-tripping and counting what
+came back, rather than counting what is present and assuming the worst.
+
+One bug worth naming: the task-item transform trimmed the leading space off every
+text node instead of only the separator goldmark puts after a checkbox, so
+`**CREANDO** NO` became `**CREANDO**NO`. It cost three bodies of round-trip
+stability and is pinned as a test.
+
+Still open: whether Plane's editor renders **our** old plain
+`<ul><li><input type="checkbox">`. Emitting Plane's own shape sidesteps the
+question for everything written from here on, but bodies written before this
+still carry the plain shape.
 
 ### Phase 3 — the write path
 

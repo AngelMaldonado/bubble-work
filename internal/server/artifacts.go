@@ -58,7 +58,7 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, brief, logbo
 	if logbook != nil {
 		body = md.ReplaceSection(body, "Logbook", *logbook)
 	}
-	html := md.RenderHTML(body)
+	html := md.RenderPlaneHTML(body)
 
 	// Written with the caller's own key, so Plane attributes the edit to the
 	// person (or the human an agent is impersonating), exactly like a comment.
@@ -113,7 +113,7 @@ func (s *Server) AddRevision(ctx context.Context, threadID, title, body string) 
 	if !strings.HasPrefix(strings.ToLower(name), "rev:") {
 		name = "rev: " + name
 	}
-	html := md.RenderHTML(body)
+	html := md.RenderPlaneHTML(body)
 
 	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
 	state, err := wcl.DefaultState(ctx)

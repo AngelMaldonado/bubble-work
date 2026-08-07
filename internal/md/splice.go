@@ -310,7 +310,7 @@ func Splice(descriptionHTML string, region Region, markdown string) (string, err
 			}
 			continue
 		}
-		if rendered := strings.TrimSpace(RenderHTML(m)); rendered != "" {
+		if rendered := strings.TrimSpace(RenderPlaneHTML(m)); rendered != "" {
 			parts = append(parts, rendered)
 		}
 	}
@@ -377,7 +377,7 @@ func appendSection(doc string, region Region, markdown string) (string, error) {
 	if region == RegionDoD {
 		title = "Definition of Done"
 	}
-	body := strings.TrimSpace(RenderHTML(markdown))
+	body := strings.TrimSpace(RenderPlaneHTML(markdown))
 	out := strings.TrimRight(doc, " \n\t")
 	return out + "<h2>" + title + "</h2>" + body, nil
 }

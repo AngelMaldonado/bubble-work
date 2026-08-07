@@ -206,6 +206,17 @@ func (c *htmlConv) inlineNode(n *html.Node) string {
 			}
 			return ""
 		}
+		// A Plane mention carries no text of its own — entity_name is the KIND
+		// ("user_mention"), not a display name — so without this it rendered to
+		// nothing and a write deleted it. The label is decoration; only the link
+		// target survives, so a surface that knows the person's name may
+		// substitute it freely.
+		if n.Data == "mention-component" {
+			if id := mentionID(n); id != "" {
+				return "[" + mentionLabel + "](" + MentionScheme + id + ")"
+			}
+			return ""
+		}
 		switch n.DataAtom {
 		case atom.Strong, atom.B:
 			return wrap("**", strings.TrimSpace(c.inline(n)))
@@ -413,6 +424,15 @@ func (c *htmlConv) table(n *html.Node) {
 }
 
 // ---- small helpers ----
+
+// mentionID pulls the user id off a <mention-component>, preferring the
+// entity_identifier Plane binds the person to over the node's own id.
+func mentionID(n *html.Node) string {
+	if id := attr(n, "entity_identifier"); id != "" {
+		return id
+	}
+	return attr(n, "id")
+}
 
 // AssetScheme marks a Plane asset id inside an image src so the server can
 // rewrite it to a real (proxied) URL once it knows the instance and project.

@@ -110,18 +110,23 @@ func TestOrderedListStartIsHonoured(t *testing.T) {
 	}
 }
 
-// Check has to report the nodes a write would destroy, not just whether the
-// markdown drifted — a body can round-trip "stably" and still lose every mention
-// in it, because FromHTML drops them before the comparison ever happens.
-func TestCheckCountsNodesAWriteWouldDestroy(t *testing.T) {
+// Check reports the nodes a write would DESTROY, measured rather than assumed —
+// a body can round-trip "stably" and still lose every mention in it, because
+// FromHTML used to drop them before the comparison ever happened. Since Phase 2
+// taught the bridge Plane's vocabulary, the answer must be none.
+func TestCheckReportsNoNodesDestroyed(t *testing.T) {
 	body := `<p><mention-component id="m1" entity_identifier="u1" entity_name="user_mention"></mention-component> hi</p>` +
 		`<p><image-component src="asset-1"></image-component></p>` +
 		`<p><image-component src="asset-2"></image-component></p>`
 	f := Check(body)
-	if f.Mentions != 1 {
-		t.Errorf("mentions: want 1, got %d", f.Mentions)
+	if f.Mentions != 0 {
+		t.Errorf("a write would delete %d mention(s)", f.Mentions)
 	}
-	if f.Assets != 2 {
-		t.Errorf("assets: want 2, got %d", f.Assets)
+	if f.Assets != 0 {
+		t.Errorf("a write would break %d image(s)", f.Assets)
+	}
+	if !f.Stable {
+		t.Errorf("mentions/images do not round-trip: line %d\n  was %q\n  now %q",
+			f.Line, f.Before, f.After)
 	}
 }

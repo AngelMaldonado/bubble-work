@@ -20,6 +20,7 @@ import (
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 	planesync "github.com/AngelMaldonado/bubble-work/internal/sync"
@@ -2195,5 +2196,30 @@ func TestUpdateThreadIsEvidenceAndImmediate(t *testing.T) {
 	json.Unmarshal(rb, &d)
 	if d.Level != "in_progress" {
 		t.Errorf("a Logbook edit did not warm the thread: level=%s reason=%s", d.Level, d.Reason)
+	}
+}
+
+// A Plane mention rendered to nothing at all until docs/ARTIFACT-EDITING.md
+// Phase 2, so every mention in every body was invisible in the interior. The id
+// resolves against the mirrored members; one we do not know must still show that
+// somebody was mentioned rather than vanishing again.
+func TestRewriteMentionsNamesThePerson(t *testing.T) {
+	names := map[string]string{"u1": "Angel Maldonado"}
+	in := md.RenderHTML("Hey [@mention](" + md.MentionScheme + "u1), and [@mention](" + md.MentionScheme + "u2) too.")
+
+	got := rewriteMentions(in, names)
+	if !strings.Contains(got, `<span class="plane-mention">@Angel Maldonado</span>`) {
+		t.Errorf("known member was not named: %s", got)
+	}
+	if !strings.Contains(got, `<span class="plane-mention">@someone</span>`) {
+		t.Errorf("unknown member vanished instead of degrading: %s", got)
+	}
+	if strings.Contains(got, md.MentionScheme) {
+		t.Errorf("a raw mention marker leaked into the view: %s", got)
+	}
+	// A body with no mentions is returned untouched.
+	plain := md.RenderHTML("nothing to see")
+	if rewriteMentions(plain, names) != plain {
+		t.Error("a body without mentions was rewritten")
 	}
 }

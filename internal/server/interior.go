@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"html"
 	"log"
 	"net/http"
 	"regexp"
@@ -34,6 +35,34 @@ func rewriteAssets(htmlStr, itemURL string) string {
 	}
 	link := `<a class="plane-img" href="` + itemURL + `" target="_blank" rel="noopener">🖼 image — open in Plane</a>`
 	return planeAssetImgRe.ReplaceAllStringFunc(htmlStr, func(string) string { return link })
+}
+
+// planeMentionRe matches the links md emits for Plane mention-components.
+var planeMentionRe = regexp.MustCompile(
+	`<a\b[^>]*\bhref="` + regexp.QuoteMeta(md.MentionScheme) + `([^"]*)"[^>]*>.*?</a>`)
+
+// rewriteMentions turns mention markers into the person's name.
+//
+// Until Phase 2 a <mention-component> rendered to nothing at all, so every
+// mention in every body was invisible here and deleted by any write. The id is
+// resolved against the mirrored members; an id we do not know keeps the marker's
+// generic label rather than vanishing again, because "someone was mentioned" is
+// still truer than silence.
+func rewriteMentions(htmlStr string, names map[string]string) string {
+	if !strings.Contains(htmlStr, md.MentionScheme) {
+		return htmlStr
+	}
+	return planeMentionRe.ReplaceAllStringFunc(htmlStr, func(m string) string {
+		id := ""
+		if g := planeMentionRe.FindStringSubmatch(m); len(g) > 1 {
+			id = g[1]
+		}
+		name := names[id]
+		if name == "" {
+			name = "someone"
+		}
+		return `<span class="plane-mention">@` + html.EscapeString(name) + `</span>`
+	})
 }
 
 // planeItemURL builds the Plane web URL for a work item.
@@ -223,14 +252,22 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 		}
 	}
 
-	// Replace Plane image markers with an "open in Plane" link (revisions are
-	// rewritten in revisions() where each has its own item id).
+	// Resolve Plane's own nodes for display: image markers become an "open in
+	// Plane" link, mention markers become the person's name. The Logbook is
+	// rewritten too — it is rendered separately from the artifacts and so used to
+	// miss this entirely, which showed a broken <img> for any image in a plan.
+	// (Revisions are rewritten in revisions(); each has its own item id.)
 	itemURL := planeItemURL(inst.BaseURL, inst.Workspace, projID, wid)
+	display := func(h string) string { return rewriteMentions(rewriteAssets(h, itemURL), names) }
 	for i := range arts {
-		arts[i].HTML = rewriteAssets(arts[i].HTML, itemURL)
+		arts[i].HTML = display(arts[i].HTML)
+	}
+	if log != nil {
+		log.HTML = display(log.HTML)
+		log.DoDHTML = display(log.DoDHTML)
 	}
 
-	revisions := s.revisions(inst, projID, wid)
+	revisions := s.revisions(inst, projID, wid, names)
 
 	// Normalize to non-nil slices so the JSON is arrays, never null (the web
 	// client indexes/`.length`s them).
@@ -320,7 +357,7 @@ func cut3(id string) (slug, proj, obj string) {
 // so revisions attach via the parent/child link instead; an optional "rev:" name
 // prefix is stripped for the label. The child list already carries
 // description_html, so no per-item fetch is needed. Best-effort: never fatal.
-func (s *Server) revisions(inst domain.Instance, projID, wid string) []md.Artifact {
+func (s *Server) revisions(inst domain.Instance, projID, wid string, names map[string]string) []md.Artifact {
 	// This was the expensive half of a thread open: Plane has no usable
 	// sub-item endpoint, so ListChildren paged the WHOLE project and filtered by
 	// parent client-side. The mirror has an index on parent_id.
@@ -337,7 +374,8 @@ func (s *Server) revisions(inst domain.Instance, projID, wid string) []md.Artifa
 			}
 		}
 		art := md.NewArtifact(label, md.FromHTML(ch.DescriptionHTML))
-		art.HTML = rewriteAssets(art.HTML, planeItemURL(inst.BaseURL, inst.Workspace, projID, ch.ID))
+		art.HTML = rewriteMentions(
+			rewriteAssets(art.HTML, planeItemURL(inst.BaseURL, inst.Workspace, projID, ch.ID)), names)
 		out = append(out, art)
 	}
 	return out
@@ -590,7 +628,7 @@ func (s *Server) PostComment(ctx context.Context, threadID, body string) (domain
 	}
 	// Write with the caller's own key so Plane's native actor is the real author.
 	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
-	cm, err := wcl.CreateComment(ctx, wid, md.RenderHTML(body))
+	cm, err := wcl.CreateComment(ctx, wid, md.RenderPlaneHTML(body))
 	if err != nil {
 		// Plane refused or was unreachable. Keep the words: what a person
 		// actually loses here is their typing, and that is recoverable without

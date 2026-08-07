@@ -1101,6 +1101,19 @@
     border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
     background: color-mix(in oklab, var(--wip) 8%, transparent);
   }
+  /* Plane @mentions. Invisible until ARTIFACT-EDITING.md Phase 2 — a
+     <mention-component> rendered to nothing at all — so this is the first time
+     they show up in the interior. */
+  .prose :global(span.plane-mention) {
+    padding: 0.05em 0.4em;
+    border-radius: 6px;
+    font-family: var(--sans);
+    font-size: 0.88em;
+    font-weight: 600;
+    color: var(--wip);
+    background: color-mix(in oklab, var(--wip) 12%, transparent);
+    white-space: nowrap;
+  }
   .prose :global(blockquote) {
     margin-left: 0;
     padding: 0.25em 1.15em;

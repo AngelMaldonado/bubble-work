@@ -29,6 +29,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
 	"github.com/AngelMaldonado/bubble-work/internal/mcpapi"
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
@@ -1132,21 +1133,20 @@ func (s *Server) instanceBySlug(slug string) (domain.Instance, bool, error) {
 }
 
 // briefLogbookHTML renders the two birth artifacts into one description page (§7.1).
+//
+// Both fields arrive as Markdown — a Logbook is phases and a todo list by
+// definition (§ thread birth rule) — so they are rendered as Markdown. They used
+// to be HTML-escaped with newlines turned into <br/>, which made a birthed
+// Logbook one long paragraph: no headings, and no checkboxes for the todos.
+// That is not cosmetic. A todo Plane cannot render is a todo nobody can tick,
+// and a ticked todo is the primary evidence of production.
 func briefLogbookHTML(brief, logbook string) string {
-	esc := func(s string) string {
-		s = strings.ReplaceAll(s, "&", "&amp;")
-		s = strings.ReplaceAll(s, "<", "&lt;")
-		s = strings.ReplaceAll(s, ">", "&gt;")
-		return strings.ReplaceAll(s, "\n", "<br/>")
-	}
 	var b strings.Builder
-	b.WriteString("<h2>Brief</h2><p>")
-	b.WriteString(esc(brief))
-	b.WriteString("</p>")
+	b.WriteString("<h2>Brief</h2>")
+	b.WriteString(md.RenderPlaneHTML(brief))
 	if strings.TrimSpace(logbook) != "" {
-		b.WriteString("<h2>Logbook</h2><p>")
-		b.WriteString(esc(logbook))
-		b.WriteString("</p>")
+		b.WriteString("<h2>Logbook</h2>")
+		b.WriteString(md.RenderPlaneHTML(logbook))
 	}
 	return b.String()
 }

@@ -476,6 +476,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/whoami", s.restAuth(s.handleWhoami))
 	mux.HandleFunc("GET /api/status", s.restAuth(s.handleStatus))
 	mux.HandleFunc("POST /api/workspaces", s.restAuth(s.handleCreateWorkspace))
+	mux.HandleFunc("PATCH /api/workspaces/{id}", s.restAuth(s.handleRenameWorkspace))
+	mux.HandleFunc("DELETE /api/workspaces/{id}", s.restAuth(s.handleDeleteWorkspace))
 	mux.HandleFunc("POST /api/bubbles", s.restAuth(s.handleCreateBubble))
 	mux.HandleFunc("GET /api/bubbles", s.restAuth(s.handleBubbles))
 	mux.HandleFunc("GET /api/stream", s.restAuth(s.handleStream))

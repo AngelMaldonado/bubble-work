@@ -551,6 +551,29 @@ func CreateWorkspace(cfg config.Config, req domain.CreateWorkspaceRequest) error
 	return nil
 }
 
+// RenameWorkspace retitles a Workspace (a Plane project).
+func RenameWorkspace(cfg config.Config, id, name string) error {
+	var ws domain.Workspace
+	if err := patchJSON(cfg, "/api/workspaces/"+url.PathEscape(id), map[string]string{"name": name}, &ws); err != nil {
+		return err
+	}
+	fmt.Printf("renamed workspace %s to %q\n", id, ws.Name)
+	return nil
+}
+
+// DeleteWorkspace destroys a Workspace and everything inside it.
+func DeleteWorkspace(cfg config.Config, id string) error {
+	var res struct {
+		Bubbles int `json:"deleted_bubbles"`
+		Threads int `json:"deleted_threads"`
+	}
+	if err := deleteJSON(cfg, "/api/workspaces/"+url.PathEscape(id), &res); err != nil {
+		return err
+	}
+	fmt.Printf("deleted workspace %s — %d bubble(s), %d thread(s)\n", id, res.Bubbles, res.Threads)
+	return nil
+}
+
 // CreateBubble creates a Plane module (a Bubble) in a project.
 func CreateBubble(cfg config.Config, req domain.CreateBubbleRequest) error {
 	var b domain.NewBubble

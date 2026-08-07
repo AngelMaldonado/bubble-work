@@ -407,3 +407,45 @@ func (m *Mirror) SetProjectMembers(instance, projectID string, memberIDs []strin
 		return err
 	})
 }
+
+// DeleteProject drops a workspace and everything mirrored beneath it.
+//
+// Every table that keys on the project, plus the items — which key on the
+// instance rather than the project, so they have to be found through the
+// project first or they would be orphaned rows that still answer queries.
+func (m *Mirror) DeleteProject(instance, projectID string) error {
+	items, err := m.Items(instance, projectID)
+	if err != nil {
+		return err
+	}
+	ids := make([]string, 0, len(items))
+	for _, it := range items {
+		ids = append(ids, it.ID)
+	}
+	if err := m.DeleteItems(instance, ids); err != nil {
+		return err
+	}
+	return m.batch(func(tx *sql.Tx) error {
+		for _, q := range []string{
+			`DELETE FROM mirror_module_items WHERE instance = ? AND module_id IN
+			   (SELECT id FROM mirror_modules WHERE instance = ? AND project_id = ?)`,
+		} {
+			if _, err := tx.Exec(q, instance, instance, projectID); err != nil {
+				return err
+			}
+		}
+		for _, q := range []string{
+			`DELETE FROM mirror_modules WHERE instance = ? AND project_id = ?`,
+			`DELETE FROM mirror_states WHERE instance = ? AND project_id = ?`,
+			`DELETE FROM mirror_cycles WHERE instance = ? AND project_id = ?`,
+			`DELETE FROM mirror_project_members WHERE instance = ? AND project_id = ?`,
+			`DELETE FROM mirror_project_member_sync WHERE instance = ? AND project_id = ?`,
+			`DELETE FROM mirror_projects WHERE instance = ? AND id = ?`,
+		} {
+			if _, err := tx.Exec(q, instance, projectID); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+}

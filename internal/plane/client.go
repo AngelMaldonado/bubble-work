@@ -226,6 +226,18 @@ func (c *Client) del(ctx context.Context, path string) error {
 	return c.send(ctx, http.MethodDelete, path, nil, nil)
 }
 
+// SetProjectName renames a workspace (a Plane project).
+func (c *Client) SetProjectName(ctx context.Context, projectID, name string) error {
+	return c.patch(ctx, c.workspaceBase()+"/projects/"+projectID+"/", map[string]any{"name": name}, nil)
+}
+
+// DeleteProject removes a workspace from Plane, and with it every work item,
+// module, comment and attachment inside. IRREVERSIBLE, and by a wide margin the
+// most destructive call in this client.
+func (c *Client) DeleteProject(ctx context.Context, projectID string) error {
+	return c.del(ctx, c.workspaceBase()+"/projects/"+projectID+"/")
+}
+
 // DeleteModule removes a bubble from Plane. Plane keeps the work items that
 // were in it — a module is a grouping, not a container — so they survive,
 // belonging to no bubble.

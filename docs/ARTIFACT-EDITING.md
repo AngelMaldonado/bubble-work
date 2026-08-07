@@ -425,6 +425,40 @@ Case and spacing are forgiven; there is deliberately no `force` flag.
 `delete_artifact` is not name-guarded: it removes a section from a page the
 caller must already have read to name the region, and the thread survives.
 
+## The workspace tier
+
+A Workspace is the boundary for a body of work — a Plane **project**, not a
+Plane workspace. You could create one and then never revise it: no rename, no
+delete, on any surface. Every tier below it had the full set, so the outermost
+container was the only permanent mistake in the system.
+
+**Rename** is not production. What a body of work is *called* is not what has
+been done, so it earns no heat — the same judgment a thread's title already gets.
+It writes through to the mirror because the project list is only re-read on the
+ten-minute structure cadence; without that the board would show the old name for
+ten minutes and look broken.
+
+**Delete** takes every bubble, thread, artifact and comment inside. It is the
+most destructive call on the surface and Plane keeps no copy. Two things follow
+from that:
+
+- The counts are taken **before** Plane is touched, so the caller is told what it
+  actually cost rather than what is left (nothing).
+- The overlay is cleared **before** the mirror, because the overlay keys on
+  bubble ids that only exist while the mirrored modules do. The other order
+  leaves contracts and progress baselines behind with no way left to name them.
+
+Authorization is project membership — `CanSeeProject`, the same gate the board
+and the interior use — so you cannot delete a workspace you were never shown.
+
+Surface parity: `POST /api/workspaces` (existing), `PATCH /api/workspaces/{id}`,
+`DELETE /api/workspaces/{id}` · `bubble workspace new|rename`,
+`bubble delete workspace <id> [-y]` · MCP `create_workspace`, `rename_workspace`,
+`delete_workspace`. `delete_workspace` carries the same **name guard** as
+`delete_bubble`, and `create_workspace`'s description says plainly that a new
+body of work is usually a new *bubble* — an agent reaching for a whole workspace
+is usually reaching one tier too high.
+
 ## Open
 
 - Whether Plane's editor renders our checkbox shape (Phase 2) — one live write

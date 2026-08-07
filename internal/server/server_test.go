@@ -3178,3 +3178,138 @@ func TestMarkdownStandardIsEnforcedOnWrites(t *testing.T) {
 		t.Errorf("an unrelated edit was blocked by a pre-existing violation: %d %s", code, b)
 	}
 }
+
+// A Workspace is the outermost container, and until now it was the one thing you
+// could create and never revise: no rename, no delete. Deleting one is also the
+// most destructive call on the surface — it takes every bubble and thread inside
+// — so what it reports has to be true before Plane is touched, not after.
+func TestWorkspaceRenameAndDelete(t *testing.T) {
+	var mu sync.Mutex
+	name, gone := "Sandbox", false
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		curName, dead := name, gone
+		mu.Unlock()
+		switch {
+		case r.Method == http.MethodDelete && strings.HasSuffix(p, "/projects/p1/"):
+			mu.Lock()
+			gone = true
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+		case r.Method == http.MethodPatch && strings.HasSuffix(p, "/projects/p1/"):
+			var in struct {
+				Name string `json:"name"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			name = in.Name
+			mu.Unlock()
+			io.WriteString(w, `{"id":"p1"}`)
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/projects/p1/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"}]`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			if dead {
+				io.WriteString(w, `{"results":[],"next_page_results":false}`)
+				return
+			}
+			fmt.Fprintf(w, `{"results":[{"id":"p1","name":%q,"identifier":"SB"}],"next_page_results":false}`, curName)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			if dead {
+				io.WriteString(w, `{"results":[]}`)
+				return
+			}
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			if dead {
+				io.WriteString(w, `{"results":[],"next_page_results":false}`)
+				return
+			}
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":"<p>x</p>",
+			  "created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],
+			  "next_page_results":false}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// 1. Rename reaches Plane and the board tells the truth immediately — the
+	// project list is only re-read on the ten-minute structure cadence, so
+	// without the write-through the old name would linger.
+	code, rb := do(t, http.MethodPatch, ts.URL+"/api/workspaces/ws:p1", key, `{"name":"Renamed"}`)
+	if code != http.StatusOK {
+		t.Fatalf("rename: %d %s", code, rb)
+	}
+	mu.Lock()
+	planeName := name
+	mu.Unlock()
+	if planeName != "Renamed" {
+		t.Errorf("Plane still calls it %q", planeName)
+	}
+	var board []domain.BubbleView
+	_, bb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	json.Unmarshal(bb, &board)
+	if len(board) == 0 {
+		t.Fatal("the board lost its bubble to a rename")
+	}
+	if board[0].ProjectName != "Renamed" {
+		t.Errorf("board still shows %q", board[0].ProjectName)
+	}
+
+	// An empty name is not a rename.
+	if code, _ := do(t, http.MethodPatch, ts.URL+"/api/workspaces/ws:p1", key, `{"name":"  "}`); code != http.StatusBadRequest {
+		t.Errorf("blank rename: want 400, got %d", code)
+	}
+
+	// 2. Delete reports what it destroyed, and destroys it everywhere.
+	code, rb = do(t, http.MethodDelete, ts.URL+"/api/workspaces/ws:p1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("delete: %d %s", code, rb)
+	}
+	var out map[string]int
+	json.Unmarshal(rb, &out)
+	if out["deleted_bubbles"] != 1 || out["deleted_threads"] != 1 {
+		t.Errorf("counted before deleting: want 1 bubble + 1 thread, got %v", out)
+	}
+	mu.Lock()
+	dead := gone
+	mu.Unlock()
+	if !dead {
+		t.Error("Plane was never asked to delete the project")
+	}
+	board = nil
+	_, bb = do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	json.Unmarshal(bb, &board)
+	if len(board) != 0 {
+		t.Errorf("a deleted workspace is still on the board: %v", board)
+	}
+	if _, ok, _ := st.GetContract("ws:p1:m1"); ok {
+		t.Error("a deleted workspace left a bubble contract behind")
+	}
+	// And it is gone, not merely invisible: a second delete has nothing to find.
+	if code, _ := do(t, http.MethodDelete, ts.URL+"/api/workspaces/ws:p1", key, ""); code == http.StatusOK {
+		t.Error("deleting a workspace twice succeeded twice")
+	}
+}

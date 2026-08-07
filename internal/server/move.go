@@ -6,8 +6,10 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"strings"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 )
 
@@ -148,4 +150,149 @@ func (s *Server) handleMoveThread(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, d)
+}
+
+// ---- workspaces ----
+//
+// A Workspace is the boundary for a body of work and maps to a Plane PROJECT
+// (AGENTS.md vocabulary — not a Plane "workspace"). Creating one already
+// existed; renaming and deleting did not, so the outermost container was the
+// one thing you could make and never revise.
+
+// wsParts splits a namespaced workspace id and authorizes it.
+func (s *Server) wsParts(ctx context.Context, id string) (domain.Instance, string, error) {
+	slug, projID, _ := cut3(id + ":")
+	if slug == "" || projID == "" {
+		return domain.Instance{}, "", fmt.Errorf("%w: expected slug:project, got %q", errBadRequest, id)
+	}
+	actor, _ := domain.ActorFrom(ctx)
+	// Project membership, the same gate the board and the interior use.
+	if !actor.CanSeeProject(slug, projID) {
+		return domain.Instance{}, "", errForbid
+	}
+	inst, ok, err := s.instanceBySlug(slug)
+	if err != nil {
+		return domain.Instance{}, "", err
+	}
+	if !ok {
+		return domain.Instance{}, "", errNotFound
+	}
+	return inst, projID, nil
+}
+
+// RenameWorkspace retitles a workspace. Like a thread's title it is not
+// production — what a body of work is called is not what has been done.
+func (s *Server) RenameWorkspace(ctx context.Context, id, name string) (domain.Workspace, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return domain.Workspace{}, fmt.Errorf("%w: a workspace needs a name", errBadRequest)
+	}
+	inst, projID, err := s.wsParts(ctx, id)
+	if err != nil {
+		return domain.Workspace{}, err
+	}
+	cl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
+	if err := cl.SetProjectName(ctx, projID, name); err != nil {
+		return domain.Workspace{}, fmt.Errorf("rename project: %w", err)
+	}
+	if s.mirror != nil {
+		if ps, err := s.mirror.Projects(inst.Slug); err == nil {
+			for _, p := range ps {
+				if p.ID == projID {
+					p.Name = name
+					if err := s.mirror.UpsertProjects(inst.Slug, []mirror.Project{p}, s.now()); err != nil {
+						log.Printf("mirror: record workspace rename %s: %v", projID, err)
+					}
+					break
+				}
+			}
+		}
+	}
+	s.dropInstanceCache(inst.Slug)
+	if _, err := s.refreshInstance(context.Background(), inst); err != nil {
+		log.Printf("rebuild after workspace rename: %v", err)
+	}
+	s.broadcastThread("")
+	actor, _ := domain.ActorFrom(ctx)
+	log.Printf("rename_workspace by %s: %s -> %q", actor.Label(), id, name)
+	return domain.Workspace{ID: projID, Name: name, Instance: inst.Slug}, nil
+}
+
+// DeleteWorkspace removes a workspace from Plane, and with it EVERY bubble,
+// thread, artifact and comment inside. Nothing about this is recoverable, which
+// is why the caller has to say how much it is destroying and mean it.
+func (s *Server) DeleteWorkspace(ctx context.Context, id string) (bubbles, threads int, err error) {
+	inst, projID, err := s.wsParts(ctx, id)
+	if err != nil {
+		return 0, 0, err
+	}
+	if s.mirror == nil {
+		return 0, 0, fmt.Errorf("mirror unavailable")
+	}
+	// Counted BEFORE, so the caller is told what it cost.
+	if ms, err := s.mirror.Modules(inst.Slug, projID); err == nil {
+		bubbles = len(ms)
+	}
+	if its, err := s.mirror.Items(inst.Slug, projID); err == nil {
+		threads = len(its)
+	}
+
+	cl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
+	if err := cl.DeleteProject(ctx, projID); err != nil {
+		return 0, 0, fmt.Errorf("delete project: %w", err)
+	}
+
+	// The overlay keys on bubble ids, which only exist while the modules do —
+	// so it has to be cleared before the mirror forgets them.
+	if ms, err := s.mirror.Modules(inst.Slug, projID); err == nil {
+		for _, m := range ms {
+			if err := s.store.ForgetBubble(inst.Slug + ":" + projID + ":" + m.ID); err != nil {
+				log.Printf("overlay: forget bubble %s: %v", m.ID, err)
+			}
+		}
+	}
+	if its, err := s.mirror.Items(inst.Slug, projID); err == nil {
+		ids := make([]string, 0, len(its))
+		for _, it := range its {
+			ids = append(ids, it.ID)
+		}
+		if err := s.store.ForgetThreads(ids); err != nil {
+			log.Printf("overlay: forget threads: %v", err)
+		}
+	}
+	if err := s.mirror.DeleteProject(inst.Slug, projID); err != nil {
+		log.Printf("mirror: forget workspace %s: %v", projID, err)
+	}
+
+	s.dropInstanceCache(inst.Slug)
+	if _, err := s.refreshInstance(context.Background(), inst); err != nil {
+		log.Printf("rebuild after delete_workspace: %v", err)
+	}
+	s.broadcastThread("")
+	actor, _ := domain.ActorFrom(ctx)
+	log.Printf("delete_workspace by %s: %s (%d bubble(s), %d thread(s))", actor.Label(), id, bubbles, threads)
+	return bubbles, threads, nil
+}
+
+func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	ws, err := s.RenameWorkspace(r.Context(), r.PathValue("id"), in.Name)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, ws)
+}
+
+func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {
+	bubbles, threads, err := s.DeleteWorkspace(r.Context(), r.PathValue("id"))
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]int{"deleted_bubbles": bubbles, "deleted_threads": threads})
 }

@@ -113,7 +113,7 @@ Usage:
   bubble dod <id> [text|-]         rewrite a thread's Definition of Done
   bubble rename <id> <title>       retitle a thread or a revision
   bubble move <thread> <bubble>    re-home a thread into another bubble
-  bubble delete <kind> <id> [-y]   PERMANENTLY delete a bubble/thread/artifact
+  bubble delete <kind> <id> [-y]   PERMANENTLY delete a workspace/bubble/thread/artifact
   bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
   bubble revision <id> <title> [-] attach a revision artifact to a thread
   bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
@@ -126,7 +126,7 @@ Usage:
   bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list;
                                    --tokens shows keys masked, add --reveal for full)
-  bubble workspace new [flags]     create a Plane project (modules on) — our Workspace
+  bubble workspace new|rename      create or retitle a Plane project — our Workspace
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble new|set|close|open create a bubble or set its contract (§4)
   bubble instance add|list|remove  manage Plane instances (run on the server host)
@@ -379,7 +379,16 @@ Usage:
 
 // cmdWorkspace creates a Plane project (our Workspace) with modules enabled.
 func cmdWorkspace(args []string) {
-	if len(args) < 1 || args[0] != "new" {
+	if len(args) < 1 {
+		workspaceUsage()
+		os.Exit(2)
+	}
+	switch args[0] {
+	case "new":
+	case "rename":
+		cmdWorkspaceRename(args[1:])
+		return
+	default:
 		workspaceUsage()
 		os.Exit(2)
 	}
@@ -407,14 +416,35 @@ func cmdWorkspace(args []string) {
 	}
 }
 
+// cmdWorkspaceRename retitles a Workspace. Renaming is not production — what a
+// body of work is called is not what has been done — so no heat is earned.
+func cmdWorkspaceRename(args []string) {
+	fs := flag.NewFlagSet("workspace rename", flag.ExitOnError)
+	id := fs.String("id", "", "<instance>:<project-id> (required)")
+	name := fs.String("name", "", "the new name (required)")
+	_ = fs.Parse(args)
+	if *id == "" || *name == "" {
+		log.Fatal("workspace rename: --id <instance>:<project-id> and --name are required")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.RenameWorkspace(cfg, *id, *name); err != nil {
+		log.Fatalf("workspace rename: %v", err)
+	}
+}
+
 func workspaceUsage() {
-	fmt.Fprint(os.Stderr, `bubble workspace — create a Plane project (our Workspace) with modules on
+	fmt.Fprint(os.Stderr, `bubble workspace — a Plane project (our Workspace), with modules on
 
 Usage:
   bubble workspace new --instance <slug> --name <name> [--identifier <ID>] \
                        [--no-cycles] [--no-pages] [--views] [--intake]
+  bubble workspace rename --id <instance>:<project-id> --name <name>
 
 Modules, Cycles and Pages are enabled by default; Views/Intake are opt-in.
+To destroy a workspace and everything in it: bubble delete workspace <id>.
 
 `)
 }
@@ -1168,7 +1198,7 @@ func cmdDelete(args []string) {
 		rest = append(rest, a)
 	}
 	if len(rest) < 2 {
-		log.Fatal("usage: bubble delete <bubble|thread|artifact> <id> [logbook|dod|brief] [-y]")
+		log.Fatal("usage: bubble delete <workspace|bubble|thread|artifact> <id> [logbook|dod|brief] [-y]")
 	}
 	cfg, err := config.Load()
 	if err != nil {
@@ -1178,6 +1208,10 @@ func cmdDelete(args []string) {
 	kind, id := rest[0], rest[1]
 	var path, what, warning string
 	switch kind {
+	case "workspace":
+		path, what = "/api/workspaces/"+url.PathEscape(id), "workspace "+id
+		warning = "EVERY bubble, thread, artifact and comment inside it goes too.\n" +
+			"This is the most destructive thing you can do here, and Plane keeps no copy."
 	case "bubble":
 		path, what = "/api/bubbles/"+url.PathEscape(id), "bubble "+id
 		warning = "Its threads survive in Plane but will belong to no bubble, so they leave the board.\n" +
@@ -1193,7 +1227,7 @@ func cmdDelete(args []string) {
 		what = rest[2] + " of " + id
 		warning = "The thread survives; only this section is removed."
 	default:
-		log.Fatalf("delete what? bubble, thread or artifact — not %q", kind)
+		log.Fatalf("delete what? workspace, bubble, thread or artifact — not %q", kind)
 	}
 
 	if !yes {

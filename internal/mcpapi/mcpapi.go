@@ -19,6 +19,9 @@ import (
 // interface avoids an import cycle and mirrors the HTTP surface exactly.
 type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
+	CreateWorkspace(ctx context.Context, req domain.CreateWorkspaceRequest) (domain.Workspace, error)
+	RenameWorkspace(ctx context.Context, id, name string) (domain.Workspace, error)
+	DeleteWorkspace(ctx context.Context, id string) (int, int, error)
 	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
 	BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
 	SetContract(ctx context.Context, bubbleID string, in domain.ContractInput) (domain.Contract, error)
@@ -35,6 +38,23 @@ type Backend interface {
 	ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error)
 	AddRevision(ctx context.Context, threadID, title, body string) (domain.ThreadDetail, error)
 	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
+}
+
+// confirmWorkspaceName checks the caller named the workspace correctly. It reads
+// the name off the bubbles the workspace contains, which is what list_bubbles
+// already reports — so an agent that has looked can answer, and one that has not
+// cannot guess.
+func confirmWorkspaceName(ctx context.Context, b Backend, id, claimed string) error {
+	bubbles, err := b.Bubbles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, x := range bubbles {
+		if strings.HasPrefix(x.ID, id+":") {
+			return sameName(claimed, x.ProjectName, "workspace")
+		}
+	}
+	return fmt.Errorf("no workspace %q, or it holds nothing you can see — read it before deleting it", id)
 }
 
 // confirmBubbleName resolves a bubble and checks the caller named it correctly.
@@ -127,6 +147,33 @@ type toggleTodoIn struct {
 // forces an agent to have READ the thing it is about to destroy, so a
 // transposed or hallucinated id fails loudly instead of deleting a stranger's
 // work. There is deliberately no "force" flag to route around it.
+// createWorkspaceIn creates a WORKSPACE — the boundary for a body of work,
+// which maps to a Plane project (AGENTS.md vocabulary; NOT a Plane "workspace").
+// Bubbles live inside one, so this is the outermost thing an agent can make.
+type createWorkspaceIn struct {
+	Instance   string `json:"instance" jsonschema:"the instance slug, e.g. one of those list_bubbles reports"`
+	Name       string `json:"name" jsonschema:"what this body of work is called"`
+	Identifier string `json:"identifier,omitempty" jsonschema:"short key Plane prefixes work items with, e.g. KIOSK. Derived from the name when omitted"`
+	NoCycles   bool   `json:"no_cycles,omitempty" jsonschema:"turn cycles off. On by default: the cycle is the pulse heat is measured against (§3.6)"`
+	NoPages    bool   `json:"no_pages,omitempty" jsonschema:"turn Plane pages off. On by default"`
+	Views      bool   `json:"views,omitempty" jsonschema:"turn Plane views on. Off by default"`
+	Intake     bool   `json:"intake,omitempty" jsonschema:"turn Plane intake on. Off by default"`
+}
+
+// renameWorkspaceIn retitles a workspace.
+type renameWorkspaceIn struct {
+	ID   string `json:"id" jsonschema:"the workspace id as slug:project"`
+	Name string `json:"name" jsonschema:"the new name"`
+}
+
+// deleteWorkspaceIn destroys a workspace and EVERYTHING in it. The name guard
+// is the same one delete_bubble uses, and it matters far more here: this is the
+// most destructive call on the surface.
+type deleteWorkspaceIn struct {
+	ID   string `json:"id" jsonschema:"the workspace id as slug:project"`
+	Name string `json:"name" jsonschema:"the workspace's exact current name. The delete is REFUSED if it does not match — read it first"`
+}
+
 type deleteIn struct {
 	ID   string `json:"id" jsonschema:"the namespaced id of the thing to delete"`
 	Name string `json:"name" jsonschema:"the thing's exact current name, as you just read it. The delete is REFUSED if it does not match — read it first"`
@@ -210,6 +257,19 @@ func Handler(b Backend) http.Handler {
 				return nil, listOut{}, err
 			}
 			return nil, listOut{Bubbles: vs}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "create_workspace", Description: "Create a WORKSPACE — the boundary for a body of work, which maps to a Plane project. Note the vocabulary: this is NOT a Plane workspace, it is a project inside one (AGENTS.md). Bubbles live inside a workspace, so make one only when the work genuinely does not belong in any existing workspace; a new body of work is usually a new BUBBLE. Modules are enabled on it, because bubbles need them."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in createWorkspaceIn) (*sdk.CallToolResult, domain.Workspace, error) {
+			w, err := b.CreateWorkspace(withActor(ctx, req), domain.CreateWorkspaceRequest{
+				Instance: in.Instance, Name: in.Name, Identifier: in.Identifier,
+				NoCycles: in.NoCycles, NoPages: in.NoPages, Views: in.Views, Intake: in.Intake,
+			})
+			if err != nil {
+				return nil, domain.Workspace{}, err
+			}
+			return nil, w, nil
 		})
 
 	sdk.AddTool(srv,
@@ -344,6 +404,30 @@ func Handler(b Backend) http.Handler {
 				return nil, domain.ThreadDetail{}, err
 			}
 			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "rename_workspace", Description: "Rename a workspace. Not evidence of production — what a body of work is called is not what has been done."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in renameWorkspaceIn) (*sdk.CallToolResult, domain.Workspace, error) {
+			w, err := b.RenameWorkspace(withActor(ctx, req), in.ID, in.Name)
+			if err != nil {
+				return nil, domain.Workspace{}, err
+			}
+			return nil, w, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_workspace", Description: "PERMANENTLY delete a workspace and EVERY bubble, thread, artifact and comment inside it. This is the most destructive call available and nothing about it is recoverable. Pass the workspace's exact name to confirm — the delete is refused if it does not match. Ask the person first, and be sure they mean the whole workspace rather than one bubble."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteWorkspaceIn) (*sdk.CallToolResult, deletedOut, error) {
+			actx := withActor(ctx, req)
+			if err := confirmWorkspaceName(actx, b, in.ID, in.Name); err != nil {
+				return nil, deletedOut{}, err
+			}
+			bubbles, threads, err := b.DeleteWorkspace(actx, in.ID)
+			if err != nil {
+				return nil, deletedOut{}, err
+			}
+			return nil, deletedOut{OK: true, Affected: bubbles + threads}, nil
 		})
 
 	sdk.AddTool(srv,

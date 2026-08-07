@@ -18,6 +18,25 @@
   const MENU_W = 232;
   const px = $derived(Math.max(8, Math.min(workspaceMenu.x, window.innerWidth - MENU_W - 8)));
 
+  // Measured, not guessed: the menu's height changes with the language and with
+  // whether the "pick one first" hint is showing, and being wrong by a row puts
+  // it back off the bottom edge.
+  let box = $state<HTMLElement | null>(null);
+  let h = $state(0);
+  $effect(() => {
+    if (workspaceMenu.open && box) h = box.offsetHeight;
+  });
+
+  // Open upward when there is no room below — the handle lives in the status bar
+  // at the bottom of the window, so upward is in fact the normal case.
+  const py = $derived.by(() => {
+    const below = workspaceMenu.bottom + 6;
+    if (h > 0 && below + h + 8 > window.innerHeight) {
+      return Math.max(8, workspaceMenu.top - h - 6);
+    }
+    return below;
+  });
+
   // The workspace being acted on: the filtered one, or the only one there is.
   const current = $derived(store.activeProject);
 
@@ -48,7 +67,12 @@
     }}
   ></div>
 
-  <div class="ctxmenu" style="left: {px}px; top: {workspaceMenu.y}px" role="menu">
+  <div
+    class="ctxmenu"
+    bind:this={box}
+    style="left: {px}px; top: {py}px; visibility: {h > 0 ? 'visible' : 'hidden'}"
+    role="menu"
+  >
     <div class="ctxmenu-head">
       {current ? current.name : t('ws.noneScoped')}
     </div>

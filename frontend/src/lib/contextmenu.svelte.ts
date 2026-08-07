@@ -49,10 +49,18 @@ class BoardMenu {
 //
 // It is ANCHORED to its button rather than to the pointer: it is opened by a
 // click on a known element, not by a right-click somewhere on the canvas.
+//
+// Both edges of that button are kept, not just one. The button lives in the
+// status bar at the BOTTOM of the window, so a menu placed under it opens off
+// the bottom of the screen — invisible, with nothing to say it opened. The
+// component picks the edge that fits.
 class WorkspaceMenu {
   open = $state(false);
   x = $state(0);
-  y = $state(0);
+  /** viewport y of the anchor's top edge */
+  top = $state(0);
+  /** viewport y of the anchor's bottom edge */
+  bottom = $state(0);
 
   showAt(el: HTMLElement): void {
     bubbleMenu.open = false;
@@ -60,7 +68,8 @@ class WorkspaceMenu {
     boardMenu.open = false;
     const r = el.getBoundingClientRect();
     this.x = r.left;
-    this.y = r.bottom + 6;
+    this.top = r.top;
+    this.bottom = r.bottom;
     this.open = true;
   }
 

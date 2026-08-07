@@ -470,6 +470,12 @@ forbids. Both are now on the board:
   project; the destinations are read off the thread's own namespaced id, so the
   picker costs no extra request.
 - **Workspaces** hang off a `⋯` next to the project filter — Rename, New, Delete.
+  That handle lives in the status bar at the **bottom** of the window, so a menu
+  anchored under it opens off the bottom edge: invisible, with nothing to say it
+  opened at all. It flips above the button when there is no room below, using a
+  measured height rather than a guessed one — the menu grows a row in Spanish and
+  another when the "pick one first" hint shows, and being wrong by one row puts
+  it back off the screen.
 
 Two things the web had to decide that the other surfaces never face:
 

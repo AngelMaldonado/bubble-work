@@ -386,6 +386,9 @@ func (s *Server) revisions(inst domain.Instance, projID, wid string, names map[s
 			}
 		}
 		art := md.NewArtifact(label, md.FromHTML(ch.DescriptionHTML))
+		// A revision IS a work item, so it carries its own id and can be renamed
+		// through the same path as a thread.
+		art.ID = inst.Slug + ":" + projID + ":" + ch.ID
 		art.HTML = rewriteMentions(
 			rewriteAssets(art.HTML, planeItemURL(inst.BaseURL, inst.Workspace, projID, ch.ID)), names)
 		out = append(out, art)

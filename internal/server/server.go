@@ -1013,11 +1013,40 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 		log.Printf("birth_thread: created %s but link to module failed: %v", wid, err)
 	}
 
+	// Same reasoning as CreateBubble: put it in the mirror rather than only in
+	// the snapshot. A delta pass would find the item within two minutes, but its
+	// MEMBERSHIP of this bubble rides on the module lists, which are re-read on
+	// the ten-minute structure cadence — so the thread would appear orphaned
+	// until then.
+	if s.mirror != nil {
+		now := s.now()
+		html := briefLogbookHTML(req.Brief, req.Logbook)
+		if err := s.mirror.UpsertItems(slug, []mirror.Item{{
+			ID: wid, ProjectID: projectID, Name: req.Name,
+			DescriptionHTML: html, DescriptionHash: mirror.HashBody(html),
+			CreatedAt: now, UpdatedAt: now,
+		}}, now); err != nil {
+			log.Printf("mirror: record new thread %s: %v", wid, err)
+		}
+		ids := []string{wid}
+		if existing, err := s.mirror.ModuleItems(slug, moduleID); err == nil {
+			ids = ids[:0]
+			for _, it := range existing {
+				ids = append(ids, it.ID)
+			}
+			ids = append(ids, wid)
+		}
+		if err := s.mirror.SetModuleItems(slug, moduleID, ids); err != nil {
+			log.Printf("mirror: link thread %s to bubble %s: %v", wid, id, err)
+		}
+	}
+
 	// Reflect the new thread in the cache without a refetch.
 	s.patchCachedBubble(slug, id, func(b *domain.Bubble) {
 		b.Threads = append(b.Threads, domain.Thread{ID: wid, Name: req.Name, Active: true})
 		b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadCreated, At: s.now()})
 	})
+	s.broadcastThread("")
 	log.Printf("birth_thread by %s: bubble=%s -> work item %s", actor.Label(), id, wid)
 	return domain.BirthResult{ThreadID: wid, Created: true, Message: fmt.Sprintf("created thread %q in %s", req.Name, id)}, nil
 }
@@ -1082,6 +1111,16 @@ func (s *Server) CreateWorkspace(ctx context.Context, req domain.CreateWorkspace
 	if err != nil {
 		return domain.Workspace{}, fmt.Errorf("create project: %w", err)
 	}
+	// Same write-through as create_bubble, and it matters MORE here: buildInstance
+	// walks the mirror's PROJECTS, so until this row exists nothing inside the new
+	// workspace can be seen either — a bubble created in it would stay invisible
+	// even though its own module row was written.
+	if s.mirror != nil {
+		if err := s.mirror.UpsertProjects(req.Instance,
+			[]mirror.Project{{ID: p.ID, Name: p.Name, Identifier: p.Identifier}}, s.now()); err != nil {
+			log.Printf("mirror: record new workspace %s: %v", p.ID, err)
+		}
+	}
 	s.dropInstanceCache(req.Instance)
 	log.Printf("create_workspace by %s: %s (%s) in %s", actor.Label(), p.ID, ident, req.Instance)
 	return domain.Workspace{ID: p.ID, Name: p.Name, Identifier: p.Identifier, Instance: req.Instance}, nil
@@ -1118,7 +1157,28 @@ func (s *Server) CreateBubble(ctx context.Context, req domain.CreateBubbleReques
 			log.Printf("create_bubble: contract set failed for %s: %v", id, err)
 		}
 	}
+	// Write it into the mirror NOW. The board is built FROM the mirror since
+	// PLANE-SYNC Phase 2, and modules are only re-read on the structure cadence
+	// (10 minutes) — so without this a bubble created here exists in Plane and
+	// is invisible to every surface until that pass runs. Dropping the instance
+	// cache used to be enough, back when dropping it forced a Plane refetch;
+	// now it just rebuilds from a mirror that has never heard of this module.
+	if s.mirror != nil {
+		if err := s.mirror.UpsertModules(inst.Slug,
+			[]mirror.Module{{ID: m.ID, ProjectID: req.Project, Name: m.Name}}, s.now()); err != nil {
+			log.Printf("mirror: record new bubble %s: %v", id, err)
+		}
+		// A new bubble has no threads yet, and saying so explicitly beats
+		// leaving the membership unknown.
+		if err := s.mirror.SetModuleItems(inst.Slug, m.ID, nil); err != nil {
+			log.Printf("mirror: init bubble membership %s: %v", id, err)
+		}
+	}
 	s.dropInstanceCache(req.Instance)
+	if _, err := s.refreshInstance(context.Background(), inst); err != nil {
+		log.Printf("rebuild after create_bubble: %v", err)
+	}
+	s.broadcastThread("")
 	log.Printf("create_bubble by %s: %s", actor.Label(), id)
 	return domain.NewBubble{ID: id, Name: m.Name}, nil
 }

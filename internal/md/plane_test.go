@@ -133,3 +133,64 @@ func TestSplicedBlockKeepsPlaneNodes(t *testing.T) {
 		t.Errorf("mention block was not reused verbatim: %s", out)
 	}
 }
+
+// A real Logbook from a security remediation thread: every task item carries
+// inline code, bold, em-dashes and arrows, and the lines are long. Rich task
+// items are where a naive task-list renderer falls over, so this pins the whole
+// pipeline — read, write, parse, splice and tick — on one demanding case.
+func TestRichTaskListSurvivesEverything(t *testing.T) {
+	const src = "### Phase 2 — Remediate findings\n\n" +
+		"- [x] `F-001` — PR qualification gate proven (run `31019609188`) — **Verified**\n" +
+		"- [ ] `F-002` — Remove `typescript.ignoreBuildErrors` bypass in dashboard/kiosk/monitor once Next route types are authoritative — **In progress**\n" +
+		"- [ ] `F-018` — Publish driver release accepting both claim contracts → raise `minSupportedVersion` → deploy backend route removal, in that order — **Implemented; rollout pending**\n" +
+		"- [ ] `F-021` — Bind mobile access tokens to a revocable session (or shorten lifetime); hash and rotate stored refresh tokens with replay detection — **Confirmed, not started** — candidate to graduate into its own thread once work begins (protocol-level change)"
+
+	body := RenderPlaneHTML(src)
+	if back := FromHTML(body); back != src {
+		t.Fatalf("round trip lost something:\n  want %q\n  got  %q", src, back)
+	}
+
+	// The checkbox state and the item text both survive parsing.
+	page := "## Logbook\n\n" + src
+	section, _, _ := ExtractSection(page, "logbook")
+	todos := ParseTodos(section)
+	if len(todos) != 4 {
+		t.Fatalf("want 4 todos, got %d", len(todos))
+	}
+	if !todos[0].Done || todos[1].Done {
+		t.Errorf("checkbox state: %+v", todos[:2])
+	}
+	if CountDone(page) != 1 {
+		t.Errorf("CountDone: want 1, got %d", CountDone(page))
+	}
+
+	// Saving it unchanged is a no-op...
+	current, _ := RegionMarkdown(body, RegionDocument)
+	out, err := Splice(body, RegionDocument, current)
+	if err != nil || out != body {
+		t.Errorf("splicing it back changed the body (err=%v)", err)
+	}
+
+	// ...and ticking one item leaves every other one exactly as it was.
+	next, err := ToggleTodo(current, 1, todos[1].Text, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ticked, err := Splice(body, RegionDocument, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := RegionMarkdown(ticked, RegionDocument)
+	if !strings.Contains(got, "- [x] `F-002`") {
+		t.Errorf("F-002 was not ticked:\n%s", got)
+	}
+	for _, untouched := range []string{
+		"- [x] `F-001` — PR qualification gate proven (run `31019609188`) — **Verified**",
+		"`minSupportedVersion` → deploy backend route removal, in that order",
+		"(protocol-level change)",
+	} {
+		if !strings.Contains(got, untouched) {
+			t.Errorf("ticking one item disturbed another:\n  lost %s", untouched)
+		}
+	}
+}

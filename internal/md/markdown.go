@@ -39,6 +39,10 @@ func RenderHTML(markdown string) string {
 // (or the whole body when there are no H1s), with a TOC built from its H2+.
 // HTML is the goldmark-rendered body for the web view; CLI/MCP use Markdown.
 type Artifact struct {
+	// ID is the Plane work-item id for artifacts that ARE a work item — today
+	// that is revisions, which is what makes them renamable. Empty for the
+	// thread's own body, whose title is the thread's.
+	ID       string     `json:"id,omitempty"`
 	Title    string     `json:"title"`
 	TOC      []TOCEntry `json:"toc"`
 	Markdown string     `json:"markdown"`

@@ -55,6 +55,8 @@ func main() {
 		cmdLogbook(os.Args[2:])
 	case "dod":
 		cmdDoD(os.Args[2:])
+	case "rename":
+		cmdRename(os.Args[2:])
 	case "todo":
 		cmdTodo(os.Args[2:])
 	case "revision":
@@ -104,6 +106,7 @@ Usage:
   bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
   bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
   bubble dod <id> [text|-]         rewrite a thread's Definition of Done
+  bubble rename <id> <title>       retitle a thread or a revision
   bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
   bubble revision <id> <title> [-] attach a revision artifact to a thread
   bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
@@ -1107,6 +1110,22 @@ func cmdDoD(args []string) {
 	}
 	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{DoD: &body}); err != nil {
 		log.Fatalf("dod: %v", err)
+	}
+}
+
+// cmdRename retitles a thread or a revision. Both are Plane work items, so both
+// take the same path.
+func cmdRename(args []string) {
+	if len(args) < 2 {
+		log.Fatal("usage: bubble rename <id> <new title...>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	title := strings.Join(args[1:], " ")
+	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{Title: &title}); err != nil {
+		log.Fatalf("rename: %v", err)
 	}
 }
 

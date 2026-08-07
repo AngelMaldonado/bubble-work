@@ -56,6 +56,7 @@ func withActor(ctx context.Context, req *sdk.CallToolRequest) context.Context {
 // erase the human's Brief.
 type updateThreadIn struct {
 	ThreadID string  `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Title    *string `json:"title,omitempty" jsonschema:"rename the thread. Not evidence of production — a title is what the work is called, not what has been done"`
 	Logbook  *string `json:"logbook,omitempty" jsonschema:"replace the Logbook section: the plan in phases, its todos, current owner and state. Markdown"`
 	Brief    *string `json:"brief,omitempty" jsonschema:"replace the Brief section: problem, intended outcome, constraints, links. Rarely what an agent should touch"`
 	DoD      *string `json:"dod,omitempty" jsonschema:"replace the Definition of Done: the checklist that says the work is finished. Markdown"`
@@ -216,7 +217,7 @@ func Handler(b Backend) http.Handler {
 		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. Only the sections you pass are touched, and within a section only the blocks you actually changed are rewritten — so images, mentions and formatting elsewhere on the page survive. To tick a single existing todo, prefer toggle_todo."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.UpdateThread(withActor(ctx, req), in.ThreadID, domain.ThreadEdit{
-				Brief: in.Brief, Logbook: in.Logbook, DoD: in.DoD,
+				Title: in.Title, Brief: in.Brief, Logbook: in.Logbook, DoD: in.DoD,
 			})
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err

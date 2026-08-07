@@ -34,6 +34,24 @@ var editRegions = []struct {
 	{"dod", md.RegionDoD},
 }
 
+// regionByName resolves the write API's name to a splice region. It exists
+// because the two vocabularies genuinely differ — "brief" is the API's word for
+// the document — and every surface has to agree on the translation.
+func regionByName(name string) (md.Region, bool) {
+	for _, r := range editRegions {
+		if r.name == name {
+			return r.region, true
+		}
+	}
+	// Accept the engine's own names too, so an MCP caller that says "document"
+	// is not mysteriously rejected.
+	switch md.Region(name) {
+	case md.RegionDocument, md.RegionLogbook, md.RegionDoD:
+		return md.Region(name), true
+	}
+	return "", false
+}
+
 // UpdateThread rewrites parts of a thread's artifact page.
 //
 // It is REGION-SCOPED, and it SPLICES rather than re-rendering. Both matter:
@@ -73,6 +91,30 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 		return domain.ThreadDetail{}, errNotFound
 	}
 
+	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
+
+	// A rename is its own write: the title lives in Plane's `name`, not in the
+	// description, so it does not go through the splice at all. It is also not
+	// production — what the work is CALLED is not what has been done.
+	if edit.Title != nil {
+		title := strings.TrimSpace(*edit.Title)
+		if title == "" {
+			return domain.ThreadDetail{}, fmt.Errorf("%w: a thread needs a title", errBadRequest)
+		}
+		if title != it.Name {
+			if _, err := wcl.SetWorkItemName(ctx, wid, title); err != nil {
+				return domain.ThreadDetail{}, err
+			}
+			it.Name = title
+			if err := s.mirror.UpsertItems(inst.Slug, []mirror.Item{it}, s.now()); err != nil {
+				log.Printf("mirror: record rename %s: %v", wid, err)
+			}
+			// The board shows thread titles, so this one DOES need a rebuild even
+			// though it earns no heat.
+			s.rebuildAndNotify(inst, wid, true)
+		}
+	}
+
 	body := it.DescriptionHTML
 	production := false
 	for _, r := range editRegions {
@@ -107,7 +149,6 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 
 	// Written with the caller's own key, so Plane attributes the edit to the
 	// person (or the human an agent is impersonating), exactly like a comment.
-	wcl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
 	updatedAt, err := wcl.SetWorkItemBody(ctx, wid, body)
 	if err != nil {
 		return domain.ThreadDetail{}, err
@@ -156,8 +197,10 @@ func checkBase(descriptionHTML string, region md.Region, base string) error {
 // kept running into: a local copy confidently answering a question it does not
 // actually know (docs/PLANE-SYNC.md).
 func (s *Server) ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error) {
-	if region != md.RegionLogbook && region != md.RegionDoD {
-		return domain.ThreadDetail{}, fmt.Errorf("%w: todos live in the logbook or the dod", errBadRequest)
+	switch region {
+	case md.RegionDocument, md.RegionLogbook, md.RegionDoD:
+	default:
+		return domain.ThreadDetail{}, fmt.Errorf("%w: unknown region %q", errBadRequest, region)
 	}
 	full, err := s.resolveThreadID(ctx, threadID)
 	if err != nil {
@@ -195,6 +238,7 @@ func (s *Server) ToggleTodo(ctx context.Context, threadID string, region md.Regi
 		return s.ThreadDetail(ctx, full) // already in that state
 	}
 	return s.UpdateThread(ctx, full, domain.ThreadEdit{
+		Brief:   pick(region == md.RegionDocument, next),
 		Logbook: pick(region == md.RegionLogbook, next),
 		DoD:     pick(region == md.RegionDoD, next),
 	})
@@ -303,9 +347,13 @@ func (s *Server) handleToggleTodo(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
-	region := md.Region(in.Region)
-	if region == "" {
-		region = md.RegionLogbook
+	region, ok := regionByName(in.Region)
+	if in.Region == "" {
+		region, ok = md.RegionLogbook, true
+	}
+	if !ok {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown region " + in.Region})
+		return
 	}
 	d, err := s.ToggleTodo(r.Context(), r.PathValue("id"), region, in.Index, in.Text, in.Done)
 	if writeErr(w, err) {

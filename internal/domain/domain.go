@@ -435,6 +435,10 @@ type EditableRegion struct {
 // as it was — an agent revising a plan must not be able to erase the human's
 // Brief, so the shape makes "touch only what you name" the default.
 type ThreadEdit struct {
+	// Title renames the work item. Not a region: it lives in Plane's `name`,
+	// not in the description, and it is not production either — what the work is
+	// called is not what has been done.
+	Title   *string `json:"title,omitempty"`
 	Brief   *string `json:"brief,omitempty"`
 	Logbook *string `json:"logbook,omitempty"`
 	DoD     *string `json:"dod,omitempty"`
@@ -445,7 +449,9 @@ type ThreadEdit struct {
 }
 
 // Empty reports whether an edit names nothing to change.
-func (e ThreadEdit) Empty() bool { return e.Brief == nil && e.Logbook == nil && e.DoD == nil }
+func (e ThreadEdit) Empty() bool {
+	return e.Title == nil && e.Brief == nil && e.Logbook == nil && e.DoD == nil
+}
 
 // Comment is one rendered entry in a thread's comment feed (Phase 12). HTML is
 // the goldmark render for the chat UI; Markdown serves CLI/MCP. Mine marks the

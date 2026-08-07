@@ -398,3 +398,38 @@ func TestHashChangesWithTheMarkdown(t *testing.T) {
 		t.Error("hash forgave a whitespace change it should have caught")
 	}
 }
+
+// Todos are not confined to the Logbook. 59 of 96 real bodies keep them in the
+// document with no Logbook section at all, so a toggle that only understood
+// logbook/dod rendered a checkbox that did nothing.
+func TestToggleTodoInTheDocumentRegion(t *testing.T) {
+	body := `<p data-id="p1">Findings:</p>` +
+		`<ul data-type="taskList">` +
+		`<li data-type="taskItem" data-checked="false"><div><p>login is slow</p></div></li>` +
+		`<li data-type="taskItem" data-checked="false"><div><p>error text is in English</p></div></li>` +
+		`</ul>`
+
+	current, ok := RegionMarkdown(body, RegionDocument)
+	if !ok {
+		t.Fatal("document region not found")
+	}
+	next, err := ToggleTodo(current, 1, "error text is in English", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := Splice(body, RegionDocument, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := RegionMarkdown(out, RegionDocument)
+	if !strings.Contains(got, "- [x] error text is in English") {
+		t.Errorf("the todo was not ticked: %q", got)
+	}
+	if !strings.Contains(got, "- [ ] login is slow") {
+		t.Errorf("the wrong todo moved: %q", got)
+	}
+	// The prose above the list is untouched, verbatim.
+	if !strings.Contains(out, `<p data-id="p1">Findings:</p>`) {
+		t.Errorf("ticking a todo disturbed the paragraph above it:\n%s", out)
+	}
+}

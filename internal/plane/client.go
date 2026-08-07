@@ -338,6 +338,19 @@ func (c *Client) SetWorkItemBody(ctx context.Context, workItemID, descriptionHTM
 	return out.UpdatedAt, err
 }
 
+// SetWorkItemName renames a work item. A thread's title is its Plane name, and
+// so is a revision's — a revision IS a sub-work-item — so one call covers both.
+// A rename is not production: it changes what the work is called, not what has
+// been done.
+func (c *Client) SetWorkItemName(ctx context.Context, workItemID, name string) (time.Time, error) {
+	var out struct {
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	err := c.patch(ctx, c.projectBase()+"/work-items/"+workItemID+"/",
+		map[string]any{"name": name}, &out)
+	return out.UpdatedAt, err
+}
+
 // SetWorkItemState moves a work item to a state. This is the ONLY call that
 // changes a card's position in Plane's pipeline, and it is made solely by the
 // opt-in auto-state sweep (THREAD-LIFECYCLE.md Phase B) — never on a read path.

@@ -2235,16 +2235,21 @@ func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
 		`<p class="editor-paragraph-block" data-id="p1">The pull is real.</p>` +
 		`<p class="editor-paragraph-block" data-id="p2">` + mention + ` owns this.</p>` +
 		image +
+		// A todo living in the DOCUMENT, with no Logbook above it — the shape 59
+		// of 96 real bodies have.
+		`<ul data-type="taskList"><li data-type="taskItem" data-checked="false">` +
+		`<div><p>read the report</p></div></li></ul>` +
 		`<h2 class="editor-heading-block" data-id="h2">Logbook</h2>` +
 		`<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><div><p>wire it up</p></div></li></ul>` +
 		`<h2 class="editor-heading-block" data-id="h3">Definition of Done</h2>` +
 		`<p class="editor-paragraph-block" data-id="p3">It works.</p>`
 	patched := 0
+	name := "First thread"
 
 	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p := r.URL.Path
 		mu.Lock()
-		cur := body
+		cur, curName := body, name
 		mu.Unlock()
 		switch {
 		case strings.HasSuffix(p, "/users/me"):
@@ -2259,15 +2264,21 @@ func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
 			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
 		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
 			var in struct {
-				DescriptionHTML string `json:"description_html"`
+				DescriptionHTML *string `json:"description_html"`
+				Name            *string `json:"name"`
 			}
 			json.NewDecoder(r.Body).Decode(&in)
 			mu.Lock()
-			body, patched = in.DescriptionHTML, patched+1
+			if in.DescriptionHTML != nil {
+				body, patched = *in.DescriptionHTML, patched+1
+			}
+			if in.Name != nil {
+				name = *in.Name
+			}
 			mu.Unlock()
 			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
 		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
-			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, cur)
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":%q,"description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, curName, cur)
 		default:
 			io.WriteString(w, `{"results":[]}`)
 		}
@@ -2388,6 +2399,47 @@ func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
 		t.Errorf("the todo was not ticked: %+v", d.Logbook)
 	}
 
+	// 4b. The API says "brief"; the splice engine says "document". A toggle that
+	//     cast the string instead of translating it silently rejected every todo
+	//     living outside a Logbook — which is most of them.
+	brief, _ := json.Marshal(map[string]any{
+		"region": "brief", "index": 0, "text": "read the report", "done": true,
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(brief)); code != http.StatusOK {
+		t.Fatalf("a todo in the document region was refused: %d %s", code, b)
+	}
+	if !strings.Contains(sent(), "read the report") || !strings.Contains(sent(), `data-checked="true"`) {
+		t.Errorf("the document todo was not ticked:\n%s", sent())
+	}
+	if !strings.Contains(sent(), mention) {
+		t.Error("ticking a document todo destroyed the mention")
+	}
+
+	// 4c. A title is the work item's Plane NAME, not part of the body, so it
+	//     takes its own path and must not disturb the description at all.
+	beforeBody := sent()
+	ren, _ := json.Marshal(domain.ThreadEdit{Title: strPtr("Rework the intake form")})
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(ren)); code != http.StatusOK {
+		t.Fatalf("rename: %d %s", code, b)
+	}
+	mu.Lock()
+	gotName := name
+	mu.Unlock()
+	if gotName != "Rework the intake form" {
+		t.Errorf("the thread was not renamed: %q", gotName)
+	}
+	if sent() != beforeBody {
+		t.Error("a rename rewrote the description")
+	}
+	if d := read(); d.Title != "Rework the intake form" {
+		t.Errorf("the new title is not visible without a sync pass: %q", d.Title)
+	}
+	// An empty title is a slip, not a rename.
+	empty, _ := json.Marshal(domain.ThreadEdit{Title: strPtr("   ")})
+	if code, _ := do(t, http.MethodPatch, ts.URL+thread, key, string(empty)); code != http.StatusBadRequest {
+		t.Errorf("an empty title was accepted: %d", code)
+	}
+
 	// 5. The Definition of Done is writable in its own right.
 	dod, _ := json.Marshal(domain.ThreadEdit{DoD: strPtr("- [ ] it works\n- [ ] somebody said so")})
 	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(dod)); code != http.StatusOK {
@@ -2402,3 +2454,200 @@ func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
 }
 
 func strPtr(s string) *string { return &s }
+
+// A revision IS its own work item, so ticking a todo inside one must write to
+// the REVISION, not to the thread that owns it. Before revisions carried an id
+// they were not addressable at all, and the click went to the parent's document.
+func TestRevisionsAreAddressableAndTickable(t *testing.T) {
+	var mu sync.Mutex
+	parent := `<p data-id="p1">The parent brief.</p>`
+	child := `<ul data-type="taskList">` +
+		`<li data-type="taskItem" data-checked="false"><div><p>re-run the numbers</p></div></li></ul>`
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		curParent, curChild := parent, child
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/rev-1/"):
+			var in struct {
+				DescriptionHTML *string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			if in.DescriptionHTML != nil {
+				child = *in.DescriptionHTML
+			}
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			t.Error("a revision's todo was written to the PARENT thread")
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[
+			  {"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}},
+			  {"id":"rev-1","name":"rev: findings","parent":"wi-1","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}
+			],"next_page_results":false}`, curParent, curChild)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	var d domain.ThreadDetail
+	_, rb := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if err := json.Unmarshal(rb, &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Revisions) != 1 {
+		t.Fatalf("want 1 revision, got %d", len(d.Revisions))
+	}
+	// The id is what makes it addressable — without it the click had nowhere to go.
+	if d.Revisions[0].ID != "ws:p1:rev-1" {
+		t.Fatalf("revision id: %q", d.Revisions[0].ID)
+	}
+
+	body, _ := json.Marshal(map[string]any{
+		"region": "brief", "index": 0, "text": "re-run the numbers", "done": true,
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+"/api/threads/"+d.Revisions[0].ID+"/todo", key, string(body)); code != http.StatusOK {
+		t.Fatalf("toggle in a revision: %d %s", code, b)
+	}
+	mu.Lock()
+	got := child
+	mu.Unlock()
+	if !strings.Contains(got, `data-checked="true"`) {
+		t.Errorf("the revision's todo was not ticked:\n%s", got)
+	}
+	if !strings.Contains(got, "re-run the numbers") {
+		t.Errorf("the revision's body was damaged:\n%s", got)
+	}
+}
+
+// A bubble created through MCP or the API must be visible IMMEDIATELY.
+//
+// It regressed when the board moved off Plane and onto the mirror
+// (docs/PLANE-SYNC.md Phase 2): CreateBubble dropped the instance cache, which
+// used to force a Plane refetch and afterwards only forced a rebuild from a
+// mirror that had never heard of the new module. Modules are re-read on the
+// TEN MINUTE structure cadence, so the bubble existed in Plane and no surface
+// could see it — not the board, not list_bubbles, not an agent looking for its
+// id.
+func TestNewBubblesAndThreadsAreVisibleImmediately(t *testing.T) {
+	var mu sync.Mutex
+	modules := `{"results":[]}`
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		mods := modules
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/modules/"):
+			// Plane accepts it. The mirror will not learn of it for ten minutes.
+			io.WriteString(w, `{"id":"m-new","name":"Fresh bubble"}`)
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/work-items/"):
+			io.WriteString(w, `{"id":"wi-new","name":"First thread"}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, mods)
+		case strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	mk, _ := json.Marshal(map[string]string{
+		"instance": "ws", "project": "p1", "name": "Fresh bubble", "outcome": "it ships",
+	})
+	code, rb := do(t, http.MethodPost, ts.URL+"/api/bubbles", key, string(mk))
+	if code != http.StatusOK && code != http.StatusCreated {
+		t.Fatalf("create: %d %s", code, rb)
+	}
+	var made domain.NewBubble
+	if err := json.Unmarshal(rb, &made); err != nil {
+		t.Fatal(err)
+	}
+
+	// NO sync pass has run. The board must show it anyway.
+	var board []domain.BubbleView
+	_, bb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	if err := json.Unmarshal(bb, &board); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, b := range board {
+		if b.ID == made.ID {
+			found = true
+			if b.Name != "Fresh bubble" {
+				t.Errorf("bubble name: %q", b.Name)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("a bubble created a moment ago is invisible to every surface: %s not in %d bubbles",
+			made.ID, len(board))
+	}
+
+	// ...and a thread born into it is visible without a sync pass too, attached
+	// to the right bubble rather than orphaned.
+	birth, _ := json.Marshal(map[string]any{
+		"instance": "ws", "bubble_id": made.ID, "name": "First thread",
+		"brief": "why\n\n## Definition of Done\n- [ ] it works", "logbook": "- [ ] start",
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, string(birth)); code >= 300 {
+		t.Fatalf("birth: %d %s", code, b)
+	}
+	_, tb := do(t, http.MethodGet, ts.URL+"/api/bubbles/"+made.ID+"/threads", key, "")
+	var threads []domain.ThreadNode
+	if err := json.Unmarshal(tb, &threads); err != nil {
+		t.Fatal(err)
+	}
+	if len(threads) != 1 || threads[0].Title != "First thread" {
+		t.Errorf("a thread born a moment ago is not in its bubble: %+v", threads)
+	}
+}

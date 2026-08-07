@@ -1,6 +1,6 @@
 # MCP access — agents acting, artifacts updating live
 
-Status: **Steps 1-3 built (not yet deployed) · 4-6 pending** · Drafted 2026-08-06 · Companion to
+Status: **Steps 1-3 and 5 built · 4 and 6 pending** · Drafted 2026-08-06 · Companion to
 [`AGENTS.md`](../AGENTS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -142,7 +142,7 @@ that is the case where a pasted header is not an option.
 2. [x] **Write-through to the mirror on every MCP write.**
 3. [x] **SSE reaches the open thread.**
 4. **Tailscale Funnel** for a stable public HTTPS URL.
-5. **Connect page** (option A) for one-click Claude Code setup.
+5. [x] **Connect page** (option A) for one-click Claude Code setup.
 6. **OAuth AS** (option B) if and when a hosted client needs it.
 
 Steps 1–3 are the intention. 4–5 are access. 6 is polish.
@@ -182,6 +182,24 @@ first-sighting rule (we cannot know when a logbook was last touched, and stampin
 it "now" would fabricate heat for work that might be a year old). In production
 the refresher establishes the baseline long before anyone edits; only a test can
 arrive with both at once, which is exactly what the test had to be taught.
+
+## Step 5 as built
+
+An **MCP badge** in the top bar, left of the language toggle, opens a per-person
+connect panel: the server URL (derived from wherever you are browsing, so it is
+right for localhost and for the deployed host without configuration), your
+token, and three ways to use them — the `claude mcp add` one-liner, a global
+config block, and **a prompt to paste into an assistant** so it does the
+configuration itself rather than you hunting for the right config path.
+
+Nothing is minted. The token is the Plane key this browser already holds, which
+is why option A needed no server work at all — but it also means the panel has
+to say what it is handing over, so it does: *this is your personal Plane API
+key, not a scoped token; anyone holding it can read and write as you*. That
+sentence is the argument for step 6 whenever it comes.
+
+Everything is masked until you press Show, including inside the snippets and the
+prompt, because a credential on a screen is a credential in a screenshot.
 
 ## Still open
 

@@ -3,6 +3,7 @@
   import { i18n, t } from '../lib/i18n.svelte';
   import { theme } from '../lib/theme.svelte';
   import { tour } from '../lib/tour.svelte';
+  import McpConnect from './McpConnect.svelte';
   import { LEVELS } from '../lib/types';
   import type { BubbleView } from '../lib/types';
   import Band from './Band.svelte';
@@ -18,6 +19,7 @@
   import { boardMenu } from '../lib/contextmenu.svelte';
 
   let omni = $state(false);
+  let mcpOpen = $state(false);
   let birthTarget = $state<BubbleView | null>(null);
   let showCreate = $state(false);
 
@@ -201,6 +203,14 @@
           <span class="tico">?</span>
         </button>
       {/if}
+      <!-- connecting an agent sits left of the language pair: it is per-person
+           setup, and it carries a credential, so it wants its own affordance -->
+      {#if !kiosk}
+        <button class="theme mcp" onclick={() => (mcpOpen = true)} title={t('mcp.title')}>
+          <span class="tico">🔌</span>
+          <span class="tlabel">{t('mcp.badge')}</span>
+        </button>
+      {/if}
       <!-- language sits immediately left of the theme badge and shares its
            shape: two adjacent display preferences should read as one pair. -->
       <button
@@ -245,6 +255,9 @@
   />
   {#if birthTarget}
     <BirthForm bubble={birthTarget} onclose={() => (birthTarget = null)} />
+  {/if}
+  {#if mcpOpen}
+    <McpConnect onclose={() => (mcpOpen = false)} />
   {/if}
   {#if showCreate}
     <CreateBubbleForm onclose={() => (showCreate = false)} />

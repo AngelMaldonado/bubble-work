@@ -109,6 +109,7 @@ export const api = {
   updateThread: (
     id: string,
     edit: {
+      title?: string;
       brief?: string;
       logbook?: string;
       dod?: string;

@@ -85,6 +85,10 @@ export interface Todo {
 }
 
 export interface Artifact {
+  /** Present for artifacts that ARE a Plane work item — revisions — which is
+   *  what makes them renamable and lets their todos be ticked against
+   *  themselves rather than their parent thread. */
+  id?: string;
   title: string;
   toc: TOCEntry[];
   markdown: string;

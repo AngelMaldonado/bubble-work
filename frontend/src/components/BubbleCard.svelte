@@ -13,6 +13,10 @@
 
   const delay = $derived((index % 7) * 0.45);
 
+  $effect(() => {
+    if (pinned) place();
+  });
+
   async function act(fn: () => Promise<unknown>) {
     busy = true;
     try {
@@ -38,9 +42,40 @@
   const MAX_AVATARS = 3;
   const shownPeople = $derived(people.slice(0, MAX_AVATARS));
   const extraPeople = $derived(Math.max(0, people.length - shownPeople.length));
+
+  // The detail card opens BELOW the orb, which clips it for any bubble near the
+  // bottom of the viewport — the last row of a band, most of the time. So it
+  // flips above when there is no room, measured on hover rather than guessed:
+  // the card's height depends on how much outcome text the bubble carries.
+  let wrapEl = $state<HTMLElement | null>(null);
+  let detailEl = $state<HTMLElement | null>(null);
+  let up = $state(false);
+
+  const GAP = 16;
+
+  function place(): void {
+    const w = wrapEl;
+    const d = detailEl;
+    if (!w || !d) return;
+    const box = w.getBoundingClientRect();
+    const h = d.offsetHeight;
+    const below = window.innerHeight - box.bottom;
+    // Only flip when it actually helps: a card too tall for either side stays
+    // below, where at least its top — the name and outcome — is readable.
+    up = below < h + GAP && box.top > h + GAP;
+  }
 </script>
 
-<div class="wrap lvl-{bubble.level}" class:pinned style="--d: {delay}s" id="bw-{bubble.id}">
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div
+  class="wrap lvl-{bubble.level}"
+  class:pinned
+  style="--d: {delay}s"
+  id="bw-{bubble.id}"
+  bind:this={wrapEl}
+  onmouseenter={place}
+  onfocusin={place}
+>
   <button
     class="orb"
     class:busy
@@ -75,7 +110,7 @@
 
   <span class="caption">{bubble.name}</span>
 
-  <div class="detail" role="dialog">
+  <div class="detail" class:up role="dialog" bind:this={detailEl}>
     <div class="dhead">
       <span class="dname">{bubble.name}</span>
       <span class="dinstance">{bubble.instance}</span>
@@ -302,6 +337,12 @@
       opacity 0.16s ease,
       transform 0.16s ease;
   }
+  /* flipped above the orb when there is no room beneath it */
+  .detail.up {
+    top: auto;
+    bottom: 100%;
+    transform: translateX(-50%) translateY(-6px);
+  }
   /* transparent bridge so the cursor can cross into the card without a dead-zone */
   .detail::before {
     content: '';
@@ -310,6 +351,10 @@
     right: 0;
     top: -12px;
     height: 12px;
+  }
+  .detail.up::before {
+    top: auto;
+    bottom: -12px;
   }
   .wrap:hover .detail,
   .pinned .detail {

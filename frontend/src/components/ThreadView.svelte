@@ -75,31 +75,42 @@
   let ticking = $state<string | null>(null);
 
   async function onProseClick(e: MouseEvent): Promise<void> {
-    const el = e.target as HTMLElement | null;
-    if (!el || el.tagName !== 'INPUT' || (el as HTMLInputElement).type !== 'checkbox') return;
-    if (store.kiosk || !detail) return;
+    const el = e.target as HTMLInputElement | null;
+    if (!el || el.tagName !== 'INPUT' || el.type !== 'checkbox') return;
+    if (store.kiosk || !detail || ticking) return;
 
-    // Which section owns this box? The Logbook and the DoD render as separate
-    // articles, and their todos are numbered independently.
-    const article = el.closest('[data-region]') as HTMLElement | null;
-    const region = article?.dataset.region as RegionName | undefined;
-    if (!region) return;
+    // Which list owns this box? The Logbook, the DoD and the document are
+    // numbered independently — and a REVISION is a different work item
+    // altogether, so the wrapper names the thread as well as the region.
+    const wrap = el.closest('[data-region]') as HTMLElement | null;
+    const region = wrap?.dataset.region as RegionName | undefined;
+    if (!wrap || !region) return;
+    const target = wrap.dataset.thread || detail.id;
 
-    const boxes = [...article!.querySelectorAll('input[type=checkbox]')];
-    const index = boxes.indexOf(el as HTMLInputElement);
+    const boxes = [...wrap.querySelectorAll('input[type=checkbox]')];
+    const index = boxes.indexOf(el);
     if (index < 0) return;
 
     // The item's own text, read off the DOM the same way a person reads it.
-    const item = el.closest('li');
-    const text = (item?.textContent ?? '').trim();
-    const done = !(el as HTMLInputElement).checked;
+    const text = (el.closest('li')?.textContent ?? '').trim();
 
+    // The browser flips `checked` BEFORE dispatching click, so this is already
+    // the state being asked for — negating it sent the exact opposite, which is
+    // why ticking a box appeared to do nothing. preventDefault then puts the
+    // box back, so the server's answer is what actually lands.
+    const done = el.checked;
     e.preventDefault();
-    const key = `${region}:${index}`;
-    if (ticking) return;
-    ticking = key;
+
+    ticking = `${target}:${region}:${index}`;
     try {
-      detail = await api.toggleTodo(detail.id, region, index, text, done);
+      const fresh = await api.toggleTodo(target, region, index, text, done);
+      // A revision's detail is its own, not this thread's — adopting it would
+      // navigate the reader into the revision they just ticked a box in.
+      if (target === detail.id) {
+        detail = fresh;
+      } else {
+        await reloadDetail();
+      }
     } catch (err) {
       // A 409 means the list moved under us — the honest answer is to show what
       // is actually there rather than guess which item was meant.
@@ -107,6 +118,42 @@
       await reloadDetail();
     } finally {
       ticking = null;
+    }
+  }
+
+  // ---- renaming ----
+  //
+  // A title is the work item's Plane `name`, which is why it is edited here
+  // rather than in the markdown editor: it is not part of the body at all, and
+  // splicing has nothing to do with it.
+  let titleEl = $state<HTMLElement | null>(null);
+  let titleWas = $state('');
+
+  function onTitleKey(e: KeyboardEvent): void {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      titleEl?.blur(); // commits
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      if (titleEl) titleEl.textContent = titleWas; // put it back, then leave
+      titleEl?.blur();
+    }
+  }
+
+  async function commitTitle(): Promise<void> {
+    const el = titleEl;
+    if (!el || !detail) return;
+    const next = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (!next) {
+      el.textContent = titleWas; // an empty title is not a rename, it is a slip
+      return;
+    }
+    if (next === detail.title) return;
+    try {
+      detail = await api.updateThread(detail.id, { title: next });
+    } catch (err) {
+      el.textContent = titleWas;
+      error = err instanceof ApiError ? err.message : String(err);
     }
   }
 
@@ -485,12 +532,13 @@
   $effect(() => {
     const html = current?.html; // dependency: re-run when the shown doc changes
     const logbookHTML = detail?.logbook?.html; // ...and on the logbook view
+    const dodHTML = detail?.logbook?.dod_html;
     const el = contentEl;
     if (!el) return;
     const target = savedScroll(); // capture for THIS artifact before async work
     requestAnimationFrame(() => {
       enableCheckboxes(el);
-      if (!html && !logbookHTML) {
+      if (!html && !logbookHTML && !dodHTML) {
         headings = [];
         return;
       }
@@ -536,7 +584,26 @@
     </button>
     {#if detail}
       <span class="seq">#{detail.seq}</span>
-      <h2 class="ttl">{detail.title}</h2>
+      <!-- The title is the Plane work item's NAME, not part of the body, so it
+           is renamed on its own path rather than through the splice. -->
+      {#if store.kiosk}
+        <h2 class="ttl">{detail.title}</h2>
+      {:else}
+        <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+        <h2
+          class="ttl edit"
+          contenteditable="plaintext-only"
+          role="textbox"
+          aria-label={t('thread.renameHint')}
+          tabindex="0"
+          spellcheck="false"
+          title={t('thread.renameHint')}
+          bind:this={titleEl}
+          onfocus={() => (titleWas = detail?.title ?? '')}
+          onblur={commitTitle}
+          onkeydown={onTitleKey}
+        >{detail.title}</h2>
+      {/if}
       <div class="chips">
         <span class="chip {detail.kind}">{detail.kind}</span>
         <!-- the thread's own buoyancy (THREAD-LIFECYCLE.md): subsumes open/done -->
@@ -658,9 +725,18 @@
       <main class="content" bind:this={contentEl}>
         {#if canEdit && !store.kiosk}
           <div class="edit-bar">
-            <button class="edit-toggle" class:on={editing} onclick={() => (editing = !editing)}>
-              {editing ? t('thread.preview') : `✎ ${t('thread.edit')}`}
-            </button>
+            <div class="seg" role="group" aria-label={t('thread.viewMode')}>
+              <button
+                class:on={!editing}
+                aria-pressed={!editing}
+                onclick={() => (editing = false)}>{t('thread.rendered')}</button
+              >
+              <button
+                class:on={editing}
+                aria-pressed={editing}
+                onclick={() => (editing = true)}>{t('thread.markdown')}</button
+              >
+            </div>
           </div>
         {/if}
 
@@ -687,6 +763,7 @@
                 hash={detail.regions[editRegion].hash}
                 onsaved={onSaved}
                 onreload={reloadDetail}
+                ondone={() => (editing = false)}
               />
             {/key}
             {#if editRegion === 'logbook' && detail.regions?.dod}
@@ -700,6 +777,7 @@
                   hash={detail.regions.dod.hash}
                   onsaved={onSaved}
                   onreload={reloadDetail}
+                  ondone={() => (editing = false)}
                 />
               {/key}
             {/if}
@@ -730,9 +808,20 @@
             {/if}
           </article>
         {:else if current}
-          <article class="prose">
-            <!-- server-rendered goldmark HTML (safe: raw HTML is escaped) -->
-            {@html current.html}
+          <!-- Todos are NOT confined to the Logbook: 59 of 96 real bodies keep
+               them here, in the document. Without this wrapper they rendered as
+               checkboxes that did nothing at all. -->
+          <!-- svelte-ignore a11y_click_events_have_key_events -->
+          <!-- svelte-ignore a11y_no_static_element_interactions -->
+          {@const owner =
+            sel.kind === 'revision' ? (detail.revisions?.[sel.idx]?.id ?? detail.id) : detail.id}
+          <article class="prose" class:ticking={ticking !== null}>
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div data-region="brief" data-thread={owner} onclick={onProseClick}>
+              <!-- server-rendered goldmark HTML (safe: raw HTML is escaped) -->
+              {@html current.html}
+            </div>
           </article>
         {:else}
           <p class="dim">{t('thread.nothing')}</p>
@@ -1168,6 +1257,21 @@
     color: oklch(0.68 0.19 25);
   }
 
+  .ttl.edit {
+    border-radius: 7px;
+    padding: 0 0.3rem;
+    margin-left: -0.3rem;
+    outline: none;
+    cursor: text;
+  }
+  .ttl.edit:hover {
+    background: color-mix(in oklab, var(--text) 7%, transparent);
+  }
+  .ttl.edit:focus {
+    background: color-mix(in oklab, var(--wip) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--wip) 50%, transparent);
+  }
+
   /* a rendered todo is a control, not decoration (Phase 6) */
   .prose :global(input[type='checkbox']) {
     cursor: pointer;
@@ -1204,29 +1308,46 @@
     font: inherit;
   }
   .edit-bar {
+    position: sticky;
+    top: 0.75rem;
+    z-index: 5;
     display: flex;
     justify-content: flex-end;
     margin-bottom: 0.6rem;
+    pointer-events: none; /* only the button itself catches clicks */
   }
-  .edit-toggle {
-    padding: 0.3rem 0.75rem;
+  .edit-bar > * {
+    pointer-events: auto;
+  }
+  .seg {
+    display: inline-flex;
+    padding: 2px;
     border-radius: 999px;
     border: 1px solid var(--line);
-    background: color-mix(in oklab, var(--text) 4%, transparent);
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
+  }
+  .seg button {
+    padding: 0.32rem 0.85rem;
+    border: none;
+    border-radius: 999px;
+    background: none;
     color: var(--muted);
     font-family: var(--sans);
-    font-size: 0.75rem;
+    font-size: 0.76rem;
     font-weight: 600;
     cursor: pointer;
+    transition:
+      background 120ms ease,
+      color 120ms ease;
   }
-  .edit-toggle:hover {
+  .seg button:hover {
     color: var(--text);
-    border-color: color-mix(in oklab, var(--wip) 45%, var(--line));
   }
-  .edit-toggle.on {
+  .seg button.on {
     color: oklch(0.16 0.02 265);
     background: var(--wip);
-    border-color: transparent;
   }
   .editors {
     display: flex;
@@ -1401,16 +1522,19 @@
     background: var(--line);
     border: 0;
   }
-  /* task-list items: flex row so the checkbox sits on the first line and wrapped
-     text hangs under the text (not back under the checkbox) */
+  /* Task-list items: a HANGING INDENT, not a flex row.
+     Flex was the obvious way to keep wrapped text from tucking back under the
+     checkbox, and it was wrong: it makes every child of the <li> a flex item, so
+     each text run, `code` span and **bold** run became its own box and the item
+     stopped flowing as a sentence. Padding plus a negative margin gets the same
+     hanging indent while leaving the content as ordinary inline text.
+     1.55em = the checkbox's 1.05em width + its 0.5em right margin. */
   .prose :global(li:has(> input[type='checkbox'])) {
     list-style: none;
-    display: flex;
-    align-items: flex-start;
+    padding-left: 1.55em;
   }
   .prose :global(li:has(> input[type='checkbox']) > input[type='checkbox']) {
-    flex: none;
-    margin-top: 0.34em; /* drop the box onto the first text line */
+    margin-left: -1.55em; /* pull the box out into the gutter it just made */
   }
   /* custom task-list checkboxes (ported from mds) */
   .prose :global(input[type='checkbox']) {
@@ -1572,11 +1696,15 @@
     align-self: flex-start;
     display: flex;
     flex-direction: column;
+    align-items: flex-start;
     gap: 0.15rem;
   }
   .msg.mine {
     align-self: flex-end;
     align-items: flex-end;
+  }
+  .msg.mine .msg-meta {
+    flex-direction: row-reverse;
   }
   .msg-meta {
     display: flex;
@@ -1589,6 +1717,11 @@
     color: var(--muted);
   }
   .msg-body {
+    /* .prose centres itself in a page column (max-width: 940px; margin: 0 auto).
+       In a chat bubble that is exactly wrong — an auto margin beats align-items,
+       so every message floated to the middle and neither side aligned. */
+    margin: 0;
+    max-width: 100%;
     padding: 0.4rem 0.65rem;
     border-radius: 12px;
     background: var(--hover);

@@ -878,6 +878,10 @@ func cmdServe(args []string) {
 
 	srv := server.New(st, cfg.Cycle())
 	srv.SetAdmin(os.Getenv("BUBBLE_ADMIN_TOKEN"), cfg.AdminEmails)
+	srv.SetMCPHosts(cfg.MCPHosts)
+	if len(cfg.MCPHosts) > 0 {
+		log.Printf("mcp hosts: %s", strings.Join(cfg.MCPHosts, ", "))
+	}
 	if os.Getenv("BUBBLE_ADMIN_TOKEN") != "" || len(cfg.AdminEmails) > 0 {
 		log.Printf("service-admin enabled (token=%v, %d admin email(s))", os.Getenv("BUBBLE_ADMIN_TOKEN") != "", len(cfg.AdminEmails))
 	}

@@ -103,6 +103,7 @@ type Server struct {
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
+	mcpHosts    map[string]bool // Host headers /mcp answers to besides loopback
 	startedAt   time.Time
 }
 
@@ -167,6 +168,7 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		bubblesCache: map[string]cachedBubbles{},
 		subs:         map[chan string]struct{}{},
 		adminEmails:  map[string]bool{},
+		mcpHosts:     map[string]bool{},
 		startedAt:    time.Now(),
 	}
 	s.loadTuning()
@@ -537,10 +539,13 @@ func (s *Server) Handler() http.Handler {
 	// they are NOT behind restAuth.
 	mux.HandleFunc("POST /webhooks/plane/{slug}", s.handlePlaneWebhook)
 
-	mcp := auth.RequireBearerToken(
+	// The host guard sits OUTSIDE the bearer check on purpose: a rejected Host
+	// should not depend on presenting a valid credential first, and the reply
+	// should say what to fix rather than look like an auth failure.
+	mcp := s.mcpHostGuard(auth.RequireBearerToken(
 		s.verifyToken,
 		&auth.RequireBearerTokenOptions{AllowMissingExpiration: true},
-	)(mcpapi.Handler(s))
+	)(mcpapi.Handler(s)))
 	mux.Handle("/mcp", mcp)
 	mux.Handle("/mcp/", mcp)
 

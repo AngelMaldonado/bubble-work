@@ -363,5 +363,17 @@ func Handler(b Backend) http.Handler {
 			return nil, okOut{OK: true}, nil
 		})
 
-	return sdk.NewStreamableHTTPHandler(func(*http.Request) *sdk.Server { return srv }, nil)
+	// The SDK auto-enables DNS-rebinding protection: a request arriving over
+	// loopback whose Host header is NOT loopback gets a 403. That is the right
+	// default for an MCP server a browser could reach directly, and it is wrong
+	// behind a reverse proxy — colima forwards ports over an SSH tunnel, so the
+	// request lands on 127.0.0.1 with the real public Host and is refused.
+	//
+	// It is turned off here and replaced by trustedHost, which is an explicit
+	// ALLOWLIST rather than an absence of checking. The SDK only offers the
+	// boolean, so the list has to live on our side.
+	return sdk.NewStreamableHTTPHandler(
+		func(*http.Request) *sdk.Server { return srv },
+		&sdk.StreamableHTTPOptions{DisableLocalhostProtection: true},
+	)
 }

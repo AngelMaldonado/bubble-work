@@ -52,6 +52,16 @@ type Config struct {
 
 	AdminEmails []string `json:"admin_emails,omitempty"` // server: Plane emails granted godmode
 
+	// MCPHosts are the Host headers /mcp will answer to, beyond loopback.
+	//
+	// MCP carries DNS-rebinding protection: a request arriving over loopback
+	// with a non-loopback Host is refused, because a malicious page could
+	// otherwise drive a local MCP server through a victim's browser. Behind a
+	// reverse proxy every request looks exactly like that, so the public names
+	// this server is served under have to be named here. Empty means loopback
+	// only, which is the safe default and the SDK's own behaviour.
+	MCPHosts []string `json:"mcp_hosts,omitempty"`
+
 	// Credential profiles let one client switch between workspaces/identities
 	// (e.g. different Plane keys + servers per org). Current is the active one.
 	Current  string             `json:"current,omitempty"`

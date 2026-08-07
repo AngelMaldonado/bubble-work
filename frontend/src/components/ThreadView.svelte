@@ -10,10 +10,13 @@
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
   import ArtifactEditor from './ArtifactEditor.svelte';
   import ConfirmDelete from './ConfirmDelete.svelte';
+  import MoveThread from './MoveThread.svelte';
 
   type Sel = ArtSel;
 
   let detail = $state<ThreadDetail | null>(null);
+  // re-homing this thread into another bubble
+  let moving = $state(false);
   let loading = $state(true);
   let error = $state<string | null>(null);
 
@@ -775,6 +778,7 @@
                 title={t('thread.deleteRegion')}>🗑</button
               >
             {/if}
+            <button onclick={() => (moving = true)} title={t('thread.move')}>↔</button>
             <button
               class="danger"
               onclick={() => (pending = { kind: 'thread' })}
@@ -895,6 +899,15 @@
         busy={deleting}
         oncancel={() => (pending = null)}
         onconfirm={confirmDelete}
+      />
+    {/if}
+
+    {#if moving && detail}
+      <MoveThread
+        threadId={store.threadId ?? detail.id}
+        title={detail.title}
+        onclose={() => (moving = false)}
+        onmoved={() => reloadDetail()}
       />
     {/if}
 

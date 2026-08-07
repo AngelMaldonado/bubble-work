@@ -150,6 +150,33 @@ export const api = {
     small_thread: boolean;
   }) => req<{ thread_id: string; created: boolean; message: string }>('POST', '/api/threads/birth', input),
 
+  // A Workspace is the boundary for a body of work — a Plane PROJECT, not a
+  // Plane workspace. Its id is namespaced "<instance>:<project>".
+  createWorkspace: (input: { instance: string; name: string; identifier?: string }) =>
+    req<{ id: string; name: string; identifier: string; instance: string }>(
+      'POST',
+      '/api/workspaces',
+      input,
+    ),
+  renameWorkspace: (id: string, name: string) =>
+    req<{ id: string; name: string }>('PATCH', `/api/workspaces/${encodeURIComponent(id)}`, {
+      name,
+    }),
+  // The counts come back from the server, which took them BEFORE deleting —
+  // afterwards there is nothing left to count.
+  deleteWorkspace: (id: string) =>
+    req<{ deleted_bubbles: number; deleted_threads: number }>(
+      'DELETE',
+      `/api/workspaces/${encodeURIComponent(id)}`,
+    ),
+
+  // Re-home a thread. Nothing is lost: the Brief, Logbook, comments, history and
+  // id survive, and it leaves every other bubble, so this is a move not a copy.
+  moveThread: (id: string, bubbleId: string) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/move`, {
+      bubble_id: bubbleId,
+    }),
+
   // Deleting is IRREVERSIBLE and deletes from Plane. Closing a bubble keeps the
   // record of what was done and is almost always the right verb.
   deleteBubble: (id: string) =>

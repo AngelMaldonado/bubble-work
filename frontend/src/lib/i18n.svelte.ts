@@ -379,6 +379,44 @@ const en = {
   'tune.hint.pulse': 'the rhythm both grains are measured against',
   'tune.hint.bubble': 'how a bubble reaches 🪦 vs 😴',
   'tune.hint.thread': 'how a single work item moves between bands',
+
+  // The WORKSPACE tier. A Workspace is a Plane PROJECT — not a Plane workspace
+  // (AGENTS.md) — and until deletion landed it was the one tier the web treated
+  // as a filter and nothing more.
+  'ws.menuTitle': 'Workspace actions',
+  'ws.noneScoped': 'No workspace scoped',
+  'ws.pickFirst': 'Pick one workspace in the filter to rename or delete it.',
+  'ws.rename': 'Rename workspace',
+  'ws.new': 'New workspace…',
+  'ws.delete': 'Delete workspace',
+  'ws.formNew': 'New workspace',
+  'ws.formRename': 'Rename workspace',
+  'ws.isAProject': 'a Plane project — the boundary for a body of work',
+  'ws.namePlaceholder': 'what this body of work is called',
+  'ws.identifier': 'Identifier',
+  'ws.identifierHint': '(optional — derived from the name)',
+  'ws.createBtn': 'Create',
+  'ws.renameBtn': 'Rename',
+  'ws.saving': 'saving…',
+  'ws.renamed': 'renamed to {name}',
+  'ws.createdNeedsBubble': '{name} created — add a bubble to it and it appears on the board',
+  'ws.deleted': 'deleted {name} — {b} bubble(s), {n} thread(s)',
+  'del.workspace':
+    'The whole workspace goes: {b} bubble(s) and {n} thread(s), with every artifact and comment in them.',
+  'del.workspacePrefer':
+    'To retire one body of work, closing its bubbles keeps the record of what was done.',
+
+  // moving a thread between bubbles
+  'thread.move': 'Move to bubble',
+  'move.title': 'Move {what}',
+  'move.explain':
+    'Nothing is lost — its Brief, Logbook, comments and history come with it, and moving it back is the same step.',
+  'move.sameWorkspace': 'Only bubbles in the same workspace: that is Plane\u2019s limit, not ours.',
+  'move.pick': 'Destination bubble',
+  'move.none': 'There is no other bubble in this workspace to move it to.',
+  'move.go': 'Move',
+  'move.moving': 'moving…',
+  'move.done': 'moved to {name}',
 } as const;
 
 export type MsgKey = keyof typeof en;
@@ -746,6 +784,42 @@ const es: Record<MsgKey, string> = {
   'tune.hint.pulse': 'el ritmo contra el que se miden ambos niveles',
   'tune.hint.bubble': 'cómo una burbuja llega a 🪦 en vez de 😴',
   'tune.hint.thread': 'cómo un work item se mueve entre bandas',
+
+  // el nivel de ESPACIO DE TRABAJO (un proyecto de Plane)
+  'ws.menuTitle': 'Acciones del espacio de trabajo',
+  'ws.noneScoped': 'Ningún espacio seleccionado',
+  'ws.pickFirst': 'Elige un espacio de trabajo en el filtro para renombrarlo o eliminarlo.',
+  'ws.rename': 'Renombrar espacio de trabajo',
+  'ws.new': 'Nuevo espacio de trabajo…',
+  'ws.delete': 'Eliminar espacio de trabajo',
+  'ws.formNew': 'Nuevo espacio de trabajo',
+  'ws.formRename': 'Renombrar espacio de trabajo',
+  'ws.isAProject': 'un proyecto de Plane — el límite de un cuerpo de trabajo',
+  'ws.namePlaceholder': 'cómo se llama este cuerpo de trabajo',
+  'ws.identifier': 'Identificador',
+  'ws.identifierHint': '(opcional — se deriva del nombre)',
+  'ws.createBtn': 'Crear',
+  'ws.renameBtn': 'Renombrar',
+  'ws.saving': 'guardando…',
+  'ws.renamed': 'renombrado a {name}',
+  'ws.createdNeedsBubble': '{name} creado — agrégale una burbuja y aparecerá en el tablero',
+  'ws.deleted': 'eliminado {name} — {b} burbuja(s), {n} hilo(s)',
+  'del.workspace':
+    'Se va el espacio completo: {b} burbuja(s) y {n} hilo(s), con todos sus artefactos y comentarios.',
+  'del.workspacePrefer':
+    'Para retirar un cuerpo de trabajo, cerrar sus burbujas conserva el registro de lo que se hizo.',
+
+  // mover un hilo entre burbujas
+  'thread.move': 'Mover a otra burbuja',
+  'move.title': 'Mover {what}',
+  'move.explain':
+    'No se pierde nada — su Brief, Bitácora, comentarios e historial van con él, y devolverlo es el mismo paso.',
+  'move.sameWorkspace': 'Solo burbujas del mismo espacio de trabajo: es el límite de Plane, no nuestro.',
+  'move.pick': 'Burbuja destino',
+  'move.none': 'No hay otra burbuja en este espacio de trabajo a la cual moverlo.',
+  'move.go': 'Mover',
+  'move.moving': 'moviendo…',
+  'move.done': 'movido a {name}',
 };
 
 const catalogues: Record<Lang, Record<MsgKey, string>> = { en, es };

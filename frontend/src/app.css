@@ -197,6 +197,14 @@ textarea {
   color: var(--faint);
   font-size: 0.72rem;
 }
+/* a destructive menu item should look destructive — the bubble menu has carried
+   this class since deletion landed, with nothing behind it. */
+.ctxmenu-item.danger {
+  color: oklch(0.62 0.19 25);
+}
+.ctxmenu-item.danger:hover:not(:disabled) {
+  background: color-mix(in oklab, oklch(0.62 0.19 25) 12%, transparent);
+}
 .ctxmenu-sep {
   height: 1px;
   margin: 0.25rem 0.3rem;

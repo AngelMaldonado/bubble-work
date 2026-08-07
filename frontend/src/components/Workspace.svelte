@@ -15,13 +15,73 @@
   import BoardContextMenu from './BoardContextMenu.svelte';
   import BubbleDetail from './BubbleDetail.svelte';
   import ProjectCombobox from './ProjectCombobox.svelte';
+  import WorkspaceMenu from './WorkspaceMenu.svelte';
+  import WorkspaceForm from './WorkspaceForm.svelte';
+  import ConfirmDelete from './ConfirmDelete.svelte';
   import ViewCombobox from './ViewCombobox.svelte';
-  import { boardMenu } from '../lib/contextmenu.svelte';
+  import { boardMenu, workspaceMenu } from '../lib/contextmenu.svelte';
+  import { api, ApiError } from '../lib/api';
 
   let omni = $state(false);
   let mcpOpen = $state(false);
   let birthTarget = $state<BubbleView | null>(null);
   let showCreate = $state(false);
+
+  // The workspace tier: create, rename, delete (docs/ARTIFACT-EDITING.md).
+  let wsForm = $state<{ mode: 'create' | 'rename'; id: string; current: string } | null>(null);
+  let wsPendingDelete = $state<{ id: string; name: string; bubbles: number; threads: number } | null>(
+    null,
+  );
+  let wsDeleting = $state(false);
+
+  // The workspace being acted on — the filtered one, or the only one there is.
+  const scopedWorkspace = $derived(store.activeProject);
+
+  // What a delete would cost, counted from what we can already see. The server
+  // counts again for real before it deletes; this is only so the dialog can say
+  // what goes without a round trip.
+  function wsCost(projectId: string): { bubbles: number; threads: number } {
+    let bubbles = 0;
+    let threads = 0;
+    for (const b of store.bubbles) {
+      if (b.project !== projectId) continue;
+      bubbles++;
+      threads += b.threads ?? 0;
+    }
+    return { bubbles, threads };
+  }
+
+  function wsIdOf(projectId: string): string {
+    const b = store.bubbles.find((x) => x.project === projectId);
+    return `${b?.instance ?? store.instance}:${projectId}`;
+  }
+
+  function armWorkspaceDelete(): void {
+    const p = scopedWorkspace;
+    if (!p) return;
+    wsPendingDelete = { id: wsIdOf(p.id), name: p.name, ...wsCost(p.id) };
+  }
+
+  async function confirmWorkspaceDelete(): Promise<void> {
+    if (!wsPendingDelete || wsDeleting) return;
+    wsDeleting = true;
+    try {
+      const res = await api.deleteWorkspace(wsPendingDelete.id);
+      store.flash = t('ws.deleted', {
+        name: wsPendingDelete.name,
+        b: res.deleted_bubbles,
+        n: res.deleted_threads,
+      });
+      // The filter now points at a workspace that no longer exists.
+      store.selectProject('');
+      wsPendingDelete = null;
+      await store.refresh();
+    } catch (e) {
+      store.error = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      wsDeleting = false;
+    }
+  }
 
   // a kiosk display is a passive read-only screen: no ⌘K, no commands, no birth.
   const kiosk = $derived(store.kiosk);
@@ -163,6 +223,15 @@
       {#if store.projects.length > 1}
         <span class="projwrap"><ProjectCombobox /></span>
       {/if}
+      {#if !kiosk && store.instances.length > 0}
+        <button
+          class="wsdots"
+          aria-haspopup="menu"
+          aria-expanded={workspaceMenu.open}
+          title={t('ws.menuTitle')}
+          onclick={(e) => workspaceMenu.showAt(e.currentTarget)}
+        >⋯</button>
+      {/if}
 
       <!-- view scope: Everyone · Mine · <assignee> (Phase 9), same combobox as
            the project filter. "Mine" is hidden on a kiosk (no personal identity). -->
@@ -272,8 +341,58 @@
   onnewbubble={() => (showCreate = true)}
   onsearch={() => (omni = true)}
 />
+{#if !kiosk}
+  <WorkspaceMenu
+    onrename={() =>
+      scopedWorkspace &&
+      (wsForm = { mode: 'rename', id: wsIdOf(scopedWorkspace.id), current: scopedWorkspace.name })}
+    oncreate={() => (wsForm = { mode: 'create', id: '', current: '' })}
+    ondelete={armWorkspaceDelete}
+  />
+  {#if wsForm}
+    <WorkspaceForm
+      mode={wsForm.mode}
+      id={wsForm.id}
+      current={wsForm.current}
+      onclose={() => (wsForm = null)}
+    />
+  {/if}
+  {#if wsPendingDelete}
+    <ConfirmDelete
+      what={wsPendingDelete.name}
+      detail={t('del.workspace', { b: wsPendingDelete.bubbles, n: wsPendingDelete.threads })}
+      prefer={t('del.workspacePrefer')}
+      busy={wsDeleting}
+      oncancel={() => (wsPendingDelete = null)}
+      onconfirm={confirmWorkspaceDelete}
+    />
+  {/if}
+{/if}
 
 <style>
+  /* the workspace menu handle: quiet until you go looking for it */
+  .wsdots {
+    flex: none;
+    width: 1.6rem;
+    height: 1.6rem;
+    border-radius: 8px;
+    border: 1px solid transparent;
+    background: transparent;
+    color: var(--faint);
+    font-family: inherit;
+    font-size: 0.95rem;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .wsdots:hover {
+    background: var(--hover);
+    color: var(--text);
+    border-color: var(--line);
+  }
+  .wsdots:focus-visible {
+    outline: 2px solid var(--wip);
+    outline-offset: 1px;
+  }
   .app {
     min-height: 100vh;
     display: flex;

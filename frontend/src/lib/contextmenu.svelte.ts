@@ -43,5 +43,32 @@ class BoardMenu {
   }
 }
 
+// WorkspaceMenu hangs off the ⋯ beside the project filter. A workspace is the
+// outermost container — a Plane project — and until now the web treated it as a
+// filter and nothing else, so it was the one tier you could not act on.
+//
+// It is ANCHORED to its button rather than to the pointer: it is opened by a
+// click on a known element, not by a right-click somewhere on the canvas.
+class WorkspaceMenu {
+  open = $state(false);
+  x = $state(0);
+  y = $state(0);
+
+  showAt(el: HTMLElement): void {
+    bubbleMenu.open = false;
+    bubbleMenu.bubble = null;
+    boardMenu.open = false;
+    const r = el.getBoundingClientRect();
+    this.x = r.left;
+    this.y = r.bottom + 6;
+    this.open = true;
+  }
+
+  hide(): void {
+    this.open = false;
+  }
+}
+
 export const bubbleMenu = new BubbleMenu();
 export const boardMenu = new BoardMenu();
+export const workspaceMenu = new WorkspaceMenu();

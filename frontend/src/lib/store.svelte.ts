@@ -121,6 +121,15 @@ class Store {
       .sort((a, b) => a.name.localeCompare(b.name));
   }
 
+  // The workspace the UI is acting ON, which is not quite the filter: when there
+  // is only one workspace in scope the filter is hidden entirely, and "no
+  // selection" then means that one rather than nothing.
+  get activeProject(): { id: string; name: string } | null {
+    const ps = this.projects;
+    if (this.project) return ps.find((p) => p.id === this.project) ?? null;
+    return ps.length === 1 ? ps[0] : null;
+  }
+
   selectInstance(v: string): void {
     this.instance = v;
     // drop the project filter if it no longer exists in the new scope

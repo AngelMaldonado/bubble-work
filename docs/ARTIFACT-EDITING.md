@@ -454,10 +454,35 @@ and the interior use — so you cannot delete a workspace you were never shown.
 Surface parity: `POST /api/workspaces` (existing), `PATCH /api/workspaces/{id}`,
 `DELETE /api/workspaces/{id}` · `bubble workspace new|rename`,
 `bubble delete workspace <id> [-y]` · MCP `create_workspace`, `rename_workspace`,
-`delete_workspace`. `delete_workspace` carries the same **name guard** as
-`delete_bubble`, and `create_workspace`'s description says plainly that a new
-body of work is usually a new *bubble* — an agent reaching for a whole workspace
-is usually reaching one tier too high.
+`delete_workspace` · web: a `⋯` beside the project filter. `delete_workspace`
+carries the same **name guard** as `delete_bubble`, and `create_workspace`'s
+description says plainly that a new body of work is usually a new *bubble* — an
+agent reaching for a whole workspace is usually reaching one tier too high.
+
+### The web took two changes to catch up
+
+Move and the workspace tier both shipped on REST, the CLI and MCP with no web
+surface, and the omission was not stated — which is the part the rule actually
+forbids. Both are now on the board:
+
+- **Move** is a `↔` beside Delete in a thread's edit bar. It offers only bubbles
+  in the same workspace, because Plane groups work items inside their own
+  project; the destinations are read off the thread's own namespaced id, so the
+  picker costs no extra request.
+- **Workspaces** hang off a `⋯` next to the project filter — Rename, New, Delete.
+
+Two things the web had to decide that the other surfaces never face:
+
+The project filter is **hidden when there is only one workspace**, so "nothing
+selected" cannot mean "nothing to act on" — with one workspace in scope it *is*
+the subject. `store.activeProject` encodes that: the filtered one, or the only
+one there is, and otherwise null, in which case rename and delete are disabled
+and say why rather than guessing.
+
+A newly created workspace **holds no bubbles**, and the board derives its project
+list from bubbles — so it does not appear until it has one. The form says that
+outright instead of leaving someone hunting the filter for a workspace that
+really was created.
 
 ## Open
 

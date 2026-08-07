@@ -500,6 +500,15 @@ way to see a project the board would have hidden. Parity: `bubble workspace
 list`, MCP `list_workspaces`, and the web filter and the new-bubble picker both
 read it, falling back to the bubble-derived list only while it loads.
 
+**One malformed tool takes down all of them.** `list_workspaces` first shipped
+returning a bare `[]Workspace`, so its generated output schema was
+`"type": "array"`. Clients validate the whole `tools/list` response, so they
+rejected *every* tool in it — the entire MCP surface went dark, not just the new
+one, and the error named only an index. Every other list tool already wrapped its
+value in a struct (`listOut`, `timelineOut`, `commentsOut`); this one did not.
+`TestEveryToolAnnouncesAnObjectSchema` now lists the tools through an in-memory
+client, exactly as a real one does, and names the tool at fault.
+
 `create_workspace` now also fetches the new project's **members** and mirrors
 them. Project membership is what authorizes a workspace, and it is otherwise
 refreshed only on the slow structure cadence — so without it the creator would

@@ -202,6 +202,13 @@ type addRevisionIn struct {
 type listOut struct {
 	Bubbles []domain.BubbleView `json:"bubbles"`
 }
+
+// A tool's output schema must be an OBJECT. Returning a bare slice generates
+// `"type": "array"`, which clients reject — and they reject the whole tools/list
+// response, so one such tool takes every other tool down with it.
+type workspacesOut struct {
+	Workspaces []domain.Workspace `json:"workspaces"`
+}
 type closeIn struct {
 	BubbleID string `json:"bubble_id" jsonschema:"the bubble (Plane module) id to close"`
 }
@@ -248,6 +255,15 @@ type okOut struct {
 
 // Handler builds the MCP server and returns a streamable-HTTP handler to mount.
 func Handler(b Backend) http.Handler {
+	srv := newServer(b)
+
+	return wrap(srv)
+}
+
+// newServer registers every tool. Split out of Handler so a test can list them:
+// a tool whose output schema is not an object makes clients reject the WHOLE
+// tools/list response, which takes every other tool down with it.
+func newServer(b Backend) *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "bubble-work", Version: "0.1.0"}, nil)
 
 	sdk.AddTool(srv,
@@ -409,12 +425,12 @@ func Handler(b Backend) http.Handler {
 
 	sdk.AddTool(srv,
 		&sdk.Tool{Name: "list_workspaces", Description: "List the workspaces you can see — the bodies of work, each a Plane project. Unlike list_bubbles this also shows an EMPTY workspace, one with no bubbles in it yet, which is otherwise invisible everywhere. Read it to get the instance and project ids create_bubble needs."},
-		func(ctx context.Context, req *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, []domain.Workspace, error) {
+		func(ctx context.Context, req *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, workspacesOut, error) {
 			ws, err := b.Workspaces(withActor(ctx, req))
 			if err != nil {
-				return nil, nil, err
+				return nil, workspacesOut{}, err
 			}
-			return nil, ws, nil
+			return nil, workspacesOut{Workspaces: ws}, nil
 		})
 
 	sdk.AddTool(srv,
@@ -496,6 +512,10 @@ func Handler(b Backend) http.Handler {
 			return nil, okOut{OK: true}, nil
 		})
 
+	return srv
+}
+
+func wrap(srv *sdk.Server) http.Handler {
 	// The SDK auto-enables DNS-rebinding protection: a request arriving over
 	// loopback whose Host header is NOT loopback gets a 403. That is the right
 	// default for an MCP server a browser could reach directly, and it is wrong

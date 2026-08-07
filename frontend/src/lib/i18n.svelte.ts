@@ -192,6 +192,18 @@ class I18n {
     return this.lang === 'es' ? 'Español' : 'English';
   }
 
+  /** Region flag for the badge. Spanish here is Mexican Spanish, so MX rather
+   *  than ES — the wording ("¿qué onda?" register, "responsable") is written for
+   *  that audience, and a Spain flag would misstate it. */
+  get flag(): string {
+    return this.lang === 'es' ? '🇲🇽' : '🇺🇸';
+  }
+
+  /** Short code for the badge label, matching the theme badge's terseness. */
+  get code(): string {
+    return this.lang === 'es' ? 'MX' : 'US';
+  }
+
   /**
    * Translate a key, substituting {placeholders}.
    *

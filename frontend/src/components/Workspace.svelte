@@ -189,6 +189,17 @@
       {:else}
         <span class="hint">⌘K search · <b>&gt;</b> commands</span>
       {/if}
+      <!-- language sits immediately left of the theme badge and shares its
+           shape: two adjacent display preferences should read as one pair. -->
+      <button
+        class="theme lang"
+        onclick={() => i18n.toggle()}
+        title="{i18n.label} — {i18n.lang === 'es' ? 'switch to English' : 'cambiar a español'}"
+        aria-label={i18n.label}
+      >
+        <span class="tico">{i18n.flag}</span>
+        <span class="tlabel">{i18n.code}</span>
+      </button>
       <button
         class="theme"
         onclick={() => theme.cycle()}
@@ -443,6 +454,16 @@
   .tico {
     font-size: 0.85rem;
     line-height: 1;
+  }
+  /* The flag glyph renders taller than the theme icons, so it is nudged down to
+     sit on the same optical baseline as ☀️/🌙 rather than the text baseline. */
+  .lang .tico {
+    font-size: 0.95rem;
+    transform: translateY(0.5px);
+  }
+  .lang .tlabel {
+    font-variant-numeric: tabular-nums;
+    letter-spacing: 0.02em;
   }
   .tlabel {
     font-size: 0.72rem;

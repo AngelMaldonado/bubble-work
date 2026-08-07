@@ -344,3 +344,26 @@ func (m *Mirror) ProjectMembershipKnown(instance string) (bool, error) {
 		`SELECT COUNT(*) FROM mirror_project_member_sync WHERE instance = ?`, instance).Scan(&n)
 	return n > 0, err
 }
+
+// ModulesForItem returns the bubbles an item currently belongs to.
+//
+// Plane allows a work item in several modules at once, and the board shows it
+// in each — so a MOVE has to know all of them, or it would be a copy.
+func (m *Mirror) ModulesForItem(instance, itemID string) ([]string, error) {
+	rows, err := m.db.Query(
+		`SELECT module_id FROM mirror_module_items WHERE instance = ? AND item_id = ?`,
+		instance, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		out = append(out, id)
+	}
+	return out, rows.Err()
+}

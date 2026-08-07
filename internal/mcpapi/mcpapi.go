@@ -28,6 +28,7 @@ type Backend interface {
 	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
 	UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error)
+	MoveThread(ctx context.Context, threadID, bubbleID string) (domain.ThreadDetail, error)
 	DeleteBubble(ctx context.Context, bubbleID string) (int, error)
 	DeleteThread(ctx context.Context, threadID string) (int, error)
 	DeleteRegion(ctx context.Context, threadID string, region md.Region) (domain.ThreadDetail, error)
@@ -134,6 +135,14 @@ type deleteIn struct {
 type deleteRegionIn struct {
 	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
 	Region   string `json:"region" jsonschema:"logbook, dod, or brief (the document)"`
+}
+
+// moveThreadIn re-homes a thread. No guard beyond authorization: a move loses
+// nothing — the work item, its artifacts, its comments and its id all survive,
+// and moving it back is the same call.
+type moveThreadIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	BubbleID string `json:"bubble_id" jsonschema:"the bubble to move it into. Must be in the same workspace — Plane groups work items only within their own project"`
 }
 
 type addRevisionIn struct {
@@ -297,6 +306,16 @@ func Handler(b Backend) http.Handler {
 				Title: in.Title, Brief: in.Brief, Logbook: in.Logbook, DoD: in.DoD,
 				Edits: edits,
 			})
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "move_thread", Description: "Move a thread into a different bubble. It LEAVES every other bubble, so this is a move and not a copy. Nothing is lost — the Brief, the Logbook, the comments, the history and the id are untouched, and moving it back is the same call. Use it when a thread turns out to belong to a different body of work; it is not evidence of production and warms nothing."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in moveThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.MoveThread(withActor(ctx, req), in.ThreadID, in.BubbleID)
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err
 			}

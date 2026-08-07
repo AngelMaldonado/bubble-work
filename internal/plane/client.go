@@ -382,6 +382,13 @@ func (c *Client) SetWorkItemState(ctx context.Context, workItemID, stateID strin
 	return c.patch(ctx, c.projectBase()+"/work-items/"+workItemID+"/", map[string]any{"state": stateID}, nil)
 }
 
+// RemoveIssueFromModule unlinks a work item from a module. The work item stays
+// in the project — only the grouping changes, which is what makes a re-home
+// safe: the Brief, the Logbook, the comments and the id all survive.
+func (c *Client) RemoveIssueFromModule(ctx context.Context, moduleID, issueID string) error {
+	return c.del(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/"+issueID+"/")
+}
+
 // AddIssuesToModule links work items to a module (bubble).
 func (c *Client) AddIssuesToModule(ctx context.Context, moduleID string, issueIDs []string) error {
 	return c.post(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", map[string]any{"issues": issueIDs}, nil)

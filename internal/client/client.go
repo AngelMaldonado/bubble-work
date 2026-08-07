@@ -990,6 +990,18 @@ func UpdateThread(cfg config.Config, id string, edit domain.ThreadEdit) error {
 	return nil
 }
 
+// MoveThread re-homes a thread into another bubble. Nothing is lost — the work
+// item and everything on it survives; only the grouping changes.
+func MoveThread(cfg config.Config, threadID, bubbleID string) error {
+	var d domain.ThreadDetail
+	in := map[string]string{"bubble_id": bubbleID}
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(threadID)+"/move", in, &d); err != nil {
+		return err
+	}
+	fmt.Printf("moved %s -> %s\n", d.Title, bubbleID)
+	return nil
+}
+
 // Delete removes a bubble, a thread or one artifact. IRREVERSIBLE: it deletes
 // from Plane, which is the system of record.
 func Delete(cfg config.Config, path, what string) error {

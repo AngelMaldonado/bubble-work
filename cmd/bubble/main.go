@@ -58,6 +58,8 @@ func main() {
 		cmdDoD(os.Args[2:])
 	case "rename":
 		cmdRename(os.Args[2:])
+	case "move":
+		cmdMove(os.Args[2:])
 	case "delete", "rm":
 		cmdDelete(os.Args[2:])
 	case "todo":
@@ -110,6 +112,7 @@ Usage:
   bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
   bubble dod <id> [text|-]         rewrite a thread's Definition of Done
   bubble rename <id> <title>       retitle a thread or a revision
+  bubble move <thread> <bubble>    re-home a thread into another bubble
   bubble delete <kind> <id> [-y]   PERMANENTLY delete a bubble/thread/artifact
   bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
   bubble revision <id> <title> [-] attach a revision artifact to a thread
@@ -1134,6 +1137,21 @@ func cmdRename(args []string) {
 	title := strings.Join(args[1:], " ")
 	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{Title: &title}); err != nil {
 		log.Fatalf("rename: %v", err)
+	}
+}
+
+// cmdMove re-homes a thread. Reversible by construction — the same call the
+// other way puts it back — so it does not prompt.
+func cmdMove(args []string) {
+	if len(args) < 2 {
+		log.Fatal("usage: bubble move <thread-id> <bubble-id>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.MoveThread(cfg, args[0], args[1]); err != nil {
+		log.Fatalf("move: %v", err)
 	}
 }
 

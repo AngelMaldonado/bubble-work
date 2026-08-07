@@ -2945,3 +2945,133 @@ func TestProjectMembershipIsTheBoundary(t *testing.T) {
 	code, body = do(t, http.MethodDelete, ts.URL+"/api/bubbles/ws:p2:m2", outsider, "")
 	refused(t, "DELETE bubble", code, string(body))
 }
+
+// A move must be a MOVE. Plane lets a work item belong to several modules at
+// once and the board shows it in each, so removing only the bubble you named
+// would quietly make this a copy — the thread would appear twice.
+func TestMoveThreadLeavesTheOldBubble(t *testing.T) {
+	var mu sync.Mutex
+	// membership as Plane sees it
+	inModule := map[string][]string{"m1": {"wi-1"}, "m2": {}}
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/projects/p1/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"}]`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Kiosko"},{"id":"m2","name":"POS"}]}`)
+
+		case r.Method == http.MethodDelete && strings.Contains(p, "/module-issues/"):
+			mod := segment(p, "modules")
+			item := lastSegment(p)
+			mu.Lock()
+			kept := inModule[mod][:0]
+			for _, id := range inModule[mod] {
+				if id != item {
+					kept = append(kept, id)
+				}
+			}
+			inModule[mod] = kept
+			mu.Unlock()
+			w.WriteHeader(http.StatusNoContent)
+
+		case r.Method == http.MethodPost && strings.HasSuffix(p, "/module-issues/"):
+			var in struct {
+				Issues []string `json:"issues"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mod := segment(p, "modules")
+			mu.Lock()
+			inModule[mod] = append(inModule[mod], in.Issues...)
+			mu.Unlock()
+			io.WriteString(w, `{}`)
+
+		case strings.Contains(p, "/module-issues/"):
+			mu.Lock()
+			ids := append([]string(nil), inModule[segment(p, "modules")]...)
+			mu.Unlock()
+			out := make([]string, 0, len(ids))
+			for _, id := range ids {
+				out = append(out, fmt.Sprintf(`{"id":%q,"name":"First thread"}`, id))
+			}
+			fmt.Fprintf(w, `{"results":[%s]}`, strings.Join(out, ","))
+
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":"<p>body</p>","created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	body, _ := json.Marshal(map[string]string{"bubble_id": "ws:p1:m2"})
+	if code, b := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/move", key, string(body)); code != http.StatusOK {
+		t.Fatalf("move: %d %s", code, b)
+	}
+
+	mu.Lock()
+	old, new_ := append([]string(nil), inModule["m1"]...), append([]string(nil), inModule["m2"]...)
+	mu.Unlock()
+	if len(old) != 0 {
+		t.Errorf("the thread is still in its old bubble — that is a copy, not a move: %v", old)
+	}
+	if len(new_) != 1 || new_[0] != "wi-1" {
+		t.Errorf("the thread did not arrive in the target bubble: %v", new_)
+	}
+
+	// Visible on the board immediately — module lists are only re-read on the
+	// ten-minute structure cadence, so this depends on the write-through.
+	var board []domain.BubbleView
+	_, bb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	json.Unmarshal(bb, &board)
+	for _, b := range board {
+		if b.ID == "ws:p1:m1" && b.Threads != 0 {
+			t.Errorf("the old bubble still lists %d thread(s) without a sync pass", b.Threads)
+		}
+		if b.ID == "ws:p1:m2" && b.Threads != 1 {
+			t.Errorf("the new bubble lists %d thread(s), want 1", b.Threads)
+		}
+	}
+
+	// Moving it where it already is changes nothing rather than erroring.
+	if code, b := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/move", key, string(body)); code != http.StatusOK {
+		t.Errorf("a no-op move failed: %d %s", code, b)
+	}
+}
+
+func segment(path, after string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	for i, p := range parts {
+		if p == after && i+1 < len(parts) {
+			return parts[i+1]
+		}
+	}
+	return ""
+}
+
+func lastSegment(path string) string {
+	parts := strings.Split(strings.Trim(path, "/"), "/")
+	if len(parts) == 0 {
+		return ""
+	}
+	return parts[len(parts)-1]
+}

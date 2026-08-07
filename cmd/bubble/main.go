@@ -51,6 +51,10 @@ func main() {
 		cmdThread(os.Args[2:])
 	case "comment":
 		cmdComment(os.Args[2:])
+	case "logbook":
+		cmdLogbook(os.Args[2:])
+	case "revision":
+		cmdRevision(os.Args[2:])
 	case "search":
 		cmdSearch(os.Args[2:])
 	case "whoami":
@@ -94,6 +98,8 @@ Usage:
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble show <id>                 a bubble's thread timeline (git-log-oneline)
   bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
+  bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
+  bubble revision <id> <title> [-] attach a revision artifact to a thread
   bubble comment <id> <text...>    post a comment to a thread's discussion (as you)
                                    --retry/--discard <draft> for an unsent one
   bubble search <query>            fuzzy-search threads (tasks) across your instances
@@ -1048,6 +1054,50 @@ func cmdThread(args []string) {
 	}
 	if err := client.Thread(cfg, id, comments); err != nil {
 		log.Fatalf("thread: %v", err)
+	}
+}
+
+// cmdLogbook rewrites a thread's Logbook. "-" reads it from stdin, which is how
+// a plan of any real length gets in without shell quoting.
+func cmdLogbook(args []string) {
+	if len(args) < 2 {
+		log.Fatal("usage: bubble logbook <id> <text...>   (or '-' to read stdin)")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	body := strings.Join(args[1:], " ")
+	if body == "-" {
+		b, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			log.Fatalf("logbook: reading stdin: %v", rerr)
+		}
+		body = string(b)
+	}
+	if err := client.UpdateThread(cfg, args[0], nil, &body); err != nil {
+		log.Fatalf("logbook: %v", err)
+	}
+}
+
+func cmdRevision(args []string) {
+	if len(args) < 2 {
+		log.Fatal("usage: bubble revision <id> <title> [body...|-]")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	body := strings.Join(args[2:], " ")
+	if body == "" || body == "-" {
+		b, rerr := io.ReadAll(os.Stdin)
+		if rerr != nil {
+			log.Fatalf("revision: reading stdin: %v", rerr)
+		}
+		body = string(b)
+	}
+	if err := client.AddRevision(cfg, args[0], args[1], body); err != nil {
+		log.Fatalf("revision: %v", err)
 	}
 }
 

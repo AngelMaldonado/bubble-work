@@ -304,14 +304,38 @@ func (c *Client) DefaultState(ctx context.Context) (string, error) {
 
 // CreateWorkItem creates a work item (thread) and returns its id.
 func (c *Client) CreateWorkItem(ctx context.Context, name, descriptionHTML, stateID string) (string, error) {
+	return c.CreateChildWorkItem(ctx, name, descriptionHTML, stateID, "")
+}
+
+// CreateChildWorkItem creates a work item, optionally hanging it off a parent.
+// A child IS a revision artifact — that is how revisions are modelled
+// (INTERIOR-PLAN.md), and the mirror indexes them by parent_id.
+func (c *Client) CreateChildWorkItem(ctx context.Context, name, descriptionHTML, stateID, parentID string) (string, error) {
 	var out struct {
 		ID string `json:"id"`
 	}
 	body := map[string]any{"name": name, "state": stateID, "description_html": descriptionHTML}
+	if parentID != "" {
+		body["parent"] = parentID
+	}
 	if err := c.post(ctx, c.projectBase()+"/work-items/", body, &out); err != nil {
 		return "", err
 	}
 	return out.ID, nil
+}
+
+// SetWorkItemBody rewrites a work item's description. This is how an artifact
+// (Brief + Logbook, one page by design) changes.
+//
+// It returns the item's updated_at so the caller can write the same row into the
+// mirror rather than waiting for a delta pass to rediscover its own write.
+func (c *Client) SetWorkItemBody(ctx context.Context, workItemID, descriptionHTML string) (time.Time, error) {
+	var out struct {
+		UpdatedAt time.Time `json:"updated_at"`
+	}
+	err := c.patch(ctx, c.projectBase()+"/work-items/"+workItemID+"/",
+		map[string]any{"description_html": descriptionHTML}, &out)
+	return out.UpdatedAt, err
 }
 
 // SetWorkItemState moves a work item to a state. This is the ONLY call that

@@ -15,30 +15,44 @@ import (
 // Plane fetch completing, which is why the board now repaints within a sync
 // interval instead of on a fixed timer.
 
-// subscribe registers an SSE listener; unsubscribe removes it. broadcast nudges
-// every listener non-blockingly (a full buffer means an update is already
-// pending, so the drop is harmless).
-func (s *Server) subscribe() chan struct{} {
-	ch := make(chan struct{}, 1)
+// subscribe registers an SSE listener; unsubscribe removes it.
+//
+// The channel carries a THREAD ID: empty means "the board changed", a value
+// means "this thread's artifacts changed". Without the id an open thread could
+// only be refreshed by re-fetching it on every board nudge — which is a fetch
+// per client per sync tick for a thread that usually did not change.
+func (s *Server) subscribe() chan string {
+	ch := make(chan string, 1)
 	s.subsMu.Lock()
 	s.subs[ch] = struct{}{}
 	s.subsMu.Unlock()
 	return ch
 }
 
-func (s *Server) unsubscribe(ch chan struct{}) {
+func (s *Server) unsubscribe(ch chan string) {
 	s.subsMu.Lock()
 	delete(s.subs, ch)
 	s.subsMu.Unlock()
 }
 
-func (s *Server) broadcast() {
+// broadcast nudges every listener non-blockingly (a full buffer means an update
+// is already pending, so the drop is harmless).
+func (s *Server) broadcast() { s.nudge("") }
+
+// broadcastThread nudges listeners about one thread's artifacts, so a client
+// watching that thread repaints while an agent is editing it (MCP-ACCESS.md).
+func (s *Server) broadcastThread(threadID string) { s.nudge(threadID) }
+
+func (s *Server) nudge(threadID string) {
 	s.subsMu.Lock()
 	defer s.subsMu.Unlock()
 	for ch := range s.subs {
 		select {
-		case ch <- struct{}{}:
+		case ch <- threadID:
 		default:
+			// A pending nudge is already queued. Dropping a BOARD nudge is
+			// harmless; dropping a THREAD one would lose the id, so the queued
+			// nudge is left alone and the client's board refresh catches up.
 		}
 	}
 }
@@ -86,9 +100,17 @@ func (s *Server) handleStream(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-sub:
+		case tid := <-sub:
 			if !send() {
 				return
+			}
+			if tid != "" {
+				// A second, cheaper event: the client re-fetches this thread only
+				// if it is the one on screen.
+				if _, err := fmt.Fprintf(w, "event: thread\ndata: %q\n\n", tid); err != nil {
+					return
+				}
+				flusher.Flush()
 			}
 		case <-ping.C:
 			if _, err := io.WriteString(w, ": ping\n\n"); err != nil {

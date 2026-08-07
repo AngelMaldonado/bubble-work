@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { slide } from 'svelte/transition';
   import { store, type ArtSel } from '../lib/store.svelte';
   import { pins, type Pin } from '../lib/pins.svelte';
@@ -102,6 +103,35 @@
 
   // Fetch only — no read-marking. Runs eagerly on thread open so the unread
   // badge is accurate before the panel is ever opened.
+  // Repaint when an agent edits the thread that is on screen. Watching a
+  // Logbook change as it happens is the whole point of the MCP surface
+  // (docs/MCP-ACCESS.md); before this, ThreadView loaded once on open and
+  // nothing short of navigating away would refresh it.
+  $effect(() => {
+    const changed = store.threadChanged;
+    if (!changed) return;
+    const open = store.threadId;
+    if (!open || changed.id !== open) return;
+    // untrack the reload so re-entering this effect is driven only by a NEW
+    // change event, never by the state the reload itself writes.
+    untrack(() => {
+      void reloadDetail();
+    });
+  });
+
+  async function reloadDetail(): Promise<void> {
+    const tid = store.threadId;
+    if (!tid) return;
+    try {
+      const d = await api.thread(tid);
+      detail = d;
+      if (commentsLoaded) comments = await api.comments(tid);
+    } catch {
+      // a transient failure just leaves what is on screen; the next change
+      // event or a manual reopen recovers it
+    }
+  }
+
   async function loadComments(): Promise<void> {
     const tid = store.threadId;
     if (!tid) return;

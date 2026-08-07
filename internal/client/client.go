@@ -978,6 +978,64 @@ func printPosted(id string, c domain.Comment) {
 	fmt.Printf("posted · %s · %s\n", c.Author, relAge(c.CreatedAt))
 }
 
+// UpdateThread rewrites a thread's Logbook (and optionally its Brief). Only the
+// sections you pass are touched — an agent or a hurried human revising a plan
+// should not be able to erase the Brief.
+func UpdateThread(cfg config.Config, id string, brief, logbook *string) error {
+	body := map[string]*string{}
+	if brief != nil {
+		body["brief"] = brief
+	}
+	if logbook != nil {
+		body["logbook"] = logbook
+	}
+	var d domain.ThreadDetail
+	if err := patchJSON(cfg, "/api/threads/"+url.PathEscape(id), body, &d); err != nil {
+		return err
+	}
+	fmt.Printf("updated %s · %s\n", d.Title, d.Level)
+	return nil
+}
+
+// AddRevision attaches a revision artifact (a Plane sub-work-item) to a thread.
+func AddRevision(cfg config.Config, id, title, body string) error {
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/revisions",
+		map[string]string{"title": title, "body": body}, &d); err != nil {
+		return err
+	}
+	fmt.Printf("added revision to %s (%d total)\n", d.Title, len(d.Revisions))
+	return nil
+}
+
+// patchJSON is postJSON with a PATCH verb, for partial updates.
+func patchJSON(cfg config.Config, path string, body, out any) error {
+	b, err := json.Marshal(body)
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPatch, cfg.ActiveServer()+path, bytes.NewReader(b))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if tok := cfg.ActiveToken(); tok != "" {
+		req.Header.Set("Authorization", "Bearer "+tok)
+	}
+	resp, err := (&http.Client{Timeout: 30 * time.Second}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 300 {
+		return serverError(resp, path)
+	}
+	if out != nil {
+		return json.NewDecoder(resp.Body).Decode(out)
+	}
+	return nil
+}
+
 func printTodos(todos []md.Todo) {
 	for _, t := range todos {
 		box := "[ ]"

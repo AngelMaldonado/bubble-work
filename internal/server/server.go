@@ -94,7 +94,7 @@ type Server struct {
 	// subs are live SSE listeners (F4). broadcast() nudges each when the snapshot
 	// changes so connected boards update without polling.
 	subsMu sync.Mutex
-	subs   map[chan struct{}]struct{}
+	subs   map[chan string]struct{}
 
 	adminToken  string          // godmode break-glass credential (from env)
 	adminEmails map[string]bool // Plane emails granted service-admin
@@ -160,7 +160,7 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		now:          time.Now,
 		cache:        map[string]cachedActor{},
 		bubblesCache: map[string]cachedBubbles{},
-		subs:         map[chan struct{}]struct{}{},
+		subs:         map[chan string]struct{}{},
 		adminEmails:  map[string]bool{},
 		startedAt:    time.Now(),
 	}
@@ -449,6 +449,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/threads/birth", s.restAuth(s.handleBirth))
 	mux.HandleFunc("GET /api/threads/{id}", s.restAuth(s.handleThreadDetail))
 	mux.HandleFunc("GET /api/threads/{id}/comments", s.restAuth(s.handleThreadComments))
+	mux.HandleFunc("PATCH /api/threads/{id}", s.restAuth(s.handleUpdateThread))
+	mux.HandleFunc("POST /api/threads/{id}/revisions", s.restAuth(s.handleAddRevision))
 	mux.HandleFunc("POST /api/threads/{id}/comments", s.restAuth(s.handlePostComment))
 	mux.HandleFunc("POST /api/threads/{id}/comments/read", s.restAuth(s.handleMarkCommentsRead))
 	mux.HandleFunc("POST /api/threads/{id}/drafts/{draft}/retry", s.restAuth(s.handleRetryDraft))

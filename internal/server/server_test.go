@@ -2092,3 +2092,108 @@ func TestPruneDropsOverlayForDeletedItems(t *testing.T) {
 		t.Error("prune removed a live item's progress")
 	}
 }
+
+// TestUpdateThreadIsEvidenceAndImmediate covers the whole point of the MCP
+// surface (docs/MCP-ACCESS.md): an agent edits a Logbook, that counts as
+// production, and the change is visible WITHOUT waiting for a sync pass.
+func TestUpdateThreadIsEvidenceAndImmediate(t *testing.T) {
+	var mu sync.Mutex
+	body := "<h1>Brief</h1><p>The pull is real.</p><h2>Logbook</h2><ul><li data-checked='false'>wire</li></ul>"
+	var patched int
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur := body
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"First thread"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				DescriptionHTML string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			body, patched = in.DescriptionHTML, patched+1
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-06T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"First thread","description_html":%q,"created_at":"2026-08-06T10:00:00Z","updated_at":"2026-08-06T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, cur)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// Build the board once BEFORE editing, so the progress diff has a baseline.
+	// A thread's first sighting is baselined silently — we cannot know when its
+	// logbook was last touched, and stamping it "now" would fabricate heat for
+	// work that might be a year old (THREAD-LIFECYCLE.md). In production the
+	// refresher establishes that baseline long before anyone edits anything;
+	// only a test can arrive with the edit and the first sighting at once.
+	if code, b := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, ""); code != http.StatusOK {
+		t.Fatalf("board: %d %s", code, b)
+	}
+
+	// Tick the todo through the artifact surface.
+	logbook := "- [x] wire\n- [ ] ship"
+	payload, _ := json.Marshal(map[string]string{"logbook": logbook})
+	code, resp := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key, string(payload))
+	if code != http.StatusOK {
+		t.Fatalf("update: %d %s", code, resp)
+	}
+
+	// The Brief SURVIVED. This is the invariant that makes it safe to let an
+	// agent write here at all.
+	mu.Lock()
+	sent := body
+	mu.Unlock()
+	if !strings.Contains(sent, "The pull is real.") {
+		t.Errorf("the Brief was destroyed by a Logbook edit:\n%s", sent)
+	}
+	if !strings.Contains(sent, "ship") {
+		t.Errorf("the Logbook was not written:\n%s", sent)
+	}
+
+	// Visible IMMEDIATELY — no sync pass ran between the write and this read.
+	var d domain.ThreadDetail
+	_, rb := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if err := json.Unmarshal(rb, &d); err != nil {
+		t.Fatal(err)
+	}
+	if d.Logbook == nil || !strings.Contains(d.Logbook.Markdown, "ship") {
+		t.Errorf("the edit is not visible without a sync pass: %+v", d.Logbook)
+	}
+
+	// ...and it registered as production, so the thread is warm rather than
+	// sitting in the grave it was born into.
+	if _, err := srv.Tick(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	_, rb = do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	json.Unmarshal(rb, &d)
+	if d.Level != "in_progress" {
+		t.Errorf("a Logbook edit did not warm the thread: level=%s reason=%s", d.Level, d.Reason)
+	}
+}

@@ -198,6 +198,50 @@ func ExtractSection(md string, titles ...string) (section, rest string, found bo
 	return section, rest, true
 }
 
+// ReplaceSection swaps the CONTENT of a section, leaving its heading, its
+// position in the document and every other section untouched. When the section
+// is absent it is appended with an H2 heading, so a thread born without a
+// Logbook gains one rather than silently swallowing the update.
+//
+// This exists so an agent can rewrite a Logbook without being able to touch the
+// Brief. The two live in one Plane description by design (§3), so a whole-body
+// write is the natural shape and the wrong one: the Brief is the human's
+// statement of intent, and nothing that edits a plan should be able to erase it.
+func ReplaceSection(md, title, body string) string {
+	lines := strings.Split(md, "\n")
+	want := strings.ToLower(strings.TrimSpace(title))
+
+	start, level := -1, 0
+	for i, ln := range lines {
+		if m := headingRe.FindStringSubmatch(ln); m != nil {
+			if strings.ToLower(strings.TrimSpace(m[2])) == want {
+				start, level = i, len(m[1])
+				break
+			}
+		}
+	}
+	body = strings.TrimSpace(body)
+	if start < 0 {
+		out := strings.TrimSpace(md)
+		if out != "" {
+			out += "\n\n"
+		}
+		return out + "## " + title + "\n\n" + body
+	}
+
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if m := headingRe.FindStringSubmatch(lines[i]); m != nil && len(m[1]) <= level {
+			end = i
+			break
+		}
+	}
+	out := append([]string{}, lines[:start+1]...) // keep the heading exactly as written
+	out = append(out, "", body, "")
+	out = append(out, lines[end:]...)
+	return strings.TrimSpace(strings.Join(out, "\n")) + "\n"
+}
+
 // Split breaks body into artifacts on top-level H1 headings. Any content before
 // the first H1 (or the whole body when there are none) becomes one artifact
 // titled fallbackTitle (defaulting to "Brief").

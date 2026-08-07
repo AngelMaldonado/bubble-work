@@ -24,6 +24,8 @@ type Backend interface {
 	ThreadDetail(ctx context.Context, threadID string) (domain.ThreadDetail, error)
 	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
+	UpdateThread(ctx context.Context, threadID string, brief, logbook *string) (domain.ThreadDetail, error)
+	AddRevision(ctx context.Context, threadID, title, body string) (domain.ThreadDetail, error)
 	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
 }
 
@@ -45,6 +47,21 @@ func withActor(ctx context.Context, req *sdk.CallToolRequest) context.Context {
 		ctx = domain.WithCred(ctx, cred)
 	}
 	return ctx
+}
+
+// updateThreadIn patches a thread's artifact page. Both fields are optional and
+// a nil one is left untouched — an agent revising a plan must not be able to
+// erase the human's Brief.
+type updateThreadIn struct {
+	ThreadID string  `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Logbook  *string `json:"logbook,omitempty" jsonschema:"replace the Logbook section: the plan in phases, its todos, current owner and state. Markdown"`
+	Brief    *string `json:"brief,omitempty" jsonschema:"replace the Brief section: problem, intended outcome, constraints, Definition of Done. Rarely what an agent should touch"`
+}
+
+type addRevisionIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Title    string `json:"title" jsonschema:"what this revision is, e.g. 'first pass' — a 'rev:' prefix is added if missing"`
+	Body     string `json:"body" jsonschema:"the revision's content, in Markdown"`
 }
 
 type listOut struct {
@@ -179,6 +196,26 @@ func Handler(b Backend) http.Handler {
 				return nil, domain.Comment{}, err
 			}
 			return nil, cm, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook (and rarely its Brief). This is how an agent records that the plan changed — ticking a todo, re-phasing, noting a decision. A Logbook change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. Only the sections you pass are touched."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in updateThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.UpdateThread(withActor(ctx, req), in.ThreadID, in.Brief, in.Logbook)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "add_revision", Description: "Attach a revision artifact to a thread (a Plane sub-work-item): a findings write-up, a review pass, a deliverable. Landing one is evidence of production (§5.1) and warms the thread."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in addRevisionIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.AddRevision(withActor(ctx, req), in.ThreadID, in.Title, in.Body)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
 		})
 
 	sdk.AddTool(srv,

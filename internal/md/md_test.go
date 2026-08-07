@@ -262,3 +262,60 @@ func TestLogbookFingerprint(t *testing.T) {
 		t.Error("adding a Definition of Done should change the fingerprint")
 	}
 }
+
+// TestReplaceSection is really a test about blast radius: an agent rewriting a
+// Logbook must not be able to touch the Brief. The two live in one Plane
+// description by design (§3), so a whole-body write would be the natural shape
+// and the wrong one.
+func TestReplaceSection(t *testing.T) {
+	const doc = `# Brief
+
+The pull is that signups leak.
+
+## Logbook
+
+- [x] scaffold
+- [ ] wire
+
+## Notes
+
+keep me
+`
+	got := ReplaceSection(doc, "Logbook", "- [x] scaffold\n- [x] wire\n- [ ] ship")
+
+	if !strings.Contains(got, "The pull is that signups leak.") {
+		t.Error("the Brief was lost")
+	}
+	if !strings.Contains(got, "keep me") {
+		t.Error("a later section was lost")
+	}
+	if !strings.Contains(got, "- [x] wire") || strings.Contains(got, "- [ ] wire") {
+		t.Errorf("the Logbook was not replaced:\n%s", got)
+	}
+	// Order matters: a section that jumps to the end of the document on every
+	// edit would churn the diff and confuse anyone reading it in Plane.
+	if strings.Index(got, "## Logbook") > strings.Index(got, "## Notes") {
+		t.Errorf("the section moved:\n%s", got)
+	}
+	// The heading is kept verbatim rather than re-emitted, so an H3 "Logbook" or
+	// odd spacing survives a round trip.
+	if strings.Count(got, "Logbook") != 1 {
+		t.Errorf("the heading was duplicated:\n%s", got)
+	}
+}
+
+// A thread born small has no Logbook at all (§3.2 allows it). An update must
+// create one rather than quietly doing nothing.
+func TestReplaceSectionAppendsWhenAbsent(t *testing.T) {
+	got := ReplaceSection("# Brief\n\nJust a paragraph.", "Logbook", "- [ ] first todo")
+	if !strings.Contains(got, "## Logbook") || !strings.Contains(got, "- [ ] first todo") {
+		t.Errorf("absent section was not appended:\n%s", got)
+	}
+	if !strings.Contains(got, "Just a paragraph.") {
+		t.Error("appending clobbered the existing body")
+	}
+	// ...and it must be findable by the parser that reads it back.
+	if sec, _, ok := ExtractSection(got, "logbook"); !ok || !strings.Contains(sec, "first todo") {
+		t.Errorf("the appended section does not round-trip: %q", sec)
+	}
+}

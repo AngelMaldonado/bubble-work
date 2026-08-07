@@ -34,6 +34,9 @@ class Store {
    *  behind (PLANE-SYNC.md Phase 7). Fetched alongside the board because a
    *  stale board that says nothing is the failure mode the mirror introduces. */
   status = $state<ServiceStatus | null>(null);
+  /** last thread whose artifacts changed under us, with a timestamp so two
+   *  edits to the SAME thread still register as two distinct changes. */
+  threadChanged = $state<{ id: string; at: number } | null>(null);
   flash = $state<string | null>(null); // transient info notice (e.g. godmode readouts)
   authed = $state<boolean>(!!getToken());
 
@@ -294,7 +297,20 @@ class Store {
       if (line.startsWith('event:')) event = line.slice(6).trim();
       else if (line.startsWith('data:')) data += line.slice(5).trim();
     }
-    if (event !== 'bubbles' || !data) return;
+    if (!data) return;
+    // A thread-scoped nudge: an agent edited these artifacts (MCP-ACCESS.md).
+    // Bumping a counter rather than fetching here keeps the store ignorant of
+    // how a thread is rendered — ThreadView owns that and re-reads when the
+    // thread on screen is the one that changed.
+    if (event === 'thread') {
+      try {
+        this.threadChanged = { id: JSON.parse(data) as string, at: Date.now() };
+      } catch {
+        /* ignore malformed frame */
+      }
+      return;
+    }
+    if (event !== 'bubbles') return;
     try {
       const vs = JSON.parse(data) as BubbleView[];
       // in cross-org (godmode) mode the board comes from the admin poll, not this

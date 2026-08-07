@@ -1,6 +1,6 @@
 # Artifact editing — writing a thread's page from the board
 
-Status: **Phases 0-3 shipped · Phases 4-7 pending** · Drafted 2026-08-07 · Companion
+Status: **Phases 0-4 shipped · 5-6 pending · 7 started** · Drafted 2026-08-07 · Companion
 to [`MCP-ACCESS.md`](./MCP-ACCESS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -296,12 +296,46 @@ writes nothing, a Logbook edit leaves the mention and image untouched, a stale
 base hash 409s, a mismatched todo text 409s **and writes nothing**, and the DoD
 is writable in its own right.
 
-### Phase 4 — the editor
+### Phase 4 — the editor ✅
 
-- [ ] `ArtifactEditor.svelte` — a markdown textarea, autosave per the rules above,
-      dirty/saving/saved/conflict states.
-- [ ] Reuse the comment composer's `wrapSel` / `prefixLines` / `insertLink`, which
-      already exist in `ThreadView.svelte` and do exactly this job at small scale.
+- [x] `ArtifactEditor.svelte` — markdown source, autosaved, with
+      clean/dirty/saving/saved/conflict/error states and ⌘S to force a write.
+- [x] Autosave as specified: 1.5 s idle, a 10 s floor between writes so holding a
+      key down cannot outrun it, and a flush on blur, unmount and `beforeunload`.
+      Unchanged text is never sent at all — the server would no-op it anyway, but
+      not sending is what keeps focus and blur free.
+- [x] Every write carries the region hash and **adopts the server's** afterwards:
+      the server is the authority on what the body now is, and the next write has
+      to be based on that rather than on what we sent.
+- [x] The toolbar reuses the comment composer's `wrapSel` / `prefixLines` /
+      `insertLink` shape, which already did this job at small scale.
+- [x] Editing the Logbook shows **two** editors — the Definition of Done is its
+      own region and is written separately. Revisions are separate work items
+      with no region at all, so they stay read-only here.
+- [x] Kiosk displays never see the edit toggle.
+
+Two bugs worth naming, both caught before they shipped:
+
+- **`state` shadowed the `$state` rune**, which cascaded into nine type errors.
+  Exactly the shadowing that bit `t` during the translation pass; renamed to
+  `status`.
+- **Typing during an in-flight save was marked saved.** The post-`await` `text`
+  is not what the server received, so those keystrokes would have been recorded
+  as written and nothing scheduled to write them — they'd have survived only
+  because of the blur flush. The buffer being sent is captured up front now, and
+  a divergence re-schedules.
+
+### Phase 7 — live editing next to agents (started)
+
+- [x] **A dirty buffer is never repainted over.** The SSE `thread` event checks
+      the editors first; when one has unsaved work it raises a "changed
+      elsewhere" banner with a *Load theirs* action instead of reloading. An
+      agent editing the Logbook while somebody has the Brief open is the exact
+      case this surface exists for, and losing their typing to it would be the
+      worst possible answer.
+- [x] A 409 is surfaced as a choice, not a silent loss.
+- [ ] Demo pass: agent rewrites the Logbook through MCP while the Brief is open
+      in the editor, and neither loses anything.
 
 ### Phase 5 — slash commands
 
@@ -325,12 +359,6 @@ is writable in its own right.
       `input`: Plane's own bodies carry both, and updating one would make Plane
       and us disagree about the same box.
 
-### Phase 7 — live editing next to agents
-
-- [ ] A dirty region is never clobbered by an inbound SSE `thread` event.
-- [ ] "Changed elsewhere" banner; 409 surfaces as a choice, not a silent loss.
-- [ ] The case worth demoing: an agent rewrites the Logbook through MCP while the
-      Brief is open in the editor, and neither loses anything.
 
 ## Open
 

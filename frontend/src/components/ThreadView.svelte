@@ -6,8 +6,9 @@
   import { api, ApiError } from '../lib/api';
   import { t } from '../lib/i18n.svelte';
   import { levelIcon, levelLabel } from '../lib/types';
-  import type { ThreadDetail, Comment } from '../lib/types';
+  import type { ThreadDetail, Comment, RegionName } from '../lib/types';
   import ThreadToc, { type Heading } from './ThreadToc.svelte';
+  import ArtifactEditor from './ArtifactEditor.svelte';
 
   type Sel = ArtSel;
 
@@ -32,7 +33,44 @@
 
   function select(s: Sel): void {
     saveScroll(); // remember where we were before leaving this artifact
+    editing = false; // a different artifact is a different buffer
     store.setThreadSel(s);
+  }
+
+  // ---- editing (docs/ARTIFACT-EDITING.md Phase 4) ----
+  //
+  // What the board calls an artifact and what the write path calls a region are
+  // not the same shape: artifacts[0] is everything that is not the Logbook or
+  // the DoD, which the API names "brief". Revisions are separate work items and
+  // have no region at all, so they are read-only here.
+  let editing = $state(false);
+  const editRegion = $derived<RegionName | null>(
+    sel.kind === 'artifact' && sel.idx === 0 ? 'brief' : sel.kind === 'logbook' ? 'logbook' : null,
+  );
+  const canEdit = $derived(!!editRegion && !!detail?.regions?.[editRegion]);
+
+  // The open thread must never be repainted out from under a dirty buffer, so
+  // reloadDetail asks the editors first (Phase 7).
+  let editors = $state<Record<string, { isDirty: () => boolean } | null>>({});
+  function anyDirty(): boolean {
+    return Object.values(editors).some((e) => e?.isDirty());
+  }
+
+  // Set when a change arrived that we refused to apply because a buffer was
+  // dirty. Cleared by taking theirs, or by the next clean reload.
+  let elsewhere = $state(false);
+
+  async function takeTheirs(): Promise<void> {
+    elsewhere = false;
+    editors = {};
+    await reloadDetail();
+  }
+
+  function onSaved(d: ThreadDetail): void {
+    elsewhere = false;
+    // The write already returned the fresh thread, so adopt it rather than
+    // spending another round trip re-fetching what we were just handed.
+    detail = d;
   }
 
   let contentEl = $state<HTMLElement | null>(null);
@@ -115,6 +153,14 @@
     // untrack the reload so re-entering this effect is driven only by a NEW
     // change event, never by the state the reload itself writes.
     untrack(() => {
+      // Never repaint over unsaved work. An agent editing the Logbook while
+      // someone has the Brief open is exactly the case this whole surface
+      // exists for, and losing their typing to it would be the worst possible
+      // answer. Say so instead; the editor keeps saving on its own schedule.
+      if (anyDirty()) {
+        elsewhere = true;
+        return;
+      }
       void reloadDetail();
     });
   });
@@ -552,7 +598,55 @@
       </nav>
 
       <main class="content" bind:this={contentEl}>
-        {#if sel.kind === 'logbook' && detail.logbook}
+        {#if canEdit && !store.kiosk}
+          <div class="edit-bar">
+            <button class="edit-toggle" class:on={editing} onclick={() => (editing = !editing)}>
+              {editing ? t('thread.preview') : `✎ ${t('thread.edit')}`}
+            </button>
+          </div>
+        {/if}
+
+        {#if elsewhere}
+          <p class="elsewhere">
+            {t('editor.changedElsewhere')}
+            <button type="button" class="link" onclick={takeTheirs}>{t('editor.reload')}</button>
+          </p>
+        {/if}
+
+        {#if editing && editRegion && detail.regions?.[editRegion]}
+          <!-- Markdown source, autosaved. Two editors when the Logbook is open:
+               the DoD is its own region and is written separately. -->
+          <div class="editors">
+            <h1 class="edit-title">
+              {editRegion === 'logbook' ? t('thread.logbook') : detail.title}
+            </h1>
+            {#key `${detail.id}:${editRegion}`}
+              <ArtifactEditor
+                bind:this={editors[editRegion]}
+                threadId={detail.id}
+                region={editRegion}
+                initial={detail.regions[editRegion].markdown}
+                hash={detail.regions[editRegion].hash}
+                onsaved={onSaved}
+                onreload={reloadDetail}
+              />
+            {/key}
+            {#if editRegion === 'logbook' && detail.regions?.dod}
+              <h2 class="edit-title">{t('thread.dod')}</h2>
+              {#key `${detail.id}:dod`}
+                <ArtifactEditor
+                  bind:this={editors.dod}
+                  threadId={detail.id}
+                  region="dod"
+                  initial={detail.regions.dod.markdown}
+                  hash={detail.regions.dod.hash}
+                  onsaved={onSaved}
+                  onreload={reloadDetail}
+                />
+              {/key}
+            {/if}
+          </div>
+        {:else if sel.kind === 'logbook' && detail.logbook}
           <!-- rendered through the same goldmark/prose pipeline as the rest -->
           <article class="prose">
             <h1>{t('thread.logbook')}</h1>
@@ -1003,6 +1097,65 @@
   }
   .err {
     color: oklch(0.68 0.19 25);
+  }
+
+  /* ---- editing ---- */
+  .elsewhere {
+    margin: 0 0 0.7rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklab, oklch(0.72 0.19 25) 40%, var(--line));
+    background: color-mix(in oklab, oklch(0.72 0.19 25) 8%, transparent);
+    font-family: var(--sans);
+    font-size: 0.78rem;
+    color: var(--text);
+  }
+  .elsewhere .link {
+    border: none;
+    background: none;
+    padding: 0;
+    margin-left: 0.4rem;
+    color: var(--wip);
+    text-decoration: underline;
+    cursor: pointer;
+    font: inherit;
+  }
+  .edit-bar {
+    display: flex;
+    justify-content: flex-end;
+    margin-bottom: 0.6rem;
+  }
+  .edit-toggle {
+    padding: 0.3rem 0.75rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: color-mix(in oklab, var(--text) 4%, transparent);
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .edit-toggle:hover {
+    color: var(--text);
+    border-color: color-mix(in oklab, var(--wip) 45%, var(--line));
+  }
+  .edit-toggle.on {
+    color: oklch(0.16 0.02 265);
+    background: var(--wip);
+    border-color: transparent;
+  }
+  .editors {
+    display: flex;
+    flex-direction: column;
+    gap: 1rem;
+  }
+  .edit-title {
+    margin: 0;
+    font-family: var(--sans);
+    font-size: 1.05rem;
+    font-weight: 700;
+    color: var(--muted);
   }
 
   /* ---- prose: matches the mds tool's render (serif body, sans headings) ---- */

@@ -133,12 +133,19 @@
     justify-content: space-between;
     gap: 0.75rem;
   }
+  .htext {
+    /* The close button is flex:none, so without this a long hostname-style name
+       would grow the header instead of wrapping — a flex child will not shrink
+       below its content width until min-width is cleared. */
+    min-width: 0;
+  }
   .htext h2 {
     margin: 0;
     font-size: 1.1rem;
     font-weight: 750;
     letter-spacing: -0.01em;
     color: var(--text);
+    overflow-wrap: anywhere;
   }
   .sub {
     font-size: 0.74rem;

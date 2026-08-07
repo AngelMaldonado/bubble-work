@@ -270,6 +270,11 @@
     line-clamp: 2;
     -webkit-box-orient: vertical;
     overflow: hidden;
+    /* The clamp allows two lines, but a hostname has no break opportunity, so
+       without this it filled one line and clipped — wasting half the space it
+       had already reserved. Still clipped when genuinely too long; the detail
+       panel is where the full name lives. */
+    overflow-wrap: anywhere;
   }
 
   /* hover / click reveals the detail card */
@@ -287,6 +292,9 @@
     box-shadow: 0 20px 46px var(--shadow-strong);
     display: grid;
     gap: 0.4rem;
+    /* container-level safety for the prose below (reason, outcome): break a word
+       only when it genuinely does not fit, unlike .dname which breaks eagerly. */
+    overflow-wrap: break-word;
     opacity: 0;
     pointer-events: none;
     transition:
@@ -318,11 +326,21 @@
     font-weight: 700;
     font-size: 0.86rem;
     color: var(--text);
+    /* Bubble names are often hostnames or paths — "<cliente>.clientes.ayetec.space"
+       — with no spaces to wrap at, so in a fixed-width panel they spilled past
+       the border. It WRAPS rather than truncating: the sphere's caption is
+       already clipped, and this panel is where you come to read the full name,
+       so hiding it here would defeat the point. `anywhere` (not `break-word`)
+       because only it lets a flex item's min-content shrink; min-width:0 is the
+       other half — without it a flex child refuses to go below its content. */
+    min-width: 0;
+    overflow-wrap: anywhere;
   }
   .dinstance {
     font-size: 0.68rem;
     color: var(--faint);
     white-space: nowrap;
+    flex: none; /* never squeezed to nothing by a long name */
   }
   .why {
     margin: 0;

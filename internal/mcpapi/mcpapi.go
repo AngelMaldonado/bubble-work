@@ -5,7 +5,9 @@ package mcpapi
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"strings"
 
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
@@ -15,16 +17,6 @@ import (
 
 // Backend is the server capability set the MCP tools call into. Keeping it an
 // interface avoids an import cycle and mirrors the HTTP surface exactly.
-//
-// DELETION IS DELIBERATELY ABSENT. Surface parity (AGENTS.md) exists so a
-// capability does not drift between the REST, CLI and MCP surfaces — not so
-// that every capability is equally reachable from each of them. The web and the
-// CLI both put a person in the loop before a delete: a dialog that says what
-// goes, or a typed confirmation. MCP has no such step, so an agent calling
-// delete_thread would destroy a Brief, a Logbook, its comments and its
-// revisions with nothing but a tool description asking it to check first —
-// which is not a guard. Agents keep every read and every CONSTRUCTIVE write;
-// destruction stays with a human. Deleting lives on REST + CLI + web.
 type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
 	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
@@ -36,9 +28,41 @@ type Backend interface {
 	ThreadComments(ctx context.Context, threadID string) ([]domain.Comment, error)
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
 	UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error)
+	DeleteBubble(ctx context.Context, bubbleID string) (int, error)
+	DeleteThread(ctx context.Context, threadID string) (int, error)
+	DeleteRegion(ctx context.Context, threadID string, region md.Region) (domain.ThreadDetail, error)
 	ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error)
 	AddRevision(ctx context.Context, threadID, title, body string) (domain.ThreadDetail, error)
 	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
+}
+
+// confirmBubbleName resolves a bubble and checks the caller named it correctly.
+func confirmBubbleName(ctx context.Context, b Backend, id, claimed string) error {
+	bubbles, err := b.Bubbles(ctx)
+	if err != nil {
+		return err
+	}
+	for _, x := range bubbles {
+		if x.ID == id || strings.HasSuffix(x.ID, ":"+id) {
+			return sameName(claimed, x.Name, "bubble")
+		}
+	}
+	return fmt.Errorf("no bubble %q — read it before deleting it", id)
+}
+
+// sameName compares a claimed name to the real one. Spacing and case are
+// cosmetic; anything else means the caller is not looking at what it thinks.
+func sameName(claimed, actual, kind string) error {
+	norm := func(s string) string {
+		return strings.ToLower(strings.Join(strings.Fields(s), " "))
+	}
+	if strings.TrimSpace(claimed) == "" {
+		return fmt.Errorf("refusing to delete a %s without naming it: pass name=%q to confirm", kind, actual)
+	}
+	if norm(claimed) != norm(actual) {
+		return fmt.Errorf("that %s is called %q, not %q — read it again before deleting it", kind, actual, claimed)
+	}
+	return nil
 }
 
 // withActor lifts the MCP-verified identity (carried in req.Extra.TokenInfo by
@@ -83,6 +107,23 @@ type toggleTodoIn struct {
 	Region   string `json:"region,omitempty" jsonschema:"logbook (default) or dod"`
 }
 
+// deleteIn asks for the thing's id AND its name.
+//
+// The name is the guard, and it is the same one toggle_todo uses for a todo's
+// text: an id alone is a question the caller cannot check its own answer to. It
+// forces an agent to have READ the thing it is about to destroy, so a
+// transposed or hallucinated id fails loudly instead of deleting a stranger's
+// work. There is deliberately no "force" flag to route around it.
+type deleteIn struct {
+	ID   string `json:"id" jsonschema:"the namespaced id of the thing to delete"`
+	Name string `json:"name" jsonschema:"the thing's exact current name, as you just read it. The delete is REFUSED if it does not match — read it first"`
+}
+
+type deleteRegionIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Region   string `json:"region" jsonschema:"logbook, dod, or brief (the document)"`
+}
+
 type addRevisionIn struct {
 	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
 	Title    string `json:"title" jsonschema:"what this revision is, e.g. 'first pass' — a 'rev:' prefix is added if missing"`
@@ -123,6 +164,13 @@ type postCommentIn struct {
 type markReadIn struct {
 	ThreadID   string   `json:"thread_id" jsonschema:"the thread id whose comments to mark read"`
 	CommentIDs []string `json:"comment_ids" jsonschema:"ids of comments you've read (not your own)"`
+}
+
+// deletedOut reports what a delete cost: threads unbubbled, or revisions taken
+// down with a thread.
+type deletedOut struct {
+	OK       bool `json:"ok"`
+	Affected int  `json:"affected"`
 }
 
 type okOut struct {
@@ -254,6 +302,52 @@ func Handler(b Backend) http.Handler {
 				region = md.RegionLogbook
 			}
 			d, err := b.ToggleTodo(withActor(ctx, req), in.ThreadID, region, in.Index, in.Text, in.Done)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_bubble", Description: "PERMANENTLY delete a bubble from Plane. IRREVERSIBLE. Its threads survive but end up in no bubble, which also removes them from the board. §5.3 says a bubble should normally die by being CLOSED — that keeps the record of what was done — Pass the bubble's exact name to confirm — the delete is refused if it does not match, so read it first. Prefer close_bubble unless this bubble should never have existed."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteIn) (*sdk.CallToolResult, deletedOut, error) {
+			actx := withActor(ctx, req)
+			if err := confirmBubbleName(actx, b, in.ID, in.Name); err != nil {
+				return nil, deletedOut{}, err
+			}
+			n, err := b.DeleteBubble(actx, in.ID)
+			if err != nil {
+				return nil, deletedOut{}, err
+			}
+			return nil, deletedOut{OK: true, Affected: n}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_thread", Description: "PERMANENTLY delete a thread — or a revision, which is also a work item — from Plane, taking its Brief, Logbook, comments and revisions with it. IRREVERSIBLE, and it erases evidence of work that actually happened. Pass the thread's exact title to confirm — the delete is refused if it does not match, so read it first."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteIn) (*sdk.CallToolResult, deletedOut, error) {
+			actx := withActor(ctx, req)
+			d, err := b.ThreadDetail(actx, in.ID)
+			if err != nil {
+				return nil, deletedOut{}, err
+			}
+			if err := sameName(in.Name, d.Title, "thread"); err != nil {
+				return nil, deletedOut{}, err
+			}
+			n, err := b.DeleteThread(actx, in.ID)
+			if err != nil {
+				return nil, deletedOut{}, err
+			}
+			return nil, deletedOut{OK: true, Affected: n}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_artifact", Description: "Remove one artifact from a thread's page — its Logbook, its Definition of Done, or its document — heading and all. The thread itself survives. Everything you do not name keeps its exact bytes, so images and mentions elsewhere on the page are untouched."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deleteRegionIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			region := md.Region(in.Region)
+			if region == "brief" {
+				region = md.RegionDocument
+			}
+			d, err := b.DeleteRegion(withActor(ctx, req), in.ThreadID, region)
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err
 			}

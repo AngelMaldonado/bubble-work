@@ -406,20 +406,24 @@ The confirmation says what goes and what stays rather than "are you sure?", and
 for a bubble it counts the threads it will unbubble — the consequence nobody
 expects. Focus lands on Cancel, so an errant Enter destroys nothing.
 
-Surfaces: `DELETE /api/bubbles/{id}`, `DELETE /api/threads/{id}`,
+Surface parity: `DELETE /api/bubbles/{id}`, `DELETE /api/threads/{id}`,
 `DELETE /api/threads/{id}/regions/{region}` · `bubble delete <kind> <id> [-y]`,
-which prompts unless `-y` · **and deliberately NOT MCP.**
+which prompts unless `-y` · MCP `delete_bubble`, `delete_thread` and
+`delete_artifact`.
 
-That last one is the one exception to surface parity in this document, so it is
-worth stating why. Parity exists so a capability does not drift between the
-REST, CLI and MCP surfaces — not so that every capability is equally reachable
-from each. The web and the CLI both put a person in the loop before a delete: a
-dialog naming what goes, or a typed confirmation. MCP has no such step. An agent
-calling `delete_thread` would destroy a Brief, a Logbook, its comments and its
-revisions with nothing between it and the act but a tool description asking it
-to check first, which is not a guard. Agents keep every read and every
-*constructive* write — `update_thread`, `toggle_todo`, `add_revision`,
-`post_comment`. Destruction stays with a human.
+**On MCP, the guard is the name.** The web and the CLI put a person in the loop
+— a dialog naming what goes, or a typed confirmation — and MCP has no such step.
+So `delete_bubble` and `delete_thread` require the thing's exact current name
+alongside its id, and refuse when it does not match. That is the same shape
+`toggle_todo` uses for a todo's text, and for the same reason: an id alone is a
+question the caller cannot check its own answer to. Requiring the name forces an
+agent to have READ what it is about to destroy, so a transposed or hallucinated
+id fails loudly instead of deleting a stranger's work. The refusal says what the
+thing is actually called, so the agent can recover rather than retry blindly.
+Case and spacing are forgiven; there is deliberately no `force` flag.
+
+`delete_artifact` is not name-guarded: it removes a section from a page the
+caller must already have read to name the region, and the thread survives.
 
 ## Open
 

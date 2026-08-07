@@ -1,6 +1,6 @@
 # Artifact editing — writing a thread's page from the board
 
-Status: **Phases 0-4 shipped · 5-6 pending · 7 started** · Drafted 2026-08-07 · Companion
+Status: **Phases 0-6 shipped · 7 started** · only the live demo pass is left · Drafted 2026-08-07 · Companion
 to [`MCP-ACCESS.md`](./MCP-ACCESS.md) and [`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ## The intention
@@ -337,27 +337,45 @@ Two bugs worth naming, both caught before they shipped:
 - [ ] Demo pass: agent rewrites the Logbook through MCP while the Brief is open
       in the editor, and neither loses anything.
 
-### Phase 5 — slash commands
+### Phase 5 — slash commands ✅
 
-- [ ] `/` at a line start opens a filtered command list at the caret. Caret
-      coordinates in a textarea need the hidden-mirror-div measurement; if that
-      turns fiddly, CodeMirror 6 gives `coordsAtPos` and markdown highlighting for
-      ~150 KB, lazy-loaded the way mermaid already is.
-- [ ] Commands: heading 1–3, bullet, numbered, todo, quote, table, code block,
-      mermaid, divider, link.
-- [ ] Labels go through `i18n.svelte.ts` in **both** EN and ES — the type forces
-      parity, and the last translation pass proved that strings built in script
-      are the ones that get missed.
+- [x] `/` opens a filtered list **at the caret**, which is the whole difference
+      between this and a command palette. `lib/caret.ts` does the hidden-mirror
+      measurement — a `<textarea>` will not tell you where its caret is, so the
+      standard answer is a hidden div with the same typography and box metrics.
+      No CodeMirror needed, and no 150 KB.
+- [x] Twelve commands: heading 1–3, bullet, numbered, to-do, quote, code block,
+      diagram, table, divider, link. Each inserts plain markdown, because
+      markdown is what the buffer *is* — there is no hidden document model that
+      could disagree with the text on screen.
+- [x] ↑↓ to move, ⏎/⇥ to insert, Esc to dismiss, blur to close. Aliases so
+      "checkbox" finds the to-do and "diagram" finds mermaid.
+- [x] Labels go through `i18n.svelte.ts` in both EN and ES, with **literal**
+      keys rather than `t('cmd.' + id)`: a computed key is exactly the shape that
+      silently stops being translated.
+- [x] `lib/slash.ts` is split out and unit-tested. The boundary rule is what
+      earns it: a URL is mostly slashes, and `https://example.com/x` must never
+      open a menu.
 
-### Phase 6 — inline checkboxes
+### Phase 6 — inline checkboxes ✅
 
-- [x] The server primitive landed in Phase 3: `ToggleTodo` + `POST /api/threads/{id}/todo`
-      + `bubble todo` + the `toggle_todo` MCP tool. What is left is the UI.
-- [ ] Tick a todo straight from the rendered view. One narrow write, immediate
-      heat, independent of everything above.
-- [ ] Must update **both** `data-checked` on the `li` and `checked` on the
-      `input`: Plane's own bodies carry both, and updating one would make Plane
-      and us disagree about the same box.
+- [x] The server primitive landed in Phase 3: `ToggleTodo` +
+      `POST /api/threads/{id}/todo` + `bubble todo` + the `toggle_todo` MCP tool.
+- [x] Tick a todo straight from the rendered view. One narrow write, immediate
+      heat. The client works out *which* item was clicked and sends its text; the
+      server refuses an index whose text no longer matches, so a moved list
+      cannot tick the wrong box — it says so and reloads.
+- [x] The Logbook and the DoD render as separately tagged regions, because their
+      todos are numbered independently and the click handler has to know which
+      list it just counted.
+- [x] **goldmark writes `<input type=checkbox disabled>`, and a disabled input
+      receives no mouse events at all** — the control would have looked live and
+      been dead. The rendered boxes are re-enabled after every paint. Plane's own
+      taskList shape is not disabled, hence "if present".
+
+Writing both `data-checked` on the `li` and `checked` on the `input` turned out
+to be free: the toggle rewrites markdown and re-renders through
+`RenderPlaneHTML`, which emits Plane's shape with both (Phase 2).
 
 
 ## Open

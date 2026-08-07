@@ -13,6 +13,8 @@
   // overwrite.
   import { onDestroy, untrack } from 'svelte';
   import { api, ApiError } from '../lib/api';
+  import { caretPoint } from '../lib/caret';
+  import { findSlash } from '../lib/slash';
   import { t } from '../lib/i18n.svelte';
   import type { RegionName, ThreadDetail } from '../lib/types';
 
@@ -87,6 +89,7 @@
   }
 
   function onInput(): void {
+    detectSlash();
     if (status === 'conflict') return; // resolve it before typing over it again
     status = text === saved ? 'clean' : 'dirty';
     message = null;
@@ -137,6 +140,11 @@
     } finally {
       inflight = false;
     }
+  }
+
+  function onBlur(): void {
+    slash = null;
+    flush();
   }
 
   // Leaving without flushing is how autosave loses work, so blur, navigation and
@@ -213,10 +221,127 @@
     onInput();
   }
 
+  // ---- the slash menu (docs/ARTIFACT-EDITING.md Phase 5) ----
+  //
+  // Notion-style: type "/" on a fresh line, filter, hit enter. Each command
+  // inserts plain markdown, because markdown is what the buffer IS — there is no
+  // hidden document model here that could disagree with the text on screen.
+  //
+  // Labels go through t() with LITERAL keys rather than `t('cmd.' + id)`: the
+  // catalogue is typed, and a computed key is exactly the shape that silently
+  // stops being translated.
+  interface Command {
+    id: string;
+    label: () => string;
+    glyph: string;
+    /** Markdown to insert, and where the caret lands inside it. */
+    text: string;
+    caret: number;
+    /** Extra words to match on, so "checkbox" finds the to-do. */
+    alias?: string;
+  }
+
+  const COMMANDS: Command[] = [
+    { id: 'h1', label: () => t('cmd.h1'), glyph: 'H1', text: '# ', caret: 2, alias: 'title heading' },
+    { id: 'h2', label: () => t('cmd.h2'), glyph: 'H2', text: '## ', caret: 3, alias: 'heading' },
+    { id: 'h3', label: () => t('cmd.h3'), glyph: 'H3', text: '### ', caret: 4, alias: 'heading' },
+    { id: 'bullet', label: () => t('cmd.bullet'), glyph: '•', text: '- ', caret: 2, alias: 'list ul' },
+    { id: 'numbered', label: () => t('cmd.numbered'), glyph: '1.', text: '1. ', caret: 3, alias: 'list ol ordered' },
+    { id: 'todo', label: () => t('cmd.todo'), glyph: '☐', text: '- [ ] ', caret: 6, alias: 'task checkbox tick' },
+    { id: 'quote', label: () => t('cmd.quote'), glyph: '❝', text: '> ', caret: 2, alias: 'blockquote' },
+    { id: 'code', label: () => t('cmd.code'), glyph: '</>', text: '```\n\n```\n', caret: 4, alias: 'pre fence' },
+    {
+      id: 'mermaid',
+      label: () => t('cmd.mermaid'),
+      glyph: '◇',
+      text: '```mermaid\ngraph TD\n  A --> B\n```\n',
+      caret: 11,
+      alias: 'diagram graph chart',
+    },
+    {
+      id: 'table',
+      label: () => t('cmd.table'),
+      glyph: '▦',
+      text: '| a | b |\n| --- | --- |\n|  |  |\n',
+      caret: 2,
+      alias: 'grid',
+    },
+    { id: 'divider', label: () => t('cmd.divider'), glyph: '—', text: '---\n', caret: 4, alias: 'hr rule' },
+    { id: 'link', label: () => t('cmd.link'), glyph: '🔗', text: '[](url)', caret: 1, alias: 'url href' },
+  ];
+
+  // at is the index of the "/" itself, so running a command can replace the
+  // whole token rather than leaving it behind.
+  let slash = $state<{ at: number; query: string; top: number; left: number } | null>(null);
+  let picked = $state(0);
+
+  const matches = $derived(
+    slash
+      ? COMMANDS.filter((c) => {
+          const q = slash!.query.toLowerCase();
+          if (!q) return true;
+          return (c.label().toLowerCase() + ' ' + c.id + ' ' + (c.alias ?? '')).includes(q);
+        })
+      : [],
+  );
+
+  function detectSlash(): void {
+    if (!box) {
+      slash = null;
+      return;
+    }
+    const found = findSlash(text, box.selectionStart);
+    if (!found) {
+      slash = null;
+      return;
+    }
+    const point = caretPoint(box, found.at);
+    slash = { ...found, top: point.top + point.line, left: point.left };
+    picked = 0;
+  }
+
+  function runCommand(c: Command): void {
+    if (!slash || !box) return;
+    const end = box.selectionStart;
+    const before = text.slice(0, slash.at);
+    const after = text.slice(end);
+    // Every one of these is a block, so it starts its own line — otherwise
+    // "note /todo" would render as one paragraph rather than a checkbox.
+    const lead = before === '' || before.endsWith('\n') ? '' : '\n';
+    text = before + lead + c.text + after;
+    const caret = slash.at + lead.length + c.caret;
+    slash = null;
+    restoreSel(caret, caret);
+    onInput();
+  }
+
   function onKeydown(e: KeyboardEvent): void {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
       e.preventDefault();
       void save();
+      return;
+    }
+    if (!slash) return;
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        picked = matches.length ? (picked + 1) % matches.length : 0;
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        picked = matches.length ? (picked - 1 + matches.length) % matches.length : 0;
+        break;
+      case 'Enter':
+      case 'Tab':
+        if (matches[picked]) {
+          e.preventDefault();
+          runCommand(matches[picked]);
+        }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        slash = null;
+        break;
     }
   }
 
@@ -265,15 +390,46 @@
     </p>
   {/if}
 
-  <textarea
-    bind:this={box}
-    bind:value={text}
-    oninput={onInput}
-    onblur={flush}
-    onkeydown={onKeydown}
-    spellcheck="false"
-    aria-label={t('editor.aria')}
-  ></textarea>
+  <div class="field">
+    <textarea
+      bind:this={box}
+      bind:value={text}
+      oninput={onInput}
+      onclick={detectSlash}
+      onblur={onBlur}
+      onkeydown={onKeydown}
+      spellcheck="false"
+      aria-label={t('editor.aria')}
+    ></textarea>
+
+    {#if slash}
+      <!-- Anchored AT the caret, which is the whole difference between this and
+           a command palette. -->
+      <div class="slash" style="top:{slash.top}px; left:{slash.left}px" role="listbox" tabindex="-1">
+        {#if matches.length === 0}
+          <p class="slash-none">{t('cmd.none')}</p>
+        {:else}
+          {#each matches as c, i (c.id)}
+            <button
+              type="button"
+              class="slash-item"
+              class:on={i === picked}
+              role="option"
+              aria-selected={i === picked}
+              onmouseenter={() => (picked = i)}
+              onmousedown={(e) => {
+                e.preventDefault(); // keep focus in the textarea
+                runCommand(c);
+              }}
+            >
+              <span class="slash-glyph">{c.glyph}</span>{c.label()}
+            </button>
+          {/each}
+        {/if}
+        <p class="slash-hint">{t('cmd.hint')}</p>
+      </div>
+    {/if}
+  </div>
 </div>
 
 <style>
@@ -334,6 +490,66 @@
     text-decoration: underline;
     cursor: pointer;
     font: inherit;
+  }
+  .field {
+    position: relative;
+    flex: 1;
+    display: flex;
+    min-height: 0;
+  }
+  .slash {
+    position: absolute;
+    z-index: 20;
+    min-width: 13rem;
+    max-height: 15rem;
+    overflow-y: auto;
+    padding: 0.3rem;
+    border-radius: 12px;
+    border: 1px solid var(--line);
+    background: var(--surface-solid);
+    box-shadow: 0 18px 40px var(--shadow-strong);
+  }
+  .slash-item {
+    display: flex;
+    align-items: center;
+    gap: 0.6rem;
+    width: 100%;
+    padding: 0.35rem 0.5rem;
+    border: none;
+    border-radius: 8px;
+    background: none;
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 0.82rem;
+    text-align: left;
+    cursor: pointer;
+  }
+  .slash-item.on {
+    background: color-mix(in oklab, var(--wip) 18%, transparent);
+  }
+  .slash-glyph {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 1.6rem;
+    height: 1.35rem;
+    border-radius: 6px;
+    border: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 0.68rem;
+    font-weight: 700;
+  }
+  .slash-none,
+  .slash-hint {
+    margin: 0;
+    padding: 0.35rem 0.55rem;
+    font-family: var(--sans);
+    font-size: 0.68rem;
+    color: var(--muted);
+  }
+  .slash-hint {
+    border-top: 1px solid var(--line);
+    margin-top: 0.25rem;
   }
   textarea {
     flex: 1;

@@ -66,6 +66,50 @@
     await reloadDetail();
   }
 
+  // ---- inline checkboxes (docs/ARTIFACT-EDITING.md Phase 6) ----
+  //
+  // Tick a todo straight from the rendered view. The server primitive shipped
+  // with the write path; all this has to do is work out WHICH item was clicked
+  // and hand over its text, because the server refuses an index whose text no
+  // longer matches rather than ticking the wrong box.
+  let ticking = $state<string | null>(null);
+
+  async function onProseClick(e: MouseEvent): Promise<void> {
+    const el = e.target as HTMLElement | null;
+    if (!el || el.tagName !== 'INPUT' || (el as HTMLInputElement).type !== 'checkbox') return;
+    if (store.kiosk || !detail) return;
+
+    // Which section owns this box? The Logbook and the DoD render as separate
+    // articles, and their todos are numbered independently.
+    const article = el.closest('[data-region]') as HTMLElement | null;
+    const region = article?.dataset.region as RegionName | undefined;
+    if (!region) return;
+
+    const boxes = [...article!.querySelectorAll('input[type=checkbox]')];
+    const index = boxes.indexOf(el as HTMLInputElement);
+    if (index < 0) return;
+
+    // The item's own text, read off the DOM the same way a person reads it.
+    const item = el.closest('li');
+    const text = (item?.textContent ?? '').trim();
+    const done = !(el as HTMLInputElement).checked;
+
+    e.preventDefault();
+    const key = `${region}:${index}`;
+    if (ticking) return;
+    ticking = key;
+    try {
+      detail = await api.toggleTodo(detail.id, region, index, text, done);
+    } catch (err) {
+      // A 409 means the list moved under us — the honest answer is to show what
+      // is actually there rather than guess which item was meant.
+      error = err instanceof ApiError && err.status === 409 ? t('editor.todoMoved') : String(err);
+      await reloadDetail();
+    } finally {
+      ticking = null;
+    }
+  }
+
   function onSaved(d: ThreadDetail): void {
     elsewhere = false;
     // The write already returned the fresh thread, so adopt it rather than
@@ -354,6 +398,18 @@
     }
   }
 
+  // goldmark writes checkboxes as `<input type=checkbox disabled>`, and a
+  // disabled input receives no mouse events at all — so an inline todo would
+  // look like a control and be dead. Plane's own taskList shape is not disabled,
+  // hence "if present". Re-run on every render: {@html} replaces the nodes.
+  function enableCheckboxes(el: HTMLElement): void {
+    for (const box of el.querySelectorAll<HTMLInputElement>(
+      '[data-region] input[type=checkbox][disabled]',
+    )) {
+      box.disabled = false;
+    }
+  }
+
   function firstSel(d: ThreadDetail): Sel {
     if (d.artifacts?.length) return { kind: 'artifact', idx: 0 };
     if (d.logbook) return { kind: 'logbook', idx: 0 };
@@ -428,11 +484,13 @@
   // saved scroll position for this artifact (default: top).
   $effect(() => {
     const html = current?.html; // dependency: re-run when the shown doc changes
+    const logbookHTML = detail?.logbook?.html; // ...and on the logbook view
     const el = contentEl;
     if (!el) return;
     const target = savedScroll(); // capture for THIS artifact before async work
     requestAnimationFrame(() => {
-      if (!html) {
+      enableCheckboxes(el);
+      if (!html && !logbookHTML) {
         headings = [];
         return;
       }
@@ -647,17 +705,28 @@
             {/if}
           </div>
         {:else if sel.kind === 'logbook' && detail.logbook}
-          <!-- rendered through the same goldmark/prose pipeline as the rest -->
-          <article class="prose">
+          <!-- rendered through the same goldmark/prose pipeline as the rest.
+               Each section carries its own data-region because their todos are
+               numbered independently, and the click handler needs to know which
+               list it just counted. -->
+          <article class="prose" class:ticking={ticking !== null}>
             <h1>{t('thread.logbook')}</h1>
-            {#if detail.logbook.html}
-              {@html detail.logbook.html}
-            {:else}
-              <p class="dim">{t('thread.noTasks')}</p>
-            {/if}
+            <!-- svelte-ignore a11y_click_events_have_key_events -->
+            <!-- svelte-ignore a11y_no_static_element_interactions -->
+            <div data-region="logbook" onclick={onProseClick}>
+              {#if detail.logbook.html}
+                {@html detail.logbook.html}
+              {:else}
+                <p class="dim">{t('thread.noTasks')}</p>
+              {/if}
+            </div>
             {#if detail.logbook.dod_html}
               <h2>{t('thread.dod')}</h2>
-              {@html detail.logbook.dod_html}
+              <!-- svelte-ignore a11y_click_events_have_key_events -->
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div data-region="dod" onclick={onProseClick}>
+                {@html detail.logbook.dod_html}
+              </div>
             {/if}
           </article>
         {:else if current}
@@ -1097,6 +1166,20 @@
   }
   .err {
     color: oklch(0.68 0.19 25);
+  }
+
+  /* a rendered todo is a control, not decoration (Phase 6) */
+  .prose :global(input[type='checkbox']) {
+    cursor: pointer;
+    accent-color: var(--wip);
+    width: 0.95em;
+    height: 0.95em;
+    margin-right: 0.35em;
+    vertical-align: -0.08em;
+  }
+  .prose.ticking :global(input[type='checkbox']) {
+    cursor: progress;
+    opacity: 0.6;
   }
 
   /* ---- editing ---- */

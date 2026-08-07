@@ -293,6 +293,10 @@ type Actor struct {
 	ServiceAdmin bool     `json:"service_admin,omitempty"` // godmode — cross-org ops (§ admin)
 	ReadOnly     bool     `json:"read_only,omitempty"`     // kiosk display token: reads only, no MCP (§9 Phase 9)
 	Instances    []string `json:"instances"`
+	// Projects is the set of "slug:projectID" the actor may see. nil means
+	// "not project-scoped" (a kiosk display, or a service admin); an empty map
+	// means "scoped, and a member of nothing" — a different fact entirely.
+	Projects map[string]bool `json:"-"`
 }
 
 // Label returns a stable human label for logs and attribution.
@@ -311,6 +315,24 @@ func (a Actor) Label() string {
 }
 
 // CanSee reports whether the actor is authorized for an instance slug.
+// CanSeeProject reports whether the actor may see one project inside an
+// instance. Plane scopes membership PER PROJECT — a private project's members
+// are a subset of the workspace's — so instance membership answers "may this
+// person use this Plane at all", which is a weaker question.
+//
+// A nil Projects map means the actor is not project-scoped at all: a kiosk
+// display minted for an instance, or a service admin. Those see the instance
+// they were granted, which is what granting them meant.
+func (a Actor) CanSeeProject(slug, projectID string) bool {
+	if !a.CanSee(slug) {
+		return false
+	}
+	if a.Projects == nil {
+		return true
+	}
+	return a.Projects[slug+":"+projectID]
+}
+
 func (a Actor) CanSee(slug string) bool {
 	for _, s := range a.Instances {
 		if s == slug {

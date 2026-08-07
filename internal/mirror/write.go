@@ -375,3 +375,35 @@ func (m *Mirror) DeleteItems(instance string, itemIDs []string) error {
 		return nil
 	})
 }
+
+// SetProjectMembers replaces one project's membership. Replace rather than
+// merge: somebody REMOVED from a project has to stop seeing it, and a merge
+// would never take anyone away.
+func (m *Mirror) SetProjectMembers(instance, projectID string, memberIDs []string) error {
+	return m.batch(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			`DELETE FROM mirror_project_members WHERE instance = ? AND project_id = ?`,
+			instance, projectID); err != nil {
+			return err
+		}
+		st, err := tx.Prepare(
+			`INSERT OR IGNORE INTO mirror_project_members(instance, project_id, member_id) VALUES(?,?,?)`)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		for _, id := range memberIDs {
+			if _, err := st.Exec(instance, projectID, id); err != nil {
+				return err
+			}
+		}
+		// Record that we READ it, separately from what we read. A project whose
+		// membership genuinely came back empty is a different fact from one we
+		// have never fetched.
+		_, err = tx.Exec(
+			`INSERT INTO mirror_project_member_sync(instance, project_id, synced_at) VALUES(?,?,?)
+			 ON CONFLICT(instance, project_id) DO UPDATE SET synced_at = excluded.synced_at`,
+			instance, projectID, time.Now().UTC().Format(time.RFC3339))
+		return err
+	})
+}

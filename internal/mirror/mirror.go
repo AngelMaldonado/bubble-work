@@ -66,6 +66,25 @@ CREATE TABLE IF NOT EXISTS mirror_members (
   role         INTEGER NOT NULL DEFAULT 0,
   PRIMARY KEY (instance, id)
 );
+-- Who may see WHICH PROJECT. Plane scopes membership per project, and a private
+-- project's members are a subset of the workspace's, so scoping the board by
+-- workspace alone would show every project to everyone who can log in.
+CREATE TABLE IF NOT EXISTS mirror_project_members (
+  instance   TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  member_id  TEXT NOT NULL,
+  PRIMARY KEY (instance, project_id, member_id)
+);
+-- One row per project whose membership we have actually READ. Distinct from the
+-- membership itself: a project with no rows in mirror_project_members might have
+-- no members we know of, or might never have been fetched, and an authorization
+-- boundary cannot afford to guess which.
+CREATE TABLE IF NOT EXISTS mirror_project_member_sync (
+  instance   TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  synced_at  TEXT NOT NULL,
+  PRIMARY KEY (instance, project_id)
+);
 CREATE TABLE IF NOT EXISTS mirror_items (
   instance         TEXT NOT NULL,
   id               TEXT NOT NULL,

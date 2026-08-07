@@ -497,6 +497,20 @@ type Project struct {
 	Identifier string `json:"identifier"`
 }
 
+// ListProjectMembers returns the people who are members of ONE project.
+//
+// Plane scopes membership per project, not just per workspace: every project on
+// a real workspace can be private (network 0) with its own member list. The
+// workspace member list answers "may this person use Plane at all", which is a
+// different question from "may this person see this work".
+func (c *Client) ListProjectMembers(ctx context.Context, projectID string) ([]Member, error) {
+	// A BARE ARRAY, not a paginated envelope — verified against a live Plane on
+	// 2026-08-07, and the same shape the workspace /members/ endpoint uses.
+	var out []Member
+	err := c.get(ctx, c.workspaceBase()+"/projects/"+projectID+"/members/", &out)
+	return out, err
+}
+
 // ListProjects returns every project in the workspace (project need not be set).
 func (c *Client) ListProjects(ctx context.Context) ([]Project, error) {
 	var out []Project

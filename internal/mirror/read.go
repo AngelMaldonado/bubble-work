@@ -296,3 +296,36 @@ func (m *Mirror) Counts(instance string) (Counts, error) {
 	}
 	return c, nil
 }
+
+// ProjectsFor returns the projects a person may see in an instance.
+//
+// The second return says whether the mirror KNOWS the answer at all. An empty
+// set and "we have not synced membership yet" are different facts, and a caller
+// that conflates them either blacks out a legitimate board or shows work to
+// somebody who should not see it — so it has to be told which one this is.
+func (m *Mirror) ProjectsFor(instance, memberID string) (projects map[string]bool, known bool, err error) {
+	var synced int
+	if err := m.db.QueryRow(
+		`SELECT COUNT(*) FROM mirror_project_member_sync WHERE instance = ?`, instance).Scan(&synced); err != nil {
+		return nil, false, err
+	}
+	if synced == 0 {
+		return nil, false, nil
+	}
+	rows, err := m.db.Query(
+		`SELECT project_id FROM mirror_project_members WHERE instance = ? AND member_id = ?`,
+		instance, memberID)
+	if err != nil {
+		return nil, true, err
+	}
+	defer rows.Close()
+	projects = map[string]bool{}
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return nil, true, err
+		}
+		projects[id] = true
+	}
+	return projects, true, rows.Err()
+}

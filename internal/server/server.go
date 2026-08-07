@@ -395,6 +395,7 @@ func (s *Server) scopeActor(id identity) (domain.Actor, error) {
 		return domain.Actor{}, err
 	}
 	var scope []string
+	var projects map[string]bool
 	admin := false
 	var lookupErr error
 	for _, inst := range instances {
@@ -419,6 +420,26 @@ func (s *Server) scopeActor(id identity) (domain.Actor, error) {
 				if mm.Role >= plane.RoleAdmin {
 					admin = true
 				}
+				// Plane scopes membership PER PROJECT, and a private project's
+				// members are a subset of the workspace's. Without this, every
+				// workspace member sees every project's work.
+				vis, known, perr := s.mirror.ProjectsFor(inst.Slug, mm.ID)
+				if perr != nil {
+					lookupErr = perr
+				} else if !known {
+					// "We have not synced project membership yet" is not "you
+					// belong to no project". Same rule as the members lookup
+					// above: make it retryable rather than answer wrongly in
+					// either direction.
+					lookupErr = fmt.Errorf("instance %s has no mirrored project membership yet", inst.Slug)
+				} else {
+					if projects == nil {
+						projects = map[string]bool{}
+					}
+					for pid := range vis {
+						projects[inst.Slug+":"+pid] = true
+					}
+				}
 				break
 			}
 		}
@@ -432,10 +453,17 @@ func (s *Server) scopeActor(id identity) (domain.Actor, error) {
 	if name == "" {
 		name = id.Email
 	}
+	// A human is ALWAYS project-scoped, even when they are a member of nothing:
+	// a nil map means "not scoped", which is a different and much more
+	// permissive claim.
+	if projects == nil {
+		projects = map[string]bool{}
+	}
 	return domain.Actor{
 		ID: id.ID, Name: name, Kind: "human", Email: id.Email, Admin: admin,
 		ServiceAdmin: s.adminEmails[strings.ToLower(id.Email)],
 		Instances:    scope,
+		Projects:     projects,
 	}, nil
 }
 
@@ -1225,8 +1253,11 @@ func briefLogbookHTML(brief, logbook string) string {
 // returns the instance slug for cache invalidation.
 func (s *Server) authorizeBubble(ctx context.Context, id string) (slug string, err error) {
 	actor, _ := domain.ActorFrom(ctx)
-	slug, _, _ = strings.Cut(id, ":")
-	if slug != "" && !actor.CanSee(slug) {
+	var projID string
+	slug, projID, _ = cut3(id)
+	// Project membership, not just workspace membership: hiding a bubble from
+	// the board while still acting on it by id would be no protection at all.
+	if slug != "" && !actor.CanSeeProject(slug, projID) {
 		return "", errForbid
 	}
 	return slug, nil
@@ -1424,7 +1455,16 @@ func (s *Server) collect(ctx context.Context) ([]domain.Bubble, error) {
 			log.Printf("instance %s: %v", inst.Slug, err)
 			continue
 		}
-		out = append(out, bs...)
+		// The snapshot is built once per instance and shared by every reader, so
+		// the per-person filter belongs HERE. A bubble is a Plane module inside a
+		// project; if the actor is not a member of that project they must not see
+		// it, whatever their workspace role.
+		for _, b := range bs {
+			_, projID, _ := cut3(b.ID)
+			if actor.CanSeeProject(inst.Slug, projID) {
+				out = append(out, b)
+			}
+		}
 	}
 	return out, nil
 }

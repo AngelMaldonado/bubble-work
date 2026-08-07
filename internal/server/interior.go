@@ -96,7 +96,10 @@ func (s *Server) interiorClient(ctx context.Context, nsID string) (cl *plane.Cli
 	slug, projID, objID = parts[0], parts[1], parts[2]
 
 	actor, _ := domain.ActorFrom(ctx)
-	if !actor.CanSee(slug) {
+	// Every thread read and write comes through here, so this one check covers
+	// the interior: reading a Brief, posting a comment, editing a Logbook,
+	// ticking a todo, deleting. Guessing a namespaced id must not be a way in.
+	if !actor.CanSeeProject(slug, projID) {
 		return nil, domain.Instance{}, "", "", "", errForbid
 	}
 	inst, ok, err := s.instanceBySlug(slug)

@@ -206,6 +206,30 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 		}
 	}
 
+	// Project membership rides the STRUCTURE cadence, not the full walk: it is
+	// what decides who may see which board, so waiting an hour to notice that
+	// somebody was added to — or removed from — a project is too long. It is one
+	// cheap call per project, ten minutes apart.
+	if freshStructure {
+		for _, p := range projects {
+			ms, err := base.ListProjectMembers(ctx, p.ID)
+			if err != nil {
+				// Leave the previous answer in place. Replacing it with an empty
+				// set would silently black out everyone who can see this project.
+				log.Printf("sync %s: project members %s: %v", inst.Slug, p.ID, err)
+				res.Partial = true
+				continue
+			}
+			ids := make([]string, 0, len(ms))
+			for _, m := range ms {
+				ids = append(ids, m.ID)
+			}
+			if err := s.m.SetProjectMembers(inst.Slug, p.ID, ids); err != nil {
+				return res, fmt.Errorf("write project members: %w", err)
+			}
+		}
+	}
+
 	if full {
 		// A full walk of a busy workspace can sit inside the Phase 0 rate waits
 		// for a long time. Announce the start so a slow pass is legible as

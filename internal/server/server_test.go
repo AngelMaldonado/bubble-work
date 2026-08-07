@@ -2788,3 +2788,124 @@ func TestDeleteRemovesFromPlaneAndEverywhereElse(t *testing.T) {
 		t.Error("a deleted bubble left its contract behind")
 	}
 }
+
+// Plane scopes membership PER PROJECT — on a real workspace every project can be
+// private with its own member list — so scoping the board by WORKSPACE alone
+// showed every project's work to anyone who could log in.
+//
+// This is the boundary, so it is checked from both sides: what the board offers,
+// and what happens when somebody addresses a bubble or a thread by id anyway.
+func TestProjectMembershipIsTheBoundary(t *testing.T) {
+	// p1 has both people; p2 has only the owner. Both are private, which is what
+	// the real workspace looked like when this was found.
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			// Whoever presents a key is "the outsider" unless it is the admin key.
+			if r.Header.Get("X-API-Key") == "admin-key" {
+				io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+			} else {
+				io.WriteString(w, `{"id":"u2","email":"outsider@x","display_name":"Outsider"}`)
+			}
+		case strings.HasSuffix(p, "/projects/p1/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"},
+			                   {"id":"u2","email":"outsider@x","display_name":"Outsider"}]`)
+		case strings.HasSuffix(p, "/projects/p2/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"}]`)
+		case strings.HasSuffix(p, "/members/"):
+			// The WORKSPACE has both — which is exactly why it is the wrong list
+			// to authorize with.
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20},
+			                   {"id":"u2","email":"outsider@x","display_name":"Outsider","role":15}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Shared","identifier":"SH"},
+			                              {"id":"p2","name":"Private","identifier":"PV"}],"next_page_results":false}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.Contains(p, "/p1/") && strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Shared bubble"}]}`)
+		case strings.Contains(p, "/p2/") && strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m2","name":"Private bubble"}]}`)
+		case strings.Contains(p, "/p1/") && strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"Shared thread"}]}`)
+		case strings.Contains(p, "/p2/") && strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-2","name":"Private thread"}]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			id, name := "wi-1", "Shared thread"
+			if strings.Contains(p, "/p2/") {
+				id, name = "wi-2", "Private thread"
+			}
+			fmt.Fprintf(w, `{"results":[{"id":%q,"name":%q,"description_html":"<p>secret</p>","created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, id, name)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	const outsider = "outsider_plane_key" // a workspace member, NOT a member of p2
+
+	var board []domain.BubbleView
+	code, rb := do(t, http.MethodGet, ts.URL+"/api/bubbles", outsider, "")
+	if code != http.StatusOK {
+		t.Fatalf("board: %d %s", code, rb)
+	}
+	if err := json.Unmarshal(rb, &board); err != nil {
+		t.Fatal(err)
+	}
+	for _, b := range board {
+		if strings.Contains(b.ID, ":p2:") {
+			t.Errorf("a private project's bubble was on the board of a non-member: %s (%s)", b.ID, b.Name)
+		}
+	}
+	// ...and the one they DO belong to is still there, or this is just a blackout.
+	shared := false
+	for _, b := range board {
+		if strings.Contains(b.ID, ":p1:") {
+			shared = true
+		}
+	}
+	if !shared {
+		t.Fatal("scoping hid a project the person IS a member of")
+	}
+
+	// Hiding it from the board is no protection if you can still address it by
+	// id. Either refusal is correct here: 403 says "exists, not yours" and 404
+	// says nothing at all — and where the id is resolved against the caller's
+	// own board, 404 is the better answer, because 403 would confirm that a
+	// bubble by that id exists.
+	refused := func(t *testing.T, what string, code int, body string) {
+		t.Helper()
+		if code != http.StatusForbidden && code != http.StatusNotFound {
+			t.Errorf("%s by a non-member: want 403 or 404, got %d %s", what, code, body)
+		}
+		if strings.Contains(body, "secret") || strings.Contains(body, "Private thread") {
+			t.Errorf("%s leaked content of a project the caller is not in: %s", what, body)
+		}
+	}
+	for _, path := range []string{
+		"/api/bubbles/ws:p2:m2/threads",
+		"/api/threads/ws:p2:wi-2",
+		"/api/threads/ws:p2:wi-2/comments",
+	} {
+		code, body := do(t, http.MethodGet, ts.URL+path, outsider, "")
+		refused(t, "GET "+path, code, string(body))
+	}
+	// Writes too — reading is not the only way to learn what is in there.
+	edit, _ := json.Marshal(domain.ThreadEdit{Logbook: strPtr("- [ ] mine now")})
+	code, body := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p2:wi-2", outsider, string(edit))
+	refused(t, "PATCH thread", code, string(body))
+	code, body = do(t, http.MethodDelete, ts.URL+"/api/bubbles/ws:p2:m2", outsider, "")
+	refused(t, "DELETE bubble", code, string(body))
+}

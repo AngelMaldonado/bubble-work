@@ -177,7 +177,9 @@
             onclick={commit}
           >
             <span class="mark" class:allmark={e.id === ''}>
-              {e.identifier || (e.id === '' ? '∗' : e.name.slice(0, 2).toUpperCase())}
+              <span class="ident">
+                {e.identifier || (e.id === '' ? '∗' : e.name.slice(0, 2).toUpperCase())}
+              </span>
             </span>
             <span class="name">{e.name}</span>
             <span class="count">{t('switch.bubbles', { n: e.bubbles })}</span>
@@ -219,7 +221,7 @@
     gap: 0.5rem;
   }
   .tile {
-    width: 8.5rem;
+    width: 9.5rem;
     display: grid;
     justify-items: center;
     gap: 0.3rem;
@@ -237,18 +239,30 @@
     background: color-mix(in oklab, var(--wip) 14%, transparent);
     border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
   }
+  /* A Plane identifier is free text, and the real ones run to eight characters
+     (CECUBYMX, WAREHOUS). A fixed square could not hold them, so the badge keeps
+     its height and its minimum width — the grid still reads as a grid — and
+     grows sideways within the tile instead. */
   .mark {
-    display: grid;
-    place-items: center;
-    width: 2.6rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 2.6rem;
+    max-width: 100%;
     height: 2.6rem;
+    padding: 0 0.55rem;
     border-radius: 12px;
     background: color-mix(in oklab, var(--text) 8%, transparent);
     border: 1px solid var(--line);
-    font-size: 0.8rem;
+    font-size: 0.7rem;
     font-weight: 800;
     letter-spacing: 0.02em;
     color: var(--muted);
+  }
+  .ident {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
   }
   .tile.on .mark {
     background: var(--wip);
@@ -258,14 +272,22 @@
   .allmark {
     font-size: 1.1rem;
   }
+  /* Workspace names are hostnames here — warehouse.cuby.work does not fit on one
+     line at any tile width worth having. Two lines, broken anywhere, with the
+     height reserved either way so the counts underneath stay on one baseline. */
   .name {
-    max-width: 100%;
+    width: 100%;
+    min-height: 2.5em;
     font-size: 0.78rem;
     font-weight: 700;
+    line-height: 1.25;
     text-align: center;
+    overflow-wrap: anywhere;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .count {
     font-size: 0.68rem;

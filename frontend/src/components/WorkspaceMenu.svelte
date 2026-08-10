@@ -13,7 +13,13 @@
     onrename,
     oncreate,
     ondelete,
-  }: { onrename: () => void; oncreate: () => void; ondelete: () => void } = $props();
+    ondocs,
+  }: {
+    onrename: () => void;
+    oncreate: () => void;
+    ondelete: () => void;
+    ondocs: () => void;
+  } = $props();
 
   const MENU_W = 232;
   const px = $derived(Math.max(8, Math.min(workspaceMenu.x, window.innerWidth - MENU_W - 8)));
@@ -76,6 +82,12 @@
     <div class="ctxmenu-head">
       {current ? current.name : t('ws.noneScoped')}
     </div>
+
+    <button class="ctxmenu-item" role="menuitem" disabled={!current} onclick={() => pick(ondocs)}>
+      <span class="ctxmenu-ic">📄</span> {t('pages.title')}
+    </button>
+
+    <div class="ctxmenu-sep"></div>
 
     <button
       class="ctxmenu-item"

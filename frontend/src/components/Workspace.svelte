@@ -17,6 +17,7 @@
   import ProjectCombobox from './ProjectCombobox.svelte';
   import WorkspaceMenu from './WorkspaceMenu.svelte';
   import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
+  import PagesPanel from './PagesPanel.svelte';
   import WorkspaceForm from './WorkspaceForm.svelte';
   import ConfirmDelete from './ConfirmDelete.svelte';
   import ViewCombobox from './ViewCombobox.svelte';
@@ -34,6 +35,8 @@
     null,
   );
   let wsDeleting = $state(false);
+  // the workspace's documentation (Plane project pages)
+  let docsOpen = $state(false);
 
   // The workspace being acted on — the filtered one, or the only one there is.
   const scopedWorkspace = $derived(store.activeProject);
@@ -343,7 +346,8 @@
 />
 {#if !kiosk}
   <WorkspaceSwitcher
-    enabled={!omni &&
+    enabled={!docsOpen &&
+      !omni &&
       !showCreate &&
       !mcpOpen &&
       !birthTarget &&
@@ -359,7 +363,15 @@
       (wsForm = { mode: 'rename', id: wsIdOf(scopedWorkspace.id), current: scopedWorkspace.name })}
     oncreate={() => (wsForm = { mode: 'create', id: '', current: '' })}
     ondelete={armWorkspaceDelete}
+    ondocs={() => (docsOpen = true)}
   />
+  {#if docsOpen && scopedWorkspace}
+    <PagesPanel
+      workspaceId={wsIdOf(scopedWorkspace.id)}
+      workspaceName={scopedWorkspace.name}
+      onclose={() => (docsOpen = false)}
+    />
+  {/if}
   {#if wsForm}
     <WorkspaceForm
       mode={wsForm.mode}

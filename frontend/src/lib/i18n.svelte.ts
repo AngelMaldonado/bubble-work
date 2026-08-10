@@ -383,6 +383,14 @@ const en = {
   // The WORKSPACE tier. A Workspace is a Plane PROJECT — not a Plane workspace
   // (AGENTS.md) — and until deletion landed it was the one tier the web treated
   // as a filter and nothing more.
+  // the Alt+Tab-style workspace switcher, and the owner filter on the name
+  'switch.title': 'Switch workspace',
+  'switch.hint': 'Tab to advance · ← → to move · a letter to jump · release Shift to go · Esc to cancel',
+  'switch.bubbles': '{n} bubble(s)',
+  'owner.filter': 'Whose bubbles to show',
+  'owner.placeholder': 'owner',
+  'owner.open': 'Open the owner filter',
+  'owner.me': '{name} (you)',
   'ws.menuTitle': 'Workspace actions',
   'ws.noneScoped': 'No workspace scoped',
   'ws.pickFirst': 'Pick one workspace in the filter to rename or delete it.',
@@ -786,6 +794,14 @@ const es: Record<MsgKey, string> = {
   'tune.hint.thread': 'cómo un work item se mueve entre bandas',
 
   // el nivel de ESPACIO DE TRABAJO (un proyecto de Plane)
+  // el cambiador de espacios (estilo Alt+Tab) y el filtro por responsable
+  'switch.title': 'Cambiar de espacio de trabajo',
+  'switch.hint': 'Tab para avanzar · ← → para moverte · una letra para saltar · suelta Shift para ir · Esc para cancelar',
+  'switch.bubbles': '{n} burbuja(s)',
+  'owner.filter': 'De quién ver las burbujas',
+  'owner.placeholder': 'responsable',
+  'owner.open': 'Abrir el filtro por responsable',
+  'owner.me': '{name} (tú)',
   'ws.menuTitle': 'Acciones del espacio de trabajo',
   'ws.noneScoped': 'Ningún espacio seleccionado',
   'ws.pickFirst': 'Elige un espacio de trabajo en el filtro para renombrarlo o eliminarlo.',

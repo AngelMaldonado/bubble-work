@@ -16,6 +16,8 @@
   import BubbleDetail from './BubbleDetail.svelte';
   import ProjectCombobox from './ProjectCombobox.svelte';
   import WorkspaceMenu from './WorkspaceMenu.svelte';
+  import WorkspaceSwitcher from './WorkspaceSwitcher.svelte';
+  import OwnerCombobox from './OwnerCombobox.svelte';
   import WorkspaceForm from './WorkspaceForm.svelte';
   import ConfirmDelete from './ConfirmDelete.svelte';
   import ViewCombobox from './ViewCombobox.svelte';
@@ -236,9 +238,8 @@
            the project filter. "Mine" is hidden on a kiosk (no personal identity). -->
       <span class="projwrap"><ViewCombobox /></span>
 
-      <span class="who" title={store.actor?.email}>
-        {store.actor?.name ?? store.actor?.email ?? '—'}
-      </span>
+      <!-- the signed-in name, which is also the owner filter -->
+      <span class="projwrap"><OwnerCombobox /></span>
 
       {#if unread > 0}
         <span class="chip alert" title={t('board.unreadNotices')}>✉ {unread}</span>
@@ -341,6 +342,17 @@
   onsearch={() => (omni = true)}
 />
 {#if !kiosk}
+  <WorkspaceSwitcher
+    enabled={!omni &&
+      !showCreate &&
+      !mcpOpen &&
+      !birthTarget &&
+      !wsForm &&
+      !wsPendingDelete &&
+      !store.detail &&
+      !boardMenu.open &&
+      !workspaceMenu.open}
+  />
   <WorkspaceMenu
     onrename={() =>
       scopedWorkspace &&
@@ -568,14 +580,6 @@
     background: color-mix(in oklab, var(--reviewed) 18%, transparent);
     color: var(--text);
     font-size: 0.82rem;
-  }
-  .who {
-    color: var(--muted);
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    flex: 0 0 auto; /* never collapse to zero — always show the name */
-    max-width: 16rem;
   }
   .hint b {
     color: var(--muted);

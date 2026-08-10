@@ -514,6 +514,33 @@ them. Project membership is what authorizes a workspace, and it is otherwise
 refreshed only on the slow structure cadence — so without it the creator would
 be refused their own new workspace for up to ten minutes.
 
+## Getting between workspaces
+
+Picking a workspace meant reaching for a combobox, so the status bar grew two
+keyboard-first controls.
+
+**The switcher** is Alt+Tab for workspaces: `Shift+Tab` opens it and steps
+forward, Tab keeps stepping, arrows move without committing, a letter jumps to
+the next workspace starting with it, releasing **Shift** commits, and Esc puts
+back whatever was scoped before. Shift is the held key because that is the
+metaphor — the same reason Alt is on Windows. "All projects" is in the ring: it
+is a real scope, and without it there is no way back to the whole board from the
+keyboard.
+
+`Shift+Tab` is also how a keyboard user walks focus backwards, which is why the
+switcher only claims it when focus is on the board — inside any field, editor or
+menu the browser keeps it. It is also suppressed whenever a modal, the omnibar or
+a context menu owns the keyboard, since those have their own idea of what Tab and
+Escape mean. The trade-off that remains: with focus on a status-bar *button*,
+Shift+Tab now switches workspaces rather than moving focus back.
+
+**The name** in the status bar used to be a label that did nothing. It is now the
+owner filter, on the same `.proj-cb` styles as the other two, so the bar reads as
+one control repeated rather than three that nearly match. Note this overlaps the
+existing view-scope combobox, which already carried Everyone / Mine / each
+member — the two write the same state and stay in sync, but only one of them
+needs to exist.
+
 ## Open
 
 - Whether Plane's editor renders our checkbox shape (Phase 2) — one live write

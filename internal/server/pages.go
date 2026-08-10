@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -87,9 +88,10 @@ func (s *Server) Pages(ctx context.Context, workspaceID string) ([]domain.Page, 
 	if err != nil {
 		return nil, err
 	}
-	ps, err := s.pageClient(ctx, inst, projID).ListPages(ctx, projID)
+	cl := s.pageClient(ctx, inst, projID)
+	ps, err := cl.ListPages(ctx, projID)
 	if err != nil {
-		return nil, fmt.Errorf("list pages: %w", err)
+		return nil, s.explainPageFailure(ctx, cl, projID, err)
 	}
 	out := make([]domain.Page, 0, len(ps))
 	for _, p := range ps {
@@ -100,6 +102,34 @@ func (s *Server) Pages(ctx context.Context, workspaceID string) ([]domain.Page, 
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].UpdatedAt.After(out[j].UpdatedAt) })
 	return out, nil
+}
+
+// explainPageFailure turns Plane's 404 into something actionable.
+//
+// Plane hides a whole surface when a project has its feature switched off, and
+// the API answers 404 rather than saying which of the two happened — the project
+// has pages disabled, or this Plane is too old to expose pages on the public API
+// at all. Those need opposite responses from the person reading the message, so
+// one extra request buys the distinction.
+func (s *Server) explainPageFailure(ctx context.Context, cl *plane.Client, projID string, err error) error {
+	var api *plane.APIError
+	if !errors.As(err, &api) || api.Status != http.StatusNotFound {
+		return fmt.Errorf("list pages: %w", err)
+	}
+	p, perr := cl.GetProject(ctx, projID)
+	switch {
+	case perr != nil:
+		return fmt.Errorf("list pages: %w", err)
+	case !p.PageView:
+		return fmt.Errorf(
+			"%w: pages are switched off for %q in Plane — turn Pages on in that project's "+
+				"settings and this works immediately", errBadRequest, p.Name)
+	default:
+		return fmt.Errorf(
+			"%w: this Plane does not expose project pages on its API. Pages are on for %q, so the "+
+				"feature exists in the UI; the /pages/ endpoint arrived in a later Plane release "+
+				"than the one this instance runs", errBadRequest, p.Name)
+	}
 }
 
 // Page returns one page with its body as markdown.

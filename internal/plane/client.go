@@ -514,6 +514,19 @@ type Project struct {
 	ID         string `json:"id"`
 	Name       string `json:"name"`
 	Identifier string `json:"identifier"`
+	// Feature toggles. Plane hides a whole surface when one is off, and the API
+	// answers 404 for it rather than saying so — page_view is why reading pages
+	// can fail on a project that has them switched off.
+	PageView   bool `json:"page_view"`
+	ModuleView bool `json:"module_view"`
+	CycleView  bool `json:"cycle_view"`
+}
+
+// GetProject reads one project, including its feature toggles.
+func (c *Client) GetProject(ctx context.Context, projectID string) (Project, error) {
+	var p Project
+	err := c.get(ctx, c.workspaceBase()+"/projects/"+projectID+"/", &p)
+	return p, err
 }
 
 // ListProjectMembers returns the people who are members of ONE project.

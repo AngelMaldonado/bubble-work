@@ -89,6 +89,14 @@
     }
   }
 
+  // Two letters, always. A Plane identifier is free text and the real ones run
+  // to eight characters, which no square badge can hold — and a badge that
+  // resizes per workspace stops reading as a grid. Two initials are decoration
+  // that anchors the eye; the name underneath is what actually identifies it.
+  function initials(e: Entry): string {
+    return (e.identifier || e.name).replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase();
+  }
+
   function onKeyDown(e: KeyboardEvent): void {
     if (!open) {
       if (!enabled || !e.shiftKey || e.key !== 'Tab') return;
@@ -177,9 +185,7 @@
             onclick={commit}
           >
             <span class="mark" class:allmark={e.id === ''}>
-              <span class="ident">
-                {e.identifier || (e.id === '' ? '∗' : e.name.slice(0, 2).toUpperCase())}
-              </span>
+              {e.id === '' ? '∗' : initials(e)}
             </span>
             <span class="name">{e.name}</span>
             <span class="count">{t('switch.bubbles', { n: e.bubbles })}</span>
@@ -239,30 +245,18 @@
     background: color-mix(in oklab, var(--wip) 14%, transparent);
     border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
   }
-  /* A Plane identifier is free text, and the real ones run to eight characters
-     (CECUBYMX, WAREHOUS). A fixed square could not hold them, so the badge keeps
-     its height and its minimum width — the grid still reads as a grid — and
-     grows sideways within the tile instead. */
   .mark {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 2.6rem;
-    max-width: 100%;
+    display: grid;
+    place-items: center;
+    width: 2.6rem;
     height: 2.6rem;
-    padding: 0 0.55rem;
     border-radius: 12px;
     background: color-mix(in oklab, var(--text) 8%, transparent);
     border: 1px solid var(--line);
-    font-size: 0.7rem;
+    font-size: 0.9rem;
     font-weight: 800;
-    letter-spacing: 0.02em;
+    letter-spacing: 0.03em;
     color: var(--muted);
-  }
-  .ident {
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
   }
   .tile.on .mark {
     background: var(--wip);

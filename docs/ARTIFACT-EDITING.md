@@ -541,6 +541,27 @@ existing view-scope combobox, which already carried Everyone / Mine / each
 member — the two write the same state and stay in sync, but only one of them
 needs to exist.
 
+### Filters are remembered
+
+The instance, workspace and owner filters survive a reload. They go in
+`localStorage`, not the URL: the hash already carries *what* you are looking at
+(thread, artifact) and is meant to be shareable, while whose bubbles you narrowed
+to is a preference of yours, not part of the address.
+
+The part that needs care is that a saved filter can outlive what it points at — a
+workspace gets deleted, an instance is un-federated — and restoring it then gives
+you an empty board with no visible cause and no hint that the filter is to blame.
+So once the real data has arrived, anything that no longer resolves is dropped.
+Two things that are NOT dropped: a filter whose list has not loaded yet (an empty
+list during loading is not evidence of anything), and an owner who simply has no
+bubbles in the workspace you are filtered to — that is an empty result you asked
+for. The owner check therefore runs against every bubble, not against the
+already-narrowed member list.
+
+A kiosk is a shared wall display rather than a person, so it neither keeps its
+filters nor inherits whoever last used that browser — it clears them once whoami
+says what it is. Signing out drops them for the same reason.
+
 ## Open
 
 - Whether Plane's editor renders our checkbox shape (Phase 2) — one live write

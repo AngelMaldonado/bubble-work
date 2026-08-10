@@ -19,6 +19,37 @@ export interface ArtSel {
   idx: number;
 }
 
+// Filters survive a reload. Losing them on every refresh made the board feel
+// like it forgot what you were doing — and with the workspace filter especially,
+// re-picking it was the first thing you did every single time.
+//
+// They live in localStorage, not the URL: the hash already carries WHAT you are
+// looking at (thread, artifact) and is meant to be shareable. Whose bubbles you
+// filtered to is a preference of yours, not part of the address.
+const FILTERS_KEY = 'bubble.filters';
+
+interface SavedFilters {
+  instance?: string;
+  project?: string;
+  scope?: 'mine' | 'workspace' | 'member';
+  viewMember?: string;
+}
+
+function readFilters(): SavedFilters {
+  try {
+    const raw = localStorage.getItem(FILTERS_KEY);
+    if (!raw) return {};
+    const v = JSON.parse(raw) as SavedFilters;
+    return v && typeof v === 'object' ? v : {};
+  } catch {
+    return {}; // a corrupt or unreadable entry is not worth a broken board
+  }
+}
+
+// Read once at module load: the filters are seeded into $state fields, and four
+// separate reads of the same key would only invite them to disagree.
+const savedFilters = readFilters();
+
 const SEC_MS = 30_000; // secondary timer: inbox freshness (+ cross-org when godmode)
 const RECONNECT_MS = 3_000; // SSE reconnect backoff
 const FOCUS_CAP = 5; // soft warning threshold for the In-progress band
@@ -44,14 +75,15 @@ class Store {
   allOrgs = $state(false);
 
   // active filters ("" = all). project holds a Plane project id.
-  instance = $state<string>('');
-  project = $state<string>('');
+  // Seeded from the last session — see FILTERS_KEY.
+  instance = $state<string>(savedFilters.instance ?? '');
+  project = $state<string>(savedFilters.project ?? '');
   polling = $state(false);
 
   // view scope (Phase 9): whose bubbles to show. "workspace" = everyone in
   // scope; "mine" = bubbles I own; "member" = a chosen owner (viewMember).
-  scope = $state<'mine' | 'workspace' | 'member'>('workspace');
-  viewMember = $state<string>('');
+  scope = $state<'mine' | 'workspace' | 'member'>(savedFilters.scope ?? 'workspace');
+  viewMember = $state<string>(savedFilters.viewMember ?? '');
 
   // the bubble whose timeline detail panel is open (null = closed).
   detail = $state<BubbleView | null>(null);
@@ -102,11 +134,72 @@ class Store {
   setScope(s: 'mine' | 'workspace' | 'member'): void {
     this.scope = s;
     if (s !== 'member') this.viewMember = '';
+    this.saveFilters();
   }
 
   setViewMember(m: string): void {
     this.viewMember = m;
     this.scope = m ? 'member' : 'workspace';
+    this.saveFilters();
+  }
+
+  // A kiosk is a shared wall display, not a person: it must not inherit whatever
+  // the last human at that browser was filtered to, and must not leave its own
+  // filters behind for them either.
+  saveFilters(): void {
+    if (this.kiosk) return;
+    try {
+      localStorage.setItem(
+        FILTERS_KEY,
+        JSON.stringify({
+          instance: this.instance,
+          project: this.project,
+          scope: this.scope,
+          viewMember: this.viewMember,
+        } satisfies SavedFilters),
+      );
+    } catch {
+      // storage full or blocked (private mode): filters just stop persisting
+    }
+  }
+
+  // A saved filter can outlive what it points at — a workspace gets deleted, a
+  // person stops owning anything, an instance is un-federated. Restoring it then
+  // leaves an empty board with no visible reason, and no way to tell the filter
+  // is the cause. So once the real data is in, anything that no longer resolves
+  // is dropped.
+  private pruneFilters(): void {
+    // Identity is only known once whoami has answered, which is after the state
+    // was seeded — so this is the first point at which a kiosk can disown the
+    // filters it inherited from whoever last used this browser.
+    if (this.kiosk) {
+      this.instance = '';
+      this.project = '';
+      this.scope = 'workspace';
+      this.viewMember = '';
+      return;
+    }
+    if (this.instance && !this.instances.includes(this.instance)) {
+      this.instance = '';
+      this.project = '';
+    }
+    // Only once the workspace list has actually arrived — an empty list during
+    // loading is not evidence that the workspace is gone.
+    if (this.project && this.workspaces.length && !this.workspaces.some((w) => w.id === this.project)) {
+      this.project = '';
+    }
+    // Deliberately checked against EVERY bubble rather than store.members, which
+    // is narrowed by the current instance and project filters. Someone who owns
+    // nothing in the workspace you happen to be filtered to is an empty result
+    // you asked for, not a stale filter to throw away.
+    if (this.scope === 'member' && this.bubbles.length) {
+      const known = this.bubbles.some((b) => (b.members ?? []).includes(this.viewMember));
+      if (!known) {
+        this.viewMember = '';
+        this.scope = 'workspace';
+      }
+    }
+    this.saveFilters();
   }
 
   // The workspaces the server knows about, INCLUDING empty ones. The board is
@@ -158,10 +251,12 @@ class Store {
     if (this.project && !this.projects.some((p) => p.id === this.project)) {
       this.project = '';
     }
+    this.saveFilters();
   }
 
   selectProject(v: string): void {
     this.project = v;
+    this.saveFilters();
   }
 
   byLevel(level: Level): BubbleView[] {
@@ -237,6 +332,7 @@ class Store {
       ]);
       this.bubbles = bubbles;
       if (workspaces) this.workspaces = workspaces;
+      this.pruneFilters();
       this.inbox = inbox;
       this.status = status;
       this.error = null;
@@ -368,6 +464,11 @@ class Store {
     this.stopStream();
     this.stopSecondary();
     clearToken();
+    try {
+      localStorage.removeItem(FILTERS_KEY);
+    } catch {
+      // nothing to do — the filters are cosmetic
+    }
     this.actor = null;
     this.bubbles = [];
     this.inbox = null;

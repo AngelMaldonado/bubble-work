@@ -3,7 +3,7 @@
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
   import { fuzzyFilter } from '../lib/fuzzy';
-  import type { BubbleView, ThreadHit } from '../lib/types';
+  import type { BubbleView, ThreadHit, Workspace } from '../lib/types';
 
   let {
     open = $bindable(false),
@@ -195,6 +195,18 @@
   const allCommands = $derived([...COMMANDS, ...adminCmds, ...instanceCmds]);
   const filteredCmds = $derived(fuzzyFilter(cmdQuery, allCommands, (c) => c.label));
   const filteredBubbles = $derived(fuzzyFilter(query, store.visible, (b) => b.name).slice(0, 8));
+
+  // Workspaces are matched on their identifier too — SB and CECUBYMX are what
+  // people actually type, and they appear nowhere in the name.
+  //
+  // Only when something is typed: an empty query means "show me what is here",
+  // and every workspace is not an answer to that. Capped at three because they
+  // sit ABOVE the threads and must never push the search results off-screen.
+  const filteredWorkspaces = $derived(
+    query.trim() === ''
+      ? []
+      : fuzzyFilter(query, store.workspaces, (w) => w.name + ' ' + w.identifier).slice(0, 3),
+  );
   const pickBubbles = $derived(fuzzyFilter(argValue, store.visible, (b) => b.name).slice(0, 8));
 
   // debounced thread search
@@ -238,13 +250,19 @@
   type Row =
     | { kind: 'thread'; t: ThreadHit }
     | { kind: 'bubble'; b: BubbleView }
+    | { kind: 'ws'; w: Workspace }
     | { kind: 'cmd'; c: Cmd };
 
   const rows = $derived.by<Row[]>(() => {
     if (stage === 'pick') return pickBubbles.map((b) => ({ kind: 'bubble', b }) as Row);
     if (stage === 'input') return [];
     if (isCommand) return filteredCmds.map((c) => ({ kind: 'cmd', c }) as Row);
+    // Workspaces first: there are at most three, they are the coarsest thing
+    // here, and scoping the board is a navigation act you want to reach without
+    // arrowing past a page of threads. Threads are debounced and arrive late, so
+    // putting them first would also make the top row jump under the cursor.
     return [
+      ...filteredWorkspaces.map((w) => ({ kind: 'ws', w }) as Row),
       ...threads.map((t) => ({ kind: 'thread', t }) as Row),
       ...filteredBubbles.map((b) => ({ kind: 'bubble', b }) as Row),
     ];
@@ -300,8 +318,20 @@
     close();
   }
 
+  // Scoping to a workspace also fixes the instance filter when it disagrees:
+  // filtering to a project outside the current instance scope shows an empty
+  // board, which reads as "this workspace is empty" rather than "you cannot see
+  // it from here".
+  function scopeTo(w: Workspace) {
+    if (store.instance && store.instance !== w.instance) store.selectInstance(w.instance);
+    store.selectProject(w.id);
+    store.flash = t('omni.scoped', { name: w.name });
+    close();
+  }
+
   function activate(row: Row) {
     if (row.kind === 'cmd') return runCmd(row.c);
+    if (row.kind === 'ws') return scopeTo(row.w);
     if (row.kind === 'bubble' && stage === 'pick') return pickBubble(row.b);
     // thread / bubble in search mode → open in Plane not yet wired; just close.
     close();
@@ -393,7 +423,7 @@
           {#if searching}searching…{:else}no matches{/if}
         </div>
       {:else}
-        {#each rows as row, i (row.kind + ':' + (row.kind === 'cmd' ? row.c.id : row.kind === 'thread' ? row.t.id : row.b.id))}
+        {#each rows as row, i (row.kind + ':' + (row.kind === 'cmd' ? row.c.id : row.kind === 'thread' ? row.t.id : row.kind === 'ws' ? row.w.id : row.b.id))}
           <button
             class="row"
             class:active={i === sel}
@@ -404,6 +434,12 @@
               <span class="lead">›</span>
               <span class="main">{row.t.name}</span>
               <span class="tail">{row.t.bubble_name} · {row.t.instance} · {row.t.open ? '🔥 open' : '🏆 done'}</span>
+            {:else if row.kind === 'ws'}
+              <span class="lead">▤</span>
+              <span class="main">{row.w.name}</span>
+              <span class="tail">
+                {row.w.identifier ? row.w.identifier + ' · ' : ''}{t('omni.workspace')}
+              </span>
             {:else if row.kind === 'bubble'}
               <span class="lead">◯</span>
               <span class="main">{row.b.name}</span>

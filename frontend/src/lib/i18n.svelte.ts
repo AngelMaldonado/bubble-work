@@ -394,6 +394,8 @@ const en = {
   'pages.locked': 'locked in Plane',
   'del.page': 'The document goes. Threads and bubbles are untouched.',
 
+  'omni.workspace': 'workspace',
+  'omni.scoped': 'showing {name}',
   // the Alt+Tab-style workspace switcher
   'switch.title': 'Switch workspace',
   'switch.hint': 'Tab to advance · ← → to move · a letter to jump · release Shift to go · Esc to cancel',
@@ -812,6 +814,8 @@ const es: Record<MsgKey, string> = {
   'pages.locked': 'bloqueado en Plane',
   'del.page': 'Se va el documento. Los hilos y las burbujas no se tocan.',
 
+  'omni.workspace': 'espacio de trabajo',
+  'omni.scoped': 'mostrando {name}',
   // el cambiador de espacios (estilo Alt+Tab)
   'switch.title': 'Cambiar de espacio de trabajo',
   'switch.hint': 'Tab para avanzar · ← → para moverte · una letra para saltar · suelta Shift para ir · Esc para cancelar',

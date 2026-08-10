@@ -116,6 +116,7 @@ func (s *Server) Page(ctx context.Context, pageID string) (domain.PageDetail, er
 	return domain.PageDetail{
 		Page:     asPage(p, inst.Slug, projID),
 		Markdown: body,
+		HTML:     md.RenderHTML(body),
 		Hash:     md.Hash(body),
 	}, nil
 }
@@ -149,6 +150,7 @@ func (s *Server) CreatePage(ctx context.Context, req domain.CreatePageRequest) (
 	return domain.PageDetail{
 		Page:     asPage(p, inst.Slug, projID),
 		Markdown: req.Markdown,
+		HTML:     md.RenderHTML(req.Markdown),
 		Hash:     md.Hash(req.Markdown),
 	}, nil
 }
@@ -209,7 +211,9 @@ func (s *Server) UpdatePage(ctx context.Context, pageID string, edit domain.Page
 		out.Title = strings.TrimSpace(*edit.Title)
 	}
 	out.UpdatedAt = s.now()
-	return domain.PageDetail{Page: out, Markdown: body, Hash: md.Hash(body)}, nil
+	return domain.PageDetail{
+		Page: out, Markdown: body, HTML: md.RenderHTML(body), Hash: md.Hash(body),
+	}, nil
 }
 
 // DeletePage removes a page from Plane. Irreversible, like every other delete

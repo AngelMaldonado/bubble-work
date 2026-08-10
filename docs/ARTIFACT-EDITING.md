@@ -610,9 +610,22 @@ Surface parity: `GET|POST /api/workspaces/{id}/pages`, `GET|PATCH|DELETE
 moves bodies over stdin/stdout so a spec can be pulled out, edited in a real
 editor and pushed back.
 
-**The web is not done yet** — stated rather than left to be noticed. A page has an
-obvious visual form and should get the CodeMirror editor the thread artifacts
-already use; that is the next change, not part of this one.
+### The web: a reading room
+
+Pages open from the workspace `⋯` menu into a list on the left and the document
+on the right. Deliberately not another view of the board — a page has no band, no
+heat and no place among the bubbles, and rendering it as one would say otherwise.
+
+The editor is **ArtifactEditor with its destination swapped**, not a second
+editor. Everything that makes markdown editing bearable already lives there —
+CodeMirror, the slash menu, vim, the autosave rhythm, the hash contract — so the
+component grew one optional `write` prop and a page passes it. A thread leaves it
+out and keeps the original path untouched. Forking it would have meant two of
+each, drifting apart at the first bug fixed in only one.
+
+A locked page renders read-only rather than offering an edit button that fails,
+and Escape unwinds one layer at a time: the title field, then the editor, then
+the room — closing everything on the first press loses unsaved intent.
 
 ## Open
 

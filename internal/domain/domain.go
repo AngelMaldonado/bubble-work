@@ -623,10 +623,15 @@ type Page struct {
 	CreatedAt time.Time `json:"created_at"`
 }
 
-// PageDetail is a page with its body, as markdown.
+// PageDetail is a page with its body, as markdown and as rendered HTML.
+//
+// Both, for the same reason a thread artifact carries both: the editor writes
+// markdown, and the reader wants the rendered document without shipping a
+// markdown engine to the browser.
 type PageDetail struct {
 	Page
 	Markdown string `json:"markdown"`
+	HTML     string `json:"html"`
 	// Hash fingerprints Markdown, so an editor can prove it is writing over what
 	// it read — the same 409 contract a thread artifact uses.
 	Hash string `json:"hash"`

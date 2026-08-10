@@ -115,6 +115,26 @@ export interface EditableRegion {
 
 export type RegionName = 'brief' | 'logbook' | 'dod';
 
+/** A workspace's standing documentation: a spec, a reference, a decision record.
+ *  Not a thread — pages carry no buoyancy and earn no heat. */
+export interface Page {
+  id: string;
+  title: string;
+  instance: string;
+  project: string;
+  locked: boolean;
+  archived: boolean;
+  updated_at: string;
+  created_at: string;
+}
+
+export interface PageDetail extends Page {
+  markdown: string;
+  html: string;
+  /** Fingerprint of markdown — send it back to make a lost update a 409. */
+  hash: string;
+}
+
 /** A body of work — a Plane project. Includes ones holding no bubbles yet. */
 export interface Workspace {
   id: string;

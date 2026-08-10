@@ -21,6 +21,8 @@ import type {
   OutboxView,
   ServiceStatus,
   Workspace,
+  Page,
+  PageDetail,
 } from './types';
 
 const TOKEN_KEY = 'bubble.token';
@@ -175,6 +177,20 @@ export const api = {
       'DELETE',
       `/api/workspaces/${encodeURIComponent(id)}`,
     ),
+
+  // Project pages: a workspace's documentation. Read live from Plane rather
+  // than from the mirror — a page is opened deliberately, one at a time.
+  pages: (workspaceId: string) =>
+    req<Page[]>('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`),
+  page: (id: string) => req<PageDetail>('GET', `/api/pages/${encodeURIComponent(id)}`),
+  createPage: (workspaceId: string, title: string, markdown: string) =>
+    req<PageDetail>('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`, {
+      title,
+      markdown,
+    }),
+  updatePage: (id: string, patch: { title?: string; markdown?: string; base_hash?: string }) =>
+    req<PageDetail>('PATCH', `/api/pages/${encodeURIComponent(id)}`, patch),
+  deletePage: (id: string) => req<{ ok: boolean }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
 
   // Re-home a thread. Nothing is lost: the Brief, Logbook, comments, history and
   // id survive, and it leaves every other bubble, so this is a move not a copy.

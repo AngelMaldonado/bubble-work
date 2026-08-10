@@ -383,6 +383,17 @@ const en = {
   // The WORKSPACE tier. A Workspace is a Plane PROJECT — not a Plane workspace
   // (AGENTS.md) — and until deletion landed it was the one tier the web treated
   // as a filter and nothing more.
+  // project pages: a workspace's documentation (docs, specs, decision records)
+  'pages.title': 'Documents',
+  'pages.new': 'New document',
+  'pages.empty': 'No documents yet. Specs and references live here.',
+  'pages.pick': 'Pick a document to read it.',
+  'pages.titlePlaceholder': 'what this document is called',
+  'pages.rename': 'Rename document',
+  'pages.delete': 'Delete document',
+  'pages.locked': 'locked in Plane',
+  'del.page': 'The document goes. Threads and bubbles are untouched.',
+
   // the Alt+Tab-style workspace switcher, and the owner filter on the name
   'switch.title': 'Switch workspace',
   'switch.hint': 'Tab to advance · ← → to move · a letter to jump · release Shift to go · Esc to cancel',
@@ -794,6 +805,17 @@ const es: Record<MsgKey, string> = {
   'tune.hint.thread': 'cómo un work item se mueve entre bandas',
 
   // el nivel de ESPACIO DE TRABAJO (un proyecto de Plane)
+  // páginas de proyecto: la documentación del espacio de trabajo
+  'pages.title': 'Documentos',
+  'pages.new': 'Nuevo documento',
+  'pages.empty': 'Aún no hay documentos. Aquí viven las especificaciones y referencias.',
+  'pages.pick': 'Elige un documento para leerlo.',
+  'pages.titlePlaceholder': 'cómo se llama este documento',
+  'pages.rename': 'Renombrar documento',
+  'pages.delete': 'Eliminar documento',
+  'pages.locked': 'bloqueado en Plane',
+  'del.page': 'Se va el documento. Los hilos y las burbujas no se tocan.',
+
   // el cambiador de espacios (estilo Alt+Tab) y el filtro por responsable
   'switch.title': 'Cambiar de espacio de trabajo',
   'switch.hint': 'Tab para avanzar · ← → para moverte · una letra para saltar · suelta Shift para ir · Esc para cancelar',

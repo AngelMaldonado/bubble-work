@@ -35,13 +35,21 @@
     onsaved,
     onreload,
     ondone,
+    write,
   }: {
     threadId: string;
     region: RegionName;
     initial: string;
     hash: string;
     /** Hands back the fresh detail so the caller can repaint without refetching. */
-    onsaved: (d: ThreadDetail) => void;
+    onsaved?: (d: ThreadDetail) => void;
+    /** Where a save goes, when it is not a thread artifact.
+     *
+     *  The editor is the same surface wherever markdown is edited — CodeMirror,
+     *  the slash menu, vim, the autosave rhythm and the hash contract. Only the
+     *  destination differs, so that is the one thing injected. A project page
+     *  passes this; a thread leaves it out and keeps the original path. */
+    write?: (text: string, base: string) => Promise<{ hash: string }>;
     /** Asked for after a conflict: take whatever the server holds. */
     onreload: () => void;
     /** Esc: commit and hand the reader back their rendered view. */
@@ -171,6 +179,21 @@
     // keystrokes saved and schedule nothing to write them.
     const sending = text;
     try {
+      if (write) {
+        const r = await write(sending, base);
+        lastWrite = Date.now();
+        saved = sending;
+        lint = [];
+        base = r.hash || base;
+        if (text !== saved) {
+          status = 'dirty';
+          schedule();
+        } else {
+          status = 'saved';
+          setTimeout(() => status === 'saved' && (status = 'clean'), 1600);
+        }
+        return;
+      }
       const d = await api.updateThread(threadId, {
         [region]: sending,
         base: { [region]: base },
@@ -185,7 +208,7 @@
       // Adopt the server's hash: it is the authority on what the body now is,
       // and the next write has to be based on THAT, not on what we sent.
       base = d.regions?.[region]?.hash ?? base;
-      onsaved(d);
+      onsaved?.(d);
       if (text !== saved) {
         status = 'dirty';
         schedule(); // they kept typing — write the rest

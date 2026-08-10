@@ -534,12 +534,11 @@ a context menu owns the keyboard, since those have their own idea of what Tab an
 Escape mean. The trade-off that remains: with focus on a status-bar *button*,
 Shift+Tab now switches workspaces rather than moving focus back.
 
-**The name** in the status bar used to be a label that did nothing. It is now the
-owner filter, on the same `.proj-cb` styles as the other two, so the bar reads as
-one control repeated rather than three that nearly match. Note this overlaps the
-existing view-scope combobox, which already carried Everyone / Mine / each
-member — the two write the same state and stay in sync, but only one of them
-needs to exist.
+The name in the status bar was briefly made an owner filter too, and then taken
+back out: the view-scope combobox beside it already carried Everyone / Mine /
+each member, so the two wrote the same state and sat side by side doing one job
+twice. Worth recording as the mistake it was — a control that duplicates an
+existing one is not a feature, it is two places to look.
 
 ### Filters are remembered
 

@@ -3400,3 +3400,181 @@ func TestWorkspacesListsEmptyOnes(t *testing.T) {
 		t.Error("a project the caller is not a member of leaked into the workspace list")
 	}
 }
+
+// Project pages are the standing documentation a workspace accumulates — specs,
+// references, decision records. They are not threads: no buoyancy, no heat, no
+// place on the board. What has to hold is that they round-trip through markdown
+// the same way a thread's artifacts do, and that a write cannot silently land on
+// top of somebody else's.
+func TestProjectPages(t *testing.T) {
+	var mu sync.Mutex
+	body := `<h1>Spec</h1><p>The <strong>contract</strong>.</p>`
+	title := "Product spec"
+	locked := false
+	deleted := false
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		curBody, curTitle, curLocked, gone := body, title, locked, deleted
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/pages/pg-1/"):
+			switch r.Method {
+			case http.MethodDelete:
+				mu.Lock()
+				deleted = true
+				mu.Unlock()
+				w.WriteHeader(http.StatusNoContent)
+			case http.MethodPatch:
+				var in struct {
+					Name            *string `json:"name"`
+					DescriptionHTML *string `json:"description_html"`
+				}
+				json.NewDecoder(r.Body).Decode(&in)
+				mu.Lock()
+				if in.Name != nil {
+					title = *in.Name
+				}
+				if in.DescriptionHTML != nil {
+					body = *in.DescriptionHTML
+				}
+				mu.Unlock()
+				io.WriteString(w, `{"id":"pg-1"}`)
+			default:
+				fmt.Fprintf(w, `{"id":"pg-1","name":%q,"description_html":%q,"is_locked":%v,
+				  "created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T11:00:00Z"}`,
+					curTitle, curBody, curLocked)
+			}
+		case strings.HasSuffix(p, "/pages/"):
+			if r.Method == http.MethodPost {
+				var in struct {
+					Name string `json:"name"`
+				}
+				json.NewDecoder(r.Body).Decode(&in)
+				fmt.Fprintf(w, `{"id":"pg-new","name":%q,"created_at":"2026-08-07T12:00:00Z",
+				  "updated_at":"2026-08-07T12:00:00Z"}`, in.Name)
+				return
+			}
+			// The list endpoint returns metadata only — no description_html —
+			// which is exactly why reading a body is its own request.
+			if gone {
+				io.WriteString(w, `{"results":[],"next_page_results":false}`)
+				return
+			}
+			fmt.Fprintf(w, `{"results":[
+			  {"id":"pg-1","name":%q,"updated_at":"2026-08-07T11:00:00Z","archived_at":null},
+			  {"id":"pg-old","name":"Retired","updated_at":"2026-08-06T09:00:00Z","archived_at":"2026-08-06T10:00:00Z"},
+			  {"id":"pg-2","name":"Decisions","updated_at":"2026-08-07T13:00:00Z","archived_at":null}
+			],"next_page_results":false}`, curTitle)
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/projects/p1/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"}]`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Sandbox","identifier":"SB"}],"next_page_results":false}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		default:
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// 1. Listing skips archived pages and puts the most recently touched first.
+	var list []domain.Page
+	code, lb := do(t, http.MethodGet, ts.URL+"/api/workspaces/ws:p1/pages", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("list pages: %d %s", code, lb)
+	}
+	json.Unmarshal(lb, &list)
+	if len(list) != 2 {
+		t.Fatalf("want 2 live pages (the archived one dropped), got %d: %v", len(list), list)
+	}
+	if list[0].Title != "Decisions" {
+		t.Errorf("newest change should sort first, got %q", list[0].Title)
+	}
+	if list[1].ID != "ws:p1:pg-1" {
+		t.Errorf("page ids are namespaced like everything else, got %q", list[1].ID)
+	}
+
+	// 2. Reading converts Plane's editor HTML to markdown.
+	var d domain.PageDetail
+	code, db := do(t, http.MethodGet, ts.URL+"/api/pages/ws:p1:pg-1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("read page: %d %s", code, db)
+	}
+	json.Unmarshal(db, &d)
+	if !strings.Contains(d.Markdown, "# Spec") || !strings.Contains(d.Markdown, "**contract**") {
+		t.Errorf("body did not come back as markdown: %q", d.Markdown)
+	}
+	if d.Hash == "" {
+		t.Error("no hash to write back against")
+	}
+
+	// 3. A stale base hash is refused rather than overwriting somebody else.
+	stale := `{"markdown":"# Spec\n\nmine","base_hash":"not-what-you-read"}`
+	if code, _ := do(t, http.MethodPatch, ts.URL+"/api/pages/ws:p1:pg-1", key, stale); code != http.StatusConflict {
+		t.Errorf("stale write: want 409, got %d", code)
+	}
+
+	// 4. The markdown standard applies to a document too — two H1s is the thing
+	// that keeps happening, and it is refused at creation.
+	bad := `{"title":"Bad","markdown":"# One\n\n# Two\n"}`
+	code, bb := do(t, http.MethodPost, ts.URL+"/api/workspaces/ws:p1/pages", key, bad)
+	if code != http.StatusBadRequest {
+		t.Errorf("two H1s in a new page: want 400, got %d %s", code, bb)
+	}
+
+	// 5. A good write lands, and the round trip preserves the markdown.
+	good := `{"markdown":"# Spec\n\n## Contract\n\nIt must hold.\n"}`
+	code, gb := do(t, http.MethodPatch, ts.URL+"/api/pages/ws:p1:pg-1", key, good)
+	if code != http.StatusOK {
+		t.Fatalf("update page: %d %s", code, gb)
+	}
+	code, db = do(t, http.MethodGet, ts.URL+"/api/pages/ws:p1:pg-1", key, "")
+	json.Unmarshal(db, &d)
+	if !strings.Contains(d.Markdown, "## Contract") || !strings.Contains(d.Markdown, "It must hold.") {
+		t.Errorf("the write did not survive the round trip: %q", d.Markdown)
+	}
+
+	// 6. A page Plane has locked is read-only here too, rather than failing
+	// somewhere deep inside Plane with an opaque message.
+	mu.Lock()
+	locked = true
+	mu.Unlock()
+	code, rb := do(t, http.MethodPatch, ts.URL+"/api/pages/ws:p1:pg-1", key, `{"title":"nope"}`)
+	if code != http.StatusBadRequest || !strings.Contains(string(rb), "locked") {
+		t.Errorf("locked page: want 400 saying so, got %d %s", code, rb)
+	}
+	mu.Lock()
+	locked = false
+	mu.Unlock()
+
+	// 7. Delete reaches Plane.
+	if code, _ := do(t, http.MethodDelete, ts.URL+"/api/pages/ws:p1:pg-1", key, ""); code != http.StatusOK {
+		t.Errorf("delete page: %d", code)
+	}
+	mu.Lock()
+	killed := deleted
+	mu.Unlock()
+	if !killed {
+		t.Error("Plane was never asked to delete the page")
+	}
+}

@@ -21,6 +21,11 @@ type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
 	CreateWorkspace(ctx context.Context, req domain.CreateWorkspaceRequest) (domain.Workspace, error)
 	Workspaces(ctx context.Context) ([]domain.Workspace, error)
+	Pages(ctx context.Context, workspaceID string) ([]domain.Page, error)
+	Page(ctx context.Context, pageID string) (domain.PageDetail, error)
+	CreatePage(ctx context.Context, req domain.CreatePageRequest) (domain.PageDetail, error)
+	UpdatePage(ctx context.Context, pageID string, edit domain.PageEdit) (domain.PageDetail, error)
+	DeletePage(ctx context.Context, pageID string) error
 	RenameWorkspace(ctx context.Context, id, name string) (domain.Workspace, error)
 	DeleteWorkspace(ctx context.Context, id string) (int, int, error)
 	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
@@ -208,6 +213,34 @@ type listOut struct {
 // response, so one such tool takes every other tool down with it.
 type workspacesOut struct {
 	Workspaces []domain.Workspace `json:"workspaces"`
+}
+
+type pagesOut struct {
+	Pages []domain.Page `json:"pages"`
+}
+
+// pagesIn / pageIn: a page is addressed by the same namespaced id as everything
+// else, and belongs to a workspace rather than to a bubble or a thread.
+type pagesIn struct {
+	Workspace string `json:"workspace" jsonschema:"the workspace id as slug:project, from list_workspaces"`
+}
+type pageIn struct {
+	PageID string `json:"page_id" jsonschema:"the page id as slug:project:page, from list_pages"`
+}
+type createPageIn struct {
+	Workspace string `json:"workspace" jsonschema:"the workspace id as slug:project, from list_workspaces"`
+	Title     string `json:"title" jsonschema:"what this document is called"`
+	Markdown  string `json:"markdown,omitempty" jsonschema:"the document body in Markdown. One H1, sections as ## (spec 3.1)"`
+}
+type updatePageIn struct {
+	PageID   string  `json:"page_id" jsonschema:"the page id as slug:project:page"`
+	Title    *string `json:"title,omitempty" jsonschema:"rename the page"`
+	Markdown *string `json:"markdown,omitempty" jsonschema:"REPLACES the whole body. Read the page first and send it back with your changes applied, or you will drop everything you did not retype"`
+	BaseHash string  `json:"base_hash,omitempty" jsonschema:"the hash read_page gave you. Send it and the write is refused if somebody else changed the page in the meantime"`
+}
+type deletePageIn struct {
+	PageID string `json:"page_id" jsonschema:"the page id as slug:project:page"`
+	Title  string `json:"title" jsonschema:"the page's exact current title. The delete is REFUSED if it does not match — read it first"`
 }
 type closeIn struct {
 	BubbleID string `json:"bubble_id" jsonschema:"the bubble (Plane module) id to close"`
@@ -431,6 +464,74 @@ func newServer(b Backend) *sdk.Server {
 				return nil, workspacesOut{}, err
 			}
 			return nil, workspacesOut{Workspaces: ws}, nil
+		})
+
+	// ---- project pages: the documentation a workspace accumulates ----
+	//
+	// A Brief says why one piece of work exists; a page is the standing
+	// reference it is written against — the product spec, the API contract, the
+	// decision record. Reading one before implementing is usually the difference
+	// between building the thing and building something like it.
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "list_pages", Description: "List a workspace's pages: its documentation, product specs and reference material. A page belongs to the WORKSPACE, not to a bubble or a thread, and outlives both. Titles only — use read_page for a body."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in pagesIn) (*sdk.CallToolResult, pagesOut, error) {
+			ps, err := b.Pages(withActor(ctx, req), in.Workspace)
+			if err != nil {
+				return nil, pagesOut{}, err
+			}
+			return nil, pagesOut{Pages: ps}, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "read_page", Description: "Read one page in full, as Markdown. Read the relevant spec BEFORE implementing a thread — the thread's Brief says what to do, the page says what it has to be true of. Returns a hash to pass back to update_page."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in pageIn) (*sdk.CallToolResult, domain.PageDetail, error) {
+			d, err := b.Page(withActor(ctx, req), in.PageID)
+			if err != nil {
+				return nil, domain.PageDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "create_page", Description: "Add a document to a workspace: a spec, a reference, a decision record. Use this for what outlives a thread — anything about ONE piece of work belongs in that thread's Brief or Logbook instead. Writing documentation is not evidence of production, so this warms nothing."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in createPageIn) (*sdk.CallToolResult, domain.PageDetail, error) {
+			d, err := b.CreatePage(withActor(ctx, req), domain.CreatePageRequest{
+				Workspace: in.Workspace, Title: in.Title, Markdown: in.Markdown,
+			})
+			if err != nil {
+				return nil, domain.PageDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "update_page", Description: "Rewrite a page's title, its body, or both. The body is REPLACED wholesale, so read_page first and send back the full document with your changes applied — anything you do not retype is gone. Pass base_hash from read_page and the write is refused if somebody edited the page in between."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in updatePageIn) (*sdk.CallToolResult, domain.PageDetail, error) {
+			d, err := b.UpdatePage(withActor(ctx, req), in.PageID, domain.PageEdit{
+				Title: in.Title, Markdown: in.Markdown, BaseHash: in.BaseHash,
+			})
+			if err != nil {
+				return nil, domain.PageDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "delete_page", Description: "PERMANENTLY delete a page from Plane. IRREVERSIBLE. Pass its exact current title to confirm — the delete is refused if it does not match, so read it first."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in deletePageIn) (*sdk.CallToolResult, okOut, error) {
+			actx := withActor(ctx, req)
+			cur, err := b.Page(actx, in.PageID)
+			if err != nil {
+				return nil, okOut{}, err
+			}
+			if err := sameName(in.Title, cur.Title, "page"); err != nil {
+				return nil, okOut{}, err
+			}
+			if err := b.DeletePage(actx, in.PageID); err != nil {
+				return nil, okOut{}, err
+			}
+			return nil, okOut{OK: true}, nil
 		})
 
 	sdk.AddTool(srv,

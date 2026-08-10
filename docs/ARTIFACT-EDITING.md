@@ -562,6 +562,58 @@ A kiosk is a shared wall display rather than a person, so it neither keeps its
 filters nor inherits whoever last used that browser — it clears them once whoami
 says what it is. Signing out drops them for the same reason.
 
+## Project pages
+
+A Brief says why one piece of work exists; a Logbook says how it is going.
+Neither is where the standing documentation of a body of work belongs — the
+product spec, the API contract, the decision record everyone keeps re-deriving.
+That belongs to the **workspace**, and Plane already has somewhere to put it:
+project pages, at `/workspaces/{slug}/projects/{id}/pages/`, carrying
+`description_html` in the same editor shape as a work item. So `internal/md`
+reads and writes them unchanged — the block splicer, the Plane node vocabulary
+and the markdown standard all apply with no special casing.
+
+**Pages earn no heat.** Heat is evidence that a body of work moved; documentation
+exists to be read, and writing some is not the same as producing the outcome a
+bubble is contracted to reach. Nothing in the page path touches the board, the
+overlay or a cycle.
+
+**They read live from Plane, not from the mirror.** The mirror exists because the
+board is rebuilt every cycle for every bubble, which would burn the 60 req/min
+budget; a page is opened deliberately, one at a time, by somebody who wants to
+read it. Mirroring them would add a table and a sync worker to save a request
+that is only spent when a human asks for it. The list endpoint returns metadata
+only — no `description_html` — so a body is always its own request, which is why
+nothing fetches bodies in bulk.
+
+Three things the write path refuses rather than discovering the hard way:
+
+- **A locked page.** Plane locks a page to stop it being edited; that is answered
+  here instead of surfacing as an opaque error from deep inside Plane.
+- **A stale write.** `read_page` hands back a hash; passing it to `update_page`
+  turns a concurrent edit into a 409 instead of a silent overwrite. Same contract
+  a thread artifact already uses.
+- **A broken standard.** One H1, headings that step one level (spec §3.1) — the
+  rule a teammate broke on a thread applies to a document too. On an update it is
+  judged on what the write INTRODUCED, so an unrelated fix is not blocked by a
+  page somebody else left messy.
+
+The body is replaced wholesale rather than spliced. A thread artifact needs
+block-level splicing because agents append to a Logbook constantly and the page
+is shared with a human's Brief; a document is written by whoever is editing it,
+in one piece. `update_page`'s description says so in as many words, because an
+agent that sends a paraphrase drops everything it did not retype.
+
+Surface parity: `GET|POST /api/workspaces/{id}/pages`, `GET|PATCH|DELETE
+/api/pages/{id}` · `bubble page list|read|new|edit` · MCP `list_pages`,
+`read_page`, `create_page`, `update_page`, `delete_page` (name-guarded). The CLI
+moves bodies over stdin/stdout so a spec can be pulled out, edited in a real
+editor and pushed back.
+
+**The web is not done yet** — stated rather than left to be noticed. A page has an
+obvious visual form and should get the CodeMirror editor the thread artifacts
+already use; that is the next change, not part of this one.
+
 ## Open
 
 - Whether Plane's editor renders our checkbox shape (Phase 2) — one live write

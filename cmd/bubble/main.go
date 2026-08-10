@@ -78,6 +78,8 @@ func main() {
 		cmdUse(os.Args[2:])
 	case "birth":
 		cmdBirth(os.Args[2:])
+	case "page", "pages":
+		cmdPage(os.Args[2:])
 	case "workspace":
 		cmdWorkspace(os.Args[2:])
 	case "bubble":
@@ -126,6 +128,7 @@ Usage:
   bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list;
                                    --tokens shows keys masked, add --reveal for full)
+  bubble page list|read|new|edit   a workspace's docs and specs (Plane pages)
   bubble workspace new|list|rename  a Plane project — our Workspace
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
   bubble bubble new|set|close|open create a bubble or set its contract (§4)
@@ -442,6 +445,116 @@ func cmdWorkspaceRename(args []string) {
 	if err := client.RenameWorkspace(cfg, *id, *name); err != nil {
 		log.Fatalf("workspace rename: %v", err)
 	}
+}
+
+// cmdPage reads and writes a workspace's documentation. Bodies move as markdown
+// on stdin/stdout so they compose with the rest of a shell: a spec can be pulled
+// out, edited in a real editor, and pushed back.
+func cmdPage(args []string) {
+	if len(args) < 1 {
+		pageUsage()
+		os.Exit(2)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	switch args[0] {
+	case "list", "ls":
+		fs := flag.NewFlagSet("page list", flag.ExitOnError)
+		ws := fs.String("workspace", "", "<instance>:<project-id> (required)")
+		_ = fs.Parse(args[1:])
+		if *ws == "" {
+			log.Fatal("page list: --workspace <instance>:<project-id> is required")
+		}
+		if err := client.ListPages(cfg, *ws); err != nil {
+			log.Fatalf("page list: %v", err)
+		}
+	case "read", "cat":
+		if len(args) < 2 {
+			log.Fatal("usage: bubble page read <instance>:<project>:<page>")
+		}
+		if err := client.ReadPage(cfg, args[1]); err != nil {
+			log.Fatalf("page read: %v", err)
+		}
+	case "new":
+		fs := flag.NewFlagSet("page new", flag.ExitOnError)
+		ws := fs.String("workspace", "", "<instance>:<project-id> (required)")
+		title := fs.String("title", "", "page title (required)")
+		file := fs.String("file", "", "markdown file, or - for stdin")
+		_ = fs.Parse(args[1:])
+		if *ws == "" || *title == "" {
+			log.Fatal("page new: --workspace and --title are required")
+		}
+		if err := client.CreatePage(cfg, *ws, *title, readBody(*file)); err != nil {
+			log.Fatalf("page new: %v", err)
+		}
+	case "edit":
+		fs := flag.NewFlagSet("page edit", flag.ExitOnError)
+		id := fs.String("id", "", "<instance>:<project>:<page> (required)")
+		title := fs.String("title", "", "new title (optional)")
+		file := fs.String("file", "", "markdown file, or - for stdin — REPLACES the body")
+		_ = fs.Parse(args[1:])
+		if *id == "" {
+			log.Fatal("page edit: --id is required")
+		}
+		var tp, bp *string
+		if *title != "" {
+			tp = title
+		}
+		if *file != "" {
+			body := readBody(*file)
+			bp = &body
+		}
+		if tp == nil && bp == nil {
+			log.Fatal("page edit: pass --title, --file, or both")
+		}
+		if err := client.UpdatePage(cfg, *id, tp, bp); err != nil {
+			log.Fatalf("page edit: %v", err)
+		}
+	default:
+		pageUsage()
+		os.Exit(2)
+	}
+}
+
+// readBody reads a markdown body from a file, or from stdin when the name is
+// "-", so a page can be piped in.
+func readBody(name string) string {
+	if name == "" {
+		return ""
+	}
+	var b []byte
+	var err error
+	if name == "-" {
+		b, err = io.ReadAll(os.Stdin)
+	} else {
+		b, err = os.ReadFile(name)
+	}
+	if err != nil {
+		log.Fatalf("reading %s: %v", name, err)
+	}
+	return string(b)
+}
+
+func pageUsage() {
+	fmt.Fprint(os.Stderr, `bubble page — a workspace's documentation (Plane project pages)
+
+Usage:
+  bubble page list --workspace <instance>:<project-id>
+  bubble page read <instance>:<project>:<page>
+  bubble page new  --workspace <instance>:<project-id> --title <t> [--file <f>|-]
+  bubble page edit --id <instance>:<project>:<page> [--title <t>] [--file <f>|-]
+
+Bodies are Markdown. read prints to stdout and --file - reads stdin, so:
+  bubble page read <id> > spec.md && $EDITOR spec.md
+  bubble page edit --id <id> --file spec.md
+
+A page is reference material for the WHOLE workspace — a spec, a decision
+record. Anything about one piece of work belongs in that thread's Brief or
+Logbook. Pages earn no heat.
+
+`)
 }
 
 func workspaceUsage() {

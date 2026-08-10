@@ -140,6 +140,17 @@ func (stubBackend) CreateWorkspace(context.Context, domain.CreateWorkspaceReques
 	return domain.Workspace{}, nil
 }
 func (stubBackend) Workspaces(context.Context) ([]domain.Workspace, error) { return nil, nil }
+func (stubBackend) Pages(context.Context, string) ([]domain.Page, error)   { return nil, nil }
+func (stubBackend) Page(context.Context, string) (domain.PageDetail, error) {
+	return domain.PageDetail{}, nil
+}
+func (stubBackend) CreatePage(context.Context, domain.CreatePageRequest) (domain.PageDetail, error) {
+	return domain.PageDetail{}, nil
+}
+func (stubBackend) UpdatePage(context.Context, string, domain.PageEdit) (domain.PageDetail, error) {
+	return domain.PageDetail{}, nil
+}
+func (stubBackend) DeletePage(context.Context, string) error { return nil }
 func (stubBackend) RenameWorkspace(context.Context, string, string) (domain.Workspace, error) {
 	return domain.Workspace{}, nil
 }

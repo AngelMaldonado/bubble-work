@@ -603,6 +603,52 @@ type Workspace struct {
 	Instance   string `json:"instance"`
 }
 
+// Page is one project-level document: reference material, a product spec,
+// anything that outlives a single thread.
+//
+// Pages are NOT threads and carry no buoyancy. Heat is evidence that a body of
+// work moved, and a document exists to be read — writing one is not the same as
+// producing the outcome a bubble is contracted to reach. So a page has no level,
+// no cycle and no bearing on the board.
+type Page struct {
+	// ID is namespaced "<instance>:<project>:<page>", like every other id here.
+	ID       string `json:"id"`
+	Title    string `json:"title"`
+	Instance string `json:"instance"`
+	Project  string `json:"project"`
+	// Locked pages are read-only in Plane, and stay read-only here.
+	Locked    bool      `json:"locked"`
+	Archived  bool      `json:"archived"`
+	UpdatedAt time.Time `json:"updated_at"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// PageDetail is a page with its body, as markdown.
+type PageDetail struct {
+	Page
+	Markdown string `json:"markdown"`
+	// Hash fingerprints Markdown, so an editor can prove it is writing over what
+	// it read — the same 409 contract a thread artifact uses.
+	Hash string `json:"hash"`
+}
+
+// PageEdit writes to a page. A nil field is left exactly as it was.
+type PageEdit struct {
+	Title    *string `json:"title,omitempty"`
+	Markdown *string `json:"markdown,omitempty"`
+	// BaseHash is the hash the editor last read. When set and stale the write is
+	// refused rather than silently overwriting somebody else.
+	BaseHash string `json:"base_hash,omitempty"`
+}
+
+// CreatePageRequest adds a page to a workspace.
+type CreatePageRequest struct {
+	// Workspace is namespaced "<instance>:<project>".
+	Workspace string `json:"workspace"`
+	Title     string `json:"title"`
+	Markdown  string `json:"markdown"`
+}
+
 // CreateBubbleRequest asks the server to create a Plane module (a Bubble) in a
 // project (§3.5).
 type CreateBubbleRequest struct {

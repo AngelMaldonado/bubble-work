@@ -729,3 +729,81 @@ func Meaningful(a Activity) (kind string, ok bool) {
 		return "", false
 	}
 }
+
+// ---- pages ----
+//
+// A Plane PAGE is project-level prose: documentation, a product spec, anything
+// that outlives one work item. Plane exposes them at
+// /workspaces/{slug}/projects/{id}/pages/ and they carry description_html in the
+// same editor shape as a work item's description, so internal/md reads and
+// writes them with no special casing.
+//
+// The list endpoint does NOT return description_html — only the metadata. The
+// body costs one GET per page, which is why nothing here fetches bodies in bulk.
+type Page struct {
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Description string `json:"description_html"`
+	// Access is 0 for a project-visible page and 1 for a private one.
+	Access     int     `json:"access"`
+	IsLocked   bool    `json:"is_locked"`
+	ArchivedAt *string `json:"archived_at"`
+	OwnedBy    string  `json:"owned_by"`
+	ParentID   string  `json:"parent_id"`
+	CreatedAt  string  `json:"created_at"`
+	UpdatedAt  string  `json:"updated_at"`
+}
+
+// Archived reports whether Plane has archived this page.
+func (p Page) Archived() bool { return p.ArchivedAt != nil && *p.ArchivedAt != "" }
+
+// ListPages returns a project's pages, metadata only.
+func (c *Client) ListPages(ctx context.Context, projectID string) ([]Page, error) {
+	var out []Page
+	err := c.getPaged(ctx, c.pagesBase(projectID), func(raw json.RawMessage) error {
+		var page []Page
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		out = append(out, page...)
+		return nil
+	})
+	return out, err
+}
+
+// GetPage returns one page WITH its body.
+func (c *Client) GetPage(ctx context.Context, projectID, pageID string) (Page, error) {
+	var p Page
+	err := c.get(ctx, c.pagesBase(projectID)+pageID+"/", &p)
+	return p, err
+}
+
+// CreatePage adds a page to a project. Access 0 = visible to the project, which
+// is the only kind worth creating from here: a private page nobody else can read
+// is not documentation.
+func (c *Client) CreatePage(ctx context.Context, projectID, name, html string) (Page, error) {
+	var p Page
+	body := map[string]any{"name": name, "access": 0}
+	if html != "" {
+		body["description_html"] = html
+	}
+	err := c.post(ctx, c.pagesBase(projectID), body, &p)
+	return p, err
+}
+
+// UpdatePage patches a page. Only the named fields are sent, so a title change
+// cannot silently blank a body.
+func (c *Client) UpdatePage(ctx context.Context, projectID, pageID string, patch map[string]any) error {
+	return c.patch(ctx, c.pagesBase(projectID)+pageID+"/", patch, nil)
+}
+
+// DeletePage removes a page from Plane.
+func (c *Client) DeletePage(ctx context.Context, projectID, pageID string) error {
+	return c.del(ctx, c.pagesBase(projectID)+pageID+"/")
+}
+
+// pagesBase is spelled out rather than using projectBase() because pages are
+// addressed per project id, and a client is often built for a different one.
+func (c *Client) pagesBase(projectID string) string {
+	return fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/pages/", c.Workspace, projectID)
+}

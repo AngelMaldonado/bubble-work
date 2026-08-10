@@ -569,6 +569,64 @@ func ListWorkspaces(cfg config.Config) error {
 	return nil
 }
 
+// ---- project pages ----
+//
+// The standing documentation a workspace accumulates: specs, references,
+// decision records. Not threads, and they earn no heat.
+
+func ListPages(cfg config.Config, workspace string) error {
+	var ps []domain.Page
+	if err := getJSON(cfg.ActiveServer()+"/api/workspaces/"+url.PathEscape(workspace)+"/pages",
+		cfg.ActiveToken(), &ps); err != nil {
+		return err
+	}
+	if len(ps) == 0 {
+		fmt.Println("no pages in this workspace")
+		return nil
+	}
+	for _, p := range ps {
+		lock := ""
+		if p.Locked {
+			lock = " [locked]"
+		}
+		fmt.Printf("%-44s  %s%s\n", trunc(p.Title, 44), p.ID, lock)
+	}
+	return nil
+}
+
+// ReadPage prints a page as markdown, so it pipes.
+func ReadPage(cfg config.Config, id string) error {
+	var d domain.PageDetail
+	if err := getJSON(cfg.ActiveServer()+"/api/pages/"+url.PathEscape(id), cfg.ActiveToken(), &d); err != nil {
+		return err
+	}
+	fmt.Print(d.Markdown)
+	if !strings.HasSuffix(d.Markdown, "\n") {
+		fmt.Println()
+	}
+	return nil
+}
+
+func CreatePage(cfg config.Config, workspace, title, body string) error {
+	var d domain.PageDetail
+	in := domain.CreatePageRequest{Title: title, Markdown: body}
+	if err := postJSON(cfg, "/api/workspaces/"+url.PathEscape(workspace)+"/pages", in, &d); err != nil {
+		return err
+	}
+	fmt.Printf("created page %q\n  id: %s\n", d.Title, d.ID)
+	return nil
+}
+
+func UpdatePage(cfg config.Config, id string, title, body *string) error {
+	var d domain.PageDetail
+	in := domain.PageEdit{Title: title, Markdown: body}
+	if err := patchJSON(cfg, "/api/pages/"+url.PathEscape(id), in, &d); err != nil {
+		return err
+	}
+	fmt.Printf("updated %s\n", d.Title)
+	return nil
+}
+
 // RenameWorkspace retitles a Workspace (a Plane project).
 func RenameWorkspace(cfg config.Config, id, name string) error {
 	var ws domain.Workspace

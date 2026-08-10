@@ -127,6 +127,32 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 		return domain.ThreadDetail{}, err
 	}
 
+	// Named sections, resolved against the DOCUMENT region. A section is not a
+	// region of its own — it is a heading inside the document — so this produces
+	// the document's new markdown and then takes the ordinary region path, which
+	// means the splice still rewrites only the blocks that actually changed.
+	if len(edit.Sections) > 0 {
+		if edit.Brief != nil {
+			return domain.ThreadDetail{}, fmt.Errorf(
+				"%w: the document was given both a replacement and a section edit — send one or the other",
+				errBadRequest)
+		}
+		if _, ok := patched["brief"]; ok {
+			return domain.ThreadDetail{}, fmt.Errorf(
+				"%w: the document was given both a quoted edit and a section edit — send one or the other",
+				errBadRequest)
+		}
+		doc, _ := md.RegionMarkdown(body, md.RegionDocument)
+		next, err := applySectionEdits(doc, edit.Sections)
+		if err != nil {
+			return domain.ThreadDetail{}, err
+		}
+		if patched == nil {
+			patched = map[string]string{}
+		}
+		patched["brief"] = next
+	}
+
 	for _, r := range editRegions {
 		want := map[string]*string{
 			"brief": edit.Brief, "logbook": edit.Logbook, "dod": edit.DoD,
@@ -235,6 +261,46 @@ func (s *Server) writeBody(ctx context.Context, cl *plane.Client, inst domain.In
 // Everything is resolved before ANY write: a set that fails half way through
 // leaves nothing applied, because a partly-applied patch is worse than a
 // refused one — the caller cannot tell which half landed.
+// reservedSections are the headings that ARE regions. Writing them as sections
+// would append a second "## Logbook" inside the document rather than touching
+// the real one, so they are refused with a pointer at the right field.
+var reservedSections = map[string]string{
+	"logbook":            "logbook",
+	"bitácora":           "logbook",
+	"bitacora":           "logbook",
+	"definition of done": "dod",
+	"dod":                "dod",
+}
+
+// applySectionEdits folds named-section writes into the document's markdown.
+func applySectionEdits(doc string, edits []domain.SectionEdit) (string, error) {
+	for _, e := range edits {
+		title := strings.TrimSpace(e.Title)
+		if title == "" {
+			return "", fmt.Errorf("%w: a section edit needs a title", errBadRequest)
+		}
+		if field, bad := reservedSections[strings.ToLower(title)]; bad {
+			return "", fmt.Errorf(
+				"%w: %q is a region of its own — send it as %q instead, so it is recorded as production",
+				errBadRequest, title, field)
+		}
+		if e.Delete {
+			_, rest, found := md.ExtractSection(doc, title)
+			if !found {
+				return "", fmt.Errorf("%w: there is no section called %q", errBadRequest, title)
+			}
+			doc = rest
+			continue
+		}
+		if e.Markdown == nil {
+			return "", fmt.Errorf(
+				"%w: section %q was given neither content nor delete", errBadRequest, title)
+		}
+		doc = md.ReplaceSection(doc, title, *e.Markdown)
+	}
+	return strings.TrimSpace(doc), nil
+}
+
 func applyRegionEdits(descriptionHTML string, edits []domain.RegionEdit) (map[string]string, error) {
 	if len(edits) == 0 {
 		return nil, nil

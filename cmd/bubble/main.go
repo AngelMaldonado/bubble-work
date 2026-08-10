@@ -56,6 +56,8 @@ func main() {
 		cmdLogbook(os.Args[2:])
 	case "dod":
 		cmdDoD(os.Args[2:])
+	case "section":
+		cmdSection(os.Args[2:])
 	case "rename":
 		cmdRename(os.Args[2:])
 	case "move":
@@ -128,6 +130,8 @@ Usage:
   bubble tick                      sweep now for cooling bubbles
   bubble use [name]                switch active credential profile (no arg: list;
                                    --tokens shows keys masked, add --reveal for full)
+  bubble section --id <id> --title <t> [--file <f>|-] [--delete]
+                                   add / rewrite / remove a ## section of a thread
   bubble page list|read|new|edit   a workspace's docs and specs (Plane pages)
   bubble workspace new|list|rename  a Plane project — our Workspace
   bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
@@ -1274,6 +1278,36 @@ func cmdDoD(args []string) {
 	}
 	if err := client.UpdateThread(cfg, args[0], domain.ThreadEdit{DoD: &body}); err != nil {
 		log.Fatalf("dod: %v", err)
+	}
+}
+
+// cmdSection adds, rewrites or removes one named section of a thread's document.
+//
+// A thread page is ONE document, so a new part of it is a new `## ` section.
+// This addresses it by heading instead of making you quote its text back.
+func cmdSection(args []string) {
+	fs := flag.NewFlagSet("section", flag.ExitOnError)
+	id := fs.String("id", "", "thread id (required)")
+	title := fs.String("title", "", "section heading (required)")
+	file := fs.String("file", "", "markdown file, or - for stdin")
+	del := fs.Bool("delete", false, "remove the section, heading and all")
+	_ = fs.Parse(args)
+	if *id == "" || *title == "" {
+		log.Fatal("section: --id and --title are required")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	e := domain.SectionEdit{Title: *title, Delete: *del}
+	if !*del {
+		body := readBody(*file)
+		e.Markdown = &body
+	}
+	if err := client.UpdateThread(cfg, *id, domain.ThreadEdit{
+		Sections: []domain.SectionEdit{e},
+	}); err != nil {
+		log.Fatalf("section: %v", err)
 	}
 }
 

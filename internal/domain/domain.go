@@ -456,6 +456,24 @@ type EditableRegion struct {
 	Hash string `json:"hash"`
 }
 
+// SectionEdit writes ONE named section of a thread's document, addressed by its
+// heading rather than by quoting its text.
+//
+// A thread page is one document (ParseThread does not split it), so a "new work
+// artifact" inside it is a new `## ` section — and until now there was no way to
+// name one. You could replace the whole document, or quote a fragment and splice
+// around it; neither is "add a section" or "rewrite that section".
+type SectionEdit struct {
+	// Title is the heading text, matched case-insensitively. Created as an H2
+	// when absent, which is what the standard wants (§3.1) and what the table of
+	// contents can actually see — it starts at H2.
+	Title string `json:"title"`
+	// Markdown is the section's new content, WITHOUT its heading.
+	Markdown *string `json:"markdown,omitempty"`
+	// Delete removes the section, heading and all.
+	Delete bool `json:"delete,omitempty"`
+}
+
 // ThreadEdit is a write to a thread's artifact page. A nil field is left exactly
 // as it was — an agent revising a plan must not be able to erase the human's
 // Brief, so the shape makes "touch only what you name" the default.
@@ -484,6 +502,11 @@ type ThreadEdit struct {
 	// by default on every other surface — including MCP, where §9.3 makes an
 	// agent deliberately indistinguishable from the person it acts for.
 	Lenient bool `json:"lenient,omitempty"`
+
+	// Sections add, rewrite or remove named sections of the document. Applied
+	// before any whole-region write, and refused alongside one: naming both the
+	// document and a section inside it is a contradiction.
+	Sections []SectionEdit `json:"sections,omitempty"`
 	// Base carries the region hashes the editor read, keyed by region name.
 	// Absent means "I did not look" — accepted, because CLI and MCP callers
 	// legitimately write without having loaded the page first.
@@ -501,7 +524,8 @@ type RegionEdit struct {
 
 // Empty reports whether an edit names nothing to change.
 func (e ThreadEdit) Empty() bool {
-	return e.Title == nil && e.Brief == nil && e.Logbook == nil && e.DoD == nil && len(e.Edits) == 0
+	return e.Title == nil && e.Brief == nil && e.Logbook == nil && e.DoD == nil &&
+		len(e.Edits) == 0 && len(e.Sections) == 0
 }
 
 // Comment is one rendered entry in a thread's comment feed (Phase 12). HTML is

@@ -625,6 +625,48 @@ each, drifting apart at the first bug fixed in only one.
 A locked page renders read-only rather than offering an edit button that fails,
 and Escape unwinds one layer at a time: the title field, then the editor, then
 the room — closing everything on the first press loses unsaved intent.
+## Named sections
+
+A thread page is ONE document. `ParseThread` deliberately does not split it on
+H1, because Plane uses H1 and H2 as ordinary content headings and splitting would
+fragment real work into spurious "files". So a new work artifact *inside* a
+thread is a new `## ` section — and there was no way to say that. You could
+replace the whole document, or quote a fragment and splice around it; neither is
+"add a section" or "rewrite that section".
+
+`sections` addresses one by its heading:
+
+```json
+{"sections": [{"title": "Diseño", "markdown": "…"}]}
+```
+
+Absent, it is created as an **H2**. Present, its content is replaced and its
+heading, position and every other section are left alone. `delete: true` takes
+the heading with it, and deleting one that was never there is an error rather
+than a silent success.
+
+The H1 the standard refuses is not an obstacle to this — it is the reason for it.
+`toc()` skips H1 outright ("H1s are artifact titles, not TOC entries"), so a
+section added with `#` would be invisible in the very navigation that exists to
+find it. Writing `## ` is not a workaround for the linter; it is the only shape
+the minimap can see.
+
+Two refusals worth stating:
+
+- **A region is not a section.** Writing `Logbook` or `Definition of Done`
+  through this door would append a second one inside the document instead of
+  touching the real one, so it is refused with a pointer at the right field —
+  which also keeps a Logbook write recorded as production.
+- **The document and a section inside it, at once**, is a contradiction rather
+  than something to resolve by picking an order. Same rule `edits` already has.
+
+Underneath it is not a new write path: section edits produce the document's new
+markdown and then take the ordinary region route, so the block splicer still
+rewrites only what actually changed, and images and mentions elsewhere keep their
+bytes.
+
+Surface parity: `PATCH /api/threads/{id}` with `sections` · `bubble section --id
+<id> --title <t> [--file <f>|-] [--delete]` · MCP `update_thread`'s `sections`.
 
 ## Open
 

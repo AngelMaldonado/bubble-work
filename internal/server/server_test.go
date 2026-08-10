@@ -3578,3 +3578,146 @@ func TestProjectPages(t *testing.T) {
 		t.Error("Plane was never asked to delete the page")
 	}
 }
+
+// A thread page is ONE document — ParseThread deliberately does not split it on
+// H1, because Plane uses H1 and H2 as ordinary content headings. So a "new work
+// artifact" inside a thread is a new `## ` section, and until sections were
+// addressable there was no way to say that: you could replace the whole document
+// or quote a fragment, neither of which is "add a section".
+//
+// The H1 the standard refuses is not an obstacle to this. It is the reason for
+// it: the table of contents starts at H2, so a section added with `#` would be
+// invisible in the navigation that exists to find it.
+func TestNamedSections(t *testing.T) {
+	var mu sync.Mutex
+	body := `<h1>Brief: Ship it</h1><p data-id="p1">The intent.</p>` +
+		`<h2>Logbook</h2><ul data-type="taskList">` +
+		`<li data-type="taskItem" data-checked="false"><div><p>do it</p></div></li></ul>`
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur := body
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/projects/p1/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner"}]`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Sandbox","identifier":"SB"}],"next_page_results":false}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"Ship it"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				DescriptionHTML *string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			if in.DescriptionHTML != nil {
+				body = *in.DescriptionHTML
+			}
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"Ship it","description_html":%q,
+			  "created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z",
+			  "state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, cur)
+		default:
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	read := func() string {
+		mu.Lock()
+		defer mu.Unlock()
+		return body
+	}
+
+	// 1. A section that does not exist is CREATED, as an H2, and the Brief and
+	// the Logbook are untouched around it.
+	add := `{"sections":[{"title":"Diseño","markdown":"Lo decidido va aquí."}]}`
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, add); code != http.StatusOK {
+		t.Fatalf("add section: %d %s", code, b)
+	}
+	after := read()
+	if !strings.Contains(after, "Dise") || !strings.Contains(after, "Lo decidido va aqu") {
+		t.Fatalf("the section did not land:\n%s", after)
+	}
+	if !strings.Contains(after, `<h2`) {
+		t.Error("a new section must be an H2 — the TOC starts there and cannot see an H1")
+	}
+	if !strings.Contains(after, "The intent.") || !strings.Contains(after, "do it") {
+		t.Errorf("adding a section disturbed the Brief or the Logbook:\n%s", after)
+	}
+	// The document keeps ONE H1: that is the rule the standard enforces, and a
+	// section write must not be a way around it.
+	if n := strings.Count(md.FromHTML(after), "\n# ") + strings.Count(md.FromHTML(after), "# Brief"); n > 1 {
+		t.Errorf("a section write introduced a second H1:\n%s", md.FromHTML(after))
+	}
+
+	// 2. Writing it again REPLACES its content, rather than appending a twin.
+	again := `{"sections":[{"title":"Diseño","markdown":"Reescrito."}]}`
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, again); code != http.StatusOK {
+		t.Fatalf("rewrite section: %d %s", code, b)
+	}
+	after = read()
+	if strings.Contains(after, "Lo decidido va aqu") {
+		t.Error("rewriting a section left the old content behind")
+	}
+	if got := strings.Count(md.FromHTML(after), "## Dise"); got != 1 {
+		t.Errorf("want exactly one heading for the section, got %d:\n%s", got, md.FromHTML(after))
+	}
+
+	// 3. A region is not a section. Writing "Logbook" through this door would
+	// append a second one inside the document instead of touching the real one.
+	res := `{"sections":[{"title":"Logbook","markdown":"nope"}]}`
+	code, rb := do(t, http.MethodPatch, ts.URL+thread, key, res)
+	if code != http.StatusBadRequest || !strings.Contains(string(rb), "logbook") {
+		t.Errorf("reserved section: want 400 pointing at the field, got %d %s", code, rb)
+	}
+
+	// 4. Naming the document and a section inside it at once is a contradiction.
+	both := `{"brief":"# Brief: Ship it\n\nwhole","sections":[{"title":"Diseño","markdown":"part"}]}`
+	if code, _ := do(t, http.MethodPatch, ts.URL+thread, key, both); code != http.StatusBadRequest {
+		t.Errorf("document + section: want 400, got %d", code)
+	}
+
+	// 5. Delete takes the heading with it.
+	del := `{"sections":[{"title":"Diseño","delete":true}]}`
+	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, del); code != http.StatusOK {
+		t.Fatalf("delete section: %d %s", code, b)
+	}
+	after = read()
+	if strings.Contains(after, "Reescrito") || strings.Contains(md.FromHTML(after), "## Dise") {
+		t.Errorf("the section survived its own deletion:\n%s", after)
+	}
+	if !strings.Contains(after, "The intent.") || !strings.Contains(after, "do it") {
+		t.Errorf("deleting a section disturbed the rest of the page:\n%s", after)
+	}
+
+	// 6. Deleting one that was never there is an error, not a silent success.
+	if code, _ := do(t, http.MethodPatch, ts.URL+thread, key, del); code != http.StatusBadRequest {
+		t.Error("deleting a missing section should say so")
+	}
+}

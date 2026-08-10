@@ -115,6 +115,13 @@ func withActor(ctx context.Context, req *sdk.CallToolRequest) context.Context {
 // updateThreadIn patches a thread's artifact page. Both fields are optional and
 // a nil one is left untouched — an agent revising a plan must not be able to
 // erase the human's Brief.
+// sectionIn addresses one named section of a thread's document.
+type sectionIn struct {
+	Title    string  `json:"title" jsonschema:"the section's heading text, as read_thread shows it. Created as a ## section when it does not exist yet"`
+	Markdown *string `json:"markdown,omitempty" jsonschema:"the section's new content, WITHOUT its heading. Replaces what is there"`
+	Delete   bool    `json:"delete,omitempty" jsonschema:"remove the section, heading and all, instead of writing it"`
+}
+
 type updateThreadIn struct {
 	ThreadID string  `json:"thread_id" jsonschema:"the namespaced thread id"`
 	Title    *string `json:"title,omitempty" jsonschema:"rename the thread. Not evidence of production — a title is what the work is called, not what has been done"`
@@ -123,6 +130,8 @@ type updateThreadIn struct {
 	DoD      *string `json:"dod,omitempty" jsonschema:"replace the Definition of Done: the checklist that says the work is finished. Markdown"`
 	// Edits are the PREFERRED way to change an existing section.
 	Edits []editIn `json:"edits,omitempty" jsonschema:"change PART of a section instead of replacing it. Strongly preferred for an existing section: quote the exact text to change rather than reproducing the whole thing, which is how sections get paraphrased, truncated, or appended to twice"`
+	// Sections are how a NEW part of the document gets added or rewritten.
+	Sections []sectionIn `json:"sections,omitempty" jsonschema:"add, rewrite or remove named sections of the document, addressed by heading. This is how you add a new part to a thread's document: a heading you name here is created as a ## section, which is what the table of contents and the minimap can see — a # heading is refused, since a page has one title"`
 }
 
 // editIn is one find-and-replace. Old is the guard, exactly as text guards the
@@ -404,7 +413,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. PREFER `edits` for anything that already exists: quote the exact text and say what it becomes, and everything else stays untouched. Passing a whole section replaces it, which is how sections get paraphrased, truncated, or appended to twice — only do that when writing one from scratch. Within a section only the blocks you actually changed are rewritten, so images, mentions and formatting elsewhere survive either way. To tick a single existing todo, prefer toggle_todo."},
+		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. PREFER `edits` for anything that already exists: quote the exact text and say what it becomes, and everything else stays untouched. Passing a whole section replaces it, which is how sections get paraphrased, truncated, or appended to twice — only do that when writing one from scratch. Within a section only the blocks you actually changed are rewritten, so images, mentions and formatting elsewhere survive either way. To ADD a new part to the document, use `sections`: name a heading and it is created as a ## section, which the table of contents and the minimap can see. To tick a single existing todo, prefer toggle_todo."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			edits := make([]domain.RegionEdit, 0, len(in.Edits))
 			for _, e := range in.Edits {
@@ -412,9 +421,15 @@ func newServer(b Backend) *sdk.Server {
 					Region: e.Region, Old: e.Old, New: e.New, All: e.All,
 				})
 			}
+			sections := make([]domain.SectionEdit, 0, len(in.Sections))
+			for _, x := range in.Sections {
+				sections = append(sections, domain.SectionEdit{
+					Title: x.Title, Markdown: x.Markdown, Delete: x.Delete,
+				})
+			}
 			d, err := b.UpdateThread(withActor(ctx, req), in.ThreadID, domain.ThreadEdit{
 				Title: in.Title, Brief: in.Brief, Logbook: in.Logbook, DoD: in.DoD,
-				Edits: edits,
+				Edits: edits, Sections: sections,
 			})
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err

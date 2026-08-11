@@ -498,6 +498,10 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/threads/{id}/revisions", s.restAuth(s.handleAddRevision))
 	mux.HandleFunc("POST /api/threads/{id}/todo", s.restAuth(s.handleToggleTodo))
 	mux.HandleFunc("POST /api/threads/{id}/move", s.restAuth(s.handleMoveThread))
+	// 🏆 is Plane's state, not an overlay flag — these move the work item so the
+	// ordinary derivation reports it (docs/THREAD-LIFECYCLE.md).
+	mux.HandleFunc("POST /api/threads/{id}/complete", s.restAuth(s.handleCompleteThread))
+	mux.HandleFunc("POST /api/threads/{id}/reopen", s.restAuth(s.handleReopenThread))
 	// Deleting is irreversible and deletes from Plane; §5.3 prefers CLOSING a
 	// bubble, which keeps the record of what was done.
 	mux.HandleFunc("DELETE /api/bubbles/{id}", s.restAuth(s.handleDeleteBubble))

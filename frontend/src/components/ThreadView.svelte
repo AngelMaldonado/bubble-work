@@ -205,6 +205,53 @@
     }
   }
 
+  // ---- finishing ----
+  //
+  // 🏆 is Plane's state, so this asks the server to move the work item rather than
+  // recording anything of its own. The Definition of Done gates it: the server
+  // refuses while items are outstanding and names them, which is what dodBlock
+  // shows — with the override beside it, since a DoD can turn out to be wrong.
+  let completing = $state(false);
+  let dodBlock = $state<string | null>(null);
+
+  async function completeThread(force: boolean): Promise<void> {
+    if (!detail || completing) return;
+    completing = true;
+    if (force) dodBlock = null;
+    try {
+      detail = await api.completeThread(detail.id, force);
+      dodBlock = null;
+      // The bubble's band is derived from its threads, so the board behind this
+      // is now stale.
+      await store.refresh();
+    } catch (e) {
+      const msg = e instanceof ApiError ? e.message : String(e);
+      // The DoD refusal is a 400 that names the outstanding items; anything else
+      // is a real error and belongs in the ordinary error line.
+      if (e instanceof ApiError && e.status === 400 && msg.includes('Definition of Done')) {
+        dodBlock = msg.replace(/^bad request:\s*/, '');
+      } else {
+        error = msg;
+      }
+    } finally {
+      completing = false;
+    }
+  }
+
+  async function reopenThread(): Promise<void> {
+    if (!detail || completing) return;
+    completing = true;
+    try {
+      detail = await api.reopenThread(detail.id);
+      dodBlock = null;
+      await store.refresh();
+    } catch (e) {
+      error = e instanceof ApiError ? e.message : String(e);
+    } finally {
+      completing = false;
+    }
+  }
+
   function onSaved(d: ThreadDetail): void {
     elsewhere = false;
     // The write already returned the fresh thread, so adopt it rather than
@@ -716,6 +763,23 @@
       <main class="content" bind:this={contentEl}>
         {#if canEdit && !store.kiosk}
           <div class="edit-bar">
+            <!-- Finishing leads the bar: it is the act the whole thread exists to
+                 reach, and it used to be the one thing you had to leave for
+                 Plane's UI (docs/THREAD-LIFECYCLE.md). -->
+            {#if detail.level === 'done'}
+              <button onclick={reopenThread} disabled={completing} title={t('thread.reopenThread')}>
+                ↩ {t('thread.reopenThread')}
+              </button>
+            {:else}
+              <button
+                class="finish"
+                onclick={() => completeThread(false)}
+                disabled={completing}
+                title={t('thread.doneHint')}
+              >
+                🏆 {completing ? t('thread.completing') : t('thread.done')}
+              </button>
+            {/if}
             {#if editRegion && detail.regions?.[editRegion]}
               <button
                 class="danger"
@@ -742,6 +806,19 @@
               >
             </div>
           </div>
+        {/if}
+
+        <!-- The refusal is not a dead end: a DoD can be genuinely wrong, so the
+             override is offered right here rather than sending anyone to the CLI.
+             It says what is outstanding, because "not met" alone is unactionable. -->
+        {#if dodBlock}
+          <p class="dodblock">
+            <b>{t('thread.dodBlocked')}</b>
+            {dodBlock}
+            <button type="button" class="link" onclick={() => completeThread(true)}>
+              {t('thread.forceDone')}
+            </button>
+          </p>
         {/if}
 
         {#if elsewhere}
@@ -1326,23 +1403,82 @@
     top: 0.75rem;
     z-index: 5;
     display: flex;
+    align-items: center;
     justify-content: flex-end;
+    /* The bar had no gap, so anything without its own pill padding collided with
+       its neighbour. */
+    gap: 0.4rem;
     margin-bottom: 0.6rem;
-    pointer-events: none; /* only the button itself catches clicks */
+    pointer-events: none; /* only the controls themselves catch clicks */
   }
   .edit-bar > * {
     pointer-events: auto;
   }
-  .edit-bar .danger {
+  /* The pill, for every direct button in the bar.
+     It used to be declared only on .danger, so a button without that class
+     inherited the reading column's 18px serif and drew no border at all — it
+     looked like a stray line of prose sitting in the toolbar. `>` keeps the
+     segmented control's own buttons out of it, since they are nested in .seg and
+     have their own look. */
+  .edit-bar > button {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.35rem;
     padding: 0.32rem 0.7rem;
     border-radius: 999px;
     border: 1px solid var(--line);
     background: color-mix(in oklab, var(--text) 5%, transparent);
+    backdrop-filter: blur(10px);
+    -webkit-backdrop-filter: blur(10px);
     color: var(--muted);
     font-family: var(--sans);
     font-size: 0.74rem;
     font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
     cursor: pointer;
+  }
+  .edit-bar > button:hover:not(:disabled) {
+    color: var(--text);
+    border-color: color-mix(in oklab, var(--text) 25%, var(--line));
+  }
+  /* Filled, and the only one in the bar that is: finishing is the goal the thread
+     exists to reach, and everything else here is a tool. */
+  .edit-bar .finish {
+    background: var(--done);
+    border-color: transparent;
+    color: oklch(0.24 0.03 90);
+    font-weight: 700;
+  }
+  .edit-bar .finish:hover:not(:disabled) {
+    background: color-mix(in oklab, var(--done) 88%, white);
+    border-color: transparent;
+    color: oklch(0.24 0.03 90);
+  }
+  .edit-bar button:disabled {
+    opacity: 0.55;
+    cursor: default;
+  }
+  .dodblock {
+    margin: 0 0 0.7rem;
+    padding: 0.5rem 0.75rem;
+    border-radius: 10px;
+    border: 1px solid color-mix(in oklab, var(--done) 45%, var(--line));
+    background: color-mix(in oklab, var(--done) 8%, transparent);
+    font-size: 0.8rem;
+    color: var(--muted);
+    line-height: 1.45;
+  }
+  .dodblock .link {
+    margin-left: 0.3rem;
+    border: none;
+    background: none;
+    padding: 0;
+    color: var(--wip);
+    cursor: pointer;
+    font: inherit;
+    text-decoration: underline;
   }
   .edit-bar .danger:hover {
     color: oklch(0.98 0 0);

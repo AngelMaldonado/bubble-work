@@ -160,6 +160,12 @@ func (stubBackend) DeleteWorkspace(context.Context, string) (int, int, error) { 
 func (stubBackend) CreateBubble(context.Context, domain.CreateBubbleRequest) (domain.NewBubble, error) {
 	return domain.NewBubble{}, nil
 }
+func (stubBackend) CompleteThread(context.Context, string, bool) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) ReopenThread(context.Context, string) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
 func (stubBackend) RenameBubble(context.Context, string, string) (domain.NewBubble, error) {
 	return domain.NewBubble{}, nil
 }

@@ -62,6 +62,10 @@ func main() {
 		cmdRename(os.Args[2:])
 	case "move":
 		cmdMove(os.Args[2:])
+	case "done":
+		cmdDone(os.Args[2:])
+	case "reopen":
+		cmdReopen(os.Args[2:])
 	case "delete", "rm":
 		cmdDelete(os.Args[2:])
 	case "todo":
@@ -117,6 +121,8 @@ Usage:
   bubble dod <id> [text|-]         rewrite a thread's Definition of Done
   bubble rename <id> <title>       retitle a thread or a revision
   bubble move <thread> <bubble>    re-home a thread into another bubble
+  bubble done <id> [--force]       mark a thread finished (🏆; refused if the DoD is unmet)
+  bubble reopen <id>               put a finished thread back to work
   bubble delete <kind> <id> [-y]   PERMANENTLY delete a workspace/bubble/thread/artifact
   bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
   bubble revision <id> <title> [-] attach a revision artifact to a thread
@@ -1356,6 +1362,39 @@ func cmdMove(args []string) {
 
 // cmdDelete removes a bubble, a thread or one artifact — from PLANE, which is
 // the system of record. There is no undo, so it asks first unless -y is given.
+// cmdDone marks a thread finished. The server refuses when the Definition of Done
+// still has unticked items — the DoD is the authority on "done", and --force is
+// the deliberate override for a DoD that turned out to be wrong.
+func cmdDone(args []string) {
+	fs := flag.NewFlagSet("done", flag.ExitOnError)
+	force := fs.Bool("force", false, "complete even though the Definition of Done is unmet")
+	_ = fs.Parse(args)
+	if fs.NArg() < 1 {
+		log.Fatal("usage: bubble done <thread-id> [--force]")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.CompleteThread(cfg, fs.Arg(0), *force); err != nil {
+		log.Fatalf("done: %v", err)
+	}
+}
+
+// cmdReopen puts a finished thread back to work.
+func cmdReopen(args []string) {
+	if len(args) < 1 {
+		log.Fatal("usage: bubble reopen <thread-id>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.ReopenThread(cfg, args[0]); err != nil {
+		log.Fatalf("reopen: %v", err)
+	}
+}
+
 func cmdDelete(args []string) {
 	yes := false
 	var rest []string

@@ -4203,3 +4203,225 @@ func TestPagesNestAndSurviveTheirParent(t *testing.T) {
 		}
 	}
 }
+
+// Finishing a thread, which until now you had to leave Bubble Work to do.
+//
+// 🏆 is derived from Plane's state (heat.ClassifyThread, threadLevel), and
+// autostate refuses to write it — autoTarget returns "" for done. So this pins
+// the whole verb: the Definition of Done gates it, the target state is resolved by
+// GROUP rather than by a localized name, the write reaches Plane, the mirror
+// reflects it with no sync pass, and the derived level actually flips to 🏆.
+func TestCompletingAThreadIsGatedByItsDoD(t *testing.T) {
+	var mu sync.Mutex
+	// One unticked DoD item, and one in the Logbook — which must NOT block, since
+	// the plan can carry items that outlive the thread.
+	body := `<h1>Ship the thing</h1><p>why.</p>` +
+		`<h2>Logbook</h2>` +
+		`<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><div><p>monitor for a week</p></div></li></ul>` +
+		`<h2>Definition of Done</h2>` +
+		`<ul data-type="taskList"><li data-type="taskItem" data-checked="false"><div><p>tests pass</p></div></li></ul>`
+	stateID, stateGroup := "s1", "unstarted"
+	moves := 0
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur, sid, grp := body, stateID, stateGroup
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			// Deliberately NOT called "Done": names are project-configured and
+			// localized, so anything matching on the name would fail here.
+			io.WriteString(w, `{"results":[
+			  {"id":"s1","name":"Por hacer","group":"unstarted","default":true},
+			  {"id":"s2","name":"Haciendo","group":"started"},
+			  {"id":"s3","name":"Entregado","group":"completed","default":true}
+			]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"Ship the thing"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				State           *string `json:"state"`
+				DescriptionHTML *string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			if in.State != nil {
+				moves++
+				stateID = *in.State
+				switch stateID {
+				case "s3":
+					stateGroup = "completed"
+				case "s2":
+					stateGroup = "started"
+				default:
+					stateGroup = "unstarted"
+				}
+			}
+			if in.DescriptionHTML != nil {
+				body = *in.DescriptionHTML
+			}
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"Ship the thing","description_html":%q,`+
+				`"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z",`+
+				`"state":{"id":%q,"group":%q}}],"next_page_results":false}`, cur, sid, grp)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	level := func() string {
+		t.Helper()
+		var d domain.ThreadDetail
+		_, rb := do(t, http.MethodGet, ts.URL+thread, key, "")
+		if err := json.Unmarshal(rb, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d.Level
+	}
+
+	// 1. Refused while the DoD is unmet, and the refusal NAMES what is outstanding
+	//    — "not met" on its own is unactionable.
+	code, rb := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{}`)
+	if code != http.StatusBadRequest {
+		t.Fatalf("an unmet DoD should refuse the completion, got %d %s", code, rb)
+	}
+	if !strings.Contains(string(rb), "tests pass") {
+		t.Errorf("the refusal should name the outstanding item: %s", rb)
+	}
+	mu.Lock()
+	n := moves
+	mu.Unlock()
+	if n != 0 {
+		t.Errorf("a refused completion must not have touched Plane, got %d state writes", n)
+	}
+
+	// 2. Tick the DoD item. This is the ordinary todo path, not a special case.
+	tick, _ := json.Marshal(map[string]any{
+		"region": "dod", "index": 0, "text": "tests pass", "done": true,
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(tick)); code != http.StatusOK {
+		t.Fatalf("tick the DoD item: %d %s", code, b)
+	}
+
+	// 3. Now it completes — and lands in the `completed` GROUP, whatever the
+	//    project calls that column.
+	code, cb := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{}`)
+	if code != http.StatusOK {
+		t.Fatalf("complete: %d %s", code, cb)
+	}
+	var done domain.ThreadDetail
+	if err := json.Unmarshal(cb, &done); err != nil {
+		t.Fatal(err)
+	}
+	if done.StateGroup != "completed" {
+		t.Errorf("the thread should be in the completed group, got %q (%q)", done.StateGroup, done.State)
+	}
+	if done.State != "Entregado" {
+		t.Errorf("resolution is by group, so it should have picked the project's own column: %q", done.State)
+	}
+	// The whole point: the DERIVED level flips, with no sync pass in between.
+	if done.Level != "done" {
+		t.Errorf("a completed thread should read 🏆, got %q", done.Level)
+	}
+	if got := level(); got != "done" {
+		t.Errorf("a re-read should still say done, got %q — the mirror did not take the write", got)
+	}
+
+	// 4. Idempotent: completing it again is a no-op, not a second write.
+	mu.Lock()
+	before := moves
+	mu.Unlock()
+	if code, _ := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{}`); code != http.StatusOK {
+		t.Error("completing an already-finished thread should be a no-op, not an error")
+	}
+	mu.Lock()
+	after := moves
+	mu.Unlock()
+	if after != before {
+		t.Errorf("completing twice wrote to Plane twice (%d → %d)", before, after)
+	}
+
+	// 5. Reopening puts it back to work, and is never gated by a checklist.
+	code, ob := do(t, http.MethodPost, ts.URL+thread+"/reopen", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("reopen: %d %s", code, ob)
+	}
+	var back domain.ThreadDetail
+	if err := json.Unmarshal(ob, &back); err != nil {
+		t.Fatal(err)
+	}
+	if back.StateGroup != "started" {
+		t.Errorf("a reopened thread belongs in started, got %q", back.StateGroup)
+	}
+	if back.Level == "done" {
+		t.Error("a reopened thread must not still read 🏆")
+	}
+
+	// 6. force is the override for a DoD that turned out to be wrong. Untick the
+	//    item and finish anyway.
+	untick, _ := json.Marshal(map[string]any{
+		"region": "dod", "index": 0, "text": "tests pass", "done": false,
+	})
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(untick)); code != http.StatusOK {
+		t.Fatalf("untick: %d %s", code, b)
+	}
+	if code, _ := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{}`); code != http.StatusBadRequest {
+		t.Fatal("the DoD gate should be back")
+	}
+	code, fb := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{"force":true}`)
+	if code != http.StatusOK {
+		t.Fatalf("force: %d %s", code, fb)
+	}
+	var forced domain.ThreadDetail
+	json.Unmarshal(fb, &forced)
+	if forced.Level != "done" {
+		t.Errorf("a forced completion should still land, got level %q", forced.Level)
+	}
+}
+
+// A thread with no Definition of Done at all is not blocked.
+//
+// AGENTS.md lets a small thread skip the Logbook and close on a short paragraph,
+// so gating on an artifact those threads are explicitly exempt from would punish
+// exactly the ones the rule excuses.
+func TestAThreadWithNoDoDCanStillFinish(t *testing.T) {
+	if unmet := unmetDoD(`<h1>Small</h1><p>Just did it.</p>`); len(unmet) != 0 {
+		t.Errorf("no DoD is not an unmet DoD, got %v", unmet)
+	}
+	// An empty DoD section is the same: a heading with prose under it is a
+	// paragraph-shaped promise, not a checklist with nothing ticked.
+	if unmet := unmetDoD(`<h2>Definition of Done</h2><p>It works.</p>`); len(unmet) != 0 {
+		t.Errorf("a prose DoD has no items to be outstanding, got %v", unmet)
+	}
+	// But a checklist with an open box is.
+	html := `<h2>Definition of Done</h2>` +
+		`<ul data-type="taskList"><li data-type="taskItem" data-checked="true"><div><p>a</p></div></li>` +
+		`<li data-type="taskItem" data-checked="false"><div><p>b</p></div></li></ul>`
+	unmet := unmetDoD(html)
+	if len(unmet) != 1 || !strings.Contains(unmet[0], "b") {
+		t.Errorf("want the one open item, got %v", unmet)
+	}
+}

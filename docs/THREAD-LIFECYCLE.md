@@ -329,6 +329,48 @@ and someone later edits its Logbook, the thread recomputes to 🔥, our provenan
 still matches (we wrote that Cancelado), and the next tick moves it to In
 Progress. The card follows the work back.
 
+## Finishing a thread (as built)
+
+🏆 is derived from Plane, and for a long time that meant Bubble Work could show it
+and never cause it. Autostate refuses to write it on purpose — `autoTarget`
+returns `""` for `done`, "hands off" — so the one transition the framework asks
+you to make was the one you had to leave the framework to make. A thread carries a
+**Definition of Done** stating exactly when it is finished and todos to verify it;
+you could tick the last box and still have to go find the card in Plane. An agent
+that had satisfied the DoD had no way to say so at all.
+
+`CompleteThread` and `ReopenThread` close that. They are on all three surfaces:
+`POST /api/threads/{id}/complete` and `/reopen`, `bubble done` and `bubble reopen`,
+`complete_thread` and `reopen_thread`, plus a 🏆 button in the thread interior.
+
+What they do and deliberately do not do:
+
+- **They write Plane's state, not an overlay flag.** There is no second source of
+  truth to disagree with the first, and a thread finished here is indistinguishable
+  afterwards from one finished by dragging the card.
+- **The target is resolved by GROUP**, never by name. State names are
+  project-configured and localized; a project whose completed column is called
+  *Entregado* works, and one with no completed state at all is told so rather than
+  having its card moved somewhere arbitrary.
+- **The Definition of Done gates it.** Unticked DoD items refuse the completion,
+  and the refusal names them. This is the closing counterpart of the §3 birth rule
+  — the same artifact gates both ends of a thread's life.
+- **The Logbook does not gate it.** A plan can legitimately carry items that
+  outlive the thread ("monitor for a week"); gating on those would make the rule
+  unpassable and therefore routed around.
+- **No DoD is not an unmet DoD.** A small thread may close on a paragraph
+  (AGENTS.md), and so may a DoD written as prose rather than a checklist.
+- **`force` is the override**, for a DoD that turned out to be wrong. Logged as
+  one, never the default on any surface, and never offered to an agent as a
+  shortcut.
+- **A human's move hands off autostate** for good, the rule already stated for a
+  move made in Plane's UI, applied to one made through here.
+- **Failure queues.** The write goes through the outbox with a `state` field lock,
+  so a Plane that is down delays the card rather than losing the declaration
+  (PLANE-SYNC.md Phase 5).
+- **It is idempotent.** Completing an already-completed thread is a no-op, not a
+  second write and not an error.
+
 ## The bubble roll-up
 
 `Server.bubbleHeat` is the single place a bubble's temperature, band and
@@ -398,3 +440,6 @@ fix it in both modes.
   pulse for now).
 - Notifications track `Lifecycle`, which cannot see a 😴 → 🪦 slide. Tracking the
   band instead would fix it for both modes.
+- Completing a thread is only reachable from the thread interior in the web. The
+  bubble's timeline lists threads with their level and would be the natural place
+  to finish one without opening it.

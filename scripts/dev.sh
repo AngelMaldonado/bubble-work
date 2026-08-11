@@ -17,7 +17,9 @@ BIN="./dist/bubble"
 
 if [[ "${1:-}" == "--web" ]]; then
   echo "building the web bundle…"
-  (cd frontend && npm run build >/dev/null)
+  # bun, not npm: the repo standardised on bun and package-lock.json is
+  # git-ignored, so npm here resolves a different dependency tree than CI checks.
+  (cd frontend && bun run build >/dev/null)
 fi
 
 echo "building…"

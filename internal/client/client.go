@@ -663,6 +663,28 @@ func DeleteWorkspace(cfg config.Config, id string) error {
 	return nil
 }
 
+// CompleteThread marks a thread finished: the work item moves into its project's
+// completed state, which is what makes it 🏆 everywhere.
+func CompleteThread(cfg config.Config, id string, force bool) error {
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/complete",
+		map[string]bool{"force": force}, &d); err != nil {
+		return err
+	}
+	fmt.Printf("🏆 %s — %s\n", d.Title, orDash(d.State))
+	return nil
+}
+
+// ReopenThread puts a finished thread back to work.
+func ReopenThread(cfg config.Config, id string) error {
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/reopen", nil, &d); err != nil {
+		return err
+	}
+	fmt.Printf("reopened %s — %s\n", d.Title, orDash(d.State))
+	return nil
+}
+
 // RenameBubble retitles a Bubble (a Plane module). Its contract, stage and
 // threads are untouched — only the handle you grab it by changes.
 func RenameBubble(cfg config.Config, id, name string) error {

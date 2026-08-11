@@ -170,6 +170,8 @@ bubble revision <id> <title> [-] attach a revision artifact to a thread
 bubble comment <id> <text...>    post a comment (as you; earns no heat)
 bubble rename <id> <title>       retitle a thread or a revision
 bubble move <thread> <bubble>    re-home a thread into another bubble
+bubble done <id> [--force]       mark a thread finished (🏆; refused if the DoD is unmet)
+bubble reopen <id>               put a finished thread back to work
 
 # structure
 bubble workspace new|list|rename a Plane project — our Workspace
@@ -280,13 +282,14 @@ claude mcp add --transport http bubble http://localhost:4006/mcp \
 The web UI's **Connect** panel generates that command for you, plus a setup
 prompt, with the key masked until you ask to see it.
 
-27 tools, grouped by what they do:
+29 tools, grouped by what they do:
 
 | | Tools |
 |---|---|
 | **Read** | `list_workspaces` `list_bubbles` `thread_timeline` `read_thread` `thread_comments` `list_pages` `read_page` |
 | **Create** | `create_workspace` `create_bubble` `birth_thread` `add_revision` `create_page` |
 | **Change** | `update_thread` `toggle_todo` `delete_artifact` `set_contract` `move_thread` `rename_bubble` `rename_workspace` `update_page` |
+| **Finish** | `complete_thread` `reopen_thread` |
 | **Discuss** | `post_comment` `mark_comments_read` |
 | **End** | `close_bubble` `delete_bubble` `delete_thread` `delete_page` `delete_workspace` |
 
@@ -301,17 +304,28 @@ exact current name as confirmation.
 
 ## Development
 
-```bash
-go build ./...     # compile everything
-go vet ./...       # static checks
-go test ./...      # unit + server/store/sync/md tests
+There is a [`justfile`](./justfile); `just` on its own lists every recipe.
 
-scripts/dev.sh          # rebuild + restart the local server, wait until healthy
-scripts/dev.sh --web    # rebuild the web bundle first
+```bash
+just dist          # the web bundle AND the binary — the full rebuild
+just build         # binary only (fast, and blind to frontend changes)
+just check         # gofmt + vet + go test + svelte-check, exactly what CI gates
+
+just dev           # rebuild + restart the local server, wait until healthy
+just dev-web       # ...rebuilding the web bundle first
+just ui            # vite with hot reload, proxying the API to that server
+just logs          # follow the running server's log
 ```
 
+The one thing worth internalising: **the web bundle is embedded in the binary**
+(`web/embed.go`, `//go:embed all:dist`), so `just build` will not show a frontend
+change. Use `just dist`, or `just ui` while you are iterating. `web/dist` is
+committed, which is why a plain `go build` needs no JS toolchain — and why a UI
+change belongs in your commit as a rebuilt bundle.
+
 The frontend uses **bun** (a stray `package-lock.json` would resolve different
-versions and is git-ignored):
+versions and is git-ignored). The underlying commands, if you would rather not go
+through `just`:
 
 ```bash
 cd frontend
@@ -341,6 +355,8 @@ internal/
 web/               the embedded SPA bundle (built from frontend/)
 frontend/          Svelte 5 + Skeleton 5 + Tailwind 4, built with bun
 docs/              the design worksheets (see below)
+scripts/dev.sh     rebuild + restart the local server (what `just dev` runs)
+justfile           the build/dev recipes — `just` lists them
 ```
 
 ## Documentation
@@ -365,7 +381,7 @@ the read layer with an outbox for writes and degraded-mode reporting · derived
 thread and bubble buoyancy with opt-in write-back to Plane · the notification
 scheduler · the web board with in-place artifact editing · workspace pages, held
 by Plane or by the server depending on what the instance's Plane can do ·
-workspace and bubble lifecycle including renames and deletes · 27 MCP tools ·
+workspace and bubble lifecycle including renames and deletes · 29 MCP tools ·
 God Mode.
 
 Still open, each tracked in its own worksheet:

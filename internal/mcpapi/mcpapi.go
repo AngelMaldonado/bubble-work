@@ -39,6 +39,8 @@ type Backend interface {
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
 	UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error)
 	MoveThread(ctx context.Context, threadID, bubbleID string) (domain.ThreadDetail, error)
+	CompleteThread(ctx context.Context, threadID string, force bool) (domain.ThreadDetail, error)
+	ReopenThread(ctx context.Context, threadID string) (domain.ThreadDetail, error)
 	DeleteBubble(ctx context.Context, bubbleID string) (int, error)
 	DeleteThread(ctx context.Context, threadID string) (int, error)
 	DeleteRegion(ctx context.Context, threadID string, region md.Region) (domain.ThreadDetail, error)
@@ -201,6 +203,18 @@ type deleteWorkspaceIn struct {
 type deleteIn struct {
 	ID   string `json:"id" jsonschema:"the namespaced id of the thing to delete"`
 	Name string `json:"name" jsonschema:"the thing's exact current name, as you just read it. The delete is REFUSED if it does not match — read it first"`
+}
+
+// completeThreadIn finishes a thread. Force is deliberately not a convenience:
+// the DoD is the promise about when the work is done, and an agent that cannot
+// satisfy it should say so rather than override it.
+type completeThreadIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Force    bool   `json:"force,omitempty" jsonschema:"complete even though the Definition of Done still has unticked items. Only when the DoD itself is WRONG — the work turned out to be something else. Never to save a round trip: if you can still satisfy it, satisfy it"`
+}
+
+type threadRefIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
 }
 
 type deleteRegionIn struct {
@@ -377,6 +391,26 @@ func newServer(b Backend) *sdk.Server {
 				return nil, domain.NewBubble{}, err
 			}
 			return nil, nb, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "complete_thread", Description: "Mark a thread FINISHED (🏆). This moves the Plane work item into its project's completed state — the same thing a human does by dragging the card — so it is the real, visible declaration that the work is done, not a note about it. REFUSED while the Definition of Done still has unticked items, and the refusal names them: tick them with toggle_todo first. Use this when you have satisfied the DoD, instead of leaving the thread open for somebody to notice."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in completeThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.CompleteThread(withActor(ctx, req), in.ThreadID, in.Force)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "reopen_thread", Description: "Put a finished thread back to work: the Plane work item returns to a started state. For a thread completed by mistake, or one that turned out not to be done. Not for continuing new work — that is a new thread with its own Brief (§3)."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in threadRefIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.ReopenThread(withActor(ctx, req), in.ThreadID)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
 		})
 
 	sdk.AddTool(srv,

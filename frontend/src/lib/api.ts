@@ -196,6 +196,15 @@ export const api = {
     req<PageDetail>('PATCH', `/api/pages/${encodeURIComponent(id)}`, patch),
   deletePage: (id: string) => req<{ ok: boolean }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
 
+  // 🏆 is Plane's state, not a flag we keep: these move the work item, so a thread
+  // finished here and one finished by dragging the card in Plane end up identical.
+  // complete is REFUSED while the Definition of Done has unticked items; force is
+  // the deliberate override for a DoD that turned out to be wrong.
+  completeThread: (id: string, force = false) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/complete`, { force }),
+  reopenThread: (id: string) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/reopen`),
+
   // Re-home a thread. Nothing is lost: the Brief, Logbook, comments, history and
   // id survive, and it leaves every other bubble, so this is a move not a copy.
   moveThread: (id: string, bubbleId: string) =>

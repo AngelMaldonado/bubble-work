@@ -1,9 +1,24 @@
 # Deploying Bubble Work
 
-The production instance runs on the **reko Mac mini** services platform under
-angel's context. This documents the mount so it's reproducible.
+Two instances run, and a push to `main` deploys to both independently:
 
-## Topology
+| | reko | ayetec |
+|---|---|---|
+| URL | `https://bubble.angel.cubytest.space` | `https://bubble.ayetec.space` |
+| Host | Mac mini, macOS arm64, LAN/tailnet | VPS, Debian x86_64, public |
+| Reach | LAN or tailnet only | anywhere |
+| Supervisor | pm2 | systemd |
+| Plane | `plane.cuby.work` (LAN) | `plane.ayetec.space` (public) |
+| Managed by | `~/dev/_infra` on the mini | Ansible, `ayetec/infra` |
+| Workflow | `.github/workflows/deploy.yml` | `.github/workflows/deploy-ayetec.yml` |
+
+They are deliberately uncoupled: ayetec is the instance reachable from
+anywhere, so hanging its deploys off a test job pinned to a Mac mini on a LAN
+would let an unreachable box block them.
+
+The reko mount is documented first; [ayetec](#ayetec-vps) follows.
+
+## Topology (reko)
 
 ```
   Your laptop ──Tailscale/LAN──▶ https://bubble.angel.cubytest.space
@@ -76,6 +91,56 @@ Handy laptop alias for remote admin:
 ```bash
 alias bubble-admin='ssh -t reko@100.88.150.73 "cd ~/dev-angel/bubble-work && BUBBLE_HOME=~/dev-angel/bubble-work/.bubble ./bubble"'
 ```
+
+## ayetec VPS
+
+`https://bubble.ayetec.space` — public, so it works from anywhere, unlike the
+mini. Provisioned entirely from `ayetec/infra`: `just apply bubble` converges
+the Go toolchain and the `bubble_work` role. Nothing here is configured by hand,
+so the record of it is the role, not this file.
+
+| | |
+|---|---|
+| Unit | `bubble-work.service` (systemd) |
+| Host | `ayetec.space`, Debian x86_64, 2 vCPU / 3.8 GB, shared with Plane |
+| Code | `/opt/bubble-work/src`, read-only deploy key |
+| Binary | `/opt/bubble-work/bin/bubble`, built on the box |
+| Listen | `172.18.0.1:4006` — the `proxy` bridge, not `0.0.0.0` |
+| State | `BUBBLE_HOME=/opt/bubble-work/home` |
+| Runner | `ayetec-bubble-work`, labels `ayetec,bubble-work` |
+
+Three things differ from the mini in ways that matter:
+
+- **Traefik routes it through the file provider.** A native process has no
+  container for Docker labels to hang off, so the route is a watched file at
+  `/opt/traefik/config/bubble-work.yml`.
+- **Compiling is confined to a cgroup.** Builds share two cores and under four
+  gigabytes with Plane, Postgres, Redis and MinIO, and `modernc.org/libc` — via
+  the pure-Go SQLite driver — is one of the heaviest packages in the ecosystem
+  to compile. `build-scope.sh` caps the compiler so overshooting kills the build
+  and not a database. CI runs `go vet` and `go test` through it too.
+- **Webhooks are possible here.** Plane rejects webhook targets that resolve to
+  private IPs, which is what rules them out on the mini. Everything on ayetec is
+  public, so the polling fallback below is a choice rather than a constraint.
+
+```bash
+# operate (on the VPS)
+systemctl status bubble-work
+journalctl -u bubble-work -f
+sudo /opt/bubble-work/deploy.sh                 # rebuild + reload from the checkout
+
+# rollback — self-contained, no GitHub in the loop
+cd /opt/bubble-work/src && sudo -u angel git checkout <sha>
+sudo /opt/bubble-work/deploy.sh                 # a detached HEAD is built as-is
+
+# instances (server-side admin, local DB)
+sudo -u angel BUBBLE_HOME=/opt/bubble-work/home /opt/bubble-work/bin/bubble instance list
+```
+
+The runner executes as a user with passwordless sudo, so **push access to
+`main` is the trust boundary** — anything CI runs, runs as root on that host.
+`deploy-ayetec.yml` therefore triggers only on `push` and `workflow_dispatch`,
+never on `pull_request`.
 
 ## Plane rate limit
 

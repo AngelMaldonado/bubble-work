@@ -575,21 +575,34 @@ func ListWorkspaces(cfg config.Config) error {
 // decision records. Not threads, and they earn no heat.
 
 func ListPages(cfg config.Config, workspace string) error {
-	var ps []domain.Page
+	var list domain.PageList
 	if err := getJSON(cfg.ActiveServer()+"/api/workspaces/"+url.PathEscape(workspace)+"/pages",
-		cfg.ActiveToken(), &ps); err != nil {
+		cfg.ActiveToken(), &list); err != nil {
 		return err
 	}
-	if len(ps) == 0 {
+	// Said before the list, not after: on these instances the pages are not in
+	// Plane's UI, and someone who does not know that will go looking for them
+	// there and conclude the write failed.
+	if !list.PlaneHoldsPages {
+		fmt.Println("this instance's Plane has no pages API — these pages live in Bubble Work")
+	}
+	if len(list.Pages) == 0 {
 		fmt.Println("no pages in this workspace")
 		return nil
 	}
-	for _, p := range ps {
+	for _, p := range list.Pages {
 		lock := ""
 		if p.Locked {
 			lock = " [locked]"
 		}
-		fmt.Printf("%-44s  %s%s\n", trunc(p.Title, 44), p.ID, lock)
+		// Only the exception is marked. On an instance where Plane holds pages, a
+		// locally-held one is the oddity worth pointing at; where it does not, the
+		// line above already said it about all of them.
+		where := ""
+		if p.Storage == domain.PageInLocal && list.PlaneHoldsPages {
+			where = " [local]"
+		}
+		fmt.Printf("%-44s  %s%s%s\n", trunc(p.Title, 44), p.ID, lock, where)
 	}
 	return nil
 }
@@ -607,9 +620,9 @@ func ReadPage(cfg config.Config, id string) error {
 	return nil
 }
 
-func CreatePage(cfg config.Config, workspace, title, body string) error {
+func CreatePage(cfg config.Config, workspace, title, body, parent string) error {
 	var d domain.PageDetail
-	in := domain.CreatePageRequest{Title: title, Markdown: body}
+	in := domain.CreatePageRequest{Title: title, Markdown: body, Parent: parent}
 	if err := postJSON(cfg, "/api/workspaces/"+url.PathEscape(workspace)+"/pages", in, &d); err != nil {
 		return err
 	}

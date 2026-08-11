@@ -645,6 +645,36 @@ type Page struct {
 	Archived  bool      `json:"archived"`
 	UpdatedAt time.Time `json:"updated_at"`
 	CreatedAt time.Time `json:"created_at"`
+	// Storage says which system is the record for this page: "plane" when Plane
+	// holds it, "local" when this server does because the instance's Plane has no
+	// pages API (docs/PAGES-CAPABILITY.md). A reader deserves to know which of the
+	// two they are editing, since only one of them is visible in Plane's own UI.
+	Storage string `json:"storage"`
+	// Parent is the namespaced id of the page this one sits under, or "" at the
+	// root. Plane already models this and its own UI shows pages as a tree, so the
+	// hierarchy is read from it rather than invented here.
+	Parent string `json:"parent,omitempty"`
+}
+
+// PageStorage values for Page.Storage.
+const (
+	PageInPlane = "plane"
+	PageInLocal = "local"
+)
+
+// PageList is a workspace's pages plus the one fact a reader needs to interpret
+// them: whether Plane is holding them at all.
+//
+// An envelope rather than a bare array, because the answer "there are no pages"
+// and "this Plane cannot store pages" look identical in a list and call for
+// completely different reactions. It is also the shape MCP needs — a tool that
+// returns a bare array announces `"type": "array"` and clients reject the whole
+// tool list over it.
+type PageList struct {
+	Pages []Page `json:"pages"`
+	// PlaneHoldsPages is false when this instance's Plane does not serve pages on
+	// its public API, so pages created here are recorded by this server instead.
+	PlaneHoldsPages bool `json:"plane_holds_pages"`
 }
 
 // PageDetail is a page with its body, as markdown and as rendered HTML.
@@ -676,6 +706,9 @@ type CreatePageRequest struct {
 	Workspace string `json:"workspace"`
 	Title     string `json:"title"`
 	Markdown  string `json:"markdown"`
+	// Parent nests the new page under an existing one. Empty puts it at the root.
+	// The namespaced id, as every other reference here is.
+	Parent string `json:"parent,omitempty"`
 }
 
 // CreateBubbleRequest asks the server to create a Plane module (a Bubble) in a

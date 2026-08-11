@@ -3,7 +3,10 @@
   // Heading rail / minimap for the thread interior — mirrors the board's Minimap
   // (fixed to the right, vertically centered, expands IN PLACE on hover), but
   // observes a scroll CONTAINER instead of the window.
-  export type Heading = { id: string; title: string; depth: number };
+  // The type belongs to the producer (lib/prose extractHeadings), re-exported here
+  // so existing importers keep working and there is still only one definition.
+  import type { Heading } from '../lib/prose';
+  export type { Heading };
 
   let { headings }: { headings: Heading[] } = $props();
 

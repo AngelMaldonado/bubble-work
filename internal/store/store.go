@@ -128,6 +128,43 @@ CREATE TABLE IF NOT EXISTS kiosk_tokens (
   name       TEXT NOT NULL,      -- human label (e.g. "lobby screen")
   created_at TEXT NOT NULL
 );
+
+-- Pages this server is the record for, because the instance's Plane cannot be
+-- (docs/PAGES-CAPABILITY.md). Plane Community exposes pages only on its INTERNAL
+-- session-authenticated API, so on those deployments there is nowhere upstream to
+-- put a spec — and a workspace with no home for its standing documentation is
+-- worse than one whose documentation lives here.
+--
+-- Like the outbox, this belongs to the OVERLAY and not the mirror: the mirror is
+-- a projection Plane can rebuild, and these rows are the only copy in existence.
+-- Dropping them loses real work.
+CREATE TABLE IF NOT EXISTS local_pages (
+  id         TEXT PRIMARY KEY,   -- "<instance>:<project>:loc_<uuid>" — the prefix
+                                 -- is what tells a read which backend owns it
+  instance   TEXT NOT NULL,
+  project    TEXT NOT NULL,
+  title      TEXT NOT NULL,
+  body       TEXT NOT NULL,      -- markdown, the same shape the editor writes
+  locked     INTEGER NOT NULL DEFAULT 0,
+  archived   INTEGER NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  author     TEXT NOT NULL DEFAULT '',  -- who created it, for the audit trail
+  parent     TEXT NOT NULL DEFAULT ''   -- namespaced id of the page above it, '' at the root
+);
+CREATE INDEX IF NOT EXISTS idx_local_pages_project ON local_pages(instance, project);
+
+-- Whether an instance's Plane serves project pages on its PUBLIC API. Cached
+-- because it is a property of the deployment, not of a request, and probing it
+-- costs a request against a 60 req/min budget. Re-probed when it says "no", in
+-- case the instance is upgraded; a "yes" cannot become false.
+CREATE TABLE IF NOT EXISTS instance_capabilities (
+  slug       TEXT NOT NULL,
+  capability TEXT NOT NULL,       -- 'pages'
+  supported  INTEGER NOT NULL,
+  checked_at TEXT NOT NULL,
+  PRIMARY KEY (slug, capability)
+);
 `
 
 // Store wraps the SQLite connection.
@@ -219,6 +256,9 @@ func Open(path string) (*Store, error) {
 	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN logbook_hash TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN logbook_kind TEXT NOT NULL DEFAULT ''`)
 	_, _ = db.Exec(`ALTER TABLE thread_progress RENAME COLUMN todos_at TO logbook_at`)
+	// Pages nest, the way Plane's own do, so a locally-held one needs somewhere to
+	// say what it sits under.
+	_, _ = db.Exec(`ALTER TABLE local_pages ADD COLUMN parent TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 
@@ -934,6 +974,155 @@ func (s *Store) RemoveKioskToken(token string) (bool, error) {
 	}
 	n, _ := res.RowsAffected()
 	return n > 0, nil
+}
+
+// LocalPage is a page this server is the record for. Body is markdown, since
+// that is what the editor writes and what internal/md renders from — there is no
+// Plane round trip to convert for.
+type LocalPage struct {
+	ID        string
+	Instance  string
+	Project   string
+	Title     string
+	Body      string
+	Locked    bool
+	Archived  bool
+	CreatedAt time.Time
+	UpdatedAt time.Time
+	Author    string
+	// Parent is the namespaced id this page nests under, '' at the root. Mirrors
+	// what Plane models with parent_id, so the two kinds form ONE tree.
+	Parent string
+}
+
+// PutLocalPage inserts or replaces a locally-held page.
+func (s *Store) PutLocalPage(p LocalPage) error {
+	_, err := s.db.Exec(`
+		INSERT INTO local_pages
+		  (id, instance, project, title, body, locked, archived, created_at, updated_at, author, parent)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		ON CONFLICT(id) DO UPDATE SET
+		  title = excluded.title, body = excluded.body, locked = excluded.locked,
+		  archived = excluded.archived, updated_at = excluded.updated_at,
+		  parent = excluded.parent`,
+		p.ID, p.Instance, p.Project, p.Title, p.Body, b2i(p.Locked), b2i(p.Archived),
+		p.CreatedAt.UTC().Format(time.RFC3339), p.UpdatedAt.UTC().Format(time.RFC3339),
+		p.Author, p.Parent)
+	return err
+}
+
+// LocalPages returns one project's locally-held pages, newest change first.
+func (s *Store) LocalPages(instance, project string) ([]LocalPage, error) {
+	rows, err := s.db.Query(`
+		SELECT id, instance, project, title, body, locked, archived, created_at, updated_at, author, parent
+		FROM local_pages WHERE instance = ? AND project = ?
+		ORDER BY updated_at DESC`, instance, project)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []LocalPage
+	for rows.Next() {
+		p, err := scanLocalPage(rows.Scan)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rows.Err()
+}
+
+// LocalPage returns one locally-held page.
+func (s *Store) LocalPage(id string) (LocalPage, bool, error) {
+	row := s.db.QueryRow(`
+		SELECT id, instance, project, title, body, locked, archived, created_at, updated_at, author, parent
+		FROM local_pages WHERE id = ?`, id)
+	p, err := scanLocalPage(row.Scan)
+	if err == sql.ErrNoRows {
+		return LocalPage{}, false, nil
+	}
+	if err != nil {
+		return LocalPage{}, false, err
+	}
+	return p, true, nil
+}
+
+// DeleteLocalPage removes a locally-held page; reports whether one went.
+func (s *Store) DeleteLocalPage(id string) (bool, error) {
+	res, err := s.db.Exec(`DELETE FROM local_pages WHERE id = ?`, id)
+	if err != nil {
+		return false, err
+	}
+	n, _ := res.RowsAffected()
+	return n > 0, nil
+}
+
+// PromoteLocalPageChildren re-parents a deleted page's children onto whatever it
+// sat under. Without it they would point at an id that no longer exists, and a
+// tree rendered from its roots would simply not show them — the document would
+// still be in the database and gone from the only UI that can reach it.
+func (s *Store) PromoteLocalPageChildren(parentID, newParent string) error {
+	_, err := s.db.Exec(`UPDATE local_pages SET parent = ? WHERE parent = ?`, newParent, parentID)
+	return err
+}
+
+// ForgetLocalPages drops every locally-held page in a project. Called when the
+// workspace itself is deleted — the pages belonged to it, and nothing else will
+// ever ask for them again.
+func (s *Store) ForgetLocalPages(instance, project string) error {
+	_, err := s.db.Exec(`DELETE FROM local_pages WHERE instance = ? AND project = ?`, instance, project)
+	return err
+}
+
+// scanLocalPage reads one row in the column order every query above uses.
+func scanLocalPage(scan func(...any) error) (LocalPage, error) {
+	var p LocalPage
+	var locked, archived int
+	var created, updated string
+	if err := scan(&p.ID, &p.Instance, &p.Project, &p.Title, &p.Body,
+		&locked, &archived, &created, &updated, &p.Author, &p.Parent); err != nil {
+		return LocalPage{}, err
+	}
+	p.Locked, p.Archived = locked != 0, archived != 0
+	p.CreatedAt, _ = time.Parse(time.RFC3339, created)
+	p.UpdatedAt, _ = time.Parse(time.RFC3339, updated)
+	return p, nil
+}
+
+// Capability reports a cached instance capability verdict, and when it was taken.
+func (s *Store) Capability(slug, capability string) (supported bool, checkedAt time.Time, known bool, err error) {
+	var sup int
+	var at string
+	e := s.db.QueryRow(
+		`SELECT supported, checked_at FROM instance_capabilities WHERE slug = ? AND capability = ?`,
+		slug, capability).Scan(&sup, &at)
+	if e == sql.ErrNoRows {
+		return false, time.Time{}, false, nil
+	}
+	if e != nil {
+		return false, time.Time{}, false, e
+	}
+	t, _ := time.Parse(time.RFC3339, at)
+	return sup != 0, t, true, nil
+}
+
+// SetCapability records what a probe found.
+func (s *Store) SetCapability(slug, capability string, supported bool, at time.Time) error {
+	_, err := s.db.Exec(`
+		INSERT INTO instance_capabilities (slug, capability, supported, checked_at)
+		VALUES (?, ?, ?, ?)
+		ON CONFLICT(slug, capability) DO UPDATE SET
+		  supported = excluded.supported, checked_at = excluded.checked_at`,
+		slug, capability, b2i(supported), at.UTC().Format(time.RFC3339))
+	return err
+}
+
+// b2i encodes a bool for SQLite, which has no boolean type.
+func b2i(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 // placeholders returns "?, ?, ..." for an IN clause of n items.

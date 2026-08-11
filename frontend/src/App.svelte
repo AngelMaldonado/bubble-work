@@ -5,6 +5,7 @@
   import AuthGate from './components/AuthGate.svelte';
   import Workspace from './components/Workspace.svelte';
   import ThreadView from './components/ThreadView.svelte';
+  import PagesView from './components/PagesView.svelte';
   import GodMode from './components/GodMode.svelte';
 
   // The tour runs itself once, and only once the board is real.
@@ -15,7 +16,7 @@
   // empty-workspace branch would helpfully suggest creating a bubble. store.actor
   // is only set once whoami has actually answered, so that is the real gate.
   $effect(() => {
-    if (store.actor && !store.loading && !store.error && !store.threadId) {
+    if (store.actor && !store.loading && !store.error && !store.threadId && !store.pagesWorkspace) {
       tour.maybeAutoStart();
     }
   });
@@ -41,6 +42,13 @@
   <GodMode />
 {:else if store.threadId}
   <ThreadView />
+{:else if store.pagesWorkspace}
+  <PagesView
+    workspaceId={store.pagesWorkspace}
+    workspaceName={store.workspaces.find((w) => w.id === store.pagesWorkspace)?.name ??
+      store.pagesWorkspace}
+    onclose={() => store.closePages()}
+  />
 {:else if store.loading && store.bubbles.length === 0}
   <div class="splash">
     <span class="orb"></span>

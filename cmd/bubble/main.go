@@ -497,11 +497,12 @@ func cmdPage(args []string) {
 		ws := fs.String("workspace", "", "<instance>:<project-id> (required)")
 		title := fs.String("title", "", "page title (required)")
 		file := fs.String("file", "", "markdown file, or - for stdin")
+		parent := fs.String("parent", "", "nest under this page id (optional; root if omitted)")
 		_ = fs.Parse(args[1:])
 		if *ws == "" || *title == "" {
 			log.Fatal("page new: --workspace and --title are required")
 		}
-		if err := client.CreatePage(cfg, *ws, *title, readBody(*file)); err != nil {
+		if err := client.CreatePage(cfg, *ws, *title, readBody(*file), *parent); err != nil {
 			log.Fatalf("page new: %v", err)
 		}
 	case "edit":

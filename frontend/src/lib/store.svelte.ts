@@ -108,6 +108,10 @@ class Store {
   detail = $state<BubbleView | null>(null);
   // the namespaced thread id whose interior is open (null = closed).
   threadId = $state<string | null>(null);
+  // the workspace whose documents are open (null = closed). A screen of its own,
+  // not a modal: reading a spec is a sitting-down activity, and it deserves a URL
+  // you can send someone.
+  pagesWorkspace = $state<string | null>(null);
   // which artifact within the open thread is selected (from the route, so it's
   // deep-linkable and pin-able). null → the thread view picks its default.
   threadSel = $state<ArtSel | null>(null);
@@ -572,6 +576,16 @@ class Store {
     this.setHash('');
   }
 
+  openPages(workspaceId: string): void {
+    this.pagesWorkspace = workspaceId;
+    this.setHash(`pages/${encodeURIComponent(workspaceId)}`);
+  }
+
+  closePages(): void {
+    this.pagesWorkspace = null;
+    this.setHash('');
+  }
+
   // setThreadSel updates the selected artifact WITHOUT a history push (so
   // flipping between artifacts doesn't spam back/forward), keeping the route
   // deep-linkable and pin-able.
@@ -618,6 +632,13 @@ class Store {
     }
     this.route = 'board';
     const h = location.hash.replace(/^#/, '');
+    if (h.startsWith('pages/')) {
+      this.pagesWorkspace = decodeURIComponent(h.slice('pages/'.length));
+      this.threadId = null;
+      this.threadSel = null;
+      return;
+    }
+    this.pagesWorkspace = null;
     if (!h.startsWith('thread/')) {
       this.threadId = null;
       this.threadSel = null;

@@ -21,7 +21,7 @@ type Backend interface {
 	Bubbles(ctx context.Context) ([]domain.BubbleView, error)
 	CreateWorkspace(ctx context.Context, req domain.CreateWorkspaceRequest) (domain.Workspace, error)
 	Workspaces(ctx context.Context) ([]domain.Workspace, error)
-	Pages(ctx context.Context, workspaceID string) ([]domain.Page, error)
+	Pages(ctx context.Context, workspaceID string) (domain.PageList, error)
 	Page(ctx context.Context, pageID string) (domain.PageDetail, error)
 	CreatePage(ctx context.Context, req domain.CreatePageRequest) (domain.PageDetail, error)
 	UpdatePage(ctx context.Context, pageID string, edit domain.PageEdit) (domain.PageDetail, error)
@@ -233,10 +233,6 @@ type workspacesOut struct {
 	Workspaces []domain.Workspace `json:"workspaces"`
 }
 
-type pagesOut struct {
-	Pages []domain.Page `json:"pages"`
-}
-
 // pagesIn / pageIn: a page is addressed by the same namespaced id as everything
 // else, and belongs to a workspace rather than to a bubble or a thread.
 type pagesIn struct {
@@ -249,6 +245,7 @@ type createPageIn struct {
 	Workspace string `json:"workspace" jsonschema:"the workspace id as slug:project, from list_workspaces"`
 	Title     string `json:"title" jsonschema:"what this document is called"`
 	Markdown  string `json:"markdown,omitempty" jsonschema:"the document body in Markdown. One H1, sections as ## (spec 3.1)"`
+	Parent    string `json:"parent,omitempty" jsonschema:"nest this page under an existing one, by its page id from list_pages. Omit for a top-level page"`
 }
 type updatePageIn struct {
 	PageID   string  `json:"page_id" jsonschema:"the page id as slug:project:page"`
@@ -508,13 +505,13 @@ func newServer(b Backend) *sdk.Server {
 	// between building the thing and building something like it.
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "list_pages", Description: "List a workspace's pages: its documentation, product specs and reference material. A page belongs to the WORKSPACE, not to a bubble or a thread, and outlives both. Titles only — use read_page for a body."},
-		func(ctx context.Context, req *sdk.CallToolRequest, in pagesIn) (*sdk.CallToolResult, pagesOut, error) {
+		&sdk.Tool{Name: "list_pages", Description: "List a workspace's pages: its documentation, product specs and reference material. A page belongs to the WORKSPACE, not to a bubble or a thread, and outlives both. Titles only — use read_page for a body. plane_holds_pages tells you where they live: false means this instance's Plane has no pages API and Bubble Work is the record for them, so they exist here and NOT in Plane's own UI."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in pagesIn) (*sdk.CallToolResult, domain.PageList, error) {
 			ps, err := b.Pages(withActor(ctx, req), in.Workspace)
 			if err != nil {
-				return nil, pagesOut{}, err
+				return nil, domain.PageList{}, err
 			}
-			return nil, pagesOut{Pages: ps}, nil
+			return nil, ps, nil
 		})
 
 	sdk.AddTool(srv,

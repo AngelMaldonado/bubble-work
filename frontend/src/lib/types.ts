@@ -126,6 +126,19 @@ export interface Page {
   archived: boolean;
   updated_at: string;
   created_at: string;
+  /** which system is the record for this page: Plane, or this server because the
+   *  instance's Plane has no pages API (docs/PAGES-CAPABILITY.md) */
+  storage: 'plane' | 'local';
+  /** namespaced id of the page this one sits under, absent at the root. Plane
+   *  models the tree and shows it in its own UI, so it is read from there. */
+  parent?: string;
+}
+
+/** A workspace's pages, plus whether Plane is holding them at all. Without the
+ *  flag an empty list and "this Plane cannot store pages" look identical. */
+export interface PageList {
+  pages: Page[];
+  plane_holds_pages: boolean;
 }
 
 export interface PageDetail extends Page {

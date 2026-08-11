@@ -95,6 +95,13 @@ says what to do; a Page says what has to remain true of it.
 Writing a Page is **not evidence of production** (§5.1) — documenting what you
 intend is not the same as changing reality, so pages earn no heat.
 
+A Page maps to a Plane project page **where the instance can hold one**. Plane
+Community serves pages only on its internal, session-authenticated API, so on
+those deployments the server is the record instead, and says so on every surface.
+That is a deliberate departure from §9.2's "Plane is the system of record", taken
+because the alternative is not "Plane holds it" but "nobody does" — see
+[`PAGES-CAPABILITY.md`](./PAGES-CAPABILITY.md).
+
 ---
 
 ## 3. Thread birth rule
@@ -246,7 +253,7 @@ Keep the metaphor human-facing; give each concept an explicit Plane object. Note
 | Brief | A region of the work-item **description** | Holds intent + Definition of Done |
 | Logbook | The **same** description as the Brief, a different region | Phases + published evidence live beside the intent — one page, not a second tracker |
 | Revision | **Sub-work-item** of the thread | A findings write-up or deliverable is its own object, but never its own thread |
-| Page (§2.5) | **Project page** | Belongs to the Workspace and outlives every thread in it |
+| Page (§2.5) | **Project page**, or the server's overlay where Plane has no pages API | Belongs to the Workspace and outlives every thread in it |
 
 > Interpretation: *the Bubble is the persistent body of work; Cycles are the pulses that keep it warm.* Don't keep one Cycle alive forever — each new Cycle is a fresh pulse against the same Bubble.
 

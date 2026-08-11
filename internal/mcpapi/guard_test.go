@@ -140,7 +140,9 @@ func (stubBackend) CreateWorkspace(context.Context, domain.CreateWorkspaceReques
 	return domain.Workspace{}, nil
 }
 func (stubBackend) Workspaces(context.Context) ([]domain.Workspace, error) { return nil, nil }
-func (stubBackend) Pages(context.Context, string) ([]domain.Page, error)   { return nil, nil }
+func (stubBackend) Pages(context.Context, string) (domain.PageList, error) {
+	return domain.PageList{}, nil
+}
 func (stubBackend) Page(context.Context, string) (domain.PageDetail, error) {
 	return domain.PageDetail{}, nil
 }

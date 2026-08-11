@@ -382,6 +382,13 @@ func (s *Server) DeleteWorkspace(ctx context.Context, id string) (bubbles, threa
 	if err := s.mirror.DeleteProject(inst.Slug, projID); err != nil {
 		log.Printf("mirror: forget workspace %s: %v", projID, err)
 	}
+	// Pages this server was the record for go with the workspace they documented.
+	// Nothing else will ever ask for them, and unlike the rest of the overlay they
+	// are not a projection of anything — leaving them would leave the only copy of
+	// a document belonging to a workspace that no longer exists.
+	if err := s.store.ForgetLocalPages(inst.Slug, projID); err != nil {
+		log.Printf("overlay: forget local pages for %s: %v", projID, err)
+	}
 
 	s.dropInstanceCache(inst.Slug)
 	if _, err := s.refreshInstance(context.Background(), inst); err != nil {

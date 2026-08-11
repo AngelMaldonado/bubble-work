@@ -3498,12 +3498,13 @@ func TestProjectPages(t *testing.T) {
 	const key = "plane_personal_key"
 
 	// 1. Listing skips archived pages and puts the most recently touched first.
-	var list []domain.Page
+	var env domain.PageList
 	code, lb := do(t, http.MethodGet, ts.URL+"/api/workspaces/ws:p1/pages", key, "")
 	if code != http.StatusOK {
 		t.Fatalf("list pages: %d %s", code, lb)
 	}
-	json.Unmarshal(lb, &list)
+	json.Unmarshal(lb, &env)
+	list := env.Pages
 	if len(list) != 2 {
 		t.Fatalf("want 2 live pages (the archived one dropped), got %d: %v", len(list), list)
 	}
@@ -3512,6 +3513,17 @@ func TestProjectPages(t *testing.T) {
 	}
 	if list[1].ID != "ws:p1:pg-1" {
 		t.Errorf("page ids are namespaced like everything else, got %q", list[1].ID)
+	}
+	// This Plane answers the pages endpoint, so it is the record and every page
+	// reports so — the flag is what the UI reads to decide whether to explain
+	// itself, and it must not cry wolf on a Plane that works.
+	if !env.PlaneHoldsPages {
+		t.Error("a Plane that serves /pages/ should be reported as holding them")
+	}
+	for _, p := range list {
+		if p.Storage != domain.PageInPlane {
+			t.Errorf("page %s should be marked as living in Plane, got %q", p.ID, p.Storage)
+		}
 	}
 
 	// 2. Reading converts Plane's editor HTML to markdown.
@@ -3832,5 +3844,362 @@ func TestRenamingABubbleIsVisibleImmediatelyAndKeepsItsContract(t *testing.T) {
 	// An empty name is a slip, not a rename, and it must not reach Plane.
 	if code, _ := do(t, http.MethodPatch, ts.URL+"/api/bubbles/"+id, key, `{"name":"   "}`); code != http.StatusBadRequest {
 		t.Errorf("renaming to blank was allowed: %d", code)
+	}
+}
+
+// A Plane with no pages API must not cost a workspace its documentation.
+//
+// Plane Community serves project pages only on its INTERNAL, session-authenticated
+// API; the public API an API key can reach has no pages route at any current
+// version, so no upgrade fixes it (docs/PAGES-CAPABILITY.md). On such an instance
+// this server becomes the record for pages, and the whole point is that every
+// operation still works — otherwise the §2.5 tier simply does not exist there.
+//
+// The fake is the part that matters: it reproduces Plane's real behaviour, where
+// ANY unrouted URL answers 404 with `{"error": "Page not found."}`. That body is
+// why the capability cannot be read off a status code, and why the probe needs a
+// control request.
+func TestPagesFallBackToTheServerWhenPlaneHasNoPagesAPI(t *testing.T) {
+	var mu sync.Mutex
+	probes := 0 // how many times we asked Plane about pages at all
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Sandbox","identifier":"SB"}],"next_page_results":false}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.Contains(p, "/pages"):
+			// Community: no route. Note this catches the capability probe's control
+			// path too, which is the point — both answers are byte-identical.
+			mu.Lock()
+			probes++
+			mu.Unlock()
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"error": "Page not found."}`)
+		default:
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const ws = "/api/workspaces/ws:p1/pages"
+
+	// 1. Listing succeeds and SAYS Plane is not holding them. The old behaviour
+	//    was an error here, which left the reading room empty and blamed a Plane
+	//    upgrade that would not have helped.
+	var env domain.PageList
+	code, lb := do(t, http.MethodGet, ts.URL+ws, key, "")
+	if code != http.StatusOK {
+		t.Fatalf("listing pages on a Community Plane should work, got %d %s", code, lb)
+	}
+	json.Unmarshal(lb, &env)
+	if env.PlaneHoldsPages {
+		t.Error("a Plane with no pages route must not be reported as holding pages")
+	}
+	if len(env.Pages) != 0 {
+		t.Errorf("nothing has been written yet, got %v", env.Pages)
+	}
+
+	// 2. Creating works, and lands here rather than nowhere.
+	mk, _ := json.Marshal(map[string]string{
+		"title": "Deployment contract", "markdown": "# Deployment contract\n\nOne binary.\n",
+	})
+	code, cb := do(t, http.MethodPost, ts.URL+ws, key, string(mk))
+	if code != http.StatusOK {
+		t.Fatalf("create page: %d %s", code, cb)
+	}
+	var made domain.PageDetail
+	json.Unmarshal(cb, &made)
+	if made.Storage != domain.PageInLocal {
+		t.Errorf("a page created here should say so, got storage %q", made.Storage)
+	}
+	// The id has to announce its backend, so a read never has to guess or probe.
+	if !strings.Contains(made.ID, ":loc_") {
+		t.Errorf("a locally-held page needs a distinguishable id, got %q", made.ID)
+	}
+
+	// 3. It reads back, with a body and a hash — the same contract as a Plane page.
+	var got domain.PageDetail
+	code, rb := do(t, http.MethodGet, ts.URL+"/api/pages/"+made.ID, key, "")
+	if code != http.StatusOK {
+		t.Fatalf("read page: %d %s", code, rb)
+	}
+	json.Unmarshal(rb, &got)
+	if !strings.Contains(got.Markdown, "One binary.") {
+		t.Errorf("the body did not survive the round trip: %q", got.Markdown)
+	}
+	if got.Hash == "" || got.HTML == "" {
+		t.Error("a locally-held page still owes the reader rendered HTML and a hash")
+	}
+
+	// 4. The stale-write guard is a property of editing a document, not of Plane.
+	stale, _ := json.Marshal(map[string]string{"markdown": "# Nope\n", "base_hash": "notthehash"})
+	if code, _ := do(t, http.MethodPatch, ts.URL+"/api/pages/"+made.ID, key, string(stale)); code != http.StatusConflict {
+		t.Errorf("a stale base_hash should still be a 409, got %d", code)
+	}
+
+	// 5. A real edit sticks.
+	upd, _ := json.Marshal(map[string]string{
+		"title": "Deployment contract v2", "base_hash": got.Hash,
+		"markdown": "# Deployment contract\n\nTwo modes.\n",
+	})
+	code, ub := do(t, http.MethodPatch, ts.URL+"/api/pages/"+made.ID, key, string(upd))
+	if code != http.StatusOK {
+		t.Fatalf("update page: %d %s", code, ub)
+	}
+	var after domain.PageDetail
+	json.Unmarshal(ub, &after)
+	if after.Title != "Deployment contract v2" || !strings.Contains(after.Markdown, "Two modes.") {
+		t.Errorf("the edit did not land: %+v", after)
+	}
+
+	// 6. And it is in the list, which still reports where these live.
+	code, lb2 := do(t, http.MethodGet, ts.URL+ws, key, "")
+	if code != http.StatusOK {
+		t.Fatalf("re-list: %d %s", code, lb2)
+	}
+	env = domain.PageList{}
+	json.Unmarshal(lb2, &env)
+	if len(env.Pages) != 1 || env.Pages[0].Title != "Deployment contract v2" {
+		t.Fatalf("the page is missing from the workspace's list: %+v", env)
+	}
+	if env.PlaneHoldsPages {
+		t.Error("the capability verdict should not have flipped")
+	}
+
+	// 7. The verdict is CACHED. Six operations have run; Plane must not have been
+	//    asked about pages again, because the answer is a property of the
+	//    deployment and every ask costs a request against 60/min.
+	mu.Lock()
+	spent := probes
+	mu.Unlock()
+	if spent > 2 {
+		t.Errorf("the capability should be probed once (2 requests: pages + control), spent %d", spent)
+	}
+
+	// 8. Deleting works and is honest about having nothing left.
+	if code, _ := do(t, http.MethodDelete, ts.URL+"/api/pages/"+made.ID, key, ""); code != http.StatusOK {
+		t.Error("deleting a locally-held page should work")
+	}
+	if code, _ := do(t, http.MethodDelete, ts.URL+"/api/pages/"+made.ID, key, ""); code != http.StatusNotFound {
+		t.Error("deleting it twice should be a 404, not a silent success")
+	}
+}
+
+// A 404 from a real handler must NOT be read as "this Plane has no pages API".
+//
+// The two are indistinguishable by status, which is the whole difficulty: Plane
+// answers an unrouted URL and a missing object with the same code. So the probe
+// compares the body against a control request to a sibling path that cannot be
+// routed. When they differ, a real handler answered — the route exists, and the
+// problem is this project. Getting this backwards would silently start a second,
+// local copy of a workspace's documentation on an instance that can hold it.
+func TestARealPagesHandler404IsNotMistakenForAMissingAPI(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/p1/"):
+			// Pages is switched OFF for this project, which is why its handler 404s.
+			io.WriteString(w, `{"id":"p1","name":"Sandbox","identifier":"SB","page_view":false}`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Sandbox","identifier":"SB"}],"next_page_results":false}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/pages/"):
+			// A real DRF handler's 404 — note the different body.
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"detail":"Not found."}`)
+		case strings.Contains(p, "/pages-capability-probe/"):
+			// The catch-all, as Plane spells it.
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"error": "Page not found."}`)
+		default:
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+
+	code, body := do(t, http.MethodGet, ts.URL+"/api/workspaces/ws:p1/pages", "plane_personal_key", "")
+	if code == http.StatusOK {
+		t.Fatalf("this should NOT have fallen back to local storage: %s", body)
+	}
+	// And the message has to name the actual fix, which is a checkbox in Plane.
+	if !strings.Contains(string(body), "switched off") {
+		t.Errorf("the error should say pages are switched off for the project, got %s", body)
+	}
+	// The capability must be remembered as SUPPORTED, or the next create would
+	// write locally and split the workspace's documentation in two.
+	sup, _, known, err := st.Capability("ws", "pages")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if known && !sup {
+		t.Error("a project-level 404 was cached as 'this Plane cannot hold pages'")
+	}
+}
+
+// Pages nest, and a deleted parent must not take its children with it.
+//
+// Plane models pages with a parent and draws them as a tree in its own UI, so the
+// hierarchy is read from it rather than invented here — and a locally-held page
+// carries the same field so both kinds form ONE tree. Two things can go wrong
+// quietly, which is why they are pinned: a parent from another workspace produces
+// a page that exists and hangs off nothing a tree can draw, and deleting a parent
+// leaves children pointing at an id that is gone. Either way the document is
+// still in the database and absent from the only UI that can reach it.
+func TestPagesNestAndSurviveTheirParent(t *testing.T) {
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Sandbox","identifier":"SB"}],"next_page_results":false}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.Contains(p, "/pages"):
+			// A Community Plane: no pages route, so these are held here.
+			w.WriteHeader(http.StatusNotFound)
+			io.WriteString(w, `{"error": "Page not found."}`)
+		default:
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const ws = "/api/workspaces/ws:p1/pages"
+
+	mk := func(title, parent string) domain.PageDetail {
+		t.Helper()
+		body, _ := json.Marshal(domain.CreatePageRequest{
+			Title: title, Markdown: "# " + title + "\n", Parent: parent,
+		})
+		code, rb := do(t, http.MethodPost, ts.URL+ws, key, string(body))
+		if code != http.StatusOK {
+			t.Fatalf("create %q: %d %s", title, code, rb)
+		}
+		var d domain.PageDetail
+		if err := json.Unmarshal(rb, &d); err != nil {
+			t.Fatal(err)
+		}
+		return d
+	}
+
+	root := mk("Arquitectura", "")
+	if root.Parent != "" {
+		t.Errorf("a page created with no parent is at the root, got %q", root.Parent)
+	}
+	kidA := mk("Decisiones", root.ID)
+	kidB := mk("Contrato de API", root.ID)
+	if kidA.Parent != root.ID || kidB.Parent != root.ID {
+		t.Fatalf("children did not record their parent: %q %q", kidA.Parent, kidB.Parent)
+	}
+
+	// The parent survives a round trip through the list, which is what the tree
+	// is actually built from.
+	byID := func() map[string]domain.Page {
+		t.Helper()
+		var env domain.PageList
+		code, lb := do(t, http.MethodGet, ts.URL+ws, key, "")
+		if code != http.StatusOK {
+			t.Fatalf("list: %d %s", code, lb)
+		}
+		if err := json.Unmarshal(lb, &env); err != nil {
+			t.Fatal(err)
+		}
+		m := map[string]domain.Page{}
+		for _, p := range env.Pages {
+			m[p.ID] = p
+		}
+		return m
+	}
+	if got := byID()[kidA.ID].Parent; got != root.ID {
+		t.Errorf("the list lost the hierarchy: child's parent is %q, want %q", got, root.ID)
+	}
+
+	// A parent in another workspace is refused. Accepting it would produce a page
+	// that no tree can draw — present, and invisible.
+	stray, _ := json.Marshal(domain.CreatePageRequest{
+		Title: "Huérfana", Parent: "other:proj:loc_whatever",
+	})
+	if code, rb := do(t, http.MethodPost, ts.URL+ws, key, string(stray)); code != http.StatusBadRequest {
+		t.Errorf("a cross-workspace parent should be refused, got %d %s", code, rb)
+	}
+	// So is one that simply does not exist.
+	ghost, _ := json.Marshal(domain.CreatePageRequest{
+		Title: "Fantasma", Parent: "ws:p1:loc_nothinghere",
+	})
+	if code, _ := do(t, http.MethodPost, ts.URL+ws, key, string(ghost)); code == http.StatusOK {
+		t.Error("a parent that does not exist should be refused")
+	}
+
+	// Deleting the parent PROMOTES its children rather than orphaning them.
+	if code, rb := do(t, http.MethodDelete, ts.URL+"/api/pages/"+root.ID, key, ""); code != http.StatusOK {
+		t.Fatalf("delete parent: %d %s", code, rb)
+	}
+	after := byID()
+	if len(after) != 2 {
+		t.Fatalf("both children should have survived their parent, got %d pages", len(after))
+	}
+	for _, id := range []string{kidA.ID, kidB.ID} {
+		p, ok := after[id]
+		if !ok {
+			t.Errorf("child %s vanished with its parent", id)
+			continue
+		}
+		if p.Parent != "" {
+			t.Errorf("child %s still points at its deleted parent (%q)", p.Title, p.Parent)
+		}
 	}
 }

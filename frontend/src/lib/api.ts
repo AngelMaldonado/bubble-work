@@ -22,6 +22,7 @@ import type {
   ServiceStatus,
   Workspace,
   Page,
+  PageList,
   PageDetail,
 } from './types';
 
@@ -181,12 +182,15 @@ export const api = {
   // Project pages: a workspace's documentation. Read live from Plane rather
   // than from the mirror — a page is opened deliberately, one at a time.
   pages: (workspaceId: string) =>
-    req<Page[]>('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`),
+    req<PageList>('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`),
   page: (id: string) => req<PageDetail>('GET', `/api/pages/${encodeURIComponent(id)}`),
-  createPage: (workspaceId: string, title: string, markdown: string) =>
+  // `parent` nests the new page under an existing one — the tree Plane already
+  // models and shows in its own UI.
+  createPage: (workspaceId: string, title: string, markdown: string, parent?: string) =>
     req<PageDetail>('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`, {
       title,
       markdown,
+      parent,
     }),
   updatePage: (id: string, patch: { title?: string; markdown?: string; base_hash?: string }) =>
     req<PageDetail>('PATCH', `/api/pages/${encodeURIComponent(id)}`, patch),

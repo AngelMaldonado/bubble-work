@@ -799,11 +799,14 @@ func (c *Client) GetPage(ctx context.Context, projectID, pageID string) (Page, e
 // CreatePage adds a page to a project. Access 0 = visible to the project, which
 // is the only kind worth creating from here: a private page nobody else can read
 // is not documentation.
-func (c *Client) CreatePage(ctx context.Context, projectID, name, html string) (Page, error) {
+func (c *Client) CreatePage(ctx context.Context, projectID, name, html, parentID string) (Page, error) {
 	var p Page
 	body := map[string]any{"name": name, "access": 0}
 	if html != "" {
 		body["description_html"] = html
+	}
+	if parentID != "" {
+		body["parent_id"] = parentID
 	}
 	err := c.post(ctx, c.pagesBase(projectID), body, &p)
 	return p, err
@@ -824,4 +827,73 @@ func (c *Client) DeletePage(ctx context.Context, projectID, pageID string) error
 // addressed per project id, and a client is often built for a different one.
 func (c *Client) pagesBase(projectID string) string {
 	return fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/pages/", c.Workspace, projectID)
+}
+
+// PagesAPIAvailable reports whether this Plane serves project pages on its
+// PUBLIC API — the one an API key can reach.
+//
+// It cannot be answered by the status code alone, which is the trap the first
+// implementation fell into. Plane answers ANY unrouted URL with 404 and the body
+// `{"error": "Page not found."}` — "Page" as in web page, so a missing route and
+// a missing Page object are indistinguishable by status, and the wording actively
+// suggests the wrong reading.
+//
+// So a 404 is followed by a control request to a sibling path that cannot
+// possibly be routed. Identical answers mean the URL resolver matched neither,
+// i.e. the pages route does not exist on this deployment. A DIFFERENT answer
+// means a real handler produced the first 404, so the API does serve pages and
+// the failure is about this project or this page — which the caller's own error
+// path can then explain.
+//
+// Two requests, once per instance, cached by the caller: this is a property of
+// the deployment, not of a request.
+func (c *Client) PagesAPIAvailable(ctx context.Context, projectID string) (bool, error) {
+	status, body, err := c.probeGET(ctx, c.pagesBase(projectID))
+	if err != nil {
+		return false, err
+	}
+	if status < 300 {
+		return true, nil
+	}
+	if status != http.StatusNotFound {
+		// 401/403/5xx say something about the credential or the server, not about
+		// the surface. Refusing to answer is better than caching a guess.
+		return false, &APIError{Status: status, Path: "GET " + c.pagesBase(projectID)}
+	}
+	ctrlPath := fmt.Sprintf("/api/v1/workspaces/%s/projects/%s/pages-capability-probe/", c.Workspace, projectID)
+	ctrlStatus, ctrlBody, err := c.probeGET(ctx, ctrlPath)
+	if err != nil {
+		return false, err
+	}
+	if ctrlStatus == http.StatusNotFound && ctrlBody == body {
+		return false, nil // the resolver matched neither: no pages route here
+	}
+	return true, nil
+}
+
+// probeGET performs one budgeted GET and returns its status with a short prefix
+// of the body. Unlike get() it does not retry and does not decode: a probe wants
+// the raw answer, and a retry would only spend more of the allowance confirming
+// a 404 that is already final.
+func (c *Client) probeGET(ctx context.Context, path string) (int, string, error) {
+	bud := c.budget()
+	if err := bud.wait(ctx, laneOf(ctx)); err != nil {
+		return 0, "", err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.BaseURL+path, nil)
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("X-API-Key", c.APIKey)
+	bud.begin()
+	resp, err := c.HTTP.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer resp.Body.Close()
+	bud.observe(resp.Header, resp.StatusCode)
+	// Capped: the comparison only needs enough to tell two error bodies apart, and
+	// a success body here could be a whole page list.
+	b, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+	return resp.StatusCode, strings.TrimSpace(string(b)), nil
 }

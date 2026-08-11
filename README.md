@@ -352,6 +352,7 @@ docs/              the design worksheets (see below)
 | [`docs/THREAD-LIFECYCLE.md`](./docs/THREAD-LIFECYCLE.md) | per-thread buoyancy, evidence signals, the bubble roll-up |
 | [`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md) | the mirror, the sync worker, the outbox, degraded mode |
 | [`docs/ARTIFACT-EDITING.md`](./docs/ARTIFACT-EDITING.md) | editing a thread's page: splice engine, editor, workspaces, pages |
+| [`docs/PAGES-CAPABILITY.md`](./docs/PAGES-CAPABILITY.md) | why pages are per-instance, and who holds them when Plane cannot |
 | [`docs/MCP-ACCESS.md`](./docs/MCP-ACCESS.md) | agents writing artifacts, live updates, how sign-in could work |
 | [`docs/web-ui-design.md`](./docs/web-ui-design.md) | the original board design |
 | [`DEPLOY.md`](./DEPLOY.md) | running it on a server, CI/CD, the Plane rate limit |
@@ -362,7 +363,8 @@ Working today, end to end: the server/client spine · Plane read **and** write
 paths · multi-instance federation with per-member scoping · the SQLite mirror as
 the read layer with an outbox for writes and degraded-mode reporting · derived
 thread and bubble buoyancy with opt-in write-back to Plane · the notification
-scheduler · the web board with in-place artifact editing · project pages ·
+scheduler · the web board with in-place artifact editing · workspace pages, held
+by Plane or by the server depending on what the instance's Plane can do ·
 workspace and bubble lifecycle including renames and deletes · 27 MCP tools ·
 God Mode.
 

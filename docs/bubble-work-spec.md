@@ -37,6 +37,7 @@ The metaphor lives in the **human-facing layer**. Every term below has an explic
 | **Cycle** | The repeating pulse against which heat is measured (the *heat window*) | A calendar month — it's a rhythm, not a date |
 | **Heat** | Evidence of changed reality accumulated in the current cycle | Activity, comments, or motion |
 | **Artifact** | The evidence a thread produces: Brief, Logbook, commits, deliverables | A generic file |
+| **Page** | Reference material for a whole Workspace: a spec, a decision record | A thread's artifacts, which belong to *one* piece of work |
 
 ---
 
@@ -79,6 +80,20 @@ The core executable unit. A thread cannot enter implementation until it is **bor
 
 ### 2.4 Artifacts — the evidence
 Threads produce artifacts. The two **birth artifacts** are native files; everything else (commits, PRs, published deliverables, recorded decisions) is *external evidence* the thread links to.
+
+### 2.5 Pages — what outlives the work
+A **Page** belongs to the Workspace, not to a bubble or a thread, and outlives
+both. It is what remains true after the work that produced it has closed: a
+product spec, a reference, an architecture decision.
+
+The dividing line is ownership, and it is the same §8 rule about not duplicating
+artifacts: anything about *one piece of work* — the plan, the progress, the
+Definition of Done — belongs in that thread's Brief or Logbook. Anything the
+whole Workspace has to stay consistent with belongs on a Page. A thread's Brief
+says what to do; a Page says what has to remain true of it.
+
+Writing a Page is **not evidence of production** (§5.1) — documenting what you
+intend is not the same as changing reality, so pages earn no heat.
 
 ---
 
@@ -228,8 +243,10 @@ Keep the metaphor human-facing; give each concept an explicit Plane object. Note
 | Bubble | **Module** | Modules are durable logical groupings |
 | Heat window | **Cycle** | Cycles are the time-boxed pulse |
 | Thread | **Work item** | The executable unit |
-| Brief | Work-item description / linked **Page** | Holds intent + Definition of Done |
-| Logbook | **Same** work-item description / **Page** as the Brief | Phases + published evidence live beside the intent — one page, not a second tracker |
+| Brief | A region of the work-item **description** | Holds intent + Definition of Done |
+| Logbook | The **same** description as the Brief, a different region | Phases + published evidence live beside the intent — one page, not a second tracker |
+| Revision | **Sub-work-item** of the thread | A findings write-up or deliverable is its own object, but never its own thread |
+| Page (§2.5) | **Project page** | Belongs to the Workspace and outlives every thread in it |
 
 > Interpretation: *the Bubble is the persistent body of work; Cycles are the pulses that keep it warm.* Don't keep one Cycle alive forever — each new Cycle is a fresh pulse against the same Bubble.
 
@@ -252,7 +269,14 @@ Introduce reusable agent skills (e.g. a `birth-thread` skill) **only after** you
 
 ## 9. Implementation — the Bubble Work server & clients
 
-The framework ships as **one Go binary in two modes**: a long-running **server** that holds the authoritative overlay state and is the only thing clients talk to, and a thin **client** (CLI for humans, MCP for agents) that fetches and updates that state. Clients never touch Plane directly.
+The framework ships as **one Go binary in two modes**: a long-running **server**
+that holds the authoritative overlay state, serves its own web UI, and is the only
+thing clients talk to — and a thin **client** (CLI for humans, MCP for agents)
+that fetches and updates that state. Clients never touch Plane directly.
+
+> This section describes the architecture. For **what is built today**, the
+> README's Status section is the current answer, and each worksheet in `docs/`
+> carries its own phase checklist.
 
 ### 9.1 Topology
 
@@ -260,15 +284,18 @@ The framework ships as **one Go binary in two modes**: a long-running **server**
 flowchart TD
     H["👤 Humans<br/><i>bubble CLI</i>"]
     A["🤖 Agents<br/><i>Claude Code · Codex (MCP)</i>"]
+    W["🌐 Browser<br/><i>the board (embedded SPA)</i>"]
     H -->|"auth as a member"| S
     A -->|"auth as a member"| S
-    S["🧠 Bubble Work Server<br/>overlay state · policy engine ·<br/>member registry · scheduler ·<br/>SQLite (single file)"]
-    S -->|"holds Plane creds · syncs<br/>(poll now → webhooks later)"| P["📦 Plane<br/><i>system of record:<br/>work items + activity</i>"]
+    W -->|"auth as a member"| S
+    S["🧠 Bubble Work Server<br/>policy engine · scheduler · SSE<br/>SQLite: overlay + mirror (L1)<br/><i>every client read is served from L1</i>"]
+    S -->|"one sync worker · REST only<br/>delta + reconcile · outbox drains writes"| P["📦 Plane<br/><i>system of record:<br/>work items + activity</i>"]
+    P -.->|"webhook: a freshness hint,<br/>never the source of truth"| S
 
     classDef cli fill:#7c3aed,stroke:#5b21b6,color:#f5f3ff;
     classDef srv fill:#0e7490,stroke:#155e75,color:#ecfeff;
     classDef plane fill:#1e293b,stroke:#334155,color:#e2e8f0;
-    class H,A cli;
+    class H,A,W cli;
     class S srv;
     class P plane;
 ```
@@ -279,11 +306,21 @@ The server is authoritative for the Bubble Work *overlay*; Plane stays authorita
 
 | State | Owner |
 |-------|-------|
-| Work items, activity timeline, cycles, pages/briefs | **Plane** |
+| Work items and their bodies, comments, projects, modules, cycles, states, pages | **Plane** |
+| Who the members are, and what role each holds | **Plane** (§9.3) |
 | Heat, lifecycle state, Bubble contract (outcome/owner/closure), birth-rule status | **Server** |
-| Members, credentials, attribution, sessions | **Server** |
+| The explicit `reviewed` stage, buoyancy tuning, notification prefs, read receipts | **Server** |
+| Instance registry + credentials, kiosk tokens, the outbox | **Server** |
 
-From a client's point of view the **server handles all state** — it is the single interface and holds the authoritative overlay plus a materialized read-model of Plane. Behind the server, Plane remains the durable book of record.
+From a client's point of view the **server handles all state** — it is the single
+interface and holds the authoritative overlay plus a materialized read-model of
+Plane (§9.6). Behind the server, Plane remains the durable book of record.
+
+The overlay is keyed by Plane id, which makes one invariant load-bearing: **an id
+Plane no longer has must not keep overlay rows.** Otherwise a deleted item leaks
+its progress timestamps forever, and — were an id ever reused — a new thread
+would inherit a stranger's history and be born warm. So the overlay is pruned
+against the live set, and only ever after a *complete* walk.
 
 ### 9.3 Members & attribution — clients as team members
 Identity is **Plane-native**, so it isn't duplicated (§8). Everyone — human or
@@ -313,16 +350,82 @@ Because every mutation flows through the server, the framework's rules become en
 - **Heat = evidence (§5):** only meaningful outputs register as heat; comments and cosmetic edits never warm a bubble.
 - **Lifecycle (§5.3):** transitions Hot → Warm → Cooling → Dormant → Closed are computed centrally against the Cycle pulse.
 
-### 9.5 Two front doors, one API
-- **CLI (humans):** `bubble ls` (buoyancy view), `bubble heat <bubble>`, `bubble thread birth`, `bubble bubble new|close`, `bubble init`.
-- **MCP (agents):** the same operations exposed as tools (`list_bubbles`, `birth_thread`, `log_evidence`, `close_bubble`), so Claude Code / Codex are first-class members from day one. Agents consume the Bubble Work server's **own** MCP interface — **not** Plane's MCP.
-- **Server admin:** `bubble serve` runs the brain; holds the Plane URL + service token; runs the scheduler for cooling transitions and notifications.
+### 9.5 Three front doors, one API
 
-> The server is Plane's **only** client, and speaks to it over **REST only**. No client — human or agent — ever calls Plane directly or through Plane's MCP. This keeps the policy engine (§9.4) unbypassable: every path to Plane goes through the server's rules.
+Every capability is a **server method**. Each surface reuses that same method —
+the CLI over HTTP, MCP by calling it directly, the browser over the same REST the
+CLI uses — so the surfaces cannot drift apart, and the policy engine (§9.4) sits
+behind all of them equally.
 
-### 9.6 Storage & sync
-- **Storage:** SQLite — a single file, no external DB, keeps the server minimal and easy to publish.
-- **Sync:** poll Plane's activity endpoint (`.../work-items/{id}/activities/`, filterable by type and date) to keep the read-model fresh and derive heat; upgrade to Plane webhooks later for real-time reaction. Conflict policy follows §9.2 ownership — Plane wins its fields, the server wins the overlay.
+- **CLI (humans):** `bubble ls` (buoyancy view), `bubble heat <id>`, `bubble show`
+  / `bubble thread` (a bubble's timeline, a thread's interior), `bubble birth`,
+  `bubble logbook` / `dod` / `section` / `todo` / `revision`, `bubble comment`,
+  `bubble move`, `bubble workspace|bubble|page`, `bubble delete`,
+  `bubble notifications`, `bubble whoami`, `bubble use`, `bubble init`.
+- **MCP (agents):** the same operations as tools — `list_workspaces`,
+  `list_bubbles`, `read_thread`, `thread_timeline`, `birth_thread`,
+  `update_thread`, `toggle_todo`, `add_revision`, `set_contract`, `close_bubble`,
+  `move_thread`, the page tools and the guarded deletes — so Claude Code / Codex
+  are first-class members. Agents consume the Bubble Work server's **own** MCP
+  interface at `/mcp`, **not** Plane's MCP.
+- **Web (humans):** the server embeds and serves its own SPA at `/` — the
+  buoyancy board, thread interiors with the artifacts editable in place, and an
+  admin surface. One binary, one origin.
+- **Server admin:** `bubble serve` runs the brain; holds the Plane URLs + keys;
+  runs the sync worker (§9.6) and the scheduler for cooling transitions and
+  notifications. `bubble admin …` inspects and tunes it.
+
+> **Surface parity is the default.** A new capability lands on the REST API, the
+> CLI and the MCP tools in the same change; the web follows when it has a visual
+> form. Skip a surface only when the capability is inherently specific to one.
+
+> The server is Plane's **only** client, and speaks to it over **REST only**. No
+> client — human or agent — ever calls Plane directly or through Plane's MCP.
+> This keeps the policy engine (§9.4) unbypassable: every path to Plane goes
+> through the server's rules.
+
+### 9.6 Storage & sync — SQLite as L1, one worker as the only reader
+
+**Storage:** SQLite — a single file, no external DB, keeps the server minimal and
+easy to publish. It holds two things that must not be confused:
+
+| | What it is | If you delete it |
+|---|---|---|
+| **Overlay** | server-owned truth per §9.2: heat, progress, contracts, stage, instances, members, tuning, the outbox | the work survives, the Bubble Work layer is lost |
+| **Mirror (L1)** | a *projection* of Plane: projects, modules, work items and their bodies, comments, cycles, states, members | nothing is lost; it costs a backfill (`bubble admin sync-rebuild`) |
+
+**Reads never touch Plane.** Every client read is served from the mirror. This is
+the binding constraint made tractable: Plane allows 60 req/min per key, and a
+board that fetched live would exhaust a minute on a single page load.
+
+**One reader.** A single sync worker is the only thing that reads Plane: a delta
+pass on a short interval (`order_by=-updated_at`, early-stop at the watermark),
+and a full reconcile hourly that also catches deletes and module membership. A
+partial pass holds the watermark back rather than skipping what it missed —
+*"I could not see it" must never be mistaken for "it is gone."* A rate budget
+parses Plane's own `X-RateLimit-*` headers, waits until reset instead of guessing,
+and reserves a lane so background sync can never starve a human request.
+
+**Writes are optimistic, through an outbox.** A write lands in SQLite and returns
+immediately; the worker drains it to Plane with exponential backoff and abandons
+after a bounded number of attempts. A field with an undrained entry is
+**shielded**: an incoming sync will not overwrite it. When the entry drains or is
+abandoned, Plane is truth again — which is §9.2's conflict policy, held
+mechanically rather than by convention.
+
+**Webhooks are a hint, not a source of truth.** Plane can push, and the server
+accepts it, but the delta remains what guarantees correctness — an event only
+makes the mirror fresher, sooner.
+
+> **Being behind is fine; being behind silently is not.** A local read model
+> introduces a failure the naive design did not have: if sync stops, the board
+> keeps rendering, confidently, from data that is quietly getting older. Nothing
+> errors. So the server reports its own staleness (`GET /api/status`) — an ageing
+> mirror and the caller's unsent drafts both surface as a banner in the web UI
+> and a warning line above `bubble ls`.
+
+The full worksheet, including what was measured against a live instance, is
+[`PLANE-SYNC.md`](./PLANE-SYNC.md).
 
 ### 9.7 Federation — multiple Plane instances
 

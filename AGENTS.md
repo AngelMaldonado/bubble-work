@@ -1,7 +1,8 @@
 # Bubble Work — Agent Operating Rules
 
 You are working inside the Bubble Work repository. The canonical model is
-[`bubble-work-spec.md`](./bubble-work-spec.md) — read it before non-trivial work.
+[`docs/bubble-work-spec.md`](./docs/bubble-work-spec.md) — read it before
+non-trivial work.
 This file is the operational summary both Claude Code and Codex load.
 
 ## Vocabulary (keep the metaphor human-facing)
@@ -43,11 +44,14 @@ closing or redefining a bubble when its outcome no longer justifies the work.
 
 - One Go binary, two modes: `bubble serve` (the brain) and the thin client.
 - **Plane is the system of record** for work items + activity. The **server**
-  owns the overlay: heat, lifecycle, the Bubble contract, and members.
+  owns the overlay: heat, lifecycle, the Bubble contract, and the explicit stage.
+  Who the members are comes from Plane.
 - The server is Plane's ONLY client, over REST only. No component talks to
   Plane directly or via Plane's MCP. Plane's 60 req/min budget is the binding
-  constraint — [`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md) is moving reads onto
-  a local SQLite mirror with a single sync worker.
+  constraint, so **every client read is served from a local SQLite mirror** and a
+  single sync worker is Plane's only reader; writes land locally and drain
+  through an outbox. Never add a Plane call to a read path — see
+  [`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md).
 - Agents consume the server's OWN MCP endpoint (`/mcp`), authenticated as a
   member. The framework's rules are enforced server-side, so they cannot be
   bypassed from any client.

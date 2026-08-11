@@ -33,7 +33,13 @@ interface SavedFilters {
   project?: string;
   scope?: 'mine' | 'workspace' | 'member';
   viewMember?: string;
+  /** project ids most-recently-scoped first; "" (all projects) is a real entry */
+  recentProjects?: string[];
 }
+
+// How many visits the switcher remembers. Alt+Tab's value is in its first two or
+// three entries; past that you are reading a list, not flicking between places.
+const RECENT_CAP = 12;
 
 function readFilters(): SavedFilters {
   try {
@@ -79,6 +85,19 @@ class Store {
   instance = $state<string>(savedFilters.instance ?? '');
   project = $state<string>(savedFilters.project ?? '');
   polling = $state(false);
+
+  // Project scopes in the order they were last visited, most recent first. This
+  // is what makes Shift+Tab behave like Alt+Tab: the ring is ordered by where you
+  // have BEEN, so one tap returns to the project you just came from instead of
+  // landing on whatever happens to be next alphabetically.
+  //
+  // Seeded with the restored scope so the very first Shift+Tab of a session has a
+  // current entry to step away from.
+  recentProjects = $state<string[]>(
+    savedFilters.recentProjects?.length
+      ? savedFilters.recentProjects
+      : [savedFilters.project ?? ''],
+  );
 
   // view scope (Phase 9): whose bubbles to show. "workspace" = everyone in
   // scope; "mine" = bubbles I own; "member" = a chosen owner (viewMember).
@@ -156,6 +175,7 @@ class Store {
           project: this.project,
           scope: this.scope,
           viewMember: this.viewMember,
+          recentProjects: this.recentProjects,
         } satisfies SavedFilters),
       );
     } catch {
@@ -177,16 +197,36 @@ class Store {
       this.project = '';
       this.scope = 'workspace';
       this.viewMember = '';
+      // A wall display must not inherit the browsing history of whoever last
+      // used this browser either.
+      this.recentProjects = [''];
       return;
     }
     if (this.instance && !this.instances.includes(this.instance)) {
       this.instance = '';
       this.project = '';
+      this.touchProject('');
     }
     // Only once the workspace list has actually arrived — an empty list during
     // loading is not evidence that the workspace is gone.
     if (this.project && this.workspaces.length && !this.workspaces.some((w) => w.id === this.project)) {
       this.project = '';
+      this.touchProject('');
+    }
+    // The recency ring outlives the workspaces in it, and a deleted project would
+    // otherwise sit there forever taking up one of RECENT_CAP slots. Harmless to
+    // the switcher, which orders the LIVE projects by this and ignores the rest —
+    // but a persisted list of ids that resolve to nothing is a lie worth not
+    // keeping. Same guard: an empty workspace list is loading, not deletion.
+    if (this.workspaces.length) {
+      const live = this.recentProjects.filter(
+        (id) => id === '' || this.workspaces.some((w) => w.id === id),
+      );
+      // Only on an actual change: this runs on every poll, and reassigning an
+      // identical array would wake the switcher's ordering for nothing.
+      if (live.length !== this.recentProjects.length) {
+        this.recentProjects = live.length ? live : [this.project];
+      }
     }
     // Deliberately checked against EVERY bubble rather than store.members, which
     // is narrowed by the current instance and project filters. Someone who owns
@@ -250,13 +290,22 @@ class Store {
     // drop the project filter if it no longer exists in the new scope
     if (this.project && !this.projects.some((p) => p.id === this.project)) {
       this.project = '';
+      this.touchProject('');
     }
     this.saveFilters();
   }
 
   selectProject(v: string): void {
     this.project = v;
+    this.touchProject(v);
     this.saveFilters();
+  }
+
+  /** Record a visit: move the scope to the front of the recency ring. Every path
+   *  that changes `project` goes through here, so the ring cannot silently drift
+   *  out of step with where the board actually is. */
+  private touchProject(id: string): void {
+    this.recentProjects = [id, ...this.recentProjects.filter((p) => p !== id)].slice(0, RECENT_CAP);
   }
 
   byLevel(level: Level): BubbleView[] {
@@ -331,6 +380,15 @@ class Store {
         api.workspaces().catch(() => null),
       ]);
       this.bubbles = bubbles;
+      // Re-point the open detail panel at the LIVE bubble. It holds a reference
+      // into the array we just replaced, so without this it shows whatever was
+      // true when it was opened — a renamed bubble keeps its old name, a closed
+      // one its old band. Falls back to the stale copy when the bubble is gone
+      // (deleted, or filtered out), which the panel already survives.
+      if (this.detail) {
+        const id = this.detail.id;
+        this.detail = bubbles.find((b) => b.id === id) ?? this.detail;
+      }
       if (workspaces) this.workspaces = workspaces;
       this.pruneFilters();
       this.inbox = inbox;
@@ -487,12 +545,19 @@ class Store {
     return this.bubbles.find((b) => b.id === id);
   }
 
-  openDetail(b: BubbleView): void {
+  /** one-shot: open the detail panel with its name focused for renaming. Same
+   *  shape as openThread's `sel` — "open this, pointed at that" — and consumed by
+   *  the panel so a later reopen is an ordinary read, not another rename. */
+  detailRename = $state(false);
+
+  openDetail(b: BubbleView, opts?: { rename?: boolean }): void {
     this.detail = b;
+    this.detailRename = opts?.rename === true;
   }
 
   closeDetail(): void {
     this.detail = null;
+    this.detailRename = false;
   }
 
   openThread(id: string, sel?: ArtSel): void {

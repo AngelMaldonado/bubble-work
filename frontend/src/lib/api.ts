@@ -199,6 +199,11 @@ export const api = {
       bubble_id: bubbleId,
     }),
 
+  // Only the handle changes: the contract, the stage and every thread inside are
+  // untouched, and no heat is earned — a name is not what has been done.
+  renameBubble: (id: string, name: string) =>
+    req<{ id: string; name: string }>('PATCH', `/api/bubbles/${encodeURIComponent(id)}`, { name }),
+
   // Deleting is IRREVERSIBLE and deletes from Plane. Closing a bubble keeps the
   // record of what was done and is almost always the right verb.
   deleteBubble: (id: string) =>

@@ -32,6 +32,13 @@
 
   const isReviewed = $derived(bubble.level === 'reviewed');
   const isDone = $derived(bubble.level === 'done');
+  // The badge counts the threads that are actually burning (🔥 in_progress),
+  // not the bubble's whole inventory. A bubble carrying twelve finished threads
+  // and nothing running is not a "12" — that number reads as a workload and
+  // competes with the band the orb is already sitting in. Zero burning threads
+  // means no badge, so the badge only ever means "this much is live right now".
+  // The full breakdown stays one hover away, in the detail card's tally.
+  const burning = $derived(bubble.thread_levels?.in_progress ?? 0);
   // Everyone involved in the bubble (contract owner + every thread assignee),
   // owner first. Drives the avatar stack on the orb.
   const people = $derived.by<string[]>(() => {
@@ -89,7 +96,10 @@
     aria-label="open {bubble.name}"
   >
     <span class="sheen"></span>
-    {#if bubble.threads > 0}<span class="badge">{bubble.threads}</span>{/if}
+    {#if burning > 0}<span
+        class="badge"
+        title={t('bubble.burning', { n: burning, total: bubble.threads })}>{burning}</span
+      >{/if}
     {#if people.length}
       <span class="people">
         {#each shownPeople as p, i (p)}

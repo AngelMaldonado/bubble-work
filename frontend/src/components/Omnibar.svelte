@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { untrack } from 'svelte';
   import { t } from '../lib/i18n.svelte';
   import { store } from '../lib/store.svelte';
   import { api, ApiError } from '../lib/api';
@@ -21,6 +22,9 @@
     hint?: string;
     needsBubble?: boolean;
     needsInput?: string; // placeholder → run(bubble, value)
+    /** pre-fills the input stage from the chosen bubble. Renaming starts from the
+     *  name it has now: the common case is editing a word, not retyping it. */
+    seed?: (b: BubbleView) => string;
     run: (b?: BubbleView, value?: string) => Promise<void> | void;
   };
 
@@ -107,6 +111,22 @@
         // which is not a valid Cmd result.
         if (!b || v === undefined) return;
         return api.contract(b.id, { outcome: v }).then(() => store.refresh());
+      },
+    },
+    {
+      id: 'rename',
+      label: t('cmd.renameBubble'),
+      hint: t('cmd.renameBubbleHint'),
+      needsBubble: true,
+      needsInput: 'the new name',
+      seed: (b) => b.name,
+      run: (b, v) => {
+        if (!b || v === undefined) return;
+        const next = v.trim();
+        // An empty name is a slip, not a rename — and the server refuses it
+        // anyway, so there is nothing to gain from the round trip.
+        if (next === '' || next === b.name) return;
+        return api.renameBubble(b.id, next).then(() => store.refresh());
       },
     },
     {
@@ -240,6 +260,14 @@
     if (open && inputEl) inputEl.focus();
   });
 
+  // A seeded input arrives with text already in it (rename), so select it: the
+  // seed is a starting point to edit or replace, not a prefix to type after.
+  // argValue is read untracked — tracking it would re-select on every keystroke.
+  $effect(() => {
+    if (stage !== 'input') return;
+    if (untrack(() => argValue) !== '') inputEl?.select();
+  });
+
   // keep the highlighted row visible as you arrow through the list
   $effect(() => {
     void sel;
@@ -300,7 +328,7 @@
     pendingBubble = b;
     if (pending?.needsInput) {
       stage = 'input';
-      argValue = '';
+      argValue = pending.seed?.(b) ?? '';
       return;
     }
     await Promise.resolve(pending?.run(b));

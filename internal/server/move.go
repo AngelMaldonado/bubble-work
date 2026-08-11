@@ -275,6 +275,68 @@ func (s *Server) RenameWorkspace(ctx context.Context, id, name string) (domain.W
 	return domain.Workspace{ID: projID, Name: name, Instance: inst.Slug}, nil
 }
 
+// RenameBubble retitles a bubble. Not production either: §4 says a bubble is its
+// OUTCOME, and the name is only the handle you grab it by — so renaming earns no
+// heat and leaves the contract, the stage and every thread inside untouched.
+//
+// The write goes through to the mirror for the same reason CreateBubble's does:
+// modules are re-read on the ten-minute structure cadence, so a board rebuilt
+// from an un-updated mirror would keep showing the old name for minutes after
+// Plane accepted the new one — the local copy being confidently wrong.
+func (s *Server) RenameBubble(ctx context.Context, q, name string) (domain.NewBubble, error) {
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return domain.NewBubble{}, fmt.Errorf("%w: a bubble needs a name", errBadRequest)
+	}
+	id, err := s.resolveID(ctx, q)
+	if err != nil {
+		return domain.NewBubble{}, err
+	}
+	slug, err := s.authorizeBubble(ctx, id)
+	if err != nil {
+		return domain.NewBubble{}, err
+	}
+	inst, ok, err := s.instanceBySlug(slug)
+	if err != nil {
+		return domain.NewBubble{}, err
+	}
+	if !ok {
+		return domain.NewBubble{}, errNotFound
+	}
+	_, projID, moduleID := cut3(id)
+	if projID == "" || moduleID == "" {
+		return domain.NewBubble{}, fmt.Errorf("%w: malformed bubble id %q", errBadRequest, id)
+	}
+
+	cl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
+	if err := cl.SetModuleName(ctx, moduleID, name); err != nil {
+		return domain.NewBubble{}, fmt.Errorf("rename module: %w", err)
+	}
+
+	if s.mirror != nil {
+		if ms, err := s.mirror.Modules(inst.Slug, projID); err == nil {
+			for _, m := range ms {
+				if m.ID == moduleID {
+					m.Name = name
+					if err := s.mirror.UpsertModules(inst.Slug, []mirror.Module{m}, s.now()); err != nil {
+						log.Printf("mirror: record bubble rename %s: %v", id, err)
+					}
+					break
+				}
+			}
+		}
+	}
+
+	s.dropInstanceCache(slug)
+	if _, err := s.refreshInstance(context.Background(), inst); err != nil {
+		log.Printf("rebuild after bubble rename: %v", err)
+	}
+	s.broadcastThread("")
+	actor, _ := domain.ActorFrom(ctx)
+	log.Printf("rename_bubble by %s: %s -> %q", actor.Label(), id, name)
+	return domain.NewBubble{ID: id, Name: name}, nil
+}
+
 // DeleteWorkspace removes a workspace from Plane, and with it EVERY bubble,
 // thread, artifact and comment inside. Nothing about this is recoverable, which
 // is why the caller has to say how much it is destroying and mean it.
@@ -344,6 +406,21 @@ func (s *Server) handleRenameWorkspace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, ws)
+}
+
+func (s *Server) handleRenameBubble(w http.ResponseWriter, r *http.Request) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
+		return
+	}
+	b, err := s.RenameBubble(r.Context(), r.PathValue("id"), in.Name)
+	if writeErr(w, err) {
+		return
+	}
+	writeJSON(w, http.StatusOK, b)
 }
 
 func (s *Server) handleDeleteWorkspace(w http.ResponseWriter, r *http.Request) {

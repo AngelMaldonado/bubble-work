@@ -486,6 +486,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("PATCH /api/workspaces/{id}", s.restAuth(s.handleRenameWorkspace))
 	mux.HandleFunc("DELETE /api/workspaces/{id}", s.restAuth(s.handleDeleteWorkspace))
 	mux.HandleFunc("POST /api/bubbles", s.restAuth(s.handleCreateBubble))
+	mux.HandleFunc("PATCH /api/bubbles/{id}", s.restAuth(s.handleRenameBubble))
 	mux.HandleFunc("GET /api/bubbles", s.restAuth(s.handleBubbles))
 	mux.HandleFunc("GET /api/stream", s.restAuth(s.handleStream))
 	mux.HandleFunc("GET /api/bubbles/{id}/heat", s.restAuth(s.handleHeat))

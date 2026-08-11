@@ -650,6 +650,17 @@ func DeleteWorkspace(cfg config.Config, id string) error {
 	return nil
 }
 
+// RenameBubble retitles a Bubble (a Plane module). Its contract, stage and
+// threads are untouched — only the handle you grab it by changes.
+func RenameBubble(cfg config.Config, id, name string) error {
+	var b domain.NewBubble
+	if err := patchJSON(cfg, "/api/bubbles/"+url.PathEscape(id), map[string]string{"name": name}, &b); err != nil {
+		return err
+	}
+	fmt.Printf("renamed bubble %s to %q\n", b.ID, b.Name)
+	return nil
+}
+
 // CreateBubble creates a Plane module (a Bubble) in a project.
 func CreateBubble(cfg config.Config, req domain.CreateBubbleRequest) error {
 	var b domain.NewBubble

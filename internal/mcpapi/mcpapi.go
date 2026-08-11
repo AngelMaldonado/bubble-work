@@ -29,6 +29,7 @@ type Backend interface {
 	RenameWorkspace(ctx context.Context, id, name string) (domain.Workspace, error)
 	DeleteWorkspace(ctx context.Context, id string) (int, int, error)
 	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
+	RenameBubble(ctx context.Context, bubbleID, name string) (domain.NewBubble, error)
 	BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
 	SetContract(ctx context.Context, bubbleID string, in domain.ContractInput) (domain.Contract, error)
 	CloseBubble(ctx context.Context, bubbleID string) error
@@ -179,6 +180,14 @@ type createWorkspaceIn struct {
 type renameWorkspaceIn struct {
 	ID   string `json:"id" jsonschema:"the workspace id as slug:project"`
 	Name string `json:"name" jsonschema:"the new name"`
+}
+
+// renameBubbleIn retitles a bubble. No name guard here, unlike the deletes: a
+// rename is reversible by renaming back, and demanding the old name would only
+// cost a read for something nothing is lost to.
+type renameBubbleIn struct {
+	BubbleID string `json:"bubble_id" jsonschema:"the bubble's id (short id or namespaced)"`
+	Name     string `json:"name" jsonschema:"the new name"`
 }
 
 // deleteWorkspaceIn destroys a workspace and EVERYTHING in it. The name guard
@@ -361,6 +370,16 @@ func newServer(b Backend) *sdk.Server {
 				return nil, domain.Contract{}, err
 			}
 			return nil, c, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "rename_bubble", Description: "Rename a bubble. Its contract, stage and threads are untouched — only the handle changes. Not evidence of production: a bubble IS its outcome (§4), and what it is called is not what has been done, so nothing warms. If the name no longer fits because the WORK changed, set_contract is the honest fix."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in renameBubbleIn) (*sdk.CallToolResult, domain.NewBubble, error) {
+			nb, err := b.RenameBubble(withActor(ctx, req), in.BubbleID, in.Name)
+			if err != nil {
+				return nil, domain.NewBubble{}, err
+			}
+			return nil, nb, nil
 		})
 
 	sdk.AddTool(srv,

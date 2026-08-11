@@ -3721,3 +3721,116 @@ func TestNamedSections(t *testing.T) {
 		t.Error("deleting a missing section should say so")
 	}
 }
+
+// A renamed bubble must read back renamed IMMEDIATELY, everywhere.
+//
+// This is the same trap CreateBubble fell into (see above): modules are re-read
+// from Plane on the TEN MINUTE structure cadence, so a rename that only reached
+// Plane would leave every local surface — the board, list_bubbles, an agent
+// looking the bubble up by name — showing the old name for minutes, with no way
+// to tell it had already changed. The mirror write-through is what closes that
+// window, and this pins it: NO sync pass runs between the rename and the read.
+//
+// It also pins what a rename must NOT do: the §4 contract and the derived level
+// belong to the work, not to the label on it.
+func TestRenamingABubbleIsVisibleImmediatelyAndKeepsItsContract(t *testing.T) {
+	var mu sync.Mutex
+	renamed := "" // what Plane was actually asked to store
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/modules/m1/"):
+			b, _ := io.ReadAll(r.Body)
+			var in map[string]any
+			json.Unmarshal(b, &in)
+			mu.Lock()
+			renamed, _ = in["name"].(string)
+			mu.Unlock()
+			io.WriteString(w, `{"id":"m1","name":"Onboarding, take two"}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Onboarding"}]}`)
+		case strings.Contains(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[]}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			io.WriteString(w, `{"results":[],"next_page_results":false}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	const id = "ws:p1:m1"
+	if code, b := do(t, http.MethodPost, ts.URL+"/api/bubbles/"+id+"/contract", key,
+		`{"outcome":"signups convert 20% better","owner":"Owner"}`); code != http.StatusOK {
+		t.Fatalf("set contract: %d %s", code, b)
+	}
+
+	code, rb := do(t, http.MethodPatch, ts.URL+"/api/bubbles/"+id, key, `{"name":"Onboarding, take two"}`)
+	if code != http.StatusOK {
+		t.Fatalf("rename: %d %s", code, rb)
+	}
+	var got domain.NewBubble
+	if err := json.Unmarshal(rb, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "Onboarding, take two" || got.ID != id {
+		t.Errorf("the rename reported the wrong bubble: %+v", got)
+	}
+
+	// Plane is the system of record, so it has to have been told.
+	mu.Lock()
+	sent := renamed
+	mu.Unlock()
+	if sent != "Onboarding, take two" {
+		t.Errorf("Plane was not asked to store the new name, got %q", sent)
+	}
+
+	// NO sync pass has run. The board must show the new name anyway.
+	var board []domain.BubbleView
+	_, bb := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	if err := json.Unmarshal(bb, &board); err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, b := range board {
+		if b.ID != id {
+			continue
+		}
+		found = true
+		if b.Name != "Onboarding, take two" {
+			t.Errorf("the board still shows the old name: %q", b.Name)
+		}
+		// The name is the handle; the contract is the work. Renaming touches one.
+		if b.Outcome != "signups convert 20% better" {
+			t.Errorf("the rename damaged the §4 outcome: %q", b.Outcome)
+		}
+		if b.Owner != "Owner" {
+			t.Errorf("the rename damaged the §4 owner: %q", b.Owner)
+		}
+	}
+	if !found {
+		t.Fatal("the bubble left the board when it was renamed")
+	}
+
+	// An empty name is a slip, not a rename, and it must not reach Plane.
+	if code, _ := do(t, http.MethodPatch, ts.URL+"/api/bubbles/"+id, key, `{"name":"   "}`); code != http.StatusBadRequest {
+		t.Errorf("renaming to blank was allowed: %d", code)
+	}
+}

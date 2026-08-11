@@ -158,6 +158,9 @@ func (stubBackend) DeleteWorkspace(context.Context, string) (int, int, error) { 
 func (stubBackend) CreateBubble(context.Context, domain.CreateBubbleRequest) (domain.NewBubble, error) {
 	return domain.NewBubble{}, nil
 }
+func (stubBackend) RenameBubble(context.Context, string, string) (domain.NewBubble, error) {
+	return domain.NewBubble{}, nil
+}
 func (stubBackend) BirthThread(context.Context, domain.BirthRequest) (domain.BirthResult, error) {
 	return domain.BirthResult{}, nil
 }

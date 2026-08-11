@@ -348,6 +348,16 @@ func cmdBubble(args []string) {
 		if err := client.SetContract(cfg, id, in); err != nil {
 			log.Fatalf("bubble set: %v", err)
 		}
+	case "rename":
+		fs := flag.NewFlagSet("bubble rename", flag.ExitOnError)
+		name := fs.String("name", "", "the new name (required)")
+		_ = fs.Parse(args[2:])
+		if *name == "" {
+			log.Fatal("bubble rename: --name is required")
+		}
+		if err := client.RenameBubble(cfg, id, *name); err != nil {
+			log.Fatalf("bubble rename: %v", err)
+		}
 	case "close":
 		if err := client.Close(cfg, id); err != nil {
 			log.Fatalf("bubble close: %v", err)
@@ -371,11 +381,12 @@ func cmdBubble(args []string) {
 }
 
 func bubbleUsage() {
-	fmt.Fprint(os.Stderr, `bubble bubble — create a bubble, or set its contract (§4) / open-close it
+	fmt.Fprint(os.Stderr, `bubble bubble — create a bubble, or set its contract (§4) / rename / open-close it
 
 Usage:
   bubble bubble new --workspace <instance>:<project-id> --name <name>
   bubble bubble set <id> [--outcome <text>] [--owner <name>] [--closure <text>]
+  bubble bubble rename <id> --name <name>
   bubble bubble close <id>   ·   open <id>
   bubble bubble review <id>  ·   unreview <id>
 

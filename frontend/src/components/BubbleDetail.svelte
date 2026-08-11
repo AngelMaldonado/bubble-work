@@ -32,6 +32,62 @@
     if (e.key === 'Escape') close();
   }
 
+  // ---- renaming ----
+  //
+  // A bubble's name is the Plane module's `name`, edited in place here for the
+  // same reason a thread's title is edited in ThreadView: it is a property of the
+  // object, not content inside it, so it has its own path and no editor.
+  //
+  // Renaming is not production — a bubble IS its outcome (§4) — so nothing warms.
+  let nameEl = $state<HTMLElement | null>(null);
+  let nameWas = $state('');
+
+  // Opened from the context menu's Rename: land in the field with the name
+  // selected, so the menu item does what it says rather than merely showing you
+  // where renaming happens. Cleared immediately — it is a one-shot intention.
+  $effect(() => {
+    if (!store.detailRename) return;
+    const el = nameEl;
+    if (!el) return;
+    el.focus();
+    getSelection()?.selectAllChildren(el);
+    store.detailRename = false;
+  });
+
+  function onNameKey(e: KeyboardEvent): void {
+    // Stops the panel's own Escape-to-close from firing while editing: leaving
+    // the field and closing the panel are different intentions.
+    e.stopPropagation();
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      nameEl?.blur(); // commits
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      if (nameEl) nameEl.textContent = nameWas;
+      nameEl?.blur();
+    }
+  }
+
+  async function commitName(): Promise<void> {
+    const el = nameEl;
+    if (!el) return;
+    const next = (el.textContent ?? '').replace(/\s+/g, ' ').trim();
+    if (!next) {
+      el.textContent = nameWas; // an empty name is a slip, not a rename
+      return;
+    }
+    if (next === bubble.name) return;
+    try {
+      await api.renameBubble(bubble.id, next);
+      // The board owns the bubble list, so it has to hear about this — the panel
+      // is a view onto store.detail, not the owner of the name.
+      await store.refresh();
+    } catch (e) {
+      el.textContent = nameWas;
+      error = e instanceof ApiError ? e.message : String(e);
+    }
+  }
+
   function age(iso: string): string {
     if (!iso) return '';
     const d = Date.now() - new Date(iso).getTime();
@@ -51,7 +107,26 @@
 <div class="panel" role="dialog" aria-modal="true" aria-label="{bubble.name} timeline">
   <header>
     <div class="htext">
-      <h2>{bubble.name}</h2>
+      <!-- The name is the Plane module's NAME, a property of the bubble rather
+           than content in it, so it is renamed on its own path. -->
+      {#if store.kiosk}
+        <h2>{bubble.name}</h2>
+      {:else}
+        <!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+        <h2
+          class="edit"
+          contenteditable="plaintext-only"
+          role="textbox"
+          aria-label={t('bubble.renameHint')}
+          tabindex="0"
+          spellcheck="false"
+          title={t('bubble.renameHint')}
+          bind:this={nameEl}
+          onfocus={() => (nameWas = bubble.name)}
+          onblur={commitName}
+          onkeydown={onNameKey}
+        >{bubble.name}</h2>
+      {/if}
       <span class="sub">
         {bubble.instance}{bubble.project_name ? ' · ' + bubble.project_name : ''}
       </span>
@@ -147,6 +222,22 @@
     letter-spacing: -0.01em;
     color: var(--text);
     overflow-wrap: anywhere;
+  }
+  /* Same affordance as a thread's title in ThreadView: invisible until you go
+     near it, so the header still reads as a heading rather than a form. */
+  .htext h2.edit {
+    border-radius: 7px;
+    padding: 0 0.3rem;
+    margin-left: -0.3rem;
+    outline: none;
+    cursor: text;
+  }
+  .htext h2.edit:hover {
+    background: color-mix(in oklab, var(--text) 7%, transparent);
+  }
+  .htext h2.edit:focus {
+    background: color-mix(in oklab, var(--wip) 12%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--wip) 50%, transparent);
   }
   .sub {
     font-size: 0.74rem;

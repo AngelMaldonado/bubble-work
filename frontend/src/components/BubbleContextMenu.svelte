@@ -65,6 +65,14 @@
     if (bb) onbirth(bb);
   }
 
+  // A menu cannot hold a text field, so renaming opens the panel that owns the
+  // name and lands in it — the same place a rename would have taken you anyway.
+  function rename(): void {
+    const bb = bubbleMenu.bubble;
+    bubbleMenu.hide();
+    if (bb) store.openDetail(bb, { rename: true });
+  }
+
   function copyId(): void {
     const bb = bubbleMenu.bubble;
     bubbleMenu.hide();
@@ -99,6 +107,10 @@
     {#if !store.kiosk}
       <button class="ctxmenu-item" role="menuitem" onclick={birth}>
         <span class="ctxmenu-ic">➕</span> {t('bubble.birthThread')}
+      </button>
+
+      <button class="ctxmenu-item" role="menuitem" onclick={rename}>
+        <span class="ctxmenu-ic">✏️</span> {t('bubble.rename')}
       </button>
 
       <div class="ctxmenu-sep"></div>

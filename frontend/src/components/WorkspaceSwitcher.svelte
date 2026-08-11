@@ -21,6 +21,17 @@
 
   // "" is All projects and belongs in the ring: it is a real scope, and without
   // it there is no way back to the whole board without reaching for the mouse.
+  //
+  // ORDERED BY RECENCY, current scope first — the property that makes this Alt+Tab
+  // rather than a list. Alphabetical order put the neighbour you never visit next
+  // to the one you flick between all day, so a quick Shift+Tab landed somewhere
+  // arbitrary and you had to read the panel to find your way back. Now the second
+  // tile is always where you just came from, which is the whole point: one tap
+  // out, one tap back.
+  //
+  // Projects never visited on this browser sort after the visited ones, keeping
+  // their alphabetical order from store.projects — a stable place to hunt in,
+  // rather than an arbitrary one.
   const entries = $derived.by<Entry[]>(() => {
     const all: Entry = {
       id: '',
@@ -34,7 +45,17 @@
       identifier: store.workspaces.find((w) => w.id === p.id)?.identifier ?? '',
       bubbles: store.bubbles.filter((b) => b.project === p.id).length,
     }));
-    return [all, ...rest];
+    const live = [all, ...rest];
+
+    const rank = new Map(store.recentProjects.map((id, i) => [id, i]));
+    const seen = rank.size;
+    return live
+      // Unvisited entries key on `seen + i`, which is past every visited rank, so
+      // they land behind them while keeping their own order. Every key is
+      // distinct, so the sort is total and cannot reshuffle between renders.
+      .map((e, i) => ({ e, key: rank.get(e.id) ?? seen + i }))
+      .sort((a, b) => a.key - b.key)
+      .map((x) => x.e);
   });
 
   let open = $state(false);
@@ -55,6 +76,10 @@
 
   function show(): void {
     before = store.project;
+    // The ring is ordered current-first, so this is 0 in the normal case — but it
+    // is derived rather than assumed, because a filter pruned from under us can
+    // leave the scope somewhere else, and stepping from the wrong tile would send
+    // you to a project you were never at.
     idx = Math.max(0, entries.findIndex((e) => e.id === store.project));
     typed = '';
     open = true;

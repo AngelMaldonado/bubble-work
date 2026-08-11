@@ -174,6 +174,7 @@ bubble move <thread> <bubble>    re-home a thread into another bubble
 # structure
 bubble workspace new|list|rename a Plane project — our Workspace
 bubble bubble new|set|close|open create a bubble or set its contract (§4)
+bubble bubble rename <id> --name retitle a bubble (the handle, not the contract)
 bubble bubble review|unreview    the explicit 👀 stage overlay
 bubble page list|read|new|edit   a workspace's docs and specs (Plane pages)
 bubble delete <kind> <id> [-y]   PERMANENTLY delete a workspace/bubble/thread/artifact
@@ -279,13 +280,13 @@ claude mcp add --transport http bubble http://localhost:4006/mcp \
 The web UI's **Connect** panel generates that command for you, plus a setup
 prompt, with the key masked until you ask to see it.
 
-26 tools, grouped by what they do:
+27 tools, grouped by what they do:
 
 | | Tools |
 |---|---|
 | **Read** | `list_workspaces` `list_bubbles` `thread_timeline` `read_thread` `thread_comments` `list_pages` `read_page` |
 | **Create** | `create_workspace` `create_bubble` `birth_thread` `add_revision` `create_page` |
-| **Change** | `update_thread` `toggle_todo` `delete_artifact` `set_contract` `move_thread` `rename_workspace` `update_page` |
+| **Change** | `update_thread` `toggle_todo` `delete_artifact` `set_contract` `move_thread` `rename_bubble` `rename_workspace` `update_page` |
 | **Discuss** | `post_comment` `mark_comments_read` |
 | **End** | `close_bubble` `delete_bubble` `delete_thread` `delete_page` `delete_workspace` |
 
@@ -362,7 +363,8 @@ paths · multi-instance federation with per-member scoping · the SQLite mirror 
 the read layer with an outbox for writes and degraded-mode reporting · derived
 thread and bubble buoyancy with opt-in write-back to Plane · the notification
 scheduler · the web board with in-place artifact editing · project pages ·
-workspace and bubble lifecycle including deletes · 26 MCP tools · God Mode.
+workspace and bubble lifecycle including renames and deletes · 27 MCP tools ·
+God Mode.
 
 Still open, each tracked in its own worksheet:
 

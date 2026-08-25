@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// This file is what the mirror syncs FROM (docs/PLANE-SYNC.md Phase 1). It is
+// This file is what the mirror syncs FROM (docs/journal/PLANE-SYNC.md Phase 1). It is
 // deliberately separate from the request-path helpers above: those answer "what
 // does this screen need", these answer "what changed".
 
@@ -29,6 +29,7 @@ type ItemRow struct {
 	StateGroup      string // backlog|unstarted|started|completed|cancelled
 	Parent          string
 	Assignees       []string
+	Labels          []string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
@@ -37,7 +38,7 @@ type ItemRow struct {
 // itemFields is everything the mirror stores. state comes back as an object
 // rather than a bare uuid because of expand=state, which removes the ListStates
 // join from the read path (verified to compose with fields= on 2026-08-04).
-const itemFields = "id,project,name,description_html,sequence_id,priority,state,parent,assignees,created_at,updated_at,completed_at"
+const itemFields = "id,project,name,description_html,sequence_id,priority,state,parent,assignees,labels,created_at,updated_at,completed_at"
 
 // errStopPaging unwinds getPaged early once we reach items older than the
 // watermark. Never escapes this file.
@@ -70,6 +71,7 @@ func (c *Client) ListItemsSince(ctx context.Context, since time.Time) ([]ItemRow
 			Priority        string     `json:"priority"`
 			Parent          *string    `json:"parent"`
 			Assignees       []string   `json:"assignees"`
+			Labels          []string   `json:"labels"`
 			CreatedAt       time.Time  `json:"created_at"`
 			UpdatedAt       time.Time  `json:"updated_at"`
 			CompletedAt     *time.Time `json:"completed_at"`
@@ -92,7 +94,7 @@ func (c *Client) ListItemsSince(ctx context.Context, since time.Time) ([]ItemRow
 				ID: it.ID, ProjectID: it.Project, Name: it.Name,
 				DescriptionHTML: it.DescriptionHTML, Sequence: it.SequenceID,
 				Priority: it.Priority, StateID: it.State.ID, StateName: it.State.Name,
-				StateGroup: it.State.Group, Assignees: it.Assignees,
+				StateGroup: it.State.Group, Assignees: it.Assignees, Labels: it.Labels,
 				CreatedAt: it.CreatedAt, UpdatedAt: it.UpdatedAt, CompletedAt: it.CompletedAt,
 			}
 			if it.Parent != nil {

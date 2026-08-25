@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Round-trip fidelity (docs/ARTIFACT-EDITING.md Phase 0).
+// Round-trip fidelity (docs/journal/ARTIFACT-EDITING.md Phase 0).
 //
 // These bodies are synthetic on purpose: the real corpus is client work and does
 // not belong in the repo. What they DO reproduce is the element census measured

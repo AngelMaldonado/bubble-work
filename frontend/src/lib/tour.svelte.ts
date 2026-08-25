@@ -1,4 +1,4 @@
-// The product tour (docs/ARTIFACT-EDITING.md is not its subject — the MODEL is).
+// The product tour (docs/journal/ARTIFACT-EDITING.md is not its subject — the MODEL is).
 //
 // Deliberately not a UI walkthrough. Where the buttons are is guessable; what is
 // not guessable is that heat means evidence of changed reality rather than

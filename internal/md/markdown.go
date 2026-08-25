@@ -47,6 +47,14 @@ type Artifact struct {
 	TOC      []TOCEntry `json:"toc"`
 	Markdown string     `json:"markdown"`
 	HTML     string     `json:"html"`
+	// Todos are the checklist items written in the document itself, addressed the
+	// same way the Logbook's are (region + index) so toggle_todo can tick them.
+	//
+	// A document's checkboxes are somebody's plan written in their own shape
+	// (docs/decisions/0005). Only real `- [ ]` boxes count here: a plain bullet in
+	// prose is a sentence, and the Logbook's bullet-as-todo fallback would turn a
+	// paragraph of bullets into a task list nobody wrote.
+	Todos []Todo `json:"todos,omitempty"`
 }
 
 // TOCEntry is one heading (level 2..6) inside an artifact.
@@ -57,9 +65,25 @@ type TOCEntry struct {
 }
 
 // Todo is one logbook / DoD checklist item.
+//
+// Region and Index are the item's ADDRESS: they are exactly what toggle_todo takes.
+// They exist because a reader used to have to infer them, and inferring them wrongly
+// is silent — an index counted across the whole page toggles a different item, or
+// none. Indices are per region and start at 0.
 type Todo struct {
-	Text string `json:"text"`
-	Done bool   `json:"done"`
+	Text   string `json:"text"`
+	Done   bool   `json:"done"`
+	Region string `json:"region,omitempty"` // "document" | "logbook" | "dod" — pass this to toggle_todo
+	Index  int    `json:"index"`            // position WITHIN that region
+}
+
+// address stamps a parsed list with the region that owns it, so every todo carries
+// the two values a caller needs to act on it.
+func address(todos []Todo, region Region) []Todo {
+	for i := range todos {
+		todos[i].Region, todos[i].Index = string(region), i
+	}
+	return todos
 }
 
 // Logbook is the thread's unique task section: the raw markdown, its parsed
@@ -101,20 +125,48 @@ func ParseThread(body, threadName string) (artifacts []Artifact, logbook *Logboo
 		if title == "" {
 			title = "Document"
 		}
-		artifacts = []Artifact{makeArtifact(title, rest)}
+		art := makeArtifact(title, rest)
+		art.Todos = address(ParseChecklist(rest), RegionDocument)
+		artifacts = []Artifact{art}
 	}
 
 	if hasLog || hasDoD {
 		logbook = &Logbook{
 			Markdown: logMD,
 			HTML:     RenderHTML(logMD),
-			Todos:    ParseTodos(logMD),
-			DoD:      ParseTodos(dodMD),
+			Todos:    address(ParseTodos(logMD), RegionLogbook),
+			DoD:      address(ParseTodos(dodMD), RegionDoD),
 			DoDHTML:  RenderHTML(dodMD),
 			Phased:   headingRe.MatchString(logMD),
 		}
 	}
 	return artifacts, logbook
+}
+
+// BodyFingerprint is a stable hash of a thread's WHOLE document — every region,
+// not just the plan (docs/decisions/0004).
+//
+// Whitespace is collapsed the same way LogbookFingerprint collapses it, so a reflow
+// or a re-indent is not a change. That normalization is the only thing standing
+// between "any edit counts" and "Plane re-serialising a body counts".
+//
+// Both fingerprints are kept, and the difference is what LABELS the evidence: a
+// change inside the Logbook or the Definition of Done is a plan change
+// (logbook-updated), a change anywhere else is a document change (body-updated).
+// Both are production; knowing which is which is worth two hashes.
+func BodyFingerprint(body string) string {
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return ""
+	}
+	var norm []string
+	for _, ln := range strings.Split(body, "\n") {
+		if ln = strings.Join(strings.Fields(ln), " "); ln != "" {
+			norm = append(norm, ln)
+		}
+	}
+	sum := sha256.Sum256([]byte(strings.Join(norm, "\n")))
+	return hex.EncodeToString(sum[:8])
 }
 
 // LogbookFingerprint returns a stable hash of a thread's Logbook and Definition
@@ -145,20 +197,23 @@ func LogbookFingerprint(body string) string {
 	return hex.EncodeToString(sum[:8])
 }
 
-// CountDone reports how many checklist items in a thread body are ticked, across
-// both the Logbook and the Definition of Done. Deliberately cheap — it extracts
-// the sections and counts, rendering no HTML — because the snapshot refresher
-// runs it over every work item in a project on every sweep, only to notice when
-// the number goes up (THREAD-LIFECYCLE.md Phase C).
+// CountDone reports how many checklist items in a thread body are ticked,
+// ANYWHERE in the document — the Logbook and the Definition of Done have no
+// monopoly on a plan (docs/decisions/0005). Somebody who writes their todos under
+// their own headings produces the same evidence as somebody who uses ours.
+//
+// Checkbox items only: the bullet-as-todo fallback ParseTodos applies inside a
+// Logbook would read a paragraph of prose bullets as a task list, and a task list
+// nobody wrote can never be ticked, so it would only ever depress the count.
+//
+// Deliberately cheap — it scans lines and counts, rendering no HTML — because the
+// snapshot refresher runs it over every work item in a project on every sweep,
+// only to notice when the number goes up (THREAD-LIFECYCLE.md Phase C).
 func CountDone(body string) int {
-	logMD, rest, _ := ExtractSection(strings.TrimSpace(body), "logbook")
-	dodMD, _, _ := ExtractSection(rest, "definition of done", "dod")
 	n := 0
-	for _, section := range []string{logMD, dodMD} {
-		for _, t := range ParseTodos(section) {
-			if t.Done {
-				n++
-			}
+	for _, t := range ParseChecklist(body) {
+		if t.Done {
+			n++
 		}
 	}
 	return n
@@ -313,6 +368,19 @@ func ParseTodos(section string) []Todo {
 	return out
 }
 
+// ParseChecklist extracts ONLY real GFM checkboxes (`- [ ]` / `- [x]`), with no
+// bullet fallback. It is what reads a free-form document, where a bullet is prose
+// rather than a task.
+func ParseChecklist(section string) []Todo {
+	var out []Todo
+	for _, ln := range strings.Split(section, "\n") {
+		if m := taskRe.FindStringSubmatch(ln); m != nil {
+			out = append(out, Todo{Text: strings.TrimSpace(m[2]), Done: strings.EqualFold(m[1], "x")})
+		}
+	}
+	return out
+}
+
 // NewArtifact builds a single artifact (title + body) with a TOC derived from
 // the body's H2+ headings — used for free-form content like revision notes.
 func NewArtifact(title, body string) Artifact { return makeArtifact(title, body) }
@@ -339,4 +407,31 @@ func slugify(s string) string {
 	s = strings.ToLower(strings.TrimSpace(s))
 	s = slugRe.ReplaceAllString(s, "-")
 	return strings.Trim(s, "-")
+}
+
+// nextRe finds the `Next:` label ANYWHERE on a line, and captures the rest of it.
+//
+// Anywhere, because the status line the framework prescribes puts three labels on one
+// line — `**Owner:** … · **State:** … · **Next:** …` — so a pattern anchored at the
+// start of the line would miss the exact shape everybody is told to write. (It did,
+// until a test wrote that expectation down and made it obvious.)
+//
+// The label must still be introduced by the start of the line or by a separator, so
+// prose like "- [ ] do the next thing: ..." is not mistaken for a declaration.
+var nextRe = regexp.MustCompile(`(?i)(?:^|[·|—;]|\*\*|__)\s*(?:\*\*|__)?next(?:\*\*|__)?\s*:\s*(.+)$`)
+
+// NextAction returns the single next concrete action a Logbook declares, or "".
+//
+// docs/decisions/0003 made this a CONVENTION rather than a field, on the grounds that
+// parsing markdown people already write is cheap and migrating a field into prose is
+// not. This is that parse, and it is what lets an audit answer "what happens next
+// here?" for a whole bubble without opening every thread.
+func NextAction(logbook string) string {
+	for _, ln := range strings.Split(logbook, "\n") {
+		if m := nextRe.FindStringSubmatch(strings.TrimSpace(ln)); m != nil {
+			// Strip trailing emphasis the author may have wrapped the value in.
+			return strings.TrimSpace(strings.Trim(strings.TrimSpace(m[1]), "*_"))
+		}
+	}
+	return ""
 }

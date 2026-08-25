@@ -8,7 +8,7 @@ import (
 	"golang.org/x/net/html/atom"
 )
 
-// Plane's own node vocabulary (docs/ARTIFACT-EDITING.md Phase 2).
+// Plane's own node vocabulary (docs/journal/ARTIFACT-EDITING.md Phase 2).
 //
 // Plane stores rich text as description_html produced by a ProseMirror/TipTap
 // editor, and three of its constructs have no GFM spelling: images are

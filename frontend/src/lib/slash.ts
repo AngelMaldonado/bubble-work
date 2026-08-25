@@ -1,5 +1,5 @@
 // Finding the "/" token a slash menu is filtering on
-// (docs/ARTIFACT-EDITING.md Phase 5).
+// (docs/journal/ARTIFACT-EDITING.md Phase 5).
 //
 // Split out from the editor because it is pure and because the boundary rule is
 // the part that regresses: a URL is full of slashes and must never open a menu.

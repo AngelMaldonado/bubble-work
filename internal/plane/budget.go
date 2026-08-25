@@ -13,7 +13,7 @@ import (
 // out a fresh Client per call site (plane.New(...) is called ad-hoc all over the
 // server). So the budget cannot live on a Client; it lives in a process-wide
 // registry keyed by the credential, and every Client built for that key shares
-// it. See docs/PLANE-SYNC.md Phase 0.
+// it. See docs/journal/PLANE-SYNC.md Phase 0.
 //
 // Plane reports the state of that limit on EVERY response:
 //

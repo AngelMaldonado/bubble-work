@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Editing a thread's artifacts from the board (docs/ARTIFACT-EDITING.md).
+  // Editing a thread's artifacts from the board (docs/journal/ARTIFACT-EDITING.md).
   //
   // The editor is MARKDOWN SOURCE, not WYSIWYG, and that is a decision rather
   // than a shortcut: everything downstream already speaks markdown (the TOC, the
@@ -250,7 +250,7 @@
     return text !== saved;
   }
 
-  // ---- the slash menu (docs/ARTIFACT-EDITING.md Phase 5) ----
+  // ---- the slash menu (docs/journal/ARTIFACT-EDITING.md Phase 5) ----
   //
   // Notion-style: type "/" on a fresh line, filter, hit enter. Each command
   // inserts plain markdown, because markdown is what the buffer IS — there is no

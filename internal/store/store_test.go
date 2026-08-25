@@ -296,7 +296,7 @@ func TestThreadProgress(t *testing.T) {
 	}
 }
 
-// TestWALConcurrentReadWrite is the regression guard for docs/PLANE-SYNC.md
+// TestWALConcurrentReadWrite is the regression guard for docs/journal/PLANE-SYNC.md
 // Phase 0. Before WAL, a bulk transaction and a concurrent reader collided as
 // SQLITE_BUSY the moment they overlapped — harmless while writes were rare and
 // tiny, fatal once the sync worker bulk-upserts the mirror on every tick while

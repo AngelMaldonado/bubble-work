@@ -17,14 +17,15 @@ func (m *Mirror) UpsertItems(instance string, items []Item, now time.Time) error
 	return m.batch(func(tx *sql.Tx) error {
 		st, err := tx.Prepare(`
 			INSERT INTO mirror_items(instance, id, project_id, seq, name, state_id, state_name,
-			  state_group, priority, parent_id, assignees_json, description_html,
+			  state_group, priority, parent_id, assignees_json, labels_json, description_html,
 			  description_hash, created_at, updated_at, completed_at, synced_at)
-			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+			VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
 			ON CONFLICT(instance, id) DO UPDATE SET
 			  project_id = excluded.project_id, seq = excluded.seq, name = excluded.name,
 			  state_id = excluded.state_id, state_name = excluded.state_name,
 			  state_group = excluded.state_group, priority = excluded.priority,
 			  parent_id = excluded.parent_id, assignees_json = excluded.assignees_json,
+			  labels_json = excluded.labels_json,
 			  description_html = excluded.description_html,
 			  description_hash = excluded.description_hash,
 			  created_at = excluded.created_at, updated_at = excluded.updated_at,
@@ -36,7 +37,7 @@ func (m *Mirror) UpsertItems(instance string, items []Item, now time.Time) error
 		for _, it := range items {
 			if _, err := st.Exec(instance, it.ID, it.ProjectID, it.Seq, it.Name,
 				it.StateID, it.StateName, it.StateGroup, it.Priority, it.ParentID,
-				encodeIDs(it.Assignees), it.DescriptionHTML, it.DescriptionHash,
+				encodeIDs(it.Assignees), encodeIDs(it.Labels), it.DescriptionHTML, it.DescriptionHash,
 				ts(it.CreatedAt), ts(it.UpdatedAt), tsp(it.CompletedAt), ts(now)); err != nil {
 				return fmt.Errorf("upsert item %s: %w", it.ID, err)
 			}
@@ -334,7 +335,7 @@ func (m *Mirror) batch(fn func(*sql.Tx) error) error {
 
 // DeleteModule drops a bubble's rows: the module itself and every membership
 // row pointing at it. The ITEMS survive — a module is a grouping, not a
-// container, and Plane keeps them too (docs/ARTIFACT-EDITING.md).
+// container, and Plane keeps them too (docs/journal/ARTIFACT-EDITING.md).
 func (m *Mirror) DeleteModule(instance, moduleID string) error {
 	return m.batch(func(tx *sql.Tx) error {
 		for _, q := range []string{
@@ -444,6 +445,81 @@ func (m *Mirror) DeleteProject(instance, projectID string) error {
 		} {
 			if _, err := tx.Exec(q, instance, projectID); err != nil {
 				return err
+			}
+		}
+		return nil
+	})
+}
+
+// UpsertLabels writes a project's label catalogue.
+func (m *Mirror) UpsertLabels(instance string, ls []Label) error {
+	return m.batch(func(tx *sql.Tx) error {
+		st, err := tx.Prepare(`
+			INSERT INTO mirror_labels(instance, id, project_id, name, color)
+			VALUES(?,?,?,?,?)
+			ON CONFLICT(instance, id) DO UPDATE SET
+			  project_id = excluded.project_id, name = excluded.name, color = excluded.color`)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		for _, l := range ls {
+			if _, err := st.Exec(instance, l.ID, l.ProjectID, l.Name, l.Color); err != nil {
+				return fmt.Errorf("upsert label %s: %w", l.ID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// ReplaceLinks makes the mirror agree with Plane about one item's links. Wholesale,
+// because a link that vanished in Plane must vanish here too — a stale "evidence
+// published" would keep a thread warm on a URL nobody can open.
+func (m *Mirror) ReplaceLinks(instance, itemID string, ls []Link) error {
+	return m.batch(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			`DELETE FROM mirror_item_links WHERE instance = ? AND item_id = ?`,
+			instance, itemID); err != nil {
+			return err
+		}
+		st, err := tx.Prepare(`
+			INSERT INTO mirror_item_links(instance, id, item_id, url, title, created_at)
+			VALUES(?,?,?,?,?,?)
+			ON CONFLICT(instance, id) DO UPDATE SET
+			  item_id = excluded.item_id, url = excluded.url, title = excluded.title,
+			  created_at = excluded.created_at`)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		for _, l := range ls {
+			if _, err := st.Exec(instance, l.ID, itemID, l.URL, l.Title, ts(l.CreatedAt)); err != nil {
+				return fmt.Errorf("insert link %s: %w", l.ID, err)
+			}
+		}
+		return nil
+	})
+}
+
+// ReplaceRelations makes the mirror agree with Plane about one item's relations.
+func (m *Mirror) ReplaceRelations(instance, itemID string, rs []Relation) error {
+	return m.batch(func(tx *sql.Tx) error {
+		if _, err := tx.Exec(
+			`DELETE FROM mirror_item_relations WHERE instance = ? AND item_id = ?`,
+			instance, itemID); err != nil {
+			return err
+		}
+		st, err := tx.Prepare(`
+			INSERT INTO mirror_item_relations(instance, item_id, relation_type, related_id)
+			VALUES(?,?,?,?)
+			ON CONFLICT(instance, item_id, relation_type, related_id) DO NOTHING`)
+		if err != nil {
+			return err
+		}
+		defer st.Close()
+		for _, r := range rs {
+			if _, err := st.Exec(instance, itemID, r.Type, r.RelatedID); err != nil {
+				return fmt.Errorf("insert relation %s->%s: %w", itemID, r.RelatedID, err)
 			}
 		}
 		return nil

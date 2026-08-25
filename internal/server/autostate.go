@@ -138,7 +138,7 @@ func (s *Server) autoStateBubble(ctx context.Context, inst domain.Instance, b do
 		if err := cl.SetWorkItemState(ctx, t.ID, target.ID); err != nil {
 			// Queue it rather than dropping it. This write is performed with the
 			// INSTANCE key, which we already hold, so the drainer can retry it
-			// with nobody present (docs/PLANE-SYNC.md Phase 5). The field lock
+			// with nobody present (docs/journal/PLANE-SYNC.md Phase 5). The field lock
 			// stops a sync pass reverting the mirror to Plane's older state
 			// while the write is still in flight.
 			if _, qerr := s.store.Enqueue(store.OutboxEntry{

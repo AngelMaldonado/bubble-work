@@ -2,7 +2,7 @@ package md
 
 import "strings"
 
-// Round-trip fidelity (docs/ARTIFACT-EDITING.md Phase 0).
+// Round-trip fidelity (docs/journal/ARTIFACT-EDITING.md Phase 0).
 //
 // Bodies live in Plane as description_html. Reading one costs a FromHTML, and
 // writing it back costs a RenderHTML — so anything the pair does not preserve is

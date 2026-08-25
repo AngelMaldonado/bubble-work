@@ -169,7 +169,7 @@ func (stubBackend) ReopenThread(context.Context, string) (domain.ThreadDetail, e
 func (stubBackend) RenameBubble(context.Context, string, string) (domain.NewBubble, error) {
 	return domain.NewBubble{}, nil
 }
-func (stubBackend) BirthThread(context.Context, domain.BirthRequest) (domain.BirthResult, error) {
+func (stubBackend) CreateThread(context.Context, domain.BirthRequest) (domain.BirthResult, error) {
 	return domain.BirthResult{}, nil
 }
 func (stubBackend) SetContract(context.Context, string, domain.ContractInput) (domain.Contract, error) {
@@ -194,6 +194,21 @@ func (stubBackend) UpdateThread(context.Context, string, domain.ThreadEdit) (dom
 func (stubBackend) MoveThread(context.Context, string, string) (domain.ThreadDetail, error) {
 	return domain.ThreadDetail{}, nil
 }
+func (stubBackend) SetLabels(context.Context, string, []string) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) AddLink(context.Context, string, string, string) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) RemoveLink(context.Context, string, string) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) RelateThreads(context.Context, string, string, string) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) UnrelateThreads(context.Context, string, string) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
 func (stubBackend) DeleteBubble(context.Context, string) (int, error) { return 0, nil }
 func (stubBackend) DeleteThread(context.Context, string) (int, error) { return 0, nil }
 func (stubBackend) DeleteRegion(context.Context, string, md.Region) (domain.ThreadDetail, error) {
@@ -201,6 +216,12 @@ func (stubBackend) DeleteRegion(context.Context, string, md.Region) (domain.Thre
 }
 func (stubBackend) ToggleTodo(context.Context, string, md.Region, int, string, bool) (domain.ThreadDetail, error) {
 	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) ToggleTodos(context.Context, string, []domain.TodoToggle) (domain.ThreadDetail, error) {
+	return domain.ThreadDetail{}, nil
+}
+func (stubBackend) AuditBubble(context.Context, string) (domain.BubbleAudit, error) {
+	return domain.BubbleAudit{}, nil
 }
 func (stubBackend) AddRevision(context.Context, string, string, string) (domain.ThreadDetail, error) {
 	return domain.ThreadDetail{}, nil

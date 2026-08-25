@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// Splicing (docs/ARTIFACT-EDITING.md Phase 1). The property that matters is not
+// Splicing (docs/journal/ARTIFACT-EDITING.md Phase 1). The property that matters is not
 // "the output is valid HTML" but "the bytes I did not edit are the bytes that
 // were there" — so most of these assert on identity, not on shape.
 
@@ -537,5 +537,60 @@ func TestEditThenSpliceKeepsUntouchedBytes(t *testing.T) {
 	}
 	if got, _ := RegionMarkdown(out, RegionLogbook); !strings.Contains(got, "- [x] rewrite the validation") {
 		t.Errorf("the edit did not land: %q", got)
+	}
+}
+
+// A page whose author kept writing after the Definition of Done has content that
+// belongs to no region: the document region stops at the first special heading, and
+// a section region stops at the next heading of its level. Storing only the three
+// regions would drop it (docs/decisions/0001), so it is captured as the tail and
+// comes back in the assembled body.
+func TestTailAndAssembleRoundTrip(t *testing.T) {
+	html := `<h1>Ship it</h1><p>why</p>` +
+		`<h2>Logbook</h2><ul><li>step</li></ul>` +
+		`<h2>Definition of Done</h2><ul><li>done</li></ul>` +
+		`<h2>Notes</h2><p>a thought after the DoD</p>`
+
+	doc, ok := RegionMarkdown(html, RegionDocument)
+	if !ok {
+		t.Fatal("no document region")
+	}
+	lb, _ := RegionMarkdown(html, RegionLogbook)
+	dod, _ := RegionMarkdown(html, RegionDoD)
+
+	tail, ok := TailMarkdown(html)
+	if !ok {
+		t.Fatalf("the trailing section was not captured")
+	}
+	if !strings.Contains(tail, "a thought after the DoD") {
+		t.Errorf("tail = %q", tail)
+	}
+	// Nothing is in two places: the tail must not repeat the DoD's own items.
+	if strings.Contains(tail, "done") {
+		t.Errorf("tail overlaps the DoD: %q", tail)
+	}
+
+	body := AssembleBody(doc, lb, dod, tail)
+	for _, want := range []string{"Ship it", "why", "## Logbook", "step",
+		"## Definition of Done", "done", "Notes", "a thought after the DoD"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("assembled body lost %q:\n%s", want, body)
+		}
+	}
+	// And the headings are back where ParseThread looks for them.
+	arts, logbook := ParseThread(body, "Ship it")
+	if logbook == nil {
+		t.Fatal("assembled body has no logbook")
+	}
+	if len(logbook.DoD) != 1 || logbook.DoD[0].Text != "done" {
+		t.Errorf("DoD did not survive assembly: %+v", logbook.DoD)
+	}
+	if len(arts) == 0 || !strings.Contains(arts[0].Markdown, "why") {
+		t.Errorf("document did not survive assembly: %+v", arts)
+	}
+
+	// A page with no special sections has no tail — everything is the document.
+	if _, ok := TailMarkdown(`<h1>Plain</h1><p>just prose</p>`); ok {
+		t.Error("a page with no sections should have no tail")
 	}
 }

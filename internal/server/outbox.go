@@ -6,17 +6,24 @@ import (
 	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
+	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
-// The outbox drainer (docs/PLANE-SYNC.md Phase 5).
+// The outbox drainer (docs/journal/PLANE-SYNC.md Phase 5).
 //
-// It drains ONLY the kinds that can be performed without a person present —
-// today that is auto-state moves, which use the instance key the server already
-// holds. Comment drafts are deliberately not here: they carry no credential,
-// because storing every user's Plane key to replay later would be a worse
-// problem than the one it solves. Their author re-sends them.
+// It drains ONLY the kinds that can be performed without a person present: auto-
+// state moves, and published artifact bodies (docs/decisions/0001). Both use the
+// instance key the server already holds.
+//
+// Comment drafts are deliberately not here: they carry no credential, because
+// storing every user's Plane key to replay later would be a worse problem than the
+// one it solves. Their author re-sends them.
+//
+// A body is different from a comment in the way that matters — the markdown is
+// already safe in thread_docs, so what is queued is a PUBLICATION to retry, not
+// words that could be lost. That is why it may drain unattended.
 
 const (
 	// drainInterval is how often the queue is swept. Frequent is fine — an empty
@@ -62,12 +69,36 @@ func (s *Server) RunOutbox(ctx context.Context) {
 	}
 }
 
-// drainOutbox sends one batch of due entries.
+// drainOutbox sends one batch of due entries, per kind.
 func (s *Server) drainOutbox(ctx context.Context) {
+	s.drainKind(ctx, store.OutState, func(ctx context.Context, cl *plane.Client, e store.OutboxEntry) error {
+		if err := cl.SetWorkItemState(ctx, e.TargetID, e.StateID()); err != nil {
+			return err
+		}
+		if err := s.store.RecordAutoState(e.TargetID, e.StateID(), s.now()); err != nil {
+			log.Printf("outbox: record provenance %s: %v", e.TargetID, err)
+		}
+		return nil
+	})
+	// Publishing a body (docs/decisions/0001). Recording the published hash is not
+	// bookkeeping: it is what stops the next sync from reading our own publication
+	// as somebody editing in Plane.
+	s.drainKind(ctx, store.OutDoc, func(ctx context.Context, cl *plane.Client, e store.OutboxEntry) error {
+		html := e.HTML()
+		if _, err := cl.SetWorkItemBody(ctx, e.TargetID, html); err != nil {
+			return err
+		}
+		return s.store.SetPublished(e.TargetID, mirror.HashBody(html), s.now())
+	})
+}
+
+// drainKind sweeps one kind of queued write. The shape is identical for every kind
+// — resolve the instance, send, back off or complete — so only the send differs.
+func (s *Server) drainKind(ctx context.Context, kind string, send func(context.Context, *plane.Client, store.OutboxEntry) error) {
 	now := s.now()
-	due, err := s.store.DueOutbox(store.OutState, now, drainBatch)
+	due, err := s.store.DueOutbox(kind, now, drainBatch)
 	if err != nil {
-		log.Printf("outbox: load due: %v", err)
+		log.Printf("outbox: load due %s: %v", kind, err)
 		return
 	}
 	if len(due) == 0 {
@@ -97,7 +128,7 @@ func (s *Server) drainOutbox(ctx context.Context) {
 		}
 		projID := s.projectOf(inst.Slug, e.TargetID)
 		cl := plane.New(inst.BaseURL, inst.APIKey, inst.Workspace, projID)
-		if err := cl.SetWorkItemState(ctx, e.TargetID, e.StateID()); err != nil {
+		if err := send(ctx, cl, e); err != nil {
 			failed++
 			next := now.Add(outboxBackoff(e.Attempts))
 			if ferr := s.store.FailOutbox(e.ID, next, outboxMaxAttempts, err.Error()); ferr != nil {
@@ -106,15 +137,12 @@ func (s *Server) drainOutbox(ctx context.Context) {
 			continue
 		}
 		sent++
-		if err := s.store.RecordAutoState(e.TargetID, e.StateID(), now); err != nil {
-			log.Printf("outbox: record provenance %s: %v", e.TargetID, err)
-		}
 		if err := s.store.CompleteOutbox(e.ID); err != nil {
 			log.Printf("outbox: complete %d: %v", e.ID, err)
 		}
 	}
 	if sent > 0 || failed > 0 {
-		log.Printf("outbox: drained %d, %d still failing", sent, failed)
+		log.Printf("outbox: drained %d %s, %d still failing", sent, kind, failed)
 	}
 }
 

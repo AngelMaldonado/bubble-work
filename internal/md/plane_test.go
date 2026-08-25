@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-// Plane's node vocabulary (docs/ARTIFACT-EDITING.md Phase 2).
+// Plane's node vocabulary (docs/journal/ARTIFACT-EDITING.md Phase 2).
 
 // A mention carries no text of its own, so before Phase 2 it rendered to nothing
 // and any write deleted it — 48 of them across the live corpus.

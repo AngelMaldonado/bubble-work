@@ -11,7 +11,7 @@ import (
 )
 
 // The board, built from the local mirror instead of from Plane
-// (docs/PLANE-SYNC.md Phase 2). This replaces fetchInstance, which made one
+// (docs/journal/PLANE-SYNC.md Phase 2). This replaces fetchInstance, which made one
 // ListModules call per project plus one ListModuleWorkItems per module on every
 // refresh — roughly 32 Plane calls per tick, competing with human page loads for
 // the same 60/min.

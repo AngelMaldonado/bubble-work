@@ -107,7 +107,7 @@ export const api = {
     req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}/retry`),
   discardDraft: (id: string, draftId: number) =>
     req<void>('DELETE', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}`),
-  // Artifact editing (docs/ARTIFACT-EDITING.md). A field you omit is untouched;
+  // Artifact editing (docs/journal/ARTIFACT-EDITING.md). A field you omit is untouched;
   // `base` carries the region hashes read, so a write that lost a race gets a
   // 409 instead of silently clobbering somebody else's edit.
   updateThread: (
@@ -145,13 +145,18 @@ export const api = {
     outcome?: string;
     owner?: string;
   }) => req<{ id: string; name: string }>('POST', '/api/bubbles', input),
-  birth: (input: {
+  /** Create a thread. A name is all the server requires (docs/decisions/0005):
+   *  `body` is the document in whatever shape its author wants, and brief/logbook
+   *  are the older sectioned shape, kept for the guided form. */
+  createThread: (input: {
     instance: string;
     bubble_id: string;
     name: string;
-    brief: string;
-    logbook: string;
-    small_thread: boolean;
+    /** bug | feature | chore — scaffolds a Brief (docs/decisions/0003) */
+    type?: string;
+    body?: string;
+    brief?: string;
+    logbook?: string;
   }) => req<{ thread_id: string; created: boolean; message: string }>('POST', '/api/threads/birth', input),
 
   // A Workspace is the boundary for a body of work — a Plane PROJECT, not a
@@ -198,10 +203,10 @@ export const api = {
 
   // 🏆 is Plane's state, not a flag we keep: these move the work item, so a thread
   // finished here and one finished by dragging the card in Plane end up identical.
-  // complete is REFUSED while the Definition of Done has unticked items; force is
-  // the deliberate override for a DoD that turned out to be wrong.
-  completeThread: (id: string, force = false) =>
-    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/complete`, { force }),
+  // complete is never refused (docs/decisions/0005): if the Definition of Done still
+  // has open items the answer reports them in `unmet_dod`.
+  completeThread: (id: string) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/complete`, {}),
   reopenThread: (id: string) =>
     req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/reopen`),
 
@@ -211,6 +216,29 @@ export const api = {
     req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/move`, {
       bubble_id: bubbleId,
     }),
+
+  // Plane's own relationships (docs/decisions/0006). Labels say what kind of work
+  // this is, links carry the external evidence — landing one is production — and
+  // relations tie threads together.
+  setLabels: (id: string, labels: string[]) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/labels`, { labels }),
+  addLink: (id: string, url: string, title: string) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/links`, { url, title }),
+  removeLink: (id: string, linkId: string) =>
+    req<ThreadDetail>(
+      'DELETE',
+      `/api/threads/${encodeURIComponent(id)}/links/${encodeURIComponent(linkId)}`,
+    ),
+  relateThreads: (id: string, other: string, type: string) =>
+    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/relations`, {
+      thread: other,
+      type,
+    }),
+  unrelateThreads: (id: string, other: string) =>
+    req<ThreadDetail>(
+      'DELETE',
+      `/api/threads/${encodeURIComponent(id)}/relations/${encodeURIComponent(other)}`,
+    ),
 
   // Only the handle changes: the contract, the stage and every thread inside are
   // untouched, and no heat is earned — a name is not what has been done.

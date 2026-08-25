@@ -1,6 +1,7 @@
 package client
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net/http"
@@ -11,7 +12,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 )
 
-// The mirror's admin surface (docs/PLANE-SYNC.md Phase 1).
+// The mirror's admin surface (docs/journal/PLANE-SYNC.md Phase 1).
 //
 // sync-diff and sync-backfill both walk Plane completely and are rate-budgeted
 // server-side, so they can legitimately take minutes on a large workspace —
@@ -152,7 +153,7 @@ func printSyncFidelity(f domain.SyncFidelity) {
 	}
 	if f.Mentions > 0 || f.Assets > 0 {
 		fmt.Println("\n  Mentions and images are not carried by the markdown bridge yet")
-		fmt.Println("  (docs/ARTIFACT-EDITING.md Phase 2). Until they are, a whole-body")
+		fmt.Println("  (docs/journal/ARTIFACT-EDITING.md Phase 2). Until they are, a whole-body")
 		fmt.Println("  write destroys them — which is why writes splice blocks instead.")
 	}
 }
@@ -235,5 +236,68 @@ func AdminOutbox(cfg config.Config, token string, args []string) error {
 			fmt.Printf("   (a draft — only %s can re-send it)\n", e.Author)
 		}
 	}
+	return nil
+}
+
+// AdminExport writes an instance's work to disk as a markdown tree
+// (docs/decisions/0001). dir may be empty, meaning "somewhere sensible under the
+// SERVER's home" — the path is resolved where the server runs, not here, which is
+// worth saying out loud when the two are different machines.
+func AdminExport(cfg config.Config, token, instance, dir string) error {
+	path := "/api/admin/sync/" + url.PathEscape(instance) + "/export"
+	payload, err := json.Marshal(map[string]string{"dir": dir})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPost, cfg.ActiveServer()+path, bytes.NewReader(payload))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	resp, err := (&http.Client{Timeout: syncTimeout}).Do(req)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusForbidden {
+		return fmt.Errorf("forbidden — not a service admin (set BUBBLE_ADMIN_TOKEN or use an admin email)")
+	}
+	if resp.StatusCode >= 300 {
+		return serverError(resp, path)
+	}
+	var r domain.ExportResult
+	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
+		return err
+	}
+	fmt.Printf("exported %s → %s\n", r.Instance, r.Dir)
+	fmt.Printf("  %d workspace(s) · %d bubble(s) · %d thread(s) · %d revision(s) · %d page(s)\n",
+		r.Workspaces, r.Bubbles, r.Threads, r.Revisions, r.Pages)
+	fmt.Printf("  %d file(s) written\n", r.Files)
+	if r.Pages == 0 {
+		// Worth being explicit: pages held by Plane are Plane's copy to keep, but
+		// pages held HERE exist nowhere else, and a reader should know which they
+		// just did or did not back up.
+		fmt.Println("  (no locally-held pages on this instance; Plane-held pages stay in Plane)")
+	}
+	fmt.Println("\nThe tree is plain markdown — put it in git if you want history for free.")
+	return nil
+}
+
+// AdminAdopt imports an instance's bodies into the document store, once
+// (docs/decisions/0001).
+func AdminAdopt(cfg config.Config, token, instance string) error {
+	path := "/api/admin/sync/" + url.PathEscape(instance) + "/adopt"
+	var r domain.AdoptResult
+	if err := postLong(cfg, path, token, &r); err != nil {
+		return err
+	}
+	fmt.Printf("adopted %s: %d thread(s) taken into the document store\n", r.Instance, r.Adopted)
+	fmt.Printf("  %d already stored · %d with an empty body · %d seen\n", r.Skipped, r.Empty, r.Threads)
+	fmt.Println("\nFrom here Bubble Work owns the FORMAT of these documents: they are markdown,")
+	fmt.Println("rendered by its own renderer, and Plane receives a published copy. Editing in")
+	fmt.Println("Plane still works — those edits are imported and win.")
 	return nil
 }

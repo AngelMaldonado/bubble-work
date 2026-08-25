@@ -706,17 +706,15 @@ func CreateBubble(cfg config.Config, req domain.CreateBubbleRequest) error {
 	return nil
 }
 
-// Birth creates a thread in a bubble (server enforces the §3 birth rule).
-func Birth(cfg config.Config, bubbleID, name, brief, logbook string, small bool) error {
-	req := domain.BirthRequest{
-		BubbleID: bubbleID, Name: name, Brief: brief, Logbook: logbook, SmallThread: small,
-	}
+// CreateThread creates a thread in a bubble. A name is all the server asks for
+// (docs/decisions/0005).
+func CreateThread(cfg config.Config, req domain.BirthRequest) error {
 	var res domain.BirthResult
 	if err := postJSON(cfg, "/api/threads/birth", req, &res); err != nil {
 		return err
 	}
 	if res.Created {
-		fmt.Printf("born: %s\n", res.Message)
+		fmt.Printf("created: %s\n", res.Message)
 		fmt.Printf("  thread id: %s\n", res.ThreadID)
 	} else {
 		fmt.Println(res.Message)
@@ -830,7 +828,7 @@ func icon(l domain.Lifecycle) string {
 // Ls renders bubbles hottest-first — the "tend what floats at the top" view.
 // warnIfStale prints a line before a board listing when the server is serving
 // from an ageing mirror. A stale board that says nothing is the failure mode the
-// mirror introduces (docs/PLANE-SYNC.md Phase 7); best-effort, never fatal.
+// mirror introduces (docs/journal/PLANE-SYNC.md Phase 7); best-effort, never fatal.
 func warnIfStale(cfg config.Config) {
 	var st domain.ServiceStatus
 	if err := getJSON(cfg.ActiveServer()+"/api/status", cfg.ActiveToken(), &st); err != nil {
@@ -931,7 +929,7 @@ func Show(cfg config.Config, bubble string) error {
 		return err
 	}
 	if len(nodes) == 0 {
-		fmt.Println("no threads in this bubble yet — birth one with `bubble birth <bubble>`")
+		fmt.Println("no threads in this bubble yet — create one with `bubble new <bubble> --name <name>`")
 		return nil
 	}
 
@@ -985,6 +983,31 @@ func Thread(cfg config.Config, id string, comments bool) error {
 	}
 	if d.Priority != "" && d.Priority != "none" {
 		fmt.Printf("priority  : %s\n", d.Priority)
+	}
+	// Plane's own relationships (docs/decisions/0006): what kind of work this is,
+	// where the evidence lives, what it touches.
+	if len(d.Labels) > 0 {
+		names := make([]string, 0, len(d.Labels))
+		for _, l := range d.Labels {
+			names = append(names, l.Name)
+		}
+		fmt.Printf("labels    : %s\n", strings.Join(names, ", "))
+	}
+	for _, l := range d.Links {
+		fmt.Printf("link      : %s  %s  [%s]\n", orDash(l.Title), l.URL, l.ID)
+	}
+	for _, r := range d.Related {
+		fmt.Printf("%-10s: %s\n", strings.ReplaceAll(r.Type, "_", " "), orDash(r.Title))
+	}
+	if d.FromPlane {
+		// Normal operation, not a warning: Plane is a writable surface. Worth
+		// saying because the import goes through the HTML bridge and can lose
+		// detail the author put there (docs/decisions/0001).
+		when := ""
+		if d.ImportedAt != nil {
+			when = " on " + d.ImportedAt.Local().Format("2006-01-02 15:04")
+		}
+		fmt.Printf("body      : last written in Plane%s (imported)\n", when)
 	}
 
 	for _, a := range d.Artifacts {
@@ -1190,7 +1213,10 @@ func deleteJSON(cfg config.Config, path string, out any) error {
 // rather than ticking the wrong box if the list moved under us.
 func ToggleTodo(cfg config.Config, id string, region string, index int, text string, done bool) error {
 	in := map[string]any{"region": region, "index": index, "text": text, "done": done}
-	var d domain.ThreadDetail
+	var d struct {
+		domain.ThreadDetail
+		Confirmed domain.TodoResult `json:"confirmed"`
+	}
 	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/todo", in, &d); err != nil {
 		return err
 	}
@@ -1199,6 +1225,16 @@ func ToggleTodo(cfg config.Config, id string, region string, index int, text str
 		mark = "☑"
 	}
 	fmt.Printf("%s %s · %s\n", mark, d.Title, d.Level)
+	// The counts, so nobody has to re-read the thread to see where it now stands.
+	if c := d.Confirmed; c.LogbookTotal() > 0 || c.DoDTotal() > 0 {
+		fmt.Printf("  logbook: %d/%d done · DoD: %d/%d done\n",
+			c.LogbookDone, c.LogbookTotal(), c.DoDDone, c.DoDTotal())
+	}
+	if n := len(d.Confirmed.Unmet); n > 0 {
+		fmt.Printf("  %d item(s) still block `bubble done`: %s\n", n, strings.Join(d.Confirmed.Unmet, "; "))
+	} else if d.Confirmed.DoDTotal() > 0 {
+		fmt.Println("  the Definition of Done is met — `bubble done` will not refuse")
+	}
 	return nil
 }
 
@@ -1210,6 +1246,74 @@ func AddRevision(cfg config.Config, id, title, body string) error {
 		return err
 	}
 	fmt.Printf("added revision to %s (%d total)\n", d.Title, len(d.Revisions))
+	return nil
+}
+
+// ---- Plane's own relationships (docs/decisions/0006) ----
+
+// SetLabels replaces a thread's labels by name. Categorising work is Plane's job,
+// so this writes Plane's labels rather than an overlay field of our own.
+func SetLabels(cfg config.Config, id string, names []string) error {
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/labels",
+		map[string]any{"labels": names}, &d); err != nil {
+		return err
+	}
+	if len(d.Labels) == 0 {
+		fmt.Printf("%s: labels cleared\n", d.Title)
+		return nil
+	}
+	out := make([]string, 0, len(d.Labels))
+	for _, l := range d.Labels {
+		out = append(out, l.Name)
+	}
+	fmt.Printf("%s: %s\n", d.Title, strings.Join(out, ", "))
+	return nil
+}
+
+// AddLink attaches external evidence — a commit, a PR, something published.
+// Landing one is production, so it warms the thread.
+func AddLink(cfg config.Config, id, link, title string) error {
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/links",
+		map[string]string{"url": link, "title": title}, &d); err != nil {
+		return err
+	}
+	fmt.Printf("linked %s (%d link(s))\n", d.Title, len(d.Links))
+	return nil
+}
+
+// RemoveLink detaches one link, by the id `bubble thread` prints.
+func RemoveLink(cfg config.Config, id, linkID string) error {
+	var d domain.ThreadDetail
+	if err := deleteJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/links/"+url.PathEscape(linkID), &d); err != nil {
+		return err
+	}
+	fmt.Printf("unlinked %s (%d link(s) left)\n", d.Title, len(d.Links))
+	return nil
+}
+
+// Relate records a typed relationship between two threads.
+func Relate(cfg config.Config, id, other, kind string) error {
+	var d domain.ThreadDetail
+	if err := postJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/relations",
+		map[string]string{"thread": other, "type": kind}, &d); err != nil {
+		return err
+	}
+	fmt.Printf("%s: %d relation(s)\n", d.Title, len(d.Related))
+	for _, r := range d.Related {
+		fmt.Printf("  %-14s %s\n", r.Type, orDash(r.Title))
+	}
+	return nil
+}
+
+// Unrelate drops the relationship between two threads.
+func Unrelate(cfg config.Config, id, other string) error {
+	var d domain.ThreadDetail
+	if err := deleteJSON(cfg, "/api/threads/"+url.PathEscape(id)+"/relations/"+url.PathEscape(other), &d); err != nil {
+		return err
+	}
+	fmt.Printf("%s: %d relation(s) left\n", d.Title, len(d.Related))
 	return nil
 }
 
@@ -1322,4 +1426,66 @@ func threadRollup(levels map[string]int) string {
 		return ""
 	}
 	return "  (" + strings.Join(parts, " · ") + ")"
+}
+
+// Audit prints a whole bubble's state in one request: every thread's level, how far
+// its Definition of Done has got, what it says happens next, and what it is missing.
+//
+// It exists because the alternative was `show` followed by `thread` per row — and the
+// thing you are usually looking for, "which of these was never given a finish line",
+// is invisible one thread at a time.
+func Audit(cfg config.Config, id string) error {
+	var a domain.BubbleAudit
+	if err := getJSON(cfg.ActiveServer()+"/api/bubbles/"+url.PathEscape(id)+"/audit",
+		cfg.ActiveToken(), &a); err != nil {
+		return err
+	}
+
+	fmt.Printf("%s %s  [%s]\n", levelIcon(a.Level), a.Name, a.Instance)
+	if a.Reason != "" {
+		fmt.Printf("  %s\n", a.Reason)
+	}
+	fmt.Printf("  outcome : %s\n", orDash(a.Outcome))
+	fmt.Printf("  owner   : %s\n", orDash(a.Owner))
+	fmt.Printf("  closure : %s\n", orDash(a.Closure))
+	if len(a.Threads) == 0 {
+		fmt.Println("\n  no threads yet — create one, or close the bubble")
+		return nil
+	}
+
+	fmt.Println()
+	for _, th := range a.Threads {
+		kind := ""
+		if len(th.Labels) > 0 {
+			kind = " [" + strings.Join(th.Labels, ", ") + "]"
+		}
+		fmt.Printf("%s #%-4d %s%s\n", levelIcon(th.Level), th.Seq, th.Title, kind)
+		if th.DoDTotal > 0 {
+			fmt.Printf("     DoD %d/%d", th.DoDDone, th.DoDTotal)
+			if th.TodosTotal > 0 {
+				fmt.Printf(" · todos %d/%d", th.TodosDone, th.TodosTotal)
+			}
+			fmt.Println()
+		}
+		if th.Next != "" {
+			fmt.Printf("     next: %s\n", trunc(th.Next, termWidth()-12))
+		}
+		if th.Missing != "" {
+			// The finding, not a decoration: a thread can be warm and still have no
+			// agreed finish line.
+			fmt.Printf("     ⚠ missing %s\n", th.Missing)
+		}
+	}
+
+	fmt.Printf("\n%d thread(s): ", len(a.Threads))
+	for _, lv := range []string{"in_progress", "reviewed", "zzzz", "rip", "done"} {
+		if n := a.Counts[lv]; n > 0 {
+			fmt.Printf("%s %d  ", levelIcon(lv), n)
+		}
+	}
+	fmt.Println()
+	if a.NeedsRepair > 0 {
+		fmt.Printf("%d would read better with a finish line or a next action.\n", a.NeedsRepair)
+	}
+	return nil
 }

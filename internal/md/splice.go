@@ -10,7 +10,7 @@ import (
 	"golang.org/x/net/html"
 )
 
-// Block-level splicing (docs/ARTIFACT-EDITING.md Phase 1).
+// Block-level splicing (docs/journal/ARTIFACT-EDITING.md Phase 1).
 //
 // A whole-body write is the obvious shape and the wrong one: reading a body
 // costs a FromHTML and writing it costs a RenderHTML, so every construct the
@@ -479,6 +479,14 @@ var ErrNoSuchTodo = errors.New("no todo at that position")
 // checkbox: ticking one is a real edit somebody asked for, and the alternative
 // is a checkbox in the UI that refuses to work.
 func ToggleTodo(section string, index int, wantText string, done bool) (string, error) {
+	return ToggleTodoIn(section, index, wantText, done, false)
+}
+
+// ToggleTodoIn is ToggleTodo with the addressing rule made explicit. strict skips
+// the bullet fallback, which is what a free-form document needs: there, a plain
+// bullet is a sentence, and ParseChecklist does not count it either — the two have
+// to agree or an index means different things to the reader and the writer.
+func ToggleTodoIn(section string, index int, wantText string, done, strict bool) (string, error) {
 	lines := strings.Split(section, "\n")
 
 	var at []int
@@ -487,7 +495,7 @@ func ToggleTodo(section string, index int, wantText string, done bool) (string, 
 			at = append(at, i)
 		}
 	}
-	if len(at) == 0 {
+	if len(at) == 0 && !strict {
 		for i, ln := range lines {
 			if bulletRe.MatchString(ln) {
 				at = append(at, i)
@@ -652,4 +660,82 @@ func clipEdit(s string) string {
 		return s
 	}
 	return string(r[:max]) + "…"
+}
+
+// TailMarkdown returns the blocks that follow the LAST special section — anything
+// written after the Logbook or the Definition of Done.
+//
+// regionRange deliberately excludes those blocks from every region: the document
+// region stops at the first special heading, and a section region stops at the next
+// heading of its own level or higher. That is right for editing (they belong to
+// nobody) and wrong for STORING, because a document store assembled from the three
+// regions alone would silently drop them (docs/decisions/0001).
+//
+// Whoever writes a paragraph under their Definition of Done means it, so it is kept
+// as its own stored region rather than being editable in place.
+func TailMarkdown(descriptionHTML string) (string, bool) {
+	bs := Blocks(descriptionHTML)
+	last := -1
+	for _, r := range []Region{RegionLogbook, RegionDoD} {
+		h, ok := sectionHeading(bs, r)
+		if !ok {
+			continue
+		}
+		level, _, _ := headingOf(bs[h].Markdown)
+		end := len(bs)
+		for j := h + 1; j < len(bs); j++ {
+			if l, _, isHead := headingOf(bs[j].Markdown); isHead && l <= level {
+				end = j
+				break
+			}
+		}
+		if end > last {
+			last = end
+		}
+	}
+	if last < 0 || last >= len(bs) {
+		return "", false // no special sections, or nothing after them
+	}
+	parts := make([]string, 0, len(bs)-last)
+	for _, b := range bs[last:] {
+		if strings.TrimSpace(b.Markdown) != "" {
+			parts = append(parts, b.Markdown)
+		}
+	}
+	if len(parts) == 0 {
+		return "", false
+	}
+	return strings.Join(parts, "\n\n"), true
+}
+
+// AssembleBody rebuilds a whole page's markdown from its stored regions, putting
+// the section headings back — they are the markers ParseThread reads, and
+// RegionMarkdown strips them because editing a Logbook must not be able to rename
+// it.
+//
+// This is the read path once the store is the record: no Plane HTML is parsed to
+// show a thread.
+func AssembleBody(document, logbook, dod, tail string) string {
+	var b strings.Builder
+	write := func(heading, body string) {
+		if strings.TrimSpace(body) == "" {
+			return
+		}
+		if b.Len() > 0 {
+			b.WriteString("\n\n")
+		}
+		if heading != "" {
+			b.WriteString(heading)
+			b.WriteString("\n\n")
+		}
+		b.WriteString(strings.TrimSpace(body))
+	}
+	write("", document)
+	write("## Logbook", logbook)
+	write("## Definition of Done", dod)
+	write("", tail)
+	if b.Len() == 0 {
+		return ""
+	}
+	return b.String() + "\n"
 }

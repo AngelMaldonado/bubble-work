@@ -50,6 +50,8 @@ func main() {
 		cmdShow(os.Args[2:])
 	case "thread":
 		cmdThread(os.Args[2:])
+	case "audit":
+		cmdAudit(os.Args[2:])
 	case "comment":
 		cmdComment(os.Args[2:])
 	case "logbook":
@@ -82,8 +84,14 @@ func main() {
 		cmdTick(os.Args[2:])
 	case "use":
 		cmdUse(os.Args[2:])
-	case "birth":
-		cmdBirth(os.Args[2:])
+	case "new", "birth":
+		cmdNewThread(os.Args[2:])
+	case "label", "labels":
+		cmdLabel(os.Args[2:])
+	case "link":
+		cmdLink(os.Args[2:])
+	case "relate":
+		cmdRelate(os.Args[2:])
 	case "page", "pages":
 		cmdPage(os.Args[2:])
 	case "workspace":
@@ -116,12 +124,14 @@ Usage:
   bubble ls                        list bubbles, hottest first (buoyancy view)
   bubble heat <id>                 explain a bubble's temperature (id from 'ls')
   bubble show <id>                 a bubble's thread timeline (git-log-oneline)
+  bubble audit <id>                a bubble's whole state at once: DoD progress,
+                                   next actions, and what each thread is missing
   bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
   bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
   bubble dod <id> [text|-]         rewrite a thread's Definition of Done
   bubble rename <id> <title>       retitle a thread or a revision
   bubble move <thread> <bubble>    re-home a thread into another bubble
-  bubble done <id> [--force]       mark a thread finished (🏆; refused if the DoD is unmet)
+  bubble done <id>                 mark a thread finished (🏆; reports any unmet DoD)
   bubble reopen <id>               put a finished thread back to work
   bubble delete <kind> <id> [-y]   PERMANENTLY delete a workspace/bubble/thread/artifact
   bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
@@ -138,9 +148,15 @@ Usage:
                                    --tokens shows keys masked, add --reveal for full)
   bubble section --id <id> --title <t> [--file <f>|-] [--delete]
                                    add / rewrite / remove a ## section of a thread
+  bubble label <id> [name...]      set a thread's Plane labels (no args clears them)
+  bubble link <id> <url> [title]   attach external evidence (warms the thread)
+  bubble link rm <id> <link-id>    detach a link
+  bubble relate <id> <other> [type]  relate two threads (relates_to | duplicate |
+                                   blocking | blocked_by); "rm" drops the relation
   bubble page list|read|new|edit   a workspace's docs and specs (Plane pages)
   bubble workspace new|list|rename  a Plane project — our Workspace
-  bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
+  bubble new <id> [flags]          create a thread in a bubble (alias: birth; needs
+                                   only --name; --body is your document, any shape)
   bubble bubble new|set|close|open create a bubble or set its contract (§4)
   bubble instance add|list|remove  manage Plane instances (run on the server host)
   bubble admin <cmd>               service-admin ops (godmode; needs admin token/email)
@@ -154,6 +170,21 @@ named profile (`+"`bubble init --name cuby --token <key> --server <url>`"+`) so
 agent impersonates a human by using that human's key.
 
 `)
+}
+
+// cmdAudit shows a whole bubble's state in one request — levels, DoD progress, the
+// declared next action, and what each thread is missing.
+func cmdAudit(args []string) {
+	if len(args) < 1 {
+		log.Fatal("usage: bubble audit <bubble-id>")
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.Audit(cfg, args[0]); err != nil {
+		log.Fatalf("audit: %v", err)
+	}
 }
 
 func cmdSearch(args []string) {
@@ -235,30 +266,41 @@ func cmdTick(args []string) {
 	}
 }
 
-// cmdBirth creates a thread in a bubble. The server enforces the §3 birth rule
-// (Brief with a Definition of Done, plus a Logbook unless --small).
-func cmdBirth(args []string) {
+// cmdNewThread creates a thread in a bubble. A name is all it needs
+// (docs/decisions/0005); everything else is the document, in whatever shape.
+func cmdNewThread(args []string) {
 	if len(args) < 1 {
-		birthUsage()
+		newThreadUsage()
 		os.Exit(2)
 	}
 	id := args[0]
-	fs := flag.NewFlagSet("birth", flag.ExitOnError)
+	fs := flag.NewFlagSet("new", flag.ExitOnError)
 	name := fs.String("name", "", "thread name (required)")
-	brief := fs.String("brief", "", "Brief text (or use --brief-file)")
-	briefFile := fs.String("brief-file", "", "read the Brief from a file")
+	body := fs.String("body", "", "the thread's document, as Markdown (or use --body-file / -)")
+	bodyFile := fs.String("body-file", "", "read the document from a file, or - for stdin")
+	brief := fs.String("brief", "", "document text, older two-field shape (or use --brief-file)")
+	briefFile := fs.String("brief-file", "", "read the document from a file")
 	logbook := fs.String("logbook", "", "Logbook text (or use --logbook-file)")
 	logbookFile := fs.String("logbook-file", "", "read the Logbook from a file")
-	small := fs.Bool("small", false, "small thread — allow an empty Logbook (§3.2)")
+	// Accepted and ignored: nothing is required any more, so there is nothing to be
+	// excused from. Kept so existing scripts do not start failing on an unknown flag.
+	_ = fs.Bool("small", false, "(no longer needed — nothing is required)")
 	_ = fs.Parse(args[1:])
 
 	readIf := func(inline, path, label string) string {
 		if path == "" {
 			return inline
 		}
+		if path == "-" {
+			b, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				log.Fatalf("new: reading stdin: %v", err)
+			}
+			return string(b)
+		}
 		b, err := os.ReadFile(path)
 		if err != nil {
-			log.Fatalf("birth: reading %s: %v", label, err)
+			log.Fatalf("new: reading %s: %v", label, err)
 		}
 		return string(b)
 	}
@@ -266,24 +308,105 @@ func cmdBirth(args []string) {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
-	if err := client.Birth(cfg, id, *name,
-		readIf(*brief, *briefFile, "--brief-file"),
-		readIf(*logbook, *logbookFile, "--logbook-file"), *small); err != nil {
-		log.Fatalf("birth: %v", err)
+	if err := client.CreateThread(cfg, domain.BirthRequest{
+		BubbleID: id,
+		Name:     *name,
+		Body:     readIf(*body, *bodyFile, "--body-file"),
+		Brief:    readIf(*brief, *briefFile, "--brief-file"),
+		Logbook:  readIf(*logbook, *logbookFile, "--logbook-file"),
+	}); err != nil {
+		log.Fatalf("new: %v", err)
 	}
 }
 
-func birthUsage() {
-	fmt.Fprint(os.Stderr, `bubble birth — create a thread in a bubble (enforces the §3 birth rule)
+func newThreadUsage() {
+	fmt.Fprint(os.Stderr, `bubble new — create a thread in a bubble (alias: bubble birth)
 
 Usage:
-  bubble birth <bubble-id> --name <name> \
-      (--brief <text> | --brief-file <path>) \
-      (--logbook <text> | --logbook-file <path> | --small)
+  bubble new <bubble-id> --name <name> [--body <text> | --body-file <path|->]
 
-The Brief must include a "Definition of Done". <bubble-id> is the short id from 'bubble ls'.
+A name is all that is required. --body is the thread's document, stored exactly as
+written: your headings, your order, nothing added and nothing refused for its shape.
+
+Checkboxes count anywhere in it — ticking one is evidence, which is what keeps the
+thread warm. Two headings are offered rather than required: "## Definition of Done"
+(its open items are reported when you finish) and "## Logbook" (its own editable
+region). --brief / --logbook are the older two-field shape.
+
+<bubble-id> is the short id from 'bubble ls'.
 
 `)
+}
+
+// cmdLabel sets a thread's Plane labels. Labels replaced the overlay "thread type"
+// (docs/decisions/0006): the tracker already answers "what kind of work is this",
+// and answering it twice only produced two answers.
+func cmdLabel(args []string) {
+	if len(args) < 1 {
+		fmt.Fprintln(os.Stderr, "usage: bubble label <thread-id> [name...]   (no names clears them)")
+		os.Exit(2)
+	}
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if err := client.SetLabels(cfg, args[0], args[1:]); err != nil {
+		log.Fatalf("label: %v", err)
+	}
+}
+
+// cmdLink attaches or detaches external evidence. Landing a link is production, so
+// it warms the thread — which is the point of it being a verb rather than a line of
+// prose somebody types into the document.
+func cmdLink(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if len(args) >= 3 && (args[0] == "rm" || args[0] == "remove") {
+		if err := client.RemoveLink(cfg, args[1], args[2]); err != nil {
+			log.Fatalf("link rm: %v", err)
+		}
+		return
+	}
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr, "usage: bubble link <thread-id> <url> [title]\n       bubble link rm <thread-id> <link-id>")
+		os.Exit(2)
+	}
+	title := ""
+	if len(args) > 2 {
+		title = strings.Join(args[2:], " ")
+	}
+	if err := client.AddLink(cfg, args[0], args[1], title); err != nil {
+		log.Fatalf("link: %v", err)
+	}
+}
+
+// cmdRelate ties two threads together with one of Plane's relation types.
+func cmdRelate(args []string) {
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
+	}
+	if len(args) >= 3 && (args[0] == "rm" || args[0] == "remove") {
+		if err := client.Unrelate(cfg, args[1], args[2]); err != nil {
+			log.Fatalf("relate rm: %v", err)
+		}
+		return
+	}
+	if len(args) < 2 {
+		fmt.Fprintln(os.Stderr,
+			"usage: bubble relate <thread-id> <other-thread-id> [relates_to|duplicate|blocking|blocked_by]\n"+
+				"       bubble relate rm <thread-id> <other-thread-id>")
+		os.Exit(2)
+	}
+	kind := ""
+	if len(args) > 2 {
+		kind = args[2]
+	}
+	if err := client.Relate(cfg, args[0], args[1], kind); err != nil {
+		log.Fatalf("relate: %v", err)
+	}
 }
 
 // cmdBubble sets a bubble's §4 contract or opens/closes it (via the server).
@@ -703,6 +826,30 @@ func cmdAdmin(args []string) {
 			break
 		}
 		err = client.AdminSync(cfg, token, args[0], args[1])
+	case "adopt":
+		if len(args) < 2 {
+			err = fmt.Errorf("usage: bubble admin adopt <instance>")
+			break
+		}
+		err = client.AdminAdopt(cfg, token, args[1])
+	case "export":
+		// The path is resolved on the SERVER, so --dir is optional and defaults to
+		// somewhere under its home rather than the caller's cwd.
+		if len(args) < 2 {
+			err = fmt.Errorf("usage: bubble admin export <instance> [--dir <absolute path>]")
+			break
+		}
+		dir := ""
+		for i := 2; i < len(args); i++ {
+			switch {
+			case args[i] == "--dir" && i+1 < len(args):
+				dir = args[i+1]
+				i++
+			case strings.HasPrefix(args[i], "--dir="):
+				dir = strings.TrimPrefix(args[i], "--dir=")
+			}
+		}
+		err = client.AdminExport(cfg, token, args[1], dir)
 	case "autostate":
 		if len(args) < 3 {
 			err = fmt.Errorf("usage: bubble admin autostate <instance> <on|off>")
@@ -795,6 +942,8 @@ Usage:
   bubble admin sync-rebuild <inst>   drop the local mirror and rebuild it
   bubble admin outbox                writes that have not reached Plane
   bubble admin outbox drop <id>      clear one stuck entry
+  bubble admin export <inst>         write the work to disk as markdown (--dir <abs path>)
+  bubble admin adopt <inst>          take its bodies into the document store (once)
 
 `)
 }
@@ -1277,7 +1426,7 @@ func cmdLogbook(args []string) {
 }
 
 // A Definition of Done is a Logbook's sibling: same shape, same write path,
-// different section. It is what closes a Brief (§ thread birth rule).
+// different section.
 func cmdDoD(args []string) {
 	if len(args) < 2 {
 		log.Fatal("usage: bubble dod <id> <text...>   (or '-' to read stdin)")
@@ -1520,7 +1669,7 @@ func cmdComment(args []string) {
 		log.Fatalf("config: %v", err)
 	}
 	// A comment that could not reach Plane is kept as a draft rather than lost
-	// (docs/PLANE-SYNC.md Phase 5). These re-send or throw one away.
+	// (docs/journal/PLANE-SYNC.md Phase 5). These re-send or throw one away.
 	if args[1] == "--retry" || args[1] == "--discard" {
 		if len(args) < 3 {
 			log.Fatalf("usage: bubble comment %s %s <draft-id>", id, args[1])

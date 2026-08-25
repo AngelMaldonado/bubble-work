@@ -75,11 +75,25 @@ CREATE TABLE IF NOT EXISTS comment_reads (
 CREATE TABLE IF NOT EXISTS thread_progress (
   thread_id    TEXT PRIMARY KEY,  -- Plane work-item id
   logbook_hash TEXT NOT NULL DEFAULT '',  -- fingerprint of the Logbook + DoD text
+  -- fingerprint of the WHOLE document, so an edit anywhere counts as production
+  -- (docs/decisions/0004). Kept alongside logbook_hash because the difference is
+  -- what labels the evidence: a plan change or a document change.
+  body_hash    TEXT NOT NULL DEFAULT '',
   logbook_kind TEXT NOT NULL DEFAULT '',  -- what the last change was (an Ev* kind)
   done_todos   INTEGER NOT NULL,  -- ticked items last time we looked (tells a tick from a re-plan)
   revisions    INTEGER NOT NULL,  -- sub-work-items (revision artifacts) last time we looked
+  -- Plane links on the item: publishing external evidence is production
+  -- (docs/decisions/0006), and like revisions it is counted rather than hashed.
+  links        INTEGER NOT NULL DEFAULT 0,
+  links_at     TEXT NOT NULL DEFAULT '',
   logbook_at   TEXT NOT NULL,     -- RFC3339 of the last observed Logbook CHANGE ('' = never)
-  revisions_at TEXT NOT NULL      -- RFC3339 of the last observed revision ADDED ('' = never)
+  revisions_at TEXT NOT NULL,     -- RFC3339 of the last observed revision ADDED ('' = never)
+  -- When the thread was BORN here: it passed the birth rule, so a Brief with a
+  -- Definition of Done and a seeded Logbook were written. That is production
+  -- (docs/decisions/0002), and it has to be durable — the cache-only event it
+  -- replaced died with the cache, which is why a new thread read 😴.
+  -- Empty for a work item that merely appeared in Plane: created is not born.
+  born_at      TEXT NOT NULL DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS thread_autostate (
   thread_id  TEXT PRIMARY KEY,  -- Plane work-item id
@@ -92,6 +106,48 @@ CREATE TABLE IF NOT EXISTS thread_pulse (
   last_comment_at TEXT NOT NULL,     -- RFC3339 of the newest comment we have seen
   checked_at      TEXT NOT NULL      -- RFC3339 of the last time we looked (probe budgeting)
 );
+-- The artifact bodies themselves, as markdown (docs/decisions/0001).
+--
+-- This is the RECORD, not a projection: Plane holds a rendered copy and the
+-- mirror can be rebuilt from Plane, but nothing upstream can reconstruct these
+-- rows. They live here with the outbox and local_pages for that reason, and they
+-- are pruned only on deliberate deletion — never as a side effect of what a Plane
+-- walk did or did not see.
+--
+-- One row per region, and there are exactly three (the splice engine's
+-- document/logbook/dod). Named ## sections are edits INSIDE the document region,
+-- not regions of their own.
+CREATE TABLE IF NOT EXISTS thread_docs (
+  thread_id  TEXT NOT NULL,          -- Plane work-item id (bare, like thread_progress)
+  region     TEXT NOT NULL,          -- 'document' | 'logbook' | 'dod'
+  markdown   TEXT NOT NULL,          -- canonical content
+  hash       TEXT NOT NULL,          -- md.Hash(markdown): the optimistic-write base
+  updated_at TEXT NOT NULL,          -- RFC3339
+  updated_by TEXT NOT NULL DEFAULT '', -- the Actor, or 'plane' for an imported edit
+  PRIMARY KEY (thread_id, region)
+);
+-- What we last PUBLISHED to Plane, per thread rather than per region: the body is
+-- one HTML document however many regions it is authored in. Comparing Plane's
+-- current hash against this is how a Plane-side edit is detected without
+-- mistaking our own publish for one.
+CREATE TABLE IF NOT EXISTS thread_publish (
+  thread_id      TEXT PRIMARY KEY,
+  published_hash TEXT NOT NULL,      -- mirror.HashBody of the HTML we sent
+  published_at   TEXT NOT NULL       -- RFC3339
+);
+-- The version an import REPLACED (docs/decisions/0001). One row per region,
+-- overwritten by the next import: this is an undo, not a history. It exists because
+-- a Plane-side edit wins, and winning must not mean the other version is gone.
+CREATE TABLE IF NOT EXISTS thread_docs_prev (
+  thread_id  TEXT NOT NULL,
+  region     TEXT NOT NULL,
+  markdown   TEXT NOT NULL,
+  hash       TEXT NOT NULL,
+  updated_at TEXT NOT NULL,          -- when the version being replaced was written
+  updated_by TEXT NOT NULL DEFAULT '',
+  replaced_at TEXT NOT NULL,         -- when the import overwrote it
+  PRIMARY KEY (thread_id, region)
+);
 CREATE TABLE IF NOT EXISTS server_settings (
   key   TEXT PRIMARY KEY,        -- e.g. "tuning" (the buoyancy calibration)
   value TEXT NOT NULL            -- opaque JSON, owned by the caller
@@ -99,7 +155,7 @@ CREATE TABLE IF NOT EXISTS server_settings (
 -- The outbox lives HERE, with the overlay, and deliberately NOT in the mirror.
 -- The mirror is a rebuildable projection: mirror.Reset and sync-backfill drop
 -- its tables on purpose. This holds writes that have NOT reached Plane, so
--- losing it loses real work (docs/PLANE-SYNC.md Phase 5).
+-- losing it loses real work (docs/journal/PLANE-SYNC.md Phase 5).
 CREATE TABLE IF NOT EXISTS outbox (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
   instance     TEXT NOT NULL,
@@ -130,7 +186,7 @@ CREATE TABLE IF NOT EXISTS kiosk_tokens (
 );
 
 -- Pages this server is the record for, because the instance's Plane cannot be
--- (docs/PAGES-CAPABILITY.md). Plane Community exposes pages only on its INTERNAL
+-- (docs/journal/PAGES-CAPABILITY.md). Plane Community exposes pages only on its INTERNAL
 -- session-authenticated API, so on those deployments there is nowhere upstream to
 -- put a spec — and a workspace with no home for its standing documentation is
 -- worse than one whose documentation lives here.
@@ -215,7 +271,7 @@ func dsn(path string) string {
 // Open opens (and migrates) the SQLite database at path.
 //
 // The connection is tuned for one background writer alongside many concurrent
-// readers (docs/PLANE-SYNC.md Phase 0). This was inert while the store held only
+// readers (docs/journal/PLANE-SYNC.md Phase 0). This was inert while the store held only
 // the small, rare overlay writes; it stops being inert the moment the sync
 // worker bulk-upserts the mirror while every board read queries the same file.
 func Open(path string) (*Store, error) {
@@ -259,6 +315,19 @@ func Open(path string) (*Store, error) {
 	// Pages nest, the way Plane's own do, so a locally-held one needs somewhere to
 	// say what it sits under.
 	_, _ = db.Exec(`ALTER TABLE local_pages ADD COLUMN parent TEXT NOT NULL DEFAULT ''`)
+	// Being born is production (docs/decisions/0002). Threads that predate this
+	// column keep an empty born_at and are deliberately NOT reheated — synthesising
+	// a birth from created_at would make the board lie about old work.
+	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN born_at TEXT NOT NULL DEFAULT ''`)
+	// Any edit to the body is production now, not only the plan (docs/decisions/0004).
+	// An empty body_hash on an existing row baselines silently on the next sweep, so
+	// nobody's old prose edit is retro-actively announced as new work.
+	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN body_hash TEXT NOT NULL DEFAULT ''`)
+	// Publishing external evidence is production (docs/decisions/0006). An existing
+	// row starts at zero links and baselines on the next sweep, so links that were
+	// already there are not announced as new work.
+	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN links INTEGER NOT NULL DEFAULT 0`)
+	_, _ = db.Exec(`ALTER TABLE thread_progress ADD COLUMN links_at TEXT NOT NULL DEFAULT ''`)
 	return &Store{db: db}, nil
 }
 
@@ -266,7 +335,7 @@ func Open(path string) (*Store, error) {
 func (s *Store) Close() error { return s.db.Close() }
 
 // DB exposes the underlying handle so the Plane mirror can keep its tables in
-// the SAME file and connection pool (docs/PLANE-SYNC.md Phase 1). Two pools over
+// the SAME file and connection pool (docs/journal/PLANE-SYNC.md Phase 1). Two pools over
 // one SQLite file would reintroduce exactly the lock contention WAL is here to
 // remove, so the mirror borrows this rather than opening its own.
 //
@@ -578,11 +647,15 @@ func (s *Store) SetNotifyEnabled(email string, enabled bool) error {
 type ThreadProgress struct {
 	ThreadID    string
 	LogbookHash string    // md.LogbookFingerprint of the Logbook + DoD
+	BodyHash    string    // md.BodyFingerprint of the whole document
 	LogbookKind string    // the domain.Ev* kind of the last change
 	DoneTodos   int       // ticked items, so a tick can be told from a re-plan
 	Revisions   int       // sub-work-items
+	Links       int       // Plane links on the item (docs/decisions/0006)
 	LogbookAt   time.Time // when the Logbook last changed
 	RevisionsAt time.Time // when a revision was last added
+	LinksAt     time.Time // when a link was last added
+	BornAt      time.Time // when the thread passed the birth rule here (zero = not born here)
 }
 
 // ThreadProgressFor loads the last-observed progress for the given work items.
@@ -602,21 +675,23 @@ func (s *Store) ThreadProgressFor(ids []string) (map[string]ThreadProgress, erro
 			args[i] = id
 		}
 		rows, err := s.db.Query(
-			`SELECT thread_id, logbook_hash, logbook_kind, done_todos, revisions, logbook_at, revisions_at
+			`SELECT thread_id, logbook_hash, body_hash, logbook_kind, done_todos, revisions, links, logbook_at, revisions_at, links_at, born_at
 			 FROM thread_progress WHERE thread_id IN (`+placeholders(len(part))+`)`, args...)
 		if err != nil {
 			return nil, err
 		}
 		for rows.Next() {
 			var p ThreadProgress
-			var logAt, revAt string
-			if err := rows.Scan(&p.ThreadID, &p.LogbookHash, &p.LogbookKind,
-				&p.DoneTodos, &p.Revisions, &logAt, &revAt); err != nil {
+			var logAt, revAt, linksAt, bornAt string
+			if err := rows.Scan(&p.ThreadID, &p.LogbookHash, &p.BodyHash, &p.LogbookKind,
+				&p.DoneTodos, &p.Revisions, &p.Links, &logAt, &revAt, &linksAt, &bornAt); err != nil {
 				rows.Close()
 				return nil, err
 			}
 			p.LogbookAt, _ = time.Parse(time.RFC3339, logAt)
 			p.RevisionsAt, _ = time.Parse(time.RFC3339, revAt)
+			p.LinksAt, _ = time.Parse(time.RFC3339, linksAt)
+			p.BornAt, _ = time.Parse(time.RFC3339, bornAt)
 			out[p.ThreadID] = p
 		}
 		err = rows.Err()
@@ -638,20 +713,29 @@ func (s *Store) SaveThreadProgress(ps []ThreadProgress) error {
 		return err
 	}
 	defer tx.Rollback()
+	// born_at is only ever SET, never cleared: an empty incoming value leaves the
+	// stored one alone. The sweep that writes most of these rows has no idea when a
+	// thread was born, so without this clause a routine progress save would erase
+	// the one timestamp nothing can reconstruct.
 	stmt, err := tx.Prepare(
-		`INSERT INTO thread_progress(thread_id, logbook_hash, logbook_kind, done_todos, revisions, logbook_at, revisions_at)
-		 VALUES(?, ?, ?, ?, ?, ?, ?)
+		`INSERT INTO thread_progress(thread_id, logbook_hash, body_hash, logbook_kind, done_todos, revisions, links, logbook_at, revisions_at, links_at, born_at)
+		 VALUES(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		 ON CONFLICT(thread_id) DO UPDATE SET
-		   logbook_hash = excluded.logbook_hash, logbook_kind = excluded.logbook_kind,
+		   logbook_hash = excluded.logbook_hash, body_hash = excluded.body_hash,
+		   logbook_kind = excluded.logbook_kind,
 		   done_todos = excluded.done_todos, revisions = excluded.revisions,
-		   logbook_at = excluded.logbook_at, revisions_at = excluded.revisions_at`)
+		   links = excluded.links,
+		   logbook_at = excluded.logbook_at, revisions_at = excluded.revisions_at,
+		   links_at = excluded.links_at,
+		   born_at = CASE WHEN excluded.born_at <> '' THEN excluded.born_at ELSE thread_progress.born_at END`)
 	if err != nil {
 		return err
 	}
 	defer stmt.Close()
 	for _, p := range ps {
-		if _, err := stmt.Exec(p.ThreadID, p.LogbookHash, p.LogbookKind, p.DoneTodos, p.Revisions,
-			stamp(p.LogbookAt), stamp(p.RevisionsAt)); err != nil {
+		if _, err := stmt.Exec(p.ThreadID, p.LogbookHash, p.BodyHash, p.LogbookKind,
+			p.DoneTodos, p.Revisions, p.Links,
+			stamp(p.LogbookAt), stamp(p.RevisionsAt), stamp(p.LinksAt), stamp(p.BornAt)); err != nil {
 			return err
 		}
 	}
@@ -1134,7 +1218,7 @@ func placeholders(n int) string {
 }
 
 // Prune deletes overlay rows about work items that no longer exist, and returns
-// how many went (docs/PLANE-SYNC.md Phase 7).
+// how many went (docs/journal/PLANE-SYNC.md Phase 7).
 //
 // thread_progress, thread_pulse and thread_autostate are keyed by Plane work-item
 // id and were only ever inserted into. A deleted work item left its rows behind
@@ -1145,6 +1229,12 @@ func placeholders(n int) string {
 // MUST pass a complete set. An empty set is treated as "the mirror is not ready"
 // and prunes nothing, because deleting the entire overlay on the strength of a
 // failed sync would be catastrophic and silent.
+//
+// thread_docs and thread_publish are deliberately NOT in this list, and must never
+// be added to it (docs/decisions/0001). Those rows are the only copy of the
+// writing: for the tables below, a wrong prune costs a timestamp the next sweep
+// re-derives, and for those it costs the work. They are cleared by ForgetThreads —
+// deliberate deletion — and by nothing else.
 func (s *Store) Prune(live []string) (int, error) {
 	if len(live) == 0 {
 		return 0, nil
@@ -1194,6 +1284,12 @@ func (s *Store) ForgetThreads(threadIDs []string) error {
 			`DELETE FROM thread_progress WHERE thread_id = ?`,
 			`DELETE FROM thread_pulse WHERE thread_id = ?`,
 			`DELETE FROM thread_autostate WHERE thread_id = ?`,
+			// The document and what we published of it. Safe HERE and only here:
+			// this function is called when someone deliberately deletes a thread or
+			// its whole workspace, never from a sync pass (see Prune).
+			`DELETE FROM thread_docs WHERE thread_id = ?`,
+			`DELETE FROM thread_docs_prev WHERE thread_id = ?`,
+			`DELETE FROM thread_publish WHERE thread_id = ?`,
 		} {
 			if _, err := s.db.Exec(q, id); err != nil {
 				return err
@@ -1201,4 +1297,193 @@ func (s *Store) ForgetThreads(threadIDs []string) error {
 		}
 	}
 	return nil
+}
+
+// ---- artifact documents (docs/decisions/0001) ----
+
+// ThreadDoc is one region of a thread's page, as markdown. This is the record:
+// Plane's description_html is a rendering of it, and the mirror is a projection of
+// that rendering. Neither can reconstruct this row.
+type ThreadDoc struct {
+	ThreadID  string
+	Region    string // 'document' | 'logbook' | 'dod'
+	Markdown  string
+	Hash      string // md.Hash(Markdown) — the optimistic-write `base`
+	UpdatedAt time.Time
+	UpdatedBy string // an Actor label, or "plane" for an edit imported from Plane
+}
+
+// ThreadDocs returns a thread's regions keyed by region name. An empty map means
+// the thread has no stored document yet, which is the signal to fall back to the
+// mirrored body rather than to show an empty page.
+func (s *Store) ThreadDocs(threadID string) (map[string]ThreadDoc, error) {
+	rows, err := s.db.Query(`
+		SELECT thread_id, region, markdown, hash, updated_at, updated_by
+		FROM thread_docs WHERE thread_id = ?`, threadID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]ThreadDoc{}
+	for rows.Next() {
+		var d ThreadDoc
+		var at string
+		if err := rows.Scan(&d.ThreadID, &d.Region, &d.Markdown, &d.Hash, &at, &d.UpdatedBy); err != nil {
+			return nil, err
+		}
+		d.UpdatedAt, _ = time.Parse(time.RFC3339, at)
+		out[d.Region] = d
+	}
+	return out, rows.Err()
+}
+
+// PutThreadDocs upserts a thread's regions in one transaction. Regions absent from
+// the batch are left alone; a region whose markdown is empty is REMOVED, because an
+// empty region and a missing one are the same thing to every reader and keeping the
+// row would make an empty Logbook look like a written one.
+func (s *Store) PutThreadDocs(docs []ThreadDoc) error {
+	if len(docs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	put, err := tx.Prepare(`
+		INSERT INTO thread_docs(thread_id, region, markdown, hash, updated_at, updated_by)
+		VALUES(?, ?, ?, ?, ?, ?)
+		ON CONFLICT(thread_id, region) DO UPDATE SET
+		  markdown = excluded.markdown, hash = excluded.hash,
+		  updated_at = excluded.updated_at, updated_by = excluded.updated_by`)
+	if err != nil {
+		return err
+	}
+	defer put.Close()
+	del, err := tx.Prepare(`DELETE FROM thread_docs WHERE thread_id = ? AND region = ?`)
+	if err != nil {
+		return err
+	}
+	defer del.Close()
+	for _, d := range docs {
+		if strings.TrimSpace(d.Markdown) == "" {
+			if _, err := del.Exec(d.ThreadID, d.Region); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err := put.Exec(d.ThreadID, d.Region, d.Markdown, d.Hash,
+			stamp(d.UpdatedAt), d.UpdatedBy); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// PublishState is what we last sent to Plane for one thread.
+type PublishState struct {
+	PublishedHash string
+	PublishedAt   time.Time
+}
+
+// SetPublished records the hash of the HTML we just published.
+func (s *Store) SetPublished(threadID, hash string, at time.Time) error {
+	_, err := s.db.Exec(`
+		INSERT INTO thread_publish(thread_id, published_hash, published_at)
+		VALUES(?, ?, ?)
+		ON CONFLICT(thread_id) DO UPDATE SET
+		  published_hash = excluded.published_hash, published_at = excluded.published_at`,
+		threadID, hash, stamp(at))
+	return err
+}
+
+// Published returns what was last published for a thread. A zero value means we
+// have never published it, which is why divergence detection must treat an empty
+// hash as "no opinion" rather than as a mismatch.
+func (s *Store) Published(threadID string) (PublishState, error) {
+	row := s.db.QueryRow(`SELECT published_hash, published_at FROM thread_publish WHERE thread_id = ?`, threadID)
+	var p PublishState
+	var at string
+	switch err := row.Scan(&p.PublishedHash, &at); err {
+	case nil:
+		p.PublishedAt, _ = time.Parse(time.RFC3339, at)
+		return p, nil
+	case sql.ErrNoRows:
+		return PublishState{}, nil
+	default:
+		return PublishState{}, err
+	}
+}
+
+// ImportedDocs replaces a thread's stored regions with a version imported from
+// Plane, keeping what it replaced (docs/decisions/0001).
+//
+// Plane stays a writable surface, so an edit made there wins — but "wins" must not
+// mean the other version is gone, which is the same rule the outbox holds in the
+// other direction: nothing disappears without being recorded somewhere.
+func (s *Store) ImportedDocs(threadID string, docs []ThreadDoc, at time.Time) error {
+	prev, err := s.ThreadDocs(threadID)
+	if err != nil {
+		return err
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback()
+	if _, err := tx.Exec(`DELETE FROM thread_docs_prev WHERE thread_id = ?`, threadID); err != nil {
+		return err
+	}
+	keep, err := tx.Prepare(`
+		INSERT INTO thread_docs_prev(thread_id, region, markdown, hash, updated_at, updated_by, replaced_at)
+		VALUES(?, ?, ?, ?, ?, ?, ?)`)
+	if err != nil {
+		return err
+	}
+	defer keep.Close()
+	for _, d := range prev {
+		if _, err := keep.Exec(d.ThreadID, d.Region, d.Markdown, d.Hash,
+			stamp(d.UpdatedAt), d.UpdatedBy, stamp(at)); err != nil {
+			return err
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return err
+	}
+	return s.PutThreadDocs(docs)
+}
+
+// ReplacedDocs returns the version an import overwrote, keyed by region, plus when
+// it was replaced. Empty when nothing has ever been imported for this thread.
+func (s *Store) ReplacedDocs(threadID string) (map[string]ThreadDoc, time.Time, error) {
+	rows, err := s.db.Query(`
+		SELECT region, markdown, hash, updated_at, updated_by, replaced_at
+		FROM thread_docs_prev WHERE thread_id = ?`, threadID)
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	defer rows.Close()
+	out := map[string]ThreadDoc{}
+	var replaced time.Time
+	for rows.Next() {
+		d := ThreadDoc{ThreadID: threadID}
+		var at, rep string
+		if err := rows.Scan(&d.Region, &d.Markdown, &d.Hash, &at, &d.UpdatedBy, &rep); err != nil {
+			return nil, time.Time{}, err
+		}
+		d.UpdatedAt, _ = time.Parse(time.RFC3339, at)
+		if r, err := time.Parse(time.RFC3339, rep); err == nil && r.After(replaced) {
+			replaced = r
+		}
+		out[d.Region] = d
+	}
+	return out, replaced, rows.Err()
+}
+
+func anySlice(ss []string) []any {
+	out := make([]any, len(ss))
+	for i, s := range ss {
+		out[i] = s
+	}
+	return out
 }

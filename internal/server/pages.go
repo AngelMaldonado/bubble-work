@@ -85,7 +85,7 @@ func nsPageID(slug, projID, raw string) string {
 //
 // Plane Community serves project pages ONLY on its internal, session-authenticated
 // API; the public API an API key can reach has no pages route at all, at any
-// current version (docs/PAGES-CAPABILITY.md). Nothing about that is going to be
+// current version (docs/journal/PAGES-CAPABILITY.md). Nothing about that is going to be
 // fixed by an upgrade, so a workspace on such an instance would have nowhere to
 // keep the standing documentation §2.5 says it needs.
 //
@@ -301,7 +301,9 @@ func (s *Server) CreatePage(ctx context.Context, req domain.CreatePageRequest) (
 	// The standard applies to a document too — an H1 per page, headings that
 	// step one level at a time (spec §3.1). Judged on what this write contains,
 	// since there is nothing here it could have inherited.
-	if bad := md.Lint(req.Markdown); len(bad) > 0 {
+	// Refusals only: the advisory rules describe a thread's Brief and Logbook, and a
+	// page is neither (docs/decisions/0003).
+	if bad := md.Refusals(md.Lint(req.Markdown)); len(bad) > 0 {
 		return domain.PageDetail{}, fmt.Errorf("%w: %v", errBadRequest, md.LintError(bad))
 	}
 	// A parent has to be a real page in THIS workspace. Left unchecked, a
@@ -396,7 +398,7 @@ func (s *Server) UpdatePage(ctx context.Context, pageID string, edit domain.Page
 		next := *edit.Markdown
 		// Same rule as a thread write: judged on what this write INTRODUCED, so
 		// an unrelated fix is not blocked by a page somebody else left messy.
-		if broke := md.NewFindings(md.Lint(body), md.Lint(next)); len(broke) > 0 {
+		if broke := md.Refusals(md.NewFindings(md.Lint(body), md.Lint(next))); len(broke) > 0 {
 			return domain.PageDetail{}, fmt.Errorf("%w: %v", errBadRequest, md.LintError(broke))
 		}
 		patch["description_html"] = md.RenderPlaneHTML(next)
@@ -451,7 +453,7 @@ func (s *Server) updateLocalPage(ctx context.Context, pageID string, edit domain
 		next.Title = title
 	}
 	if edit.Markdown != nil {
-		if broke := md.NewFindings(md.Lint(cur.Body), md.Lint(*edit.Markdown)); len(broke) > 0 {
+		if broke := md.Refusals(md.NewFindings(md.Lint(cur.Body), md.Lint(*edit.Markdown))); len(broke) > 0 {
 			return domain.PageDetail{}, fmt.Errorf("%w: %v", errBadRequest, md.LintError(broke))
 		}
 		next.Body = *edit.Markdown

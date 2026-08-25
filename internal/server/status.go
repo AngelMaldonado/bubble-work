@@ -8,7 +8,7 @@ import (
 	planesync "github.com/AngelMaldonado/bubble-work/internal/sync"
 )
 
-// Degraded mode (docs/PLANE-SYNC.md Phase 7).
+// Degraded mode (docs/journal/PLANE-SYNC.md Phase 7).
 //
 // Every read now comes from a local copy of Plane, which is the whole point —
 // but it introduces a failure this codebase did not previously have: if the sync

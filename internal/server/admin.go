@@ -21,7 +21,7 @@ import (
 
 // Service-admin surface ("God Mode"): instances, stats, calibration, kiosk
 // tokens and the cross-instance views. Split out of server.go in
-// docs/PLANE-SYNC.md Phase 7 — these handlers share a gate (adminOnly) and an
+// docs/journal/PLANE-SYNC.md Phase 7 — these handlers share a gate (adminOnly) and an
 // audience, and nothing else in the file depends on them.
 
 func (s *Server) handleAdminInstances(w http.ResponseWriter, r *http.Request) {

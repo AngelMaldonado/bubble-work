@@ -11,6 +11,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
 	"github.com/AngelMaldonado/bubble-work/internal/md"
+	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 	planesync "github.com/AngelMaldonado/bubble-work/internal/sync"
@@ -58,8 +60,20 @@ func fakePlane() *httptest.Server {
 				{"id":"wi-1","name":"First thread","created_at":"2026-01-01T10:00:00Z","completed_at":null,"sequence_id":1,"sort_order":1000,"assignees":["u1"],"state":"state-2"},
 				{"id":"wi-2","name":"Second thread","created_at":"2026-02-01T10:00:00Z","completed_at":"2026-03-01T00:00:00Z","sequence_id":2,"sort_order":2000,"assignees":[],"state":"state-3"}
 			]}`)
+		case strings.HasSuffix(p, "/relations/remove/"):
+			w.WriteHeader(http.StatusNoContent)
+		case strings.HasSuffix(p, "/relations/") && r.Method == http.MethodPost:
+			io.WriteString(w, `[]`)
 		case strings.HasSuffix(p, "/relations/"):
 			io.WriteString(w, `{"relates_to":["rev-1"],"blocking":[],"blocked_by":[]}`)
+		case strings.HasSuffix(p, "/labels/") && r.Method == http.MethodPost:
+			io.WriteString(w, `{"id":"lab-new","name":"infra","color":"#123456"}`)
+		case strings.HasSuffix(p, "/labels/"):
+			io.WriteString(w, `{"results":[{"id":"lab-1","name":"bug","color":"#ff0000"}]}`)
+		case strings.HasSuffix(p, "/links/") && r.Method == http.MethodPost:
+			io.WriteString(w, `{"id":"lnk-1","url":"https://example.test/pr/1","title":"PR #1","created_at":"2026-08-07T12:00:00Z"}`)
+		case strings.HasSuffix(p, "/links/"):
+			io.WriteString(w, `{"results":[{"id":"lnk-1","url":"https://example.test/pr/1","title":"PR #1","created_at":"2026-08-07T12:00:00Z"}]}`)
 		case strings.HasSuffix(p, "/comments/") && r.Method == http.MethodPost:
 			io.WriteString(w, `{"id":"c2","actor":"u1","comment_html":"<p>shipping it</p>","created_at":"2026-04-02T00:00:00Z"}`)
 		case strings.HasSuffix(p, "/comments/"):
@@ -100,7 +114,7 @@ func openStore(t *testing.T) *store.Store {
 
 // warmMirror fills the mirror from the fake Plane.
 //
-// Since docs/PLANE-SYNC.md Phase 2 the board is BUILT from sqlite rather than
+// Since docs/journal/PLANE-SYNC.md Phase 2 the board is BUILT from sqlite rather than
 // fetched from Plane, so a test that asserts on board contents has to sync
 // first — the same thing the real server does at boot. Backfill rather than
 // Delta on purpose: the fakes mostly omit updated_at, so a delta would early-stop
@@ -644,7 +658,9 @@ func TestCreateWorkspaceAndBubble(t *testing.T) {
 func TestBirthCreatesWorkItem(t *testing.T) {
 	ts, key := authedServer(t)
 	// Use m2 (empty baseline); m1 carries the interior fixture's threads.
-	body := `{"bubble_id":"ws:p2:m2","name":"New thread","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`
+	body := `{"bubble_id":"ws:p2:m2","name":"New thread",
+	          "brief":"### Context\nwhy\n\n## Definition of Done\n- [ ] tests pass",
+	          "logbook":"- [ ] phase 1"}`
 
 	code, resp := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, body)
 	if code != http.StatusOK {
@@ -902,18 +918,54 @@ func TestMatchBubble(t *testing.T) {
 	}
 }
 
-func TestBirthPolicyGate(t *testing.T) {
+// Creating a thread asks for a name and nothing else (docs/decisions/0005). The old
+// policy gate — Brief, a checkbox Definition of Done, a Logbook — is gone: what it
+// wanted is still SAID, in the result's message, and none of it refuses.
+func TestCreateThreadAsksOnlyForAName(t *testing.T) {
 	ts, key := authedServer(t)
 	url := ts.URL + "/api/threads/birth"
 
 	if code, _ := do(t, http.MethodPost, url, "", `{}`); code != http.StatusUnauthorized {
 		t.Fatalf("unauth birth: want 401, got %d", code)
 	}
-	if code, _ := do(t, http.MethodPost, url, key, `{"brief":"do it","logbook":"phase 1"}`); code != http.StatusUnprocessableEntity {
-		t.Fatalf("no DoD: want 422, got %d", code)
+	if code, body := do(t, http.MethodPost, url, key, `{"bubble_id":"ws:p1:m1"}`); code != http.StatusUnprocessableEntity {
+		t.Fatalf("a nameless thread: want 422, got %d (%s)", code, body)
 	}
-	if code, _ := do(t, http.MethodPost, url, key, `{"bubble_id":"ws:p1:m1","name":"T","brief":"why. Definition of Done: tests pass","logbook":"phase 1"}`); code != http.StatusOK {
-		t.Fatalf("valid birth: want 200, got %d", code)
+
+	// A name alone. No Brief, no Definition of Done, no Logbook.
+	code, body := do(t, http.MethodPost, url, key, `{"bubble_id":"ws:p1:m1","name":"Just a name"}`)
+	if code != http.StatusOK {
+		t.Fatalf("a name-only thread: want 200, got %d (%s)", code, body)
+	}
+	if !strings.Contains(string(body), "no document yet") {
+		t.Errorf("the result should say what is missing without refusing it: %s", body)
+	}
+
+	// A free-form document, in the author's own shape: no reserved headings at all.
+	free := `{"bubble_id":"ws:p1:m1","name":"Free form",
+	          "body":"## Lo que quiero\n\nque el import no truene\n\n## Pasos\n\n- [ ] leer el CSV"}`
+	code, body = do(t, http.MethodPost, url, key, free)
+	if code != http.StatusOK {
+		t.Fatalf("a free-form thread: want 200, got %d (%s)", code, body)
+	}
+	if !strings.Contains(string(body), "no Definition of Done") {
+		t.Errorf("a missing finish line should be mentioned: %s", body)
+	}
+
+	// A prose Definition of Done — the payload the old gate refused twice over.
+	proseDoD := `{"bubble_id":"ws:p1:m1","name":"T",
+	              "brief":"### Context\nwhy\n\n## Definition of Done\nit works and it is measured",
+	              "logbook":"- [ ] one"}`
+	if code, body := do(t, http.MethodPost, url, key, proseDoD); code != http.StatusOK {
+		t.Fatalf("a prose DoD: want 200, got %d (%s)", code, body)
+	}
+
+	// And the sectioned shape still works exactly as it did.
+	ok := `{"bubble_id":"ws:p1:m1","name":"T",
+	        "brief":"### Context\nwhy\n\n## Definition of Done\n- [ ] tests pass",
+	        "logbook":"- [ ] one"}`
+	if code, out := do(t, http.MethodPost, url, key, ok); code != http.StatusOK {
+		t.Fatalf("sectioned birth: want 200, got %d (%s)", code, out)
 	}
 }
 
@@ -1380,7 +1432,7 @@ func TestPulseRecordedFromComments(t *testing.T) {
 
 	// The pulse now comes from the MIRRORED comments — a local SELECT, where it
 	// used to be a Plane call per at-risk thread capped at 20 a tick
-	// (docs/PLANE-SYNC.md Phase 3). Reading the discussion no longer "records"
+	// (docs/journal/PLANE-SYNC.md Phase 3). Reading the discussion no longer "records"
 	// anything, because reading the mirror observes nothing new about Plane.
 	want := time.Date(2026, 4, 1, 0, 0, 0, 0, time.UTC) // the fixture's only comment
 	at, err := srv.mirror.LastCommentAt("ws", "wi-1")
@@ -1648,7 +1700,7 @@ func TestBubbleRollup(t *testing.T) {
 }
 
 // TestBoardMakesNoPlaneCalls is the Phase 2+3 acceptance test
-// (docs/PLANE-SYNC.md).
+// (docs/journal/PLANE-SYNC.md).
 //
 // The whole point of the mirror is that READING stops touching Plane. Asserting
 // that in prose is worthless — this counts actual HTTP requests to the fake and
@@ -1740,7 +1792,7 @@ func TestBoardMakesNoPlaneCalls(t *testing.T) {
 	}
 }
 
-// TestColdAuthCostsOneCall is the Phase 4 acceptance test (docs/PLANE-SYNC.md).
+// TestColdAuthCostsOneCall is the Phase 4 acceptance test (docs/journal/PLANE-SYNC.md).
 //
 // Scoping used to call Members on EVERY configured instance, so a cold auth cost
 // up to 2N Plane calls and had to be cached for 5 minutes to be affordable. Only
@@ -1817,7 +1869,7 @@ func TestColdAuthCostsOneCall(t *testing.T) {
 }
 
 // TestCommentSurvivesPlaneOutage is the Phase 5 acceptance test
-// (docs/PLANE-SYNC.md). What a person actually loses when a post fails is their
+// (docs/journal/PLANE-SYNC.md). What a person actually loses when a post fails is their
 // typing, so that is what must survive — without storing their credential to
 // replay later, and without the comment turning up in Plane authored by a
 // service account.
@@ -1989,7 +2041,7 @@ func TestQueuedWriteIsShieldedFromSync(t *testing.T) {
 }
 
 // TestDegradedModeReportsStaleness covers the failure this whole refactor
-// introduced (docs/PLANE-SYNC.md Phase 7): reads come from a local mirror, so a
+// introduced (docs/journal/PLANE-SYNC.md Phase 7): reads come from a local mirror, so a
 // stopped sync leaves the board rendering confidently from ageing data. Being
 // behind is fine. Being behind silently is not.
 func TestDegradedModeReportsStaleness(t *testing.T) {
@@ -2095,7 +2147,7 @@ func TestPruneDropsOverlayForDeletedItems(t *testing.T) {
 }
 
 // TestUpdateThreadIsEvidenceAndImmediate covers the whole point of the MCP
-// surface (docs/MCP-ACCESS.md): an agent edits a Logbook, that counts as
+// surface (docs/journal/MCP-ACCESS.md): an agent edits a Logbook, that counts as
 // production, and the change is visible WITHOUT waiting for a sync pass.
 func TestUpdateThreadIsEvidenceAndImmediate(t *testing.T) {
 	var mu sync.Mutex
@@ -2199,7 +2251,7 @@ func TestUpdateThreadIsEvidenceAndImmediate(t *testing.T) {
 	}
 }
 
-// A Plane mention rendered to nothing at all until docs/ARTIFACT-EDITING.md
+// A Plane mention rendered to nothing at all until docs/journal/ARTIFACT-EDITING.md
 // Phase 2, so every mention in every body was invisible in the interior. The id
 // resolves against the mirrored members; one we do not know must still show that
 // somebody was mentioned rather than vanishing again.
@@ -2224,7 +2276,7 @@ func TestRewriteMentionsNamesThePerson(t *testing.T) {
 	}
 }
 
-// The Phase 3 write path (docs/ARTIFACT-EDITING.md): splicing, optimistic
+// The Phase 3 write path (docs/journal/ARTIFACT-EDITING.md): splicing, optimistic
 // concurrency, and a todo toggle that refuses rather than ticking the wrong box.
 // One fake Plane, four guarantees, because they all turn on the same write.
 func TestArtifactWritesAreSplicedGuardedAndIdempotent(t *testing.T) {
@@ -2586,7 +2638,7 @@ func TestRevisionsAreAddressableAndTickable(t *testing.T) {
 // A bubble created through MCP or the API must be visible IMMEDIATELY.
 //
 // It regressed when the board moved off Plane and onto the mirror
-// (docs/PLANE-SYNC.md Phase 2): CreateBubble dropped the instance cache, which
+// (docs/journal/PLANE-SYNC.md Phase 2): CreateBubble dropped the instance cache, which
 // used to force a Plane refetch and afterwards only forced a rebuild from a
 // mirror that had never heard of the new module. Modules are re-read on the
 // TEN MINUTE structure cadence, so the bubble existed in Plane and no surface
@@ -3076,9 +3128,14 @@ func lastSegment(path string) string {
 	return parts[len(parts)-1]
 }
 
-// The house standard (spec §3.1, §3.2) is enforced server-side, so no client can
-// bypass it — including MCP, where §9.3 makes an agent deliberately
-// indistinguishable from the person it acts for.
+// What a write can still be refused for, since docs/decisions/0005: structural
+// damage, and nothing else. A duplicated reserved heading truncates the first
+// section, so every region-scoped write afterwards addresses nothing — that is
+// machinery, not taste. Shape advice (two H1s, a missing finish line) rides back as
+// warnings on a write that landed.
+//
+// The rule is server-side, so no client can bypass it — including MCP, where §9.3
+// makes an agent deliberately indistinguishable from the person it acts for.
 func TestMarkdownStandardIsEnforcedOnWrites(t *testing.T) {
 	var mu sync.Mutex
 	body := `<h2>Brief</h2><p>why this exists.</p>` +
@@ -3133,40 +3190,37 @@ func TestMarkdownStandardIsEnforcedOnWrites(t *testing.T) {
 	const key = "plane_personal_key"
 	const thread = "/api/threads/ws:p1:wi-1"
 
-	// The reported case: a write that introduces a second level-1 heading.
+	// Structural damage is still refused: a second `## Logbook` leaves the canonical
+	// region empty and makes every region-scoped write address nothing.
 	bad, _ := json.Marshal(domain.ThreadEdit{
-		Brief: strPtr("# One\n\nwhy this exists.\n\n# Two\n\nmore"),
+		Brief: strPtr("# One\n\n## Logbook\n\n- [ ] a\n\n## Logbook\n\n- [ ] b"),
 	})
 	code, resp := do(t, http.MethodPatch, ts.URL+thread, key, string(bad))
 	if code != http.StatusBadRequest {
-		t.Fatalf("multiple H1s were accepted: %d %s", code, resp)
+		t.Fatalf("a duplicated section heading was accepted: %d %s", code, resp)
 	}
-	for _, want := range []string{"level-1", "§3.1"} {
-		if !strings.Contains(string(resp), want) {
-			t.Errorf("the refusal should say what to change and cite the standard: %s", resp)
-		}
+	if !strings.Contains(string(resp), "ONE of each") {
+		t.Errorf("the refusal should say what to change: %s", resp)
 	}
 	mu.Lock()
 	untouched := body
 	mu.Unlock()
-	if strings.Contains(untouched, "# Two") || strings.Contains(untouched, "<h1") {
+	if strings.Contains(untouched, "- [ ] b") {
 		t.Error("a refused write still reached Plane")
 	}
 
-	// The editor opts out: it warns instead, because autosave that stops
-	// mid-sentence is its own kind of broken.
-	lenient, _ := json.Marshal(domain.ThreadEdit{
-		Brief:   strPtr("# One\n\nwhy this exists.\n\n# Two\n\nmore"),
-		Lenient: true,
+	// Shape is somebody's business, not ours: two H1s land, and are mentioned.
+	loose, _ := json.Marshal(domain.ThreadEdit{
+		Brief: strPtr("# One\n\nwhy this exists.\n\n# Two\n\nmore"),
 	})
-	code, resp = do(t, http.MethodPatch, ts.URL+thread, key, string(lenient))
+	code, resp = do(t, http.MethodPatch, ts.URL+thread, key, string(loose))
 	if code != http.StatusOK {
-		t.Fatalf("the lenient path refused: %d %s", code, resp)
+		t.Fatalf("a page with two H1s was refused: %d %s", code, resp)
 	}
 	var d domain.ThreadDetail
 	json.Unmarshal(resp, &d)
 	if len(d.Warnings) != 1 || d.Warnings[0].Rule != "one-h1" {
-		t.Errorf("a lenient write should report what it let through: %+v", d.Warnings)
+		t.Errorf("a write should report what it let through: %+v", d.Warnings)
 	}
 
 	// And now that the page ALREADY has two H1s, an unrelated edit is not
@@ -3176,6 +3230,174 @@ func TestMarkdownStandardIsEnforcedOnWrites(t *testing.T) {
 	})
 	if code, b := do(t, http.MethodPatch, ts.URL+thread, key, string(ok)); code != http.StatusOK {
 		t.Errorf("an unrelated edit was blocked by a pre-existing violation: %d %s", code, b)
+	}
+}
+
+// A plan written under somebody's own headings is a plan (docs/decisions/0005): its
+// checkboxes are addressable as region `document`, and ticking one is the same
+// evidence a Logbook tick is.
+func TestDocumentCheckboxesAreTickable(t *testing.T) {
+	var mu sync.Mutex
+	body := `<h1>Importar CSV</h1><p>- una observación en prosa</p>` +
+		`<h2>Pasos</h2><ul data-type="taskList">` +
+		`<li data-type="taskItem" data-checked="false"><div><p>leer el archivo</p></div></li>` +
+		`<li data-type="taskItem" data-checked="false"><div><p>validar</p></div></li></ul>`
+
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		mu.Lock()
+		cur := body
+		mu.Unlock()
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"s1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		case strings.HasSuffix(p, "/module-issues/"):
+			io.WriteString(w, `{"results":[{"id":"wi-1","name":"Importar CSV"}]}`)
+		case r.Method == http.MethodPatch && strings.Contains(p, "/work-items/"):
+			var in struct {
+				DescriptionHTML *string `json:"description_html"`
+			}
+			json.NewDecoder(r.Body).Decode(&in)
+			mu.Lock()
+			if in.DescriptionHTML != nil {
+				body = *in.DescriptionHTML
+			}
+			mu.Unlock()
+			io.WriteString(w, `{"updated_at":"2026-08-07T12:00:00Z"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			fmt.Fprintf(w, `{"results":[{"id":"wi-1","name":"Importar CSV","description_html":%q,"created_at":"2026-08-07T10:00:00Z","updated_at":"2026-08-07T10:00:00Z","state":{"id":"s1","group":"unstarted"}}],"next_page_results":false}`, cur)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+
+	st := openStore(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	// read_thread reports them, with the address toggle_todo takes.
+	var d domain.ThreadDetail
+	_, rb := do(t, http.MethodGet, ts.URL+thread, key, "")
+	if err := json.Unmarshal(rb, &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Artifacts) != 1 {
+		t.Fatalf("want one document artifact, got %d", len(d.Artifacts))
+	}
+	todos := d.Artifacts[0].Todos
+	if len(todos) != 2 {
+		t.Fatalf("the document's checkboxes were not reported (a prose bullet must not count): %+v", todos)
+	}
+	if todos[1].Region != "document" || todos[1].Index != 1 {
+		t.Errorf("want region document index 1, got %+v", todos[1])
+	}
+
+	// Tick one, addressed the way it was reported.
+	tick, _ := json.Marshal(map[string]any{
+		"region": "document", "index": 1, "text": "validar", "done": true,
+	})
+	code, tb := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(tick))
+	if code != http.StatusOK {
+		t.Fatalf("tick a document todo: %d %s", code, tb)
+	}
+	mu.Lock()
+	after := body
+	mu.Unlock()
+	if !strings.Contains(after, `data-checked="true"`) {
+		t.Errorf("the tick did not reach Plane:\n%s", after)
+	}
+	if strings.Count(after, `data-checked="true"`) != 1 {
+		t.Errorf("more than one box moved:\n%s", after)
+	}
+}
+
+// Plane's own relationships (docs/decisions/0006). The framework stopped keeping a
+// thread "type" of its own and stopped parsing a `### Links` section out of prose;
+// these three verbs are where those questions live now — and only ONE of them is
+// production, because only one of them changes anything outside the tracker.
+func TestPlaneRelationshipsReplaceTheParsedFields(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+	const thread = "/api/threads/ws:p1:wi-1"
+
+	// 1. Labels: by NAME, replacing the set. The known one resolves, the unknown one
+	//    is created rather than refused.
+	code, rb := do(t, http.MethodPost, ts.URL+thread+"/labels", key, `{"labels":["bug","infra"]}`)
+	if code != http.StatusOK {
+		t.Fatalf("set labels: %d %s", code, rb)
+	}
+	var d domain.ThreadDetail
+	if err := json.Unmarshal(rb, &d); err != nil {
+		t.Fatal(err)
+	}
+	names := []string{}
+	for _, l := range d.Labels {
+		names = append(names, l.Name)
+	}
+	if len(names) != 2 || names[0] != "bug" || names[1] != "infra" {
+		t.Errorf("labels = %v, want [bug infra]", names)
+	}
+
+	// 2. Links: external evidence, and the answer carries it back.
+	code, lb := do(t, http.MethodPost, ts.URL+thread+"/links", key,
+		`{"url":"https://example.test/pr/1","title":"PR #1"}`)
+	if code != http.StatusOK {
+		t.Fatalf("add link: %d %s", code, lb)
+	}
+	if err := json.Unmarshal(lb, &d); err != nil {
+		t.Fatal(err)
+	}
+	if len(d.Links) != 1 || d.Links[0].URL != "https://example.test/pr/1" {
+		t.Fatalf("links = %+v, want the PR", d.Links)
+	}
+	// Publishing evidence is production, so the link count is what the sweep diffs.
+	if p, err := st.ThreadProgressFor([]string{"wi-1"}); err != nil {
+		t.Fatal(err)
+	} else if p["wi-1"].Links != 1 {
+		t.Errorf("the link was not recorded as progress: %+v", p["wi-1"])
+	}
+
+	// 3. Relations: typed, and refused when the type is not one Plane knows.
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/relations", key,
+		`{"thread":"ws:p1:wi-2","type":"vaguely_about"}`); code == http.StatusOK {
+		t.Errorf("an invented relation type was accepted: %s", b)
+	}
+	code, rel := do(t, http.MethodPost, ts.URL+thread+"/relations", key,
+		`{"thread":"ws:p1:wi-2","type":"blocking"}`)
+	if code != http.StatusOK {
+		t.Fatalf("relate: %d %s", code, rel)
+	}
+	// A thread cannot relate to itself.
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/relations", key,
+		`{"thread":"ws:p1:wi-1"}`); code == http.StatusOK {
+		t.Errorf("a thread was allowed to relate to itself: %s", b)
 	}
 }
 
@@ -3546,12 +3768,16 @@ func TestProjectPages(t *testing.T) {
 		t.Errorf("stale write: want 409, got %d", code)
 	}
 
-	// 4. The markdown standard applies to a document too — two H1s is the thing
-	// that keeps happening, and it is refused at creation.
-	bad := `{"title":"Bad","markdown":"# One\n\n# Two\n"}`
-	code, bb := do(t, http.MethodPost, ts.URL+"/api/workspaces/ws:p1/pages", key, bad)
-	if code != http.StatusBadRequest {
-		t.Errorf("two H1s in a new page: want 400, got %d %s", code, bb)
+	// 4. A page is somebody's document: two H1s is a note, not a refusal
+	// (docs/decisions/0005). The one thing still refused is a duplicated reserved
+	// heading, which breaks region-scoped writes.
+	loose := `{"title":"Loose","markdown":"# One\n\n# Two\n"}`
+	if code, bb := do(t, http.MethodPost, ts.URL+"/api/workspaces/ws:p1/pages", key, loose); code != http.StatusOK {
+		t.Errorf("two H1s in a new page: want 200, got %d %s", code, bb)
+	}
+	dup := `{"title":"Dup","markdown":"## Logbook\n\n- [ ] a\n\n## Logbook\n\n- [ ] b\n"}`
+	if code, bb := do(t, http.MethodPost, ts.URL+"/api/workspaces/ws:p1/pages", key, dup); code != http.StatusBadRequest {
+		t.Errorf("a duplicated section heading in a new page: want 400, got %d %s", code, bb)
 	}
 
 	// 5. A good write lands, and the round trip preserves the markdown.
@@ -3851,7 +4077,7 @@ func TestRenamingABubbleIsVisibleImmediatelyAndKeepsItsContract(t *testing.T) {
 //
 // Plane Community serves project pages only on its INTERNAL, session-authenticated
 // API; the public API an API key can reach has no pages route at any current
-// version, so no upgrade fixes it (docs/PAGES-CAPABILITY.md). On such an instance
+// version, so no upgrade fixes it (docs/journal/PAGES-CAPABILITY.md). On such an instance
 // this server becomes the record for pages, and the whole point is that every
 // operation still works — otherwise the §2.5 tier simply does not exist there.
 //
@@ -4208,10 +4434,13 @@ func TestPagesNestAndSurviveTheirParent(t *testing.T) {
 //
 // 🏆 is derived from Plane's state (heat.ClassifyThread, threadLevel), and
 // autostate refuses to write it — autoTarget returns "" for done. So this pins
-// the whole verb: the Definition of Done gates it, the target state is resolved by
-// GROUP rather than by a localized name, the write reaches Plane, the mirror
-// reflects it with no sync pass, and the derived level actually flips to 🏆.
-func TestCompletingAThreadIsGatedByItsDoD(t *testing.T) {
+// the whole verb: the target state is resolved by GROUP rather than by a localized
+// name, the write reaches Plane, the mirror reflects it with no sync pass, and the
+// derived level actually flips to 🏆.
+//
+// The Definition of Done no longer gates it (docs/decisions/0005). It is REPORTED:
+// finishing with items outstanding lands, and says what was left.
+func TestCompletingAThreadReportsItsDoD(t *testing.T) {
 	var mu sync.Mutex
 	// One unticked DoD item, and one in the Logbook — which must NOT block, since
 	// the plan can carry items that outlive the thread.
@@ -4302,20 +4531,26 @@ func TestCompletingAThreadIsGatedByItsDoD(t *testing.T) {
 		return d.Level
 	}
 
-	// 1. Refused while the DoD is unmet, and the refusal NAMES what is outstanding
-	//    — "not met" on its own is unactionable.
+	// 1. An unmet DoD does not refuse — it is named in the answer, so the person
+	//    finishing can see what they closed it over.
 	code, rb := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{}`)
-	if code != http.StatusBadRequest {
-		t.Fatalf("an unmet DoD should refuse the completion, got %d %s", code, rb)
+	if code != http.StatusOK {
+		t.Fatalf("an unmet DoD must not refuse the completion, got %d %s", code, rb)
 	}
-	if !strings.Contains(string(rb), "tests pass") {
-		t.Errorf("the refusal should name the outstanding item: %s", rb)
+	var early domain.ThreadDetail
+	if err := json.Unmarshal(rb, &early); err != nil {
+		t.Fatal(err)
 	}
-	mu.Lock()
-	n := moves
-	mu.Unlock()
-	if n != 0 {
-		t.Errorf("a refused completion must not have touched Plane, got %d state writes", n)
+	if len(early.UnmetDoD) != 1 || early.UnmetDoD[0] != "tests pass" {
+		t.Errorf("the answer should name the outstanding item, got %v", early.UnmetDoD)
+	}
+	if early.Level != "done" {
+		t.Errorf("it should have finished, got level %q", early.Level)
+	}
+
+	// Put it back to work so the rest of the verb can be pinned from the start.
+	if code, b := do(t, http.MethodPost, ts.URL+thread+"/reopen", key, ""); code != http.StatusOK {
+		t.Fatalf("reopen: %d %s", code, b)
 	}
 
 	// 2. Tick the DoD item. This is the ordinary todo path, not a special case.
@@ -4380,16 +4615,13 @@ func TestCompletingAThreadIsGatedByItsDoD(t *testing.T) {
 		t.Error("a reopened thread must not still read 🏆")
 	}
 
-	// 6. force is the override for a DoD that turned out to be wrong. Untick the
-	//    item and finish anyway.
+	// 6. force is accepted and means nothing now — there is no check to skip. A
+	//    caller written against the old gate keeps working.
 	untick, _ := json.Marshal(map[string]any{
 		"region": "dod", "index": 0, "text": "tests pass", "done": false,
 	})
 	if code, b := do(t, http.MethodPost, ts.URL+thread+"/todo", key, string(untick)); code != http.StatusOK {
 		t.Fatalf("untick: %d %s", code, b)
-	}
-	if code, _ := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{}`); code != http.StatusBadRequest {
-		t.Fatal("the DoD gate should be back")
 	}
 	code, fb := do(t, http.MethodPost, ts.URL+thread+"/complete", key, `{"force":true}`)
 	if code != http.StatusOK {
@@ -4400,13 +4632,13 @@ func TestCompletingAThreadIsGatedByItsDoD(t *testing.T) {
 	if forced.Level != "done" {
 		t.Errorf("a forced completion should still land, got level %q", forced.Level)
 	}
+	if len(forced.UnmetDoD) != 1 {
+		t.Errorf("it should still report what was outstanding, got %v", forced.UnmetDoD)
+	}
 }
 
-// A thread with no Definition of Done at all is not blocked.
-//
-// AGENTS.md lets a small thread skip the Logbook and close on a short paragraph,
-// so gating on an artifact those threads are explicitly exempt from would punish
-// exactly the ones the rule excuses.
+// What unmetDoD reports, which is now the whole of what a Definition of Done does
+// at completion time: it describes, it does not block.
 func TestAThreadWithNoDoDCanStillFinish(t *testing.T) {
 	if unmet := unmetDoD(`<h1>Small</h1><p>Just did it.</p>`); len(unmet) != 0 {
 		t.Errorf("no DoD is not an unmet DoD, got %v", unmet)
@@ -4423,5 +4655,1117 @@ func TestAThreadWithNoDoDCanStillFinish(t *testing.T) {
 	unmet := unmetDoD(html)
 	if len(unmet) != 1 || !strings.Contains(unmet[0], "b") {
 		t.Errorf("want the one open item, got %v", unmet)
+	}
+}
+
+// Birth is production, so a thread is 🔥 from its first moment and the bubble that
+// gained it rises with it (docs/decisions/0002).
+//
+// This is the bug the decision exists to fix: birth's only evidence used to be an
+// EvThreadCreated appended to the in-memory cache, which (a) died with the cache
+// and (b) is deliberately not production anyway. The progress sweep then baselined
+// the thread SILENTLY — correctly, since it cannot know when a body it is seeing
+// for the first time was last touched — so a freshly born thread read 😴 and its
+// bubble stayed asleep while someone was actively starting work in it.
+func TestInvariant_Threads_BirthIsProduction(t *testing.T) {
+	st := openStore(t)
+	// A STATEFUL fake, unlike the shared one: it lists the work item it was asked
+	// to create. That matters here because the reconcile is a complete walk and
+	// prunes what Plane does not list — with a stateless fake the newly born thread
+	// vanishes on the next sweep, which is exactly the pass this test needs to
+	// survive.
+	var created []string
+	fake := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p := r.URL.Path
+		switch {
+		case strings.HasSuffix(p, "/users/me"):
+			io.WriteString(w, `{"id":"u1","email":"owner@x","display_name":"Owner"}`)
+		case strings.HasSuffix(p, "/members/"):
+			io.WriteString(w, `[{"id":"u1","email":"owner@x","display_name":"Owner","role":20}]`)
+		case strings.HasSuffix(p, "/states/"):
+			io.WriteString(w, `{"results":[{"id":"state-1","name":"Todo","group":"unstarted","default":true}]}`)
+		case strings.HasSuffix(p, "/work-items/") && r.Method == http.MethodPost:
+			created = append(created, "new-wid-123")
+			io.WriteString(w, `{"id":"new-wid-123"}`)
+		case r.Method == http.MethodGet && strings.HasSuffix(p, "/work-items/"):
+			items := make([]string, 0, len(created))
+			for _, id := range created {
+				items = append(items, `{"id":"`+id+`","name":"Ship the thing","description_html":"<h2>Brief</h2><p>x</p><h2>Logbook</h2><ul><li data-checked=\'false\'>first step</li></ul>","created_at":"2026-08-15T12:00:00Z","updated_at":"2026-08-15T12:00:00Z","state":{"id":"state-1","name":"Todo","group":"unstarted"}}`)
+			}
+			io.WriteString(w, `{"results":[`+strings.Join(items, ",")+`],"next_page_results":false}`)
+		case strings.Contains(p, "/modules/m1/") && strings.HasSuffix(p, "/module-issues/"):
+			items := make([]string, 0, len(created))
+			for _, id := range created {
+				items = append(items, `{"id":"`+id+`","name":"Ship the thing","created_at":"2026-08-15T12:00:00Z","completed_at":null,"sequence_id":9,"sort_order":9000,"assignees":["u1"],"state":"state-1"}`)
+			}
+			io.WriteString(w, `{"results":[`+strings.Join(items, ",")+`]}`)
+		case strings.HasSuffix(p, "/projects/"):
+			io.WriteString(w, `{"results":[{"id":"p1","name":"Proj One"}]}`)
+		case strings.HasSuffix(p, "/modules/"):
+			io.WriteString(w, `{"results":[{"id":"m1","name":"Bubble A"}]}`)
+		default:
+			io.WriteString(w, `{"results":[]}`)
+		}
+	}))
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	body := `{"instance":"ws","bubble_id":"ws:p1:m1","name":"Ship the thing",
+	          "brief":"## Context\nit is broken\n\n## Outcome\nit works\n\n## Definition of Done\n- [ ] it works",
+	          "logbook":"**Owner:** me · **State:** building · **Next:** start\n\n- [ ] first step"}`
+	if code, out := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, body); code != http.StatusOK {
+		t.Fatalf("birth: %d %s", code, out)
+	}
+
+	// The birth is DURABLE, not a cache artifact: it survives the caches being
+	// dropped, which is what the sweep does on every pass.
+	prog, err := st.ThreadProgressFor([]string{"new-wid-123"})
+	if err != nil {
+		t.Fatalf("progress: %v", err)
+	}
+	born := prog["new-wid-123"]
+	if born.BornAt.IsZero() {
+		t.Fatalf("birth was not recorded: %+v", born)
+	}
+	// Seeded with the logbook AS BORN, so the first sweep reports the birth rather
+	// than inventing a "logbook updated" for a plan nobody has edited yet.
+	if born.LogbookHash == "" {
+		t.Error("born row has no logbook fingerprint, so the next sweep will report a phantom edit")
+	}
+
+	sweep(t, srv)
+
+	// A sweep saves progress for every thread it looked at, and it has no idea when
+	// anything was born. The one timestamp nothing can reconstruct must survive it.
+	prog, _ = st.ThreadProgressFor([]string{"new-wid-123"})
+	if prog["new-wid-123"].BornAt.IsZero() {
+		t.Fatal("the sweep cleared born_at")
+	}
+
+	code, out := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:new-wid-123", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("thread detail: %d %s", code, out)
+	}
+	var d struct {
+		Level  string `json:"level"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if d.Level != "in_progress" {
+		t.Fatalf("a just-born thread reads %q (%s), want in_progress", d.Level, d.Reason)
+	}
+
+	// And the reported symptom: the BUBBLE has to rise too. It does so through the
+	// roll-up rather than a rule of its own — the bubble's band is the band of its
+	// hottest unfinished thread, so nothing here is bubble-specific.
+	code, out = do(t, http.MethodGet, ts.URL+"/api/bubbles", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("bubbles: %d %s", code, out)
+	}
+	var bubbles []struct {
+		ID           string         `json:"id"`
+		Level        string         `json:"level"`
+		ThreadLevels map[string]int `json:"thread_levels"`
+	}
+	if err := json.Unmarshal(out, &bubbles); err != nil {
+		t.Fatalf("decode bubbles: %v", err)
+	}
+	var found bool
+	for _, b := range bubbles {
+		if b.ID != "ws:p1:m1" {
+			continue
+		}
+		found = true
+		if b.Level != "in_progress" {
+			t.Errorf("the bubble that gained the thread reads %q, want in_progress (threads: %v)",
+				b.Level, b.ThreadLevels)
+		}
+		if b.ThreadLevels["in_progress"] != 1 {
+			t.Errorf("thread_levels = %v, want one in_progress", b.ThreadLevels)
+		}
+	}
+	if !found {
+		t.Fatalf("bubble ws:p1:m1 missing from %d bubbles", len(bubbles))
+	}
+}
+
+// The other half of the asymmetry: a work item that merely APPEARED in Plane earns
+// nothing. Nobody wrote a Brief for it, so it is a draft waiting to be born, and
+// the newborn grace keeps it 😴 rather than calling it abandoned.
+func TestInvariant_Threads_CreatedIsNotBorn(t *testing.T) {
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	week := 7 * 24 * time.Hour
+	win := heat.Window{CurStart: now.Add(-week), PrevStart: now.Add(-2 * week), Length: week, Decay: week}
+	tun := domain.DefaultTuning()
+
+	fresh := domain.Thread{Active: true, Owner: "me", CreatedAt: now.Add(-time.Hour)}
+
+	created := []domain.EvidenceEvent{{Kind: domain.EvThreadCreated, At: fresh.CreatedAt}}
+	if got := threadLevel(fresh, created, domain.Dormant, win, tun, now); got != "zzzz" {
+		t.Errorf("created-only: want zzzz, got %s", got)
+	}
+	borne := []domain.EvidenceEvent{{Kind: domain.EvThreadBorn, At: fresh.CreatedAt}}
+	if got := threadLevel(fresh, borne, domain.Hot, win, tun, now); got != "in_progress" {
+		t.Errorf("born: want in_progress, got %s", got)
+	}
+	// And a birth ages like any other evidence — it is not a permanent 🔥.
+	old := domain.Thread{Active: true, Owner: "me", CreatedAt: now.AddDate(0, -6, 0)}
+	stale := []domain.EvidenceEvent{{Kind: domain.EvThreadBorn, At: old.CreatedAt}}
+	if got := threadLevel(old, stale, domain.Dormant, win, tun, now); got != "zzzz" {
+		t.Errorf("a birth six months ago: want zzzz, got %s", got)
+	}
+}
+
+// Export writes the work to disk as plain markdown (docs/decisions/0001). It is
+// built BEFORE the overlay becomes the record for bodies, because a backup story
+// that arrives after the thing it protects is not a backup story.
+func TestInvariant_Storage_ExportWritesTheWork(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	// Pinned to ONE project on purpose: the shared fake serves the same work items
+	// for every project, so a whole-workspace instance would attribute them to
+	// whichever project was walked last and prove nothing about the layout.
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+
+	// A locally-held page: on an instance whose Plane cannot hold pages this is the
+	// only copy in existence, so an export that skipped it would be worthless.
+	if err := st.PutLocalPage(store.LocalPage{
+		ID: "loc_abc", Instance: "ws", Project: "p1", Title: "Architecture / notes",
+		Body: "# Architecture\n\nIt is one binary.", Author: "owner@x",
+		CreatedAt: time.Now(), UpdatedAt: time.Now(),
+	}); err != nil {
+		t.Fatalf("put page: %v", err)
+	}
+
+	inst, _, err := srv.instanceBySlug("ws")
+	if err != nil {
+		t.Fatalf("instance: %v", err)
+	}
+	dir := t.TempDir()
+	res, err := srv.Export(context.Background(), inst, dir)
+	if err != nil {
+		t.Fatalf("export: %v", err)
+	}
+	if res.Threads == 0 || res.Files == 0 || res.Pages != 1 {
+		t.Fatalf("nothing much exported: %+v", res)
+	}
+
+	// The project directory is named after the project, falling back to its id when
+	// the name was never mirrored — which is what the fake leaves us with, so the
+	// assertions below find it rather than hard-coding either.
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("want one project directory, got %v (%v)", entries, err)
+	}
+	proj := filepath.Join(dir, entries[0].Name())
+
+	// The fixture's thread, under its bubble, with its Logbook — and the DoD is
+	// written even though it is parsed out of the body separately.
+	thread := filepath.Join(proj, "Bubble A", "First thread")
+	if _, err := os.Stat(filepath.Join(thread, "BRIEF.md")); err != nil {
+		t.Errorf("no BRIEF.md under %s: %v", thread, err)
+	}
+	logbook, err := os.ReadFile(filepath.Join(thread, "LOGBOOK.md"))
+	if err != nil {
+		t.Fatalf("no LOGBOOK.md: %v", err)
+	}
+	if !strings.Contains(string(logbook), "scaffold") {
+		t.Errorf("logbook lost its todos:\n%s", logbook)
+	}
+	// A revision is a sub-work-item, so it is written inside its parent.
+	if _, err := os.Stat(filepath.Join(thread, "revisions", "rev first pass.md")); err != nil {
+		t.Errorf("revision not exported: %v", err)
+	}
+	// The page title had a slash in it. Plane names are arbitrary text, so a name
+	// that escapes its directory is the failure mode to prove impossible.
+	if _, err := os.Stat(filepath.Join(proj, "pages", "Architecture notes.md")); err != nil {
+		t.Errorf("page not exported under a safe name: %v", err)
+	}
+
+	// A relative path would mean something different depending on how the server
+	// was started, so it is refused rather than guessed at.
+	if _, err := srv.Export(context.Background(), inst, "relative/path"); err == nil {
+		t.Error("a relative export path should be refused")
+	}
+}
+
+// Every artifact write also lands in the document store (docs/decisions/0001).
+//
+// Nothing reads those rows yet — that is the next step — so this is what makes the
+// change safe to land on its own: the record accumulates while Plane is still
+// authoritative, and a wrong row is invisible rather than damaging.
+func TestInvariant_Documents_WritesAccumulateInTheStore(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// Editing the Logbook through the ordinary write path.
+	body := `{"logbook":"- [x] scaffold\n- [ ] wire it up\n- [ ] measure"}`
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key, body); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, out)
+	}
+
+	docs, err := st.ThreadDocs("wi-1")
+	if err != nil {
+		t.Fatalf("docs: %v", err)
+	}
+	lb, ok := docs["logbook"]
+	if !ok {
+		t.Fatalf("no logbook row after an edit: %v", docs)
+	}
+	if !strings.Contains(lb.Markdown, "measure") {
+		t.Errorf("stored logbook is not what was written:\n%s", lb.Markdown)
+	}
+	// The hash is the optimistic-write base, so it has to be the hash OF the stored
+	// markdown — an editor sends it back to prove it is writing over what it read.
+	if lb.Hash != md.Hash(lb.Markdown) {
+		t.Errorf("hash %q does not match its markdown", lb.Hash)
+	}
+	if lb.UpdatedBy == "" {
+		t.Error("stored document has no author")
+	}
+	// The document region rode along, because the write path stores every region
+	// rather than only the one that changed: a partial record is a record that
+	// cannot be read from.
+	if _, ok := docs["document"]; !ok {
+		t.Errorf("only the edited region was stored: %v", docs)
+	}
+	// And what we published is remembered, which is what stops a later sync from
+	// mistaking our own write for someone editing in Plane.
+	pub, err := st.Published("wi-1")
+	if err != nil || pub.PublishedHash == "" {
+		t.Fatalf("publish state not recorded: %+v (%v)", pub, err)
+	}
+
+	// A deliberate deletion takes the document with it. This is the ONE path
+	// allowed to remove these rows — a Plane walk must never do it, because for
+	// these rows there is no upstream copy to recover from.
+	if code, out := do(t, http.MethodDelete, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"confirm":"First thread"}`); code != http.StatusOK && code != http.StatusNoContent {
+		t.Fatalf("delete: %d %s", code, out)
+	}
+	if docs, _ := st.ThreadDocs("wi-1"); len(docs) != 0 {
+		t.Errorf("documents survived a deliberate delete: %v", docs)
+	}
+	if pub, _ := st.Published("wi-1"); pub.PublishedHash != "" {
+		t.Error("publish state survived a deliberate delete")
+	}
+}
+
+// planeWithBodyFailure is the shared fake plus a switch that makes body writes
+// fail, so the optimistic publish path can be exercised without unplugging
+// anything. It also records the last body Plane actually received.
+type planeWithBodyFailure struct {
+	*httptest.Server
+	failing  bool
+	lastBody string
+	writes   int
+}
+
+func fakePlaneFailingBodies(t *testing.T) *planeWithBodyFailure {
+	t.Helper()
+	f := &planeWithBodyFailure{}
+	inner := fakePlane()
+	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPatch && strings.Contains(r.URL.Path, "/work-items/") {
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			if html, ok := payload["description_html"].(string); ok {
+				f.writes++
+				if f.failing {
+					w.WriteHeader(http.StatusInternalServerError)
+					io.WriteString(w, `{"error":"plane is having a day"}`)
+					return
+				}
+				f.lastBody = html
+			}
+			io.WriteString(w, `{"updated_at":"2026-08-15T12:00:00Z"}`)
+			return
+		}
+		inner.Config.Handler.ServeHTTP(w, r)
+	}))
+	t.Cleanup(func() { f.Close(); inner.Close() })
+	return f
+}
+
+// Publishing must not feed itself (docs/decisions/0001). Writing a body bumps
+// Plane's updated_at, so the next sync sees a changed row — and if "changed" were
+// the test for a Plane-side edit, the server would read its own publication as
+// someone else's work and publish again, forever. The guard is comparing against
+// the hash we PUBLISHED, never against "did this row change".
+func TestInvariant_Documents_PublishDoesNotLoop(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlaneFailingBodies(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"logbook":"- [x] scaffold\n- [ ] publish once"}`); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, out)
+	}
+	writesAfterEdit := fake.writes
+
+	// What we published is exactly what the mirror now holds: nothing to reconcile.
+	pub, err := st.Published("wi-1")
+	if err != nil {
+		t.Fatalf("published: %v", err)
+	}
+	it, ok, err := srv.mirror.Item("ws", "wi-1")
+	if err != nil || !ok {
+		t.Fatalf("mirror item: %v", err)
+	}
+	if pub.PublishedHash != it.DescriptionHash {
+		t.Fatalf("published hash %q != mirrored hash %q — a sync would read our own write as a Plane edit",
+			pub.PublishedHash, it.DescriptionHash)
+	}
+
+	// Several sync passes must not turn into several publications.
+	for i := 0; i < 3; i++ {
+		sweep(t, srv)
+		srv.drainOutbox(context.Background())
+	}
+	if fake.writes != writesAfterEdit {
+		t.Errorf("syncing published again: %d writes after the edit, %d now", writesAfterEdit, fake.writes)
+	}
+	if entries, _ := st.ListOutbox(50); len(entries) != 0 {
+		t.Errorf("a successful publish left something queued: %+v", entries)
+	}
+}
+
+// Once a thread's document is stored, showing it must not depend on Plane's HTML
+// at all (docs/decisions/0001). Proven by corrupting the mirrored body: if the read
+// still returns what was written, it cannot have been read from there.
+func TestInvariant_Documents_ReadsDoNotUsePlaneHTML(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// wi-2 has no revisions, so nothing on this read path touches the mirror's HTML.
+	const wid = "ws:p1:wi-2"
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/"+wid, key,
+		`{"brief":"# Second thread\n\nThe real intent.","logbook":"- [ ] the real plan"}`); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, out)
+	}
+
+	// Now poison Plane's copy. In production this would be a fidelity loss or a
+	// half-rendered body; here it is unmistakable.
+	it, _, err := srv.mirror.Item("ws", "wi-2")
+	if err != nil {
+		t.Fatalf("mirror item: %v", err)
+	}
+	it.DescriptionHTML = "<p>CORRUPTED — this must not be shown</p>"
+	it.DescriptionHash = "poison"
+	if err := srv.mirror.UpsertItems("ws", []mirror.Item{it}, time.Now()); err != nil {
+		t.Fatalf("poison mirror: %v", err)
+	}
+
+	code, out := do(t, http.MethodGet, ts.URL+"/api/threads/"+wid, key, "")
+	if code != http.StatusOK {
+		t.Fatalf("thread detail: %d %s", code, out)
+	}
+	if strings.Contains(string(out), "CORRUPTED") {
+		t.Fatal("the read served Plane's HTML instead of the stored document")
+	}
+	for _, want := range []string{"The real intent.", "the real plan"} {
+		if !strings.Contains(string(out), want) {
+			t.Errorf("the read lost %q from the stored document", want)
+		}
+	}
+}
+
+// Plane being down costs a retry, not the edit (docs/decisions/0001). The markdown
+// is recorded before the network is involved, the publication is queued, and the
+// field lock stops a sync pass from reverting what has not been sent yet.
+func TestInvariant_Documents_PlaneDownDoesNotLoseTheEdit(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlaneFailingBodies(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	fake.failing = true
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"logbook":"- [ ] written while Plane was down"}`); code != http.StatusOK {
+		t.Fatalf("the edit should still succeed: %d %s", code, out)
+	}
+
+	docs, _ := st.ThreadDocs("wi-1")
+	if !strings.Contains(docs["logbook"].Markdown, "while Plane was down") {
+		t.Fatalf("the edit did not reach the record: %v", docs["logbook"].Markdown)
+	}
+	entries, _ := st.ListOutbox(50)
+	if len(entries) != 1 || entries[0].Kind != store.OutDoc || entries[0].FieldLock != "description" {
+		t.Fatalf("expected one queued publication holding a description lock, got %+v", entries)
+	}
+
+	// A sync pass now sees Plane's OLDER body. The lock is what stops it reverting
+	// the mirror, which is what the board would otherwise show.
+	sweep(t, srv)
+	code, out := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %s", code, out)
+	}
+	if !strings.Contains(string(out), "while Plane was down") {
+		t.Error("a sync pass reverted an edit that was only waiting to be published")
+	}
+
+	// Editing again supersedes the queued publication rather than stacking a second
+	// one: the intermediate body was never Plane's and nobody is waiting to see it.
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"logbook":"- [ ] written twice while Plane was down"}`); code != http.StatusOK {
+		t.Fatalf("second patch: %d %s", code, out)
+	}
+	if entries, _ := st.ListOutbox(50); len(entries) != 1 {
+		t.Errorf("queued publications stacked instead of superseding: %+v", entries)
+	}
+
+	// Plane comes back. The queue drains, and what Plane receives is the LATEST
+	// body — the one anybody reading Bubble Work has been seeing all along.
+	fake.failing = false
+	srv.drainOutbox(context.Background())
+	if !strings.Contains(fake.lastBody, "written twice while Plane was down") {
+		t.Errorf("Plane did not receive the latest body: %q", fake.lastBody)
+	}
+	if entries, _ := st.ListOutbox(50); len(entries) != 0 {
+		t.Errorf("the queue did not drain: %+v", entries)
+	}
+	pub, _ := st.Published("wi-1")
+	it, _, _ := srv.mirror.Item("ws", "wi-1")
+	if pub.PublishedHash != it.DescriptionHash {
+		t.Error("after draining, the published hash does not match the mirror — the next sync would see a phantom edit")
+	}
+}
+
+// Plane stays a writable surface: an edit made there is IMPORTED, not overwritten
+// (docs/decisions/0001). And importing must not bounce — the imported state is by
+// definition what Plane already has, so the next pass must find nothing to do.
+func TestInvariant_Documents_PlaneEditWinsAndDoesNotBounce(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlaneFailingBodies(t)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// Write here first, so the thread is stored AND published — until we have
+	// published something there is nothing to compare an incoming body against.
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"logbook":"- [ ] written in bubble work"}`); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, out)
+	}
+
+	// Now somebody edits the work item in Plane's own editor. The sync hook is what
+	// notices, so feed it the way a pass would.
+	planeEdited := `<h2>Brief</h2><p>Do it.</p><h2>Logbook</h2>` +
+		`<ul><li>edited in plane</li></ul>`
+	srv.importPlaneEdits("ws", map[string]string{"wi-1": planeEdited})
+
+	docs, _ := st.ThreadDocs("wi-1")
+	if !strings.Contains(docs["logbook"].Markdown, "edited in plane") {
+		t.Fatalf("Plane's edit did not win: %q", docs["logbook"].Markdown)
+	}
+	if docs["logbook"].UpdatedBy != importedBy {
+		t.Errorf("imported region is not marked as coming from Plane: %q", docs["logbook"].UpdatedBy)
+	}
+	// Winning must not mean the other version is gone.
+	prev, replacedAt, err := st.ReplacedDocs("wi-1")
+	if err != nil {
+		t.Fatalf("replaced docs: %v", err)
+	}
+	if !strings.Contains(prev["logbook"].Markdown, "written in bubble work") {
+		t.Errorf("the replaced version was not kept: %+v", prev)
+	}
+	if replacedAt.IsZero() {
+		t.Error("no replacement timestamp")
+	}
+
+	// A second pass with the SAME body is not another edit.
+	before, _ := st.Published("wi-1")
+	srv.importPlaneEdits("ws", map[string]string{"wi-1": planeEdited})
+	after, _ := st.Published("wi-1")
+	if before.PublishedHash != after.PublishedHash {
+		t.Error("the same body imported twice — the loop guard is not holding")
+	}
+	if again, _, _ := st.ReplacedDocs("wi-1"); !strings.Contains(again["logbook"].Markdown, "written in bubble work") {
+		t.Error("a no-op pass overwrote the undo copy")
+	}
+
+	// The reader is told where the body came from.
+	code, out := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %s", code, out)
+	}
+	var d struct {
+		FromPlane bool `json:"from_plane"`
+	}
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if !d.FromPlane {
+		t.Error("the thread does not say its body was written in Plane")
+	}
+
+	// And the arbitration rule: with OUR publication still queued, Plane's older
+	// body is not an edit to adopt.
+	fake.failing = true
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"logbook":"- [ ] ours, queued"}`); code != http.StatusOK {
+		t.Fatalf("patch while Plane is down: %d %s", code, out)
+	}
+	srv.importPlaneEdits("ws", map[string]string{"wi-1": planeEdited})
+	docs, _ = st.ThreadDocs("wi-1")
+	if !strings.Contains(docs["logbook"].Markdown, "ours, queued") {
+		t.Errorf("a queued publication lost to an import it should have shielded: %q", docs["logbook"].Markdown)
+	}
+}
+
+// Adoption takes an instance's existing bodies into the document store, once
+// (docs/decisions/0001), so threads that predate the inversion stop depending on
+// the fallback read path.
+func TestInvariant_Documents_AdoptIsIdempotent(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	inst, _, err := srv.instanceBySlug("ws")
+	if err != nil {
+		t.Fatalf("instance: %v", err)
+	}
+
+	res, err := srv.Adopt(context.Background(), inst)
+	if err != nil {
+		t.Fatalf("adopt: %v", err)
+	}
+	if res.Adopted == 0 {
+		t.Fatalf("adopted nothing: %+v", res)
+	}
+	docs, _ := st.ThreadDocs("wi-1")
+	if !strings.Contains(docs["logbook"].Markdown, "scaffold") {
+		t.Errorf("the adopted logbook is wrong: %q", docs["logbook"].Markdown)
+	}
+	// An adopted body is NOT marked as "written in Plane": every adopted body
+	// technically came from Plane, so flagging them all would make that signal
+	// meaningless on the threads where it should mean something.
+	if docs["logbook"].UpdatedBy != adoptedBy {
+		t.Errorf("adopted region marked %q", docs["logbook"].UpdatedBy)
+	}
+	// Plane already holds exactly this body, so it counts as published — otherwise
+	// the first sync after adoption would read every thread as edited in Plane.
+	pub, _ := st.Published("wi-1")
+	it, _, _ := srv.mirror.Item("ws", "wi-1")
+	if pub.PublishedHash != it.DescriptionHash {
+		t.Error("adoption did not record the published state")
+	}
+	srv.importPlaneEdits("ws", map[string]string{"wi-1": it.DescriptionHTML})
+	if again, _, _ := st.ReplacedDocs("wi-1"); len(again) != 0 {
+		t.Error("the first sync after adoption imported an edit that never happened")
+	}
+
+	// Re-running must not clobber writing done since the last run.
+	if err := st.PutThreadDocs([]store.ThreadDoc{{
+		ThreadID: "wi-1", Region: "logbook", Markdown: "- [ ] written after adoption",
+		Hash: md.Hash("- [ ] written after adoption"), UpdatedAt: time.Now(), UpdatedBy: "me",
+	}}); err != nil {
+		t.Fatalf("write after adoption: %v", err)
+	}
+	second, err := srv.Adopt(context.Background(), inst)
+	if err != nil {
+		t.Fatalf("second adopt: %v", err)
+	}
+	if second.Adopted != 0 || second.Skipped == 0 {
+		t.Errorf("a second adoption did work it should have skipped: %+v", second)
+	}
+	docs, _ = st.ThreadDocs("wi-1")
+	if !strings.Contains(docs["logbook"].Markdown, "written after adoption") {
+		t.Error("re-adopting overwrote work done since the first run")
+	}
+}
+
+// The document is written VERBATIM (docs/decisions/0006). The server used to add a
+// `## Brief` heading and read Context / Outcome / Symptom out of what followed; now
+// it knows nothing about the prose except where the Logbook and the Definition of
+// Done are, because those two are addressable regions.
+func TestInvariant_Artifacts_DocumentIsWrittenVerbatim(t *testing.T) {
+	ts, key := authedServer(t)
+
+	body := `{"instance":"ws","bubble_id":"ws:p1:m1","name":"Importar CSV",
+	          "body":"# Importar CSV\n\n## Lo que quiero\n\nque no truene\n\n## Pasos\n\n- [ ] leer el archivo"}`
+	code, out := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, body)
+	if code != http.StatusOK {
+		t.Fatalf("create: %d %s", code, out)
+	}
+
+	code, out = do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:new-wid-123", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %s", code, out)
+	}
+	var d domain.ThreadDetail
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(d.Artifacts) != 1 {
+		t.Fatalf("want one document artifact, got %d", len(d.Artifacts))
+	}
+	got := d.Artifacts[0].Markdown
+	for _, want := range []string{"## Lo que quiero", "## Pasos", "- [ ] leer el archivo"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("the author's own section did not survive (%q):\n%s", want, got)
+		}
+	}
+	if strings.Contains(got, "## Brief") {
+		t.Errorf("the server invented a heading nobody wrote:\n%s", got)
+	}
+	// A `type` a caller still sends is ignored rather than refused: the field is
+	// gone, and rejecting an unknown key would break every script that predates it.
+	typed := `{"instance":"ws","bubble_id":"ws:p1:m1","name":"y","type":"epic","body":"y"}`
+	if code, out := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, typed); code != http.StatusOK {
+		t.Errorf("a stale `type` field was not ignored: %d %s", code, out)
+	}
+}
+
+// Any edit to the document is production (docs/decisions/0004) — the Brief
+// included. Writing is the work here, so sharpening why something matters counts as
+// much as ticking a box. What differs is the LABEL, not whether it warms.
+func TestInvariant_Heat_AnyBodyEditIsProduction(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlane()
+	t.Cleanup(fake.Close)
+	// Pinned to one project: the shared fake serves the same work items for every
+	// project, so on a whole-workspace instance the mirror attributes them to
+	// whichever project was walked last, and the progress diff for a bubble in the
+	// OTHER project then sees none of them.
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// Baseline. The progress diff runs when the board is BUILT, not when the mirror
+	// is filled, so a read is what records the fingerprints — and the first sighting
+	// is deliberately silent about evidence.
+	board := func() {
+		if code, out := do(t, http.MethodGet, ts.URL+"/api/bubbles", key, ""); code != http.StatusOK {
+			t.Fatalf("bubbles: %d %s", code, out)
+		}
+	}
+	board()
+	before, _ := st.ThreadProgressFor([]string{"wi-1"})
+	if before["wi-1"].BodyHash == "" {
+		t.Fatal("building the board did not fingerprint the whole body")
+	}
+
+	// Edit ONLY the document region — no todo ticked, no plan touched.
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key,
+		`{"brief":"# First thread\n\nSharper statement of why this matters."}`); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, out)
+	}
+	// Deliberately NOT re-syncing: the shared fake always serves the same canned
+	// body, so a backfill would replace the mirror with the pre-edit version and this
+	// would be testing the fixture rather than the rule. The write already wrote
+	// through to the mirror, exactly as it does in production.
+	board()
+
+	after, _ := st.ThreadProgressFor([]string{"wi-1"})
+	got := after["wi-1"]
+	if got.BodyHash == before["wi-1"].BodyHash {
+		t.Fatal("the body fingerprint did not move after a Brief edit")
+	}
+	if got.LogbookAt.IsZero() {
+		t.Fatal("a Brief edit produced no evidence timestamp")
+	}
+	// Labelled as a document change, not as a plan change: the plan did not move.
+	if got.LogbookKind != domain.EvBodyUpdated {
+		t.Errorf("kind = %q, want %q", got.LogbookKind, domain.EvBodyUpdated)
+	}
+	if got.LogbookHash != before["wi-1"].LogbookHash {
+		t.Error("the plan fingerprint moved on a Brief-only edit")
+	}
+	// And it is progress, so the thread reads 🔥.
+	code, out := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:wi-1", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %s", code, out)
+	}
+	var d struct {
+		Level  string `json:"level"`
+		Reason string `json:"reason"`
+	}
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if d.Level != "in_progress" {
+		t.Errorf("after a Brief edit the thread reads %q (%s), want in_progress", d.Level, d.Reason)
+	}
+}
+
+// A comment still never WARMS anything (§5.2 stands), but a bubble people are
+// actively discussing is not a grave (docs/decisions/0004). The floor is on the
+// BAND only — lifecycle, score and ordering are untouched, because presence must not
+// outrank output.
+func TestInvariant_Heat_DiscussionKeepsABubbleOutOfTheGrave(t *testing.T) {
+	srv := New(openStore(t), time.Hour)
+	now := time.Date(2026, 8, 3, 12, 0, 0, 0, time.UTC)
+	srv.now = func() time.Time { return now }
+	tun := domain.DefaultTuning()
+
+	// An old, assigned, never-productive thread: 🪦 at both grains.
+	abandoned := domain.Thread{ID: "t1", Active: true, Owner: "me", CreatedAt: now.AddDate(0, -6, 0)}
+	bubble := domain.Bubble{
+		ID: "ws:p1:m1", Name: "Cold", Owner: "me",
+		Threads:  []domain.Thread{abandoned},
+		Evidence: []domain.EvidenceEvent{{ThreadID: "t1", Kind: domain.EvThreadCreated, At: abandoned.CreatedAt}},
+	}
+	_, level, _ := srv.bubbleHeat(bubble, tun, now)
+	if level != "rip" {
+		t.Fatalf("baseline: want rip, got %s", level)
+	}
+
+	// Somebody commented yesterday.
+	talked := bubble
+	talked.Evidence = append(append([]domain.EvidenceEvent{}, bubble.Evidence...),
+		domain.EvidenceEvent{ThreadID: "t1", Kind: domain.EvComment, At: now.AddDate(0, 0, -1)})
+
+	res, level, _ := srv.bubbleHeat(talked, tun, now)
+	if level != "zzzz" {
+		t.Fatalf("a discussed bubble reads %s, want zzzz", level)
+	}
+	// The band floored; the temperature did NOT rise.
+	if res.Lifecycle != domain.Dormant {
+		t.Errorf("a comment changed the bubble's lifecycle to %s — presence must not warm", res.Lifecycle)
+	}
+	if res.Score != 0 {
+		t.Errorf("a comment gave the bubble a score of %.3f — it must not affect ordering", res.Score)
+	}
+	// Stale chatter does not save it.
+	stale := bubble
+	stale.Evidence = append(append([]domain.EvidenceEvent{}, bubble.Evidence...),
+		domain.EvidenceEvent{ThreadID: "t1", Kind: domain.EvComment, At: now.AddDate(0, -3, 0)})
+	if _, level, _ := srv.bubbleHeat(stale, tun, now); level != "rip" {
+		t.Errorf("months-old chatter kept a bubble alive: %s", level)
+	}
+	// And it can be switched off entirely, like the thread-grain pulse.
+	off := tun
+	off.PulseCycles = 0
+	if _, level, _ := srv.bubbleHeat(talked, off, now); level != "rip" {
+		t.Errorf("pulse_cycles=0 should disable the floor, got %s", level)
+	}
+}
+
+// Birth owns the section headings, so a caller that includes them must not end up
+// with two. This is the regression test for the failure a real agent session hit: the
+// duplicate does not merely look untidy — the FIRST section's range stops at the
+// second heading, so the canonical region is EMPTY, and every region-scoped operation
+// then addresses nothing.
+func TestInvariant_Artifacts_BirthDoesNotDuplicateHeadings(t *testing.T) {
+	ts, key := authedServer(t)
+
+	// Exactly what the agent sent: its own `## Brief` and `## Logbook` headings.
+	body := `{"instance":"ws","bubble_id":"ws:p1:m1","name":"Reasignación","type":"feature",
+	          "brief":"## Brief\n\n## Context\nwhy now\n\n## Outcome\nit works\n\n## Definition of Done\n- [ ] measured",
+	          "logbook":"## Logbook\n\n### Fase 1\n- [ ] uno\n- [ ] dos"}`
+	if code, out := do(t, http.MethodPost, ts.URL+"/api/threads/birth", key, body); code != http.StatusOK {
+		t.Fatalf("birth: %d %s", code, out)
+	}
+
+	code, out := do(t, http.MethodGet, ts.URL+"/api/threads/ws:p1:new-wid-123", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("detail: %d %s", code, out)
+	}
+	var d struct {
+		Logbook *struct {
+			Markdown string `json:"markdown"`
+			Todos    []struct {
+				Text   string `json:"text"`
+				Region string `json:"region"`
+				Index  int    `json:"index"`
+			} `json:"todos"`
+		} `json:"logbook"`
+		Artifacts []struct {
+			Markdown string `json:"markdown"`
+		} `json:"artifacts"`
+		Regions map[string]struct {
+			Markdown string `json:"markdown"`
+		} `json:"regions"`
+	}
+	if err := json.Unmarshal(out, &d); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if d.Logbook == nil {
+		t.Fatal("no logbook")
+	}
+	// The plan is IN the logbook region, not stranded in the document.
+	if len(d.Logbook.Todos) != 2 {
+		t.Fatalf("logbook has %d todo(s); the region was truncated by a duplicate heading: %q",
+			len(d.Logbook.Todos), d.Logbook.Markdown)
+	}
+	if got := d.Regions["logbook"].Markdown; !strings.Contains(got, "uno") {
+		t.Errorf("the writable logbook region does not hold the plan: %q", got)
+	}
+	if len(d.Artifacts) > 0 && strings.Contains(d.Artifacts[0].Markdown, "Fase 1") {
+		t.Error("the plan leaked into the document region — the Logbook heading was duplicated")
+	}
+	// Each todo carries the address toggle_todo takes.
+	for i, td := range d.Logbook.Todos {
+		if td.Region != "logbook" || td.Index != i {
+			t.Errorf("todo %d addressed as %s[%d]", i, td.Region, td.Index)
+		}
+	}
+
+	// And ticking one by that address works — the operation that used to answer
+	// "no todo at that position".
+	tick := `{"region":"logbook","index":1,"text":"dos","done":true}`
+	if code, out := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:new-wid-123/todo", key, tick); code != http.StatusOK {
+		t.Fatalf("toggle_todo: %d %s", code, out)
+	}
+}
+
+// An index that does not exist is almost never a miscount: it is the caller
+// addressing the wrong region. The refusal has to say so, because "no todo at that
+// position" sent a real agent looking in the right place for the wrong reason.
+func TestInvariant_Artifacts_NoSuchTodoExplainsItself(t *testing.T) {
+	ts, key := authedServer(t)
+
+	// wi-1's Logbook has two items; the DoD has none.
+	code, out := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/todo", key,
+		`{"region":"dod","index":0,"done":true}`)
+	if code == http.StatusOK {
+		t.Fatal("ticking a nonexistent DoD item succeeded")
+	}
+	msg := string(out)
+	if !strings.Contains(msg, "no dod section") {
+		t.Errorf("the error does not say what is missing: %s", msg)
+	}
+	if !strings.Contains(msg, "logbook has 2") {
+		t.Errorf("the error does not point at the region that DOES have items: %s", msg)
+	}
+
+	// An out-of-range index in a region that has items says how many there are.
+	code, out = do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/todo", key,
+		`{"region":"logbook","index":9,"done":true}`)
+	if code == http.StatusOK {
+		t.Fatal("ticking index 9 of a two-item list succeeded")
+	}
+	if msg := string(out); !strings.Contains(msg, "valid indices") {
+		t.Errorf("the error does not say what the valid indices are: %s", msg)
+	}
+}
+
+// Ticking several items is ONE change: one call, one Plane write, all-or-nothing.
+// It used to be one call and one write per item — five round trips and five writes
+// against a 60-per-minute budget for something nobody thinks of as five changes.
+func TestInvariant_Artifacts_TodosToggleInOneWrite(t *testing.T) {
+	st := openStore(t)
+	fake := fakePlaneFailingBodies(t)
+	// Pinned: the shared fake serves the same items for every project, so on a
+	// whole-workspace instance the progress diff for a bubble in one project sees
+	// items the mirror attributed to the other — and the level would read cold.
+	if err := st.AddInstance(domain.Instance{
+		Slug: "ws", BaseURL: fake.URL, APIKey: "admin-key", Workspace: "w", Project: "p1",
+	}); err != nil {
+		t.Fatalf("add instance: %v", err)
+	}
+	srv := New(st, time.Hour)
+	warmMirror(t, srv)
+	ts := httptest.NewServer(srv.Handler())
+	t.Cleanup(ts.Close)
+	const key = "plane_personal_key"
+
+	// A page with a plan and a finish line.
+	setup := `{"logbook":"- [ ] uno\n- [ ] dos\n- [ ] tres","dod":"- [ ] measured\n- [ ] reviewed"}`
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key, setup); code != http.StatusOK {
+		t.Fatalf("setup: %d %s", code, out)
+	}
+	writesBefore := fake.writes
+
+	batch := `{"items":[
+	  {"region":"logbook","index":0,"text":"uno","done":true},
+	  {"region":"logbook","index":2,"text":"tres","done":true},
+	  {"region":"dod","index":0,"text":"measured","done":true}
+	]}`
+	code, out := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/todo", key, batch)
+	if code != http.StatusOK {
+		t.Fatalf("batch toggle: %d %s", code, out)
+	}
+	if n := fake.writes - writesBefore; n != 1 {
+		t.Errorf("three toggles cost %d Plane write(s), want 1", n)
+	}
+
+	// The confirmation states the PERSISTED state, so nobody has to re-read.
+	var res struct {
+		Confirmed domain.TodoResult `json:"confirmed"`
+	}
+	if err := json.Unmarshal(out, &res); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	c := res.Confirmed
+	if len(c.Applied) != 3 {
+		t.Fatalf("confirmed %d item(s), want 3: %+v", len(c.Applied), c.Applied)
+	}
+	for _, a := range c.Applied {
+		if !a.Done {
+			t.Errorf("%q reads as not done in the confirmation", a.Text)
+		}
+	}
+	if c.LogbookDone != 2 || c.LogbookOpen != 1 {
+		t.Errorf("logbook counts: %d done / %d open, want 2/1", c.LogbookDone, c.LogbookOpen)
+	}
+	if len(c.Unmet) != 1 || c.Unmet[0] != "reviewed" {
+		t.Errorf("unmet = %v, want just [reviewed]", c.Unmet)
+	}
+	if c.Level != "in_progress" {
+		t.Errorf("level after ticking todos = %q; a ticked todo is production", c.Level)
+	}
+
+	// All-or-nothing: one bad item leaves the whole batch unapplied.
+	before, _ := st.ThreadDocs("wi-1")
+	bad := `{"items":[
+	  {"region":"logbook","index":1,"text":"dos","done":true},
+	  {"region":"logbook","index":9,"text":"nope","done":true}
+	]}`
+	if code, _ := do(t, http.MethodPost, ts.URL+"/api/threads/ws:p1:wi-1/todo", key, bad); code == http.StatusOK {
+		t.Fatal("a batch with an impossible index succeeded")
+	}
+	after, _ := st.ThreadDocs("wi-1")
+	if before["logbook"].Hash != after["logbook"].Hash {
+		t.Error("a refused batch applied part of itself")
+	}
+}
+
+// One call answers the framework's questions for a whole bubble — and reports what is
+// MISSING, which is the finding nobody gets by reading threads one at a time.
+func TestInvariant_Threads_AuditAnswersTheWholeBubble(t *testing.T) {
+	ts, key := authedServer(t)
+
+	// wi-1 carries a Logbook but no Definition of Done (the fixture's shape).
+	code, out := do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/audit", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("audit: %d %s", code, out)
+	}
+	var a domain.BubbleAudit
+	if err := json.Unmarshal(out, &a); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(a.Threads) == 0 {
+		t.Fatal("the audit found no threads")
+	}
+	if a.Counts == nil {
+		t.Error("no per-level counts")
+	}
+	var seen bool
+	for _, th := range a.Threads {
+		if th.Seq != 1 {
+			continue
+		}
+		seen = true
+		if th.Level == "" {
+			t.Error("a thread has no derived level")
+		}
+		// The fixture has no DoD, so the audit must say so rather than staying quiet.
+		if th.HasDoD {
+			t.Error("the fixture thread should have no Definition of Done")
+		}
+		if th.Missing == "" {
+			t.Error("a thread with no Definition of Done was reported as intact")
+		}
+	}
+	if !seen {
+		t.Fatal("thread #1 missing from the audit")
+	}
+	if a.NeedsRepair == 0 {
+		t.Error("NeedsRepair is 0 even though a thread has no finish line")
+	}
+
+	// The declared next action is surfaced, which is what makes the audit answer
+	// "what happens next here?" without opening anything.
+	next := `{"logbook":"**Owner:** me · **State:** building · **Next:** measure it\n\n- [ ] uno",
+	          "dod":"- [ ] measured"}`
+	if code, out := do(t, http.MethodPatch, ts.URL+"/api/threads/ws:p1:wi-1", key, next); code != http.StatusOK {
+		t.Fatalf("patch: %d %s", code, out)
+	}
+	code, out = do(t, http.MethodGet, ts.URL+"/api/bubbles/ws:p1:m1/audit", key, "")
+	if code != http.StatusOK {
+		t.Fatalf("audit: %d %s", code, out)
+	}
+	if err := json.Unmarshal(out, &a); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, th := range a.Threads {
+		if th.Seq == 1 {
+			if th.Next != "measure it" {
+				t.Errorf("next = %q, want %q", th.Next, "measure it")
+			}
+			if th.DoDTotal != 1 || th.DoDDone != 0 {
+				t.Errorf("DoD progress = %d/%d, want 0/1", th.DoDDone, th.DoDTotal)
+			}
+		}
 	}
 }

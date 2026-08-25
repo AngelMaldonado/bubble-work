@@ -14,7 +14,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 )
 
-// Re-homing a thread (docs/ARTIFACT-EDITING.md).
+// Re-homing a thread (docs/journal/ARTIFACT-EDITING.md).
 //
 // birth_thread put a thread in a bubble and nothing could ever change its mind,
 // which made the first guess permanent — an odd property for a system whose

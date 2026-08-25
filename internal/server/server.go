@@ -38,7 +38,10 @@ import (
 )
 
 var (
-	errNotFound = errors.New("bubble not found")
+	// "not found", not "bubble not found": this sentinel now covers threads, pages,
+	// regions and workspaces too, and a missing Definition of Done reported as a
+	// missing bubble sends the reader looking in the wrong place.
+	errNotFound = errors.New("not found")
 	errUnauth   = errors.New("unauthorized")
 	errForbid   = errors.New("not authorized for this instance")
 	errAmbig    = errors.New("ambiguous id")
@@ -46,7 +49,7 @@ var (
 	errBadRequest = errors.New("bad request")
 	// errConflict is a lost-update guard: the caller is writing over something
 	// that changed since they read it → 409. Never a merge, and never a silent
-	// overwrite (docs/ARTIFACT-EDITING.md).
+	// overwrite (docs/journal/ARTIFACT-EDITING.md).
 	errConflict = errors.New("changed since you read it")
 	// errUpstream is a transient Plane failure during resolution. It must map to
 	// 5xx (not 401) so callers retry instead of signing out, and it is never
@@ -75,7 +78,7 @@ type Server struct {
 	now   func() time.Time
 
 	// mirror is the local projection of Plane and syncer is what fills it
-	// (docs/PLANE-SYNC.md). Both are nil if the mirror failed to open — during
+	// (docs/journal/PLANE-SYNC.md). Both are nil if the mirror failed to open — during
 	// the Phase 1 shadow period nothing reads from it, so that is survivable.
 	mirror *mirror.Mirror
 	syncer *planesync.Syncer
@@ -173,7 +176,7 @@ func New(st *store.Store, cycle time.Duration) *Server {
 	}
 	s.loadTuning()
 	s.loadPersistedSnapshots()
-	// The Plane mirror shares the store's file and pool (docs/PLANE-SYNC.md
+	// The Plane mirror shares the store's file and pool (docs/journal/PLANE-SYNC.md
 	// Phase 1). Failing to open it must NOT take the server down: in shadow mode
 	// nothing reads from it yet, so a broken mirror costs sync-diff and nothing
 	// else. Phase 2 is where this becomes load-bearing.
@@ -187,6 +190,10 @@ func New(st *store.Store, cycle time.Duration) *Server {
 		// A field with a queued write must not be reverted by a sync pass while
 		// that write is still in flight (Phase 5).
 		s.syncer.SetLocks(st.LockedFields)
+		// An edit made in Plane's own editor is adopted, not overwritten
+		// (docs/decisions/0001). The syncer reports the bodies; deciding which of
+		// them are somebody else's edits needs the overlay, so it happens here.
+		s.syncer.OnBodies(s.importPlaneEdits)
 		s.syncer.OnChange(func(slug string) {
 			inst, ok, err := s.instanceBySlug(slug)
 			if err != nil || !ok {
@@ -328,7 +335,7 @@ func (s *Server) resolve(ctx context.Context, cred string) (domain.Actor, error)
 	}
 	now := s.now()
 
-	// Only the IDENTITY half is cached (docs/PLANE-SYNC.md Phase 4). Identity is
+	// Only the IDENTITY half is cached (docs/journal/PLANE-SYNC.md Phase 4). Identity is
 	// what costs a Plane call; scope and role are a mirror lookup, so they are
 	// recomputed on every request. That means a membership or role change takes
 	// effect immediately instead of lagging by authTTL — while credential
@@ -491,6 +498,7 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("GET /api/stream", s.restAuth(s.handleStream))
 	mux.HandleFunc("GET /api/bubbles/{id}/heat", s.restAuth(s.handleHeat))
 	mux.HandleFunc("GET /api/bubbles/{id}/threads", s.restAuth(s.handleTimeline))
+	mux.HandleFunc("GET /api/bubbles/{id}/audit", s.restAuth(s.handleAuditBubble))
 	mux.HandleFunc("POST /api/threads/birth", s.restAuth(s.handleBirth))
 	mux.HandleFunc("GET /api/threads/{id}", s.restAuth(s.handleThreadDetail))
 	mux.HandleFunc("GET /api/threads/{id}/comments", s.restAuth(s.handleThreadComments))
@@ -498,8 +506,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/threads/{id}/revisions", s.restAuth(s.handleAddRevision))
 	mux.HandleFunc("POST /api/threads/{id}/todo", s.restAuth(s.handleToggleTodo))
 	mux.HandleFunc("POST /api/threads/{id}/move", s.restAuth(s.handleMoveThread))
+	// Plane's own relationships (docs/decisions/0006): labels say what kind of work
+	// this is, links carry the external evidence, relations tie threads together.
+	mux.HandleFunc("POST /api/threads/{id}/labels", s.restAuth(s.handleSetLabels))
+	mux.HandleFunc("POST /api/threads/{id}/links", s.restAuth(s.handleAddLink))
+	mux.HandleFunc("DELETE /api/threads/{id}/links/{link}", s.restAuth(s.handleRemoveLink))
+	mux.HandleFunc("POST /api/threads/{id}/relations", s.restAuth(s.handleRelate))
+	mux.HandleFunc("DELETE /api/threads/{id}/relations/{other}", s.restAuth(s.handleUnrelate))
 	// 🏆 is Plane's state, not an overlay flag — these move the work item so the
-	// ordinary derivation reports it (docs/THREAD-LIFECYCLE.md).
+	// ordinary derivation reports it (docs/journal/THREAD-LIFECYCLE.md).
 	mux.HandleFunc("POST /api/threads/{id}/complete", s.restAuth(s.handleCompleteThread))
 	mux.HandleFunc("POST /api/threads/{id}/reopen", s.restAuth(s.handleReopenThread))
 	// Deleting is irreversible and deletes from Plane; §5.3 prefers CLOSING a
@@ -530,6 +545,8 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("POST /api/admin/tick", s.adminOnly(s.handleTick))
 	mux.HandleFunc("GET /api/admin/members", s.adminOnly(s.handleAdminMembers))
 	mux.HandleFunc("POST /api/admin/instances/{slug}/autostate", s.adminOnly(s.handleSetAutoState))
+	mux.HandleFunc("POST /api/admin/sync/{slug}/export", s.adminOnly(s.handleAdminExport))
+	mux.HandleFunc("POST /api/admin/sync/{slug}/adopt", s.adminOnly(s.handleAdminAdopt))
 	mux.HandleFunc("GET /api/admin/outbox", s.adminOnly(s.handleAdminOutbox))
 	mux.HandleFunc("DELETE /api/admin/outbox/{id}", s.adminOnly(s.handleDropOutbox))
 	mux.HandleFunc("GET /api/admin/sync/{slug}", s.adminOnly(s.handleSyncStatus))
@@ -801,7 +818,11 @@ func (s *Server) bubbleHeat(b domain.Bubble, tun domain.Tuning, now time.Time) (
 	res := heat.Classify(b, tun, now)
 	buoy := s.threadBuoyancy(b)
 	if !tun.BubbleLevelRollup {
-		return res, bubbleLevel(b, res.Lifecycle, tun), buoy
+		level := bubbleLevel(b, res.Lifecycle, tun)
+		if level == "rip" && bubblePulse(b, tun, now) {
+			level = "zzzz" // discussed, so not a grave (docs/decisions/0004)
+		}
+		return res, level, buoy
 	}
 	switch {
 	case b.Closed:
@@ -824,8 +845,16 @@ func (s *Server) bubbleHeat(b domain.Bubble, tun domain.Tuning, now time.Time) (
 	}
 	switch {
 	case found:
+		level := hottest.Level
+		if level == "rip" && bubblePulse(b, tun, now) {
+			// Someone is still talking about this work. Presence does not WARM a
+			// bubble — §5.2 stands — but a bubble people are actively discussing is
+			// not a grave (docs/decisions/0004). The same rule threadLevel already
+			// applies one grain down.
+			level = "zzzz"
+		}
 		return heat.Result{Lifecycle: hottest.Lifecycle, Score: hottest.Score,
-			Reason: hottest.Reason, Code: hottest.ReasonCode, Args: hottest.ReasonArgs}, hottest.Level, buoy
+			Reason: hottest.Reason, Code: hottest.ReasonCode, Args: hottest.ReasonArgs}, level, buoy
 	case len(b.Threads) > 0:
 		// Every thread finished. Not 🏆 — that band means "closed", and closing is
 		// a human decision (§4). Surface it as needing one.
@@ -836,6 +865,17 @@ func (s *Server) bubbleHeat(b domain.Bubble, tun domain.Tuning, now time.Time) (
 		return heat.Result{Lifecycle: domain.Dormant, Score: 0,
 			Reason: "no threads yet", Code: reasonNoThreads}, "rip", buoy
 	}
+}
+
+// bubblePulse reports whether anyone has commented on ANY of a bubble's threads
+// recently enough to keep it out of the grave (docs/decisions/0004).
+//
+// The bubble's evidence stream already carries every thread's comments, so this is
+// the thread-grain pulse read one level up. Deliberately a FLOOR on the band and
+// nothing else: it does not touch the lifecycle, the score or the ordering, because
+// presence must not outrank output.
+func bubblePulse(b domain.Bubble, tun domain.Tuning, now time.Time) bool {
+	return heat.HasPulse(b.Evidence, heat.WindowFor(b, tun, now), tun, now)
 }
 
 // toViews classifies bubbles into derived views, hottest first (buoyancy).
@@ -1010,23 +1050,26 @@ func (s *Server) resolveID(ctx context.Context, q string) (string, error) {
 	return v.ID, nil
 }
 
-// BirthThread is the policy gate (§3): no thread is born without a Brief that
-// carries a Definition of Done and a Logbook (unless it's a small thread).
-func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error) {
+// CreateThread creates a thread. It asks for a NAME and nothing else
+// (docs/decisions/0005).
+//
+// This used to be a policy gate: no thread was born without a Brief carrying a
+// Definition of Done written as checkboxes, plus a Logbook, unless the caller
+// declared it small. The gate was honest about its intent — a thread nobody had
+// thought about is a thread nobody finishes — and wrong about its method. Everybody
+// writes their work down differently, and the tool's job is to HOST that writing and
+// tell you what has gone cold, not to grade the paperwork. A framework that refuses
+// the document you actually wrote gets routed around, and the work then happens
+// somewhere it can never be measured.
+//
+// So the shape is now a suggestion. What is missing is still SAID — the result's
+// Message names it — but nothing is refused: the linter's advisories run over the
+// body and the warnings ride back with the thread.
+func (s *Server) CreateThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error) {
 	actor, _ := domain.ActorFrom(ctx)
-	if strings.TrimSpace(req.Brief) == "" {
-		return domain.BirthResult{}, fmt.Errorf("birth rejected: a BRIEF is required (§3.1)")
-	}
-	if !strings.Contains(strings.ToLower(req.Brief), "definition of done") {
-		return domain.BirthResult{}, fmt.Errorf("birth rejected: the BRIEF must include a Definition of Done section (§3.1)")
-	}
-	if strings.TrimSpace(req.Logbook) == "" && !req.SmallThread {
-		return domain.BirthResult{}, fmt.Errorf("birth rejected: a LOGBOOK is required unless small_thread=true (§3.2)")
-	}
 	if strings.TrimSpace(req.Name) == "" {
-		return domain.BirthResult{}, fmt.Errorf("birth rejected: a thread name is required")
+		return domain.BirthResult{}, fmt.Errorf("%w: a thread needs a name", errBadRequest)
 	}
-
 	// Resolve the target bubble and split its namespaced id.
 	id, err := s.resolveID(ctx, req.BubbleID)
 	if err != nil {
@@ -1058,12 +1101,10 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 	if err != nil {
 		return domain.BirthResult{}, fmt.Errorf("resolve state: %w", err)
 	}
-	// NOTE: birth is deliberately NOT linted against the §3.1 template. Its gate
-	// (above) accepts a Definition of Done written as prose and a Logbook that is
-	// a sentence, which is looser than the template — but it is the established
-	// contract, and tightening it would reject payloads today's callers send.
-	// Malformed EDITS are refused; see UpdateThread.
-	page := briefLogbookHTML(req.Brief, req.Logbook)
+	// The document, in whatever shape its author wanted. A Body is written verbatim;
+	// Brief/Logbook keep the older sectioned assembly for callers that still send
+	// them. Nothing here is refused — the advisories below are said, not enforced.
+	page := threadPageHTML(req)
 	wid, err := cl.CreateWorkItem(ctx, req.Name, page, state)
 	if err != nil {
 		return domain.BirthResult{}, fmt.Errorf("create work item: %w", err)
@@ -1100,14 +1141,51 @@ func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (doma
 		}
 	}
 
+	// Record the BIRTH durably (docs/decisions/0002). The cache patch below is not
+	// enough on its own: it dies with the cache, and the progress sweep that runs
+	// afterwards knows only what the mirror shows — which is why a freshly born
+	// thread used to read 😴 for a whole cycle.
+	//
+	// The row is seeded with the logbook fingerprint AS BORN, computed the same way
+	// the sweep computes it (from the HTML round trip), so the first sweep sees no
+	// change and reports the birth rather than inventing a "logbook updated" for a
+	// plan nobody has edited yet.
+	// The document store gets the birth artifacts too (docs/decisions/0001), so a
+	// thread is store-native from its first moment rather than only from its first
+	// edit.
+	s.recordDocs(ctx, wid, page)
+
+	bornBody := md.FromHTML(page)
+	if err := s.store.SaveThreadProgress([]store.ThreadProgress{{
+		ThreadID:    wid,
+		LogbookHash: md.LogbookFingerprint(bornBody),
+		DoneTodos:   md.CountDone(bornBody),
+		BornAt:      s.now(),
+	}}); err != nil {
+		// Not fatal: the thread exists and the work is real. It will simply read as
+		// a newborn that produced nothing until its first edit.
+		log.Printf("birth_thread: record birth of %s: %v", wid, err)
+	}
+
 	// Reflect the new thread in the cache without a refetch.
 	s.patchCachedBubble(slug, id, func(b *domain.Bubble) {
-		b.Threads = append(b.Threads, domain.Thread{ID: wid, Name: req.Name, Active: true})
-		b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadCreated, At: s.now()})
+		b.Threads = append(b.Threads, domain.Thread{ID: wid, Name: req.Name, Active: true, CreatedAt: s.now()})
+		b.Evidence = append(b.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadBorn, At: s.now()})
 	})
 	s.broadcastThread("")
-	log.Printf("birth_thread by %s: bubble=%s -> work item %s", actor.Label(), id, wid)
-	return domain.BirthResult{ThreadID: wid, Created: true, Message: fmt.Sprintf("created thread %q in %s", req.Name, id)}, nil
+	log.Printf("create_thread by %s: bubble=%s -> work item %s", actor.Label(), id, wid)
+	msg := fmt.Sprintf("created thread %q in %s", req.Name, id)
+	if advice := threadAdvice(bornBody); advice != "" {
+		msg += " — " + advice
+	}
+	return domain.BirthResult{ThreadID: wid, Created: true, Message: msg}, nil
+}
+
+// BirthThread is CreateThread under the name every existing caller uses. Kept
+// because the CLI, the MCP tool and the REST route all say "birth" — the word is
+// fine, it was the GATE behind it that had to go (docs/decisions/0005).
+func (s *Server) BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error) {
+	return s.CreateThread(ctx, req)
 }
 
 // writeKey returns the Plane key to write with: the caller's own (impersonation)
@@ -1273,18 +1351,69 @@ func (s *Server) instanceBySlug(slug string) (domain.Instance, bool, error) {
 	return domain.Instance{}, false, nil
 }
 
-// briefLogbookHTML renders the two birth artifacts into one description page (§7.1).
+// threadPageHTML renders a new thread's document.
 //
-// Both fields arrive as Markdown — a Logbook is phases and a todo list by
-// definition (§ thread birth rule) — so they are rendered as Markdown. They used
-// to be HTML-escaped with newlines turned into <br/>, which made a birthed
-// Logbook one long paragraph: no headings, and no checkboxes for the todos.
-// That is not cosmetic. A todo Plane cannot render is a todo nobody can tick,
-// and a ticked todo is the primary evidence of production.
-func briefLogbookHTML(brief, logbook string) string {
+// A Body is the author's page, written exactly as sent: no headings this code
+// invented (docs/decisions/0005). Brief/Logbook remain for callers that predate
+// Body — the Brief's text is appended as written, because `## Brief` is no longer a
+// section the server knows about (docs/decisions/0006), while the Logbook keeps its
+// heading because that section is still an addressable region.
+func threadPageHTML(req domain.BirthRequest) string {
+	body := strings.TrimSpace(req.Body)
+	if body == "" {
+		body = strings.TrimSpace(req.Brief)
+	}
+	if body == "" && strings.TrimSpace(req.Logbook) == "" {
+		return "" // a name today, a document when there is something to say
+	}
+	return briefLogbookHTML(body, req.Logbook)
+}
+
+// threadAdvice is what the server has to SAY about a new thread's document, in one
+// sentence, having created it regardless.
+//
+// The old gate refused these same things. Saying them is the part that was actually
+// useful: a thread with no finish line is harder to finish, and that is worth
+// knowing at the moment you write it — it is not worth a rejected call.
+func threadAdvice(body string) string {
+	if strings.TrimSpace(body) == "" {
+		return "created with no document yet — write one when you know what this is; " +
+			"any edit to it is evidence of production and warms the bubble"
+	}
+	var says []string
+	if _, _, found := md.ExtractSection(body, "definition of done", "dod"); !found {
+		says = append(says, "no Definition of Done — nothing forces one, but it is what "+
+			"settles whether the work is over")
+	} else if dod, _, _ := md.ExtractSection(body, "definition of done", "dod"); len(md.ParseTodos(dod)) == 0 {
+		says = append(says, "the Definition of Done has no checkboxes, so nothing can be ticked off it")
+	}
+	if len(md.ParseChecklist(body)) == 0 {
+		says = append(says, "no checklist items anywhere — ticking one is the smallest evidence of "+
+			"production this thread can produce")
+	}
+	if len(says) == 0 {
+		return ""
+	}
+	return strings.Join(says, "; ")
+}
+
+// briefLogbookHTML renders a document and an optional Logbook into one page.
+//
+// Both arrive as Markdown and are rendered as Markdown: a Logbook is phases and a
+// todo list, and a todo Plane cannot render is a todo nobody can tick.
+//
+// The `## Logbook` heading belongs to US — it is what makes that part an addressable
+// region — so a caller that helpfully includes it does not end up with two. A
+// duplicate is worse than untidy: the first section's range stops at the second
+// heading, so the canonical region becomes EMPTY while the content sits in the
+// document region, and every region-scoped write then addresses nothing.
+// `duplicate-section` in the linter catches the same shape arriving by any other
+// route.
+func briefLogbookHTML(document, logbook string) string {
+	logbook = md.StripLeadingHeading(logbook, "logbook")
+
 	var b strings.Builder
-	b.WriteString("<h2>Brief</h2>")
-	b.WriteString(md.RenderPlaneHTML(brief))
+	b.WriteString(md.RenderPlaneHTML(document))
 	if strings.TrimSpace(logbook) != "" {
 		b.WriteString("<h2>Logbook</h2>")
 		b.WriteString(md.RenderPlaneHTML(logbook))

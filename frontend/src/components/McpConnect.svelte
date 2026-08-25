@@ -1,5 +1,5 @@
 <script lang="ts">
-  // Connect your agent (docs/MCP-ACCESS.md step 5).
+  // Connect your agent (docs/journal/MCP-ACCESS.md step 5).
   //
   // The server's own MCP endpoint is authenticated exactly like the REST API:
   // you present your Plane key as a Bearer credential, and the framework's rules

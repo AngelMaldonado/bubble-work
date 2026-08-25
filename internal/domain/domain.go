@@ -19,14 +19,21 @@ const (
 	Closed  Lifecycle = "closed"
 )
 
-// Evidence kinds (§5.1). Birth is what a thread *is*, not what it produced, so
-// it is deliberately weaker than the rest: a thread with nothing but its own
-// birth event never "got going" (THREAD-LIFECYCLE.md).
+// Evidence kinds (§5.1).
+//
+// CREATED and BORN are different events, and only one of them is evidence
+// (docs/decisions/0002). A work item that merely appeared — someone made one in
+// Plane — has produced nothing by existing, and stays weak. A thread CREATED here
+// is different: somebody defined a piece of work, which is production before any
+// code is touched.
 const (
-	EvThreadCreated   = "thread-created"   // the work item came into being (weak)
+	EvThreadCreated   = "thread-created"   // the work item came into being (weak — not production)
+	EvThreadBorn      = "thread-born"      // somebody defined a piece of work here (docs/decisions/0005)
 	EvCompletedTodo   = "completed-todo"   // a logbook/DoD item got ticked
 	EvLogbookUpdated  = "logbook-updated"  // the plan itself changed (§ working protocol)
+	EvBodyUpdated     = "body-updated"     // the document changed outside the plan (docs/decisions/0004)
 	EvRevisionAdded   = "revision-added"   // a revision artifact (sub-item) landed
+	EvLinkAdded       = "link-added"       // external evidence was published (docs/decisions/0006)
 	EvThreadCompleted = "thread-completed" // the work item reached a completed state
 	EvComment         = "comment"          // PULSE, not progress — see Pulse()
 )
@@ -45,9 +52,9 @@ type EvidenceEvent struct {
 func (e EvidenceEvent) Pulse() bool { return e.Kind == EvComment }
 
 // Progress reports whether an event is evidence of *production* by the thread
-// itself. Being born is not producing (that heats the BUBBLE that gained the
-// thread, not the thread), and presence is not producing. Only progress can
-// resurrect a thread (THREAD-LIFECYCLE.md).
+// itself. Merely being CREATED is not producing, and presence is not producing.
+// Being BORN is: the birth rule cannot be satisfied without writing the two
+// artifacts (docs/decisions/0002). Only progress can resurrect a thread.
 func (e EvidenceEvent) Progress() bool {
 	return e.Kind != EvThreadCreated && !e.Pulse()
 }
@@ -106,10 +113,12 @@ type Tuning struct {
 
 	// ---- thread grain (THREAD-LIFECYCLE.md) ----
 
-	// ThreadBirthHeats makes a work item's own creation heat the thread itself.
-	// Off by default: being born is not producing, and turning it on makes every
-	// new Backlog item read 🔥 for a cycle. (A birth always heats its BUBBLE.)
-	ThreadBirthHeats bool `json:"thread_birth_heats"`
+	// (There was a ThreadBirthHeats knob here. It asked whether a work item's own
+	// CREATION should heat it, and the answer was always no. What replaced it is not
+	// tunable: a thread that passed the birth rule emits EvThreadBorn, which is
+	// production, while a work item that merely appeared emits EvThreadCreated,
+	// which is not — see docs/decisions/0002.)
+
 	// ThreadGraceCycles is how long a newborn thread that has produced nothing
 	// stays 😴 before it is called 🪦. 0 = no grace.
 	ThreadGraceCycles float64 `json:"thread_grace_cycles"`
@@ -136,7 +145,6 @@ func DefaultTuning() Tuning {
 		OwnerlessIsDormant:      true,
 		BubbleRipNeedsOwner:     true,
 		BubbleLevelRollup:       true,
-		ThreadBirthHeats:        false,
 		ThreadGraceCycles:       1,
 		ThreadRipNeedsOwner:     true,
 		PulseCycles:             1,
@@ -201,8 +209,6 @@ func TuningFields() []TuningField {
 		{Key: "bubble_rip_needs_owner", Label: "Ownerless bubble is RIP", Kind: "toggle", Group: "bubble",
 			Help: "A dormant bubble with no owner reads 🪦 instead of 😴. A bubble that never produced anything is 🪦 regardless. Only used when the band is NOT rolled up from threads."},
 
-		{Key: "thread_birth_heats", Label: "Creating a thread heats it", Kind: "toggle", Group: "thread",
-			Help: "Off by default: being born is not producing. Turning this on makes every new work item read 🔥 for a whole cycle, even untouched in Backlog. A birth always heats its bubble."},
 		{Key: "thread_grace_cycles", Label: "Newborn grace (cycles)", Kind: "number", Group: "thread", Min: 0, Max: 52, Step: 0.5,
 			Help: "How long a new thread that has produced nothing stays 😴 before it is called 🪦. 0 = no grace."},
 		{Key: "thread_rip_needs_owner", Label: "Unassigned thread is RIP", Kind: "toggle", Group: "thread",
@@ -424,10 +430,15 @@ type ThreadNode struct {
 // ThreadDetail is a thread's full interior: work-artifact files, the logbook,
 // and revision artifacts (INTERIOR-PLAN.md Phase 11). Read-only in v1.
 type ThreadDetail struct {
-	ID          string        `json:"id"`
-	Seq         int           `json:"seq"`
-	Title       string        `json:"title"`
-	Kind        string        `json:"kind"` // "simple" | "phased"
+	ID    string `json:"id"`
+	Seq   int    `json:"seq"`
+	Title string `json:"title"`
+	Kind  string `json:"kind"` // "simple" | "phased" — the SHAPE of the page
+	// Labels are Plane's own labels on the work item. They replace the overlay
+	// "thread type" we used to keep (docs/decisions/0006): categorising work is
+	// something the tracker already does, and doing it a second time here only
+	// created a second answer.
+	Labels      []Label       `json:"labels,omitempty"`
 	Active      bool          `json:"active"`
 	Priority    string        `json:"priority,omitempty"`
 	Assignees   []string      `json:"assignees,omitempty"`
@@ -439,13 +450,64 @@ type ThreadDetail struct {
 	CreatedAt   time.Time     `json:"created_at"`
 	CompletedAt *time.Time    `json:"completed_at,omitempty"`
 	// Regions is what an editor loads and writes back, keyed by region name
-	// (docs/ARTIFACT-EDITING.md). Distinct from Artifacts, which is the RENDERED
+	// (docs/journal/ARTIFACT-EDITING.md). Distinct from Artifacts, which is the RENDERED
 	// read model: this is the exact markdown a splice will diff against.
 	Regions map[string]EditableRegion `json:"regions,omitempty"`
 	// Warnings are markdown-standard violations on a write that was allowed
 	// through leniently — the editor shows them next to the save status.
 	Warnings []md.Finding `json:"warnings,omitempty"`
-	Buoyancy              // lifecycle/level/score/reason, flattened into the JSON
+	// FromPlane says the body being shown was last written in PLANE's editor and
+	// imported (docs/decisions/0001). Not a warning — Plane is a writable surface
+	// and this is normal operation — but a reader deserves to know, because the
+	// import runs through the HTML bridge and can therefore have lost detail the
+	// author put there.
+	FromPlane  bool       `json:"from_plane,omitempty"`
+	ImportedAt *time.Time `json:"imported_at,omitempty"`
+	// Links are the external evidence hung off the work item in Plane: a commit, a
+	// PR, a published deliverable (docs/decisions/0006). Publishing one is
+	// production, which is why they are worth reading here rather than being left
+	// to Plane's UI.
+	Links []Link `json:"links,omitempty"`
+	// Related are Plane's typed relationships to other threads.
+	Related []Related `json:"related,omitempty"`
+	// UnmetDoD is set when a thread was just COMPLETED with Definition of Done items
+	// still unticked. It is a report, not a refusal (docs/decisions/0005): finishing
+	// is the author's call, and this is what they closed it over.
+	UnmetDoD []string `json:"unmet_dod,omitempty"`
+	Buoyancy          // lifecycle/level/score/reason, flattened into the JSON
+}
+
+// Label is one of Plane's labels on a work item.
+//
+// Plane already has a vocabulary for "what kind of work is this" — labels, work item
+// types, priorities — and we spent an overlay table answering the same question a
+// second way (docs/decisions/0006). Labels come back embedded in the work item, so
+// reading them costs nothing on top of the sync we already run.
+type Label struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// Link is external evidence attached to a thread: the commit, the PR, the thing
+// that shipped. Held by Plane, mirrored here.
+type Link struct {
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	Title     string    `json:"title,omitempty"`
+	CreatedAt time.Time `json:"created_at,omitempty"`
+}
+
+// Related is one typed edge to another thread. Type is Plane's own vocabulary —
+// relates_to, duplicate, blocking, blocked_by, start_before/after,
+// finish_before/after — and Title/State are filled in from the mirror when the
+// other end is a thread we know about.
+type Related struct {
+	ID    string `json:"id"` // namespaced thread id, so a client can open it
+	Type  string `json:"type"`
+	Title string `json:"title,omitempty"`
+	State string `json:"state,omitempty"`
+	Level string `json:"level,omitempty"`
 }
 
 // EditableRegion is one writable part of a thread's page.
@@ -542,7 +604,7 @@ type Comment struct {
 	CreatedAt time.Time `json:"created_at"`
 
 	// Pending marks a comment that has NOT reached Plane — a draft kept after a
-	// failed post (docs/PLANE-SYNC.md Phase 5). It carries no credential, so
+	// failed post (docs/journal/PLANE-SYNC.md Phase 5). It carries no credential, so
 	// only its author can re-send it, with their live key; that is also the only
 	// way Plane records the right author. DraftID addresses it for retry/discard.
 	Pending bool   `json:"pending,omitempty"`
@@ -574,16 +636,28 @@ type InstanceMembers struct {
 	Error    string   `json:"error,omitempty"` // set if this instance's members couldn't be fetched
 }
 
-// BirthRequest carries the two birth artifacts the policy engine enforces (§3).
+// BirthRequest asks for a new thread. The only thing it must carry is a NAME
+// (docs/decisions/0005): the framework hosts the writing, it does not dictate its
+// shape — and since docs/decisions/0006 it does not read the writing either.
 type BirthRequest struct {
-	BubbleID    string `json:"bubble_id"`
-	Name        string `json:"name"`
-	Brief       string `json:"brief"`
-	Logbook     string `json:"logbook"`
-	SmallThread bool   `json:"small_thread"` // §3.2 escape hatch
+	BubbleID string `json:"bubble_id"`
+	Name     string `json:"name"`
+	// Body is the thread's document, in whatever shape its author wants. Written
+	// verbatim: no headings are added around it.
+	Body string `json:"body,omitempty"`
+	// Brief and Logbook are the older two-field shape. Brief is appended to the
+	// document as written — no `## Brief` heading is added any more, because Brief
+	// is no longer a thing the server knows about — and Logbook keeps its heading,
+	// because that section is still an addressable region.
+	Brief   string `json:"brief,omitempty"`
+	Logbook string `json:"logbook,omitempty"`
+	// SmallThread is kept so old payloads still parse. Nothing reads it.
+	SmallThread bool `json:"small_thread,omitempty"`
 }
 
-// BirthResult is returned once a thread's birth artifacts pass the policy gate.
+// BirthResult is returned once a thread exists. Message carries whatever the
+// server wants to SAY about the document — a missing finish line, a Logbook with no
+// todo — none of which stopped the thread being created.
 type BirthResult struct {
 	ThreadID string `json:"thread_id"`
 	Created  bool   `json:"created"`
@@ -647,7 +721,7 @@ type Page struct {
 	CreatedAt time.Time `json:"created_at"`
 	// Storage says which system is the record for this page: "plane" when Plane
 	// holds it, "local" when this server does because the instance's Plane has no
-	// pages API (docs/PAGES-CAPABILITY.md). A reader deserves to know which of the
+	// pages API (docs/journal/PAGES-CAPABILITY.md). A reader deserves to know which of the
 	// two they are editing, since only one of them is visible in Plane's own UI.
 	Storage string `json:"storage"`
 	// Parent is the namespaced id of the page this one sits under, or "" at the
@@ -749,7 +823,7 @@ type AdminStats struct {
 	StartedAt       string `json:"started_at"`
 	// RateBudgets is each instance's live Plane rate-limit state. Plane allows
 	// 60 requests/minute per API key and reports the remaining allowance on
-	// every response; this is that, surfaced (docs/PLANE-SYNC.md Phase 0).
+	// every response; this is that, surfaced (docs/journal/PLANE-SYNC.md Phase 0).
 	RateBudgets []RateBudget `json:"rate_budgets,omitempty"`
 }
 
@@ -767,7 +841,7 @@ type RateBudget struct {
 	Floor     int    `json:"floor"`     // allowance reserved for interactive work
 }
 
-// ---- Plane mirror (docs/PLANE-SYNC.md) ----
+// ---- Plane mirror (docs/journal/PLANE-SYNC.md) ----
 
 // InstanceStatus is one instance's sync freshness.
 type InstanceStatus struct {
@@ -779,7 +853,7 @@ type InstanceStatus struct {
 }
 
 // ServiceStatus tells a client whether what it is showing can be trusted to be
-// current (docs/PLANE-SYNC.md Phase 7). Reads come from a local mirror now, so
+// current (docs/journal/PLANE-SYNC.md Phase 7). Reads come from a local mirror now, so
 // a stopped sync would otherwise leave the board rendering confidently from data
 // that is quietly getting older. Being behind is fine; being behind silently is
 // not.
@@ -875,8 +949,196 @@ type SyncDiff struct {
 	TookMS    int64         `json:"took_ms"`
 }
 
+// TodoToggle is one checklist item to tick or un-tick, addressed the way read_thread
+// reports it: per-region index, base 0, with the item's text as a guard.
+type TodoToggle struct {
+	Region string `json:"region,omitempty"` // "document" | "logbook" | "dod"; empty means logbook
+	Index  int    `json:"index"`
+	Text   string `json:"text,omitempty"` // guards the position; refuses if it moved
+	Done   bool   `json:"done"`
+}
+
+// TodoResult is the explicit confirmation of a toggle: what is PERSISTED now, plus
+// the two numbers a caller was going to re-read the whole thread for anyway.
+//
+// It exists because returning the full interior technically answered "did it land?"
+// and practically did not: the answer was buried in a large object, so an agent
+// re-read the thread to be sure. This says it in one place.
+type TodoResult struct {
+	ThreadID string `json:"thread_id"`
+	// Applied is each item as it now stands, read back from the stored page rather
+	// than echoed from the request.
+	Applied []md.Todo `json:"applied"`
+	// Open/Done counts per region, after the write. The document has its own pair
+	// because a checklist written under somebody's own heading is a plan too
+	// (docs/decisions/0005).
+	LogbookOpen  int `json:"logbook_open"`
+	LogbookDone  int `json:"logbook_done"`
+	DoDOpen      int `json:"dod_open"`
+	DoDDone      int `json:"dod_done"`
+	DocumentOpen int `json:"document_open,omitempty"`
+	DocumentDone int `json:"document_done,omitempty"`
+	// Unmet is the Definition of Done's outstanding items, when the thread has one.
+	// It no longer blocks anything — completing is the author's call
+	// (docs/decisions/0005) — it is what they check that call against.
+	Unmet []string `json:"unmet,omitempty"`
+	// Level is the thread's derived level after the write — a ticked todo is
+	// production, so this is where a caller sees the heat it just produced.
+	Level  string `json:"level"`
+	Reason string `json:"reason,omitempty"`
+}
+
+// LogbookTotal and DoDTotal are the sums a caller would otherwise compute.
+func (r TodoResult) LogbookTotal() int { return r.LogbookDone + r.LogbookOpen }
+func (r TodoResult) DoDTotal() int     { return r.DoDDone + r.DoDOpen }
+
+// NewTodoResult reads the confirmation back out of the thread as it now stands.
+//
+// `want` is what the caller asked for; every value reported here is looked up in the
+// STORED page instead of being echoed, so "done: true" in the answer means the page
+// says so — which is the whole point of the confirmation.
+func NewTodoResult(d ThreadDetail, want []TodoToggle) TodoResult {
+	res := TodoResult{ThreadID: d.ID, Level: d.Level, Reason: d.Reason}
+	byRegion := map[string][]md.Todo{}
+	for _, a := range d.Artifacts {
+		if a.ID != "" { // a revision is its own work item, not this page
+			continue
+		}
+		byRegion["document"] = append(byRegion["document"], a.Todos...)
+		for _, td := range a.Todos {
+			if td.Done {
+				res.DocumentDone++
+			} else {
+				res.DocumentOpen++
+			}
+		}
+	}
+	byRegion["brief"] = byRegion["document"] // the API's older word for it
+	if d.Logbook != nil {
+		byRegion["logbook"] = d.Logbook.Todos
+		byRegion["dod"] = d.Logbook.DoD
+		for _, td := range d.Logbook.Todos {
+			if td.Done {
+				res.LogbookDone++
+			} else {
+				res.LogbookOpen++
+			}
+		}
+		for _, td := range d.Logbook.DoD {
+			if td.Done {
+				res.DoDDone++
+			} else {
+				res.DoDOpen++
+				res.Unmet = append(res.Unmet, td.Text)
+			}
+		}
+	}
+	for _, w := range want {
+		region := w.Region
+		if region == "" {
+			region = "logbook"
+		}
+		list := byRegion[region]
+		if w.Index >= 0 && w.Index < len(list) {
+			res.Applied = append(res.Applied, list[w.Index])
+		}
+	}
+	return res
+}
+
+// ThreadAudit is one thread as the framework's own questions see it: is it born,
+// what is its finish line, how far along is it, and what happens next.
+type ThreadAudit struct {
+	ID     string   `json:"id"`
+	Seq    int      `json:"seq"`
+	Title  string   `json:"title"`
+	Labels []string `json:"labels,omitempty"` // Plane's labels on the work item
+	Owner  string   `json:"owner,omitempty"`
+
+	Level      string `json:"level"` // in_progress | zzzz | rip | done
+	Reason     string `json:"reason,omitempty"`
+	State      string `json:"state,omitempty"` // Plane's own column (localized)
+	StateGroup string `json:"state_group,omitempty"`
+
+	// HasBrief says the thread has a DOCUMENT at all — anything that is not the
+	// Logbook or the DoD. The field name predates docs/decisions/0006 and is kept so
+	// clients do not break; there is no Brief any more, only writing.
+	HasBrief   bool `json:"has_brief"`
+	HasDoD     bool `json:"has_dod"`
+	HasLogbook bool `json:"has_logbook"`
+
+	DoDDone    int      `json:"dod_done"`
+	DoDTotal   int      `json:"dod_total"`
+	TodosDone  int      `json:"todos_done"`
+	TodosTotal int      `json:"todos_total"`
+	Unmet      []string `json:"unmet,omitempty"` // Definition of Done items still open
+
+	// Next is the Logbook's declared next concrete action, parsed from its status
+	// line. Empty means nobody wrote one, which is itself the finding.
+	Next string `json:"next,omitempty"`
+	// Missing names the ONE thing that would most improve this thread's legibility —
+	// a document, a finish line, something to tick, a next action. An OBSERVATION,
+	// never a violation (docs/decisions/0005): none of it was ever required.
+	Missing        string     `json:"missing,omitempty"`
+	LastProgressAt *time.Time `json:"last_progress_at,omitempty"`
+}
+
+// BubbleAudit answers "what is the state of this bubble?" in one call, from local
+// data only — no Plane traffic, so it costs the same as showing the board.
+type BubbleAudit struct {
+	BubbleID    string `json:"bubble_id"`
+	Name        string `json:"name"`
+	Instance    string `json:"instance"`
+	ProjectName string `json:"project_name,omitempty"`
+
+	Level     string `json:"level"`
+	Lifecycle string `json:"lifecycle"`
+	Reason    string `json:"reason,omitempty"`
+
+	Outcome string `json:"outcome,omitempty"`
+	Owner   string `json:"owner,omitempty"`
+	Closure string `json:"closure,omitempty"`
+	Closed  bool   `json:"closed,omitempty"`
+
+	Threads []ThreadAudit  `json:"threads"`
+	Counts  map[string]int `json:"counts"` // threads by level
+	// NeedsRepair counts threads with a Missing observation. A bubble can be warm and
+	// still hold work nobody has defined a finish line for.
+	NeedsRepair int `json:"needs_repair"`
+}
+
+// ExportResult is what one `bubble admin export` wrote (docs/decisions/0001).
+//
+// The counts are the point: a backup you cannot check is a hope. Threads and
+// Files differing tells you how many threads had nothing worth writing, and Pages
+// covers the ones held HERE — the copies that exist nowhere else.
+type ExportResult struct {
+	Instance   string    `json:"instance"`
+	Dir        string    `json:"dir"`
+	At         time.Time `json:"at"`
+	Workspaces int       `json:"workspaces"`
+	Bubbles    int       `json:"bubbles"`
+	Threads    int       `json:"threads"`
+	Revisions  int       `json:"revisions"`
+	Pages      int       `json:"pages"`
+	Files      int       `json:"files"`
+}
+
+// AdoptResult is what one `bubble admin adopt` did (docs/decisions/0001).
+//
+// Skipped is threads that already had a stored document — re-running an adoption
+// must never overwrite writing done since the last one.
+type AdoptResult struct {
+	Instance string    `json:"instance"`
+	At       time.Time `json:"at"`
+	Threads  int       `json:"threads"`
+	Adopted  int       `json:"adopted"`
+	Skipped  int       `json:"skipped"`
+	Empty    int       `json:"empty"`
+}
+
 // SyncFidelity measures what a read→write round trip would do to an instance's
-// bodies (docs/ARTIFACT-EDITING.md Phase 0). Cheap — it reads the mirror and
+// bodies (docs/journal/ARTIFACT-EDITING.md Phase 0). Cheap — it reads the mirror and
 // costs no Plane calls — so it can be re-run after every change to the markdown
 // bridge rather than measured once and asserted forever.
 type SyncFidelity struct {

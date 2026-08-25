@@ -1,6 +1,7 @@
 package heat
 
 import (
+	"math"
 	"testing"
 	"time"
 
@@ -113,6 +114,113 @@ func TestClassifyThread(t *testing.T) {
 	}
 	if r := ClassifyThread(orphan, nil, win, tun, now); r.Lifecycle != domain.Dormant {
 		t.Fatalf("orphan with no output: want Dormant, got %s", r.Lifecycle)
+	}
+}
+
+// TestInvariant_Heat_EveryBranchOfClassify pins the shared rule itself — the one
+// `classify` both grains delegate to. Its five outcomes were only ever reached
+// through Classify/ClassifyThread, so a branch could change meaning without any
+// test naming what it decided. Each case here isolates ONE branch, including the
+// ordering that matters most: output outranks paperwork, so something actively
+// producing stays Hot even with nobody accountable.
+func TestInvariant_Heat_EveryBranchOfClassify(t *testing.T) {
+	tun := tuning(time.Hour) // window: current = last 1h, previous = 1h before that
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	at := func(mins int) time.Time { return now.Add(-time.Duration(mins) * time.Minute) }
+
+	// A bubble carries the evidence; owner and an open thread are varied per case.
+	bubble := func(owner string, active bool, evMins ...int) domain.Bubble {
+		b := domain.Bubble{Owner: owner, Threads: []domain.Thread{{Active: active}}}
+		for _, m := range evMins {
+			b.Evidence = append(b.Evidence, domain.EvidenceEvent{Kind: domain.EvCompletedTodo, At: at(m)})
+		}
+		return b
+	}
+
+	cases := []struct {
+		name string
+		b    domain.Bubble
+		want domain.Lifecycle
+		code string
+	}{
+		{"inCurrent", bubble("me", true, 10), domain.Hot, ReasonHotCurrent},
+		{"inCurrent wins over older evidence", bubble("me", true, 10, 200), domain.Hot, ReasonHotCurrent},
+		{"inPrevious and open", bubble("me", true, 90), domain.Warm, ReasonWarmPrevious},
+		{"inPrevious but nothing open", bubble("me", false, 90), domain.Cooling, ReasonCooling},
+		{"never produced", bubble("me", true), domain.Dormant, ReasonDormantNever},
+		{"silent past the threshold", bubble("me", true, 200), domain.Dormant, ReasonDormantSilent},
+		{"ownerless once quiet", bubble("", false, 90), domain.Dormant, ReasonDormantOwnerless},
+		// The ordering rule: ownerless does NOT sink something still producing.
+		{"ownerless but producing", bubble("", true, 10), domain.Hot, ReasonHotCurrent},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			got := Classify(c.b, tun, now)
+			if got.Lifecycle != c.want {
+				t.Fatalf("lifecycle: want %s, got %s (%s)", c.want, got.Lifecycle, got.Reason)
+			}
+			// The code is the contract with translating clients; the English
+			// sentence is for logs and may be reworded.
+			if got.Code != c.code {
+				t.Errorf("code: want %q, got %q", c.code, got.Code)
+			}
+		})
+	}
+
+	// dormant_silent carries the threshold so a client can say "silent for N+
+	// cycles" in its own language.
+	if r := Classify(bubble("me", true, 200), tun, now); r.Args["cycles"] != "2" {
+		t.Errorf("dormant_silent args = %v, want cycles=2", r.Args)
+	}
+
+	// OwnerlessIsDormant off: nobody accountable stops mattering.
+	lenient := tun
+	lenient.OwnerlessIsDormant = false
+	if r := Classify(bubble("", false, 90), lenient, now); r.Lifecycle != domain.Cooling {
+		t.Errorf("with ownerless_is_dormant off: want Cooling, got %s", r.Lifecycle)
+	}
+}
+
+// TestInvariant_Heat_ScoreIsExponentialDecay pins the actual curve, not just the
+// ordering TestScoreDecay checks. The numbers are what make two bubbles in the
+// same band sort sensibly, so a changed base or window is a behaviour change even
+// though every lifecycle stays the same.
+func TestInvariant_Heat_ScoreIsExponentialDecay(t *testing.T) {
+	tun := tuning(time.Hour) // decay_cycles = 1, so the decay window is 1h
+	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+
+	score := func(ago time.Duration) float64 {
+		b := domain.Bubble{Owner: "me", Threads: []domain.Thread{{Active: true}},
+			Evidence: []domain.EvidenceEvent{{Kind: domain.EvCompletedTodo, At: now.Add(-ago)}}}
+		return Classify(b, tun, now).Score
+	}
+
+	cases := []struct {
+		name string
+		ago  time.Duration
+		want float64
+	}{
+		{"just now", 0, 1.0},
+		{"one decay window", time.Hour, 0.368},      // e^-1
+		{"two decay windows", 2 * time.Hour, 0.135}, // e^-2
+	}
+	for _, c := range cases {
+		if got := score(c.ago); math.Abs(got-c.want) > 0.005 {
+			t.Errorf("%s: score = %.3f, want ≈%.3f", c.name, got, c.want)
+		}
+	}
+
+	// No evidence scores zero — it must never sort above something that produced.
+	empty := Classify(domain.Bubble{Owner: "me"}, tun, now)
+	if empty.Score != 0 {
+		t.Errorf("no evidence: score = %.3f, want 0", empty.Score)
+	}
+	// A closed bubble scores zero however fresh its last evidence was: it has
+	// stopped taking attention.
+	closed := Classify(domain.Bubble{Closed: true, Owner: "me",
+		Evidence: []domain.EvidenceEvent{{Kind: domain.EvCompletedTodo, At: now}}}, tun, now)
+	if closed.Score != 0 {
+		t.Errorf("closed: score = %.3f, want 0", closed.Score)
 	}
 }
 

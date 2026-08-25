@@ -142,13 +142,15 @@ func TestSplit(t *testing.T) {
 
 func TestParseTodos(t *testing.T) {
 	got := ParseTodos("- [x] done\n- [ ] open\n- [X] also done")
-	want := []Todo{{"done", true}, {"open", false}, {"also done", true}}
+	// Keyed on purpose: ParseTodos does not know which region it was handed, so
+	// Region/Index stay zero until ParseThread addresses them.
+	want := []Todo{{Text: "done", Done: true}, {Text: "open"}, {Text: "also done", Done: true}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("checkbox todos = %+v", got)
 	}
 	// Plain bullets (no checkboxes) become open todos.
 	got = ParseTodos("- first\n- second")
-	want = []Todo{{"first", false}, {"second", false}}
+	want = []Todo{{Text: "first"}, {Text: "second"}}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("bullet todos = %+v", got)
 	}
@@ -202,8 +204,9 @@ func TestFromHTML_BirthPage(t *testing.T) {
 	}
 }
 
-// CountDone counts ticked items across the Logbook AND the Definition of Done —
-// it is what the refresher diffs to notice a thread produced something.
+// CountDone counts ticked items ANYWHERE in the document — the Logbook and the DoD
+// have no monopoly on a plan (docs/decisions/0005). It is what the refresher diffs to
+// notice a thread produced something.
 func TestCountDone(t *testing.T) {
 	body := `# Brief
 Do the thing.
@@ -220,13 +223,46 @@ Do the thing.
 	if got := CountDone(body); got != 3 {
 		t.Fatalf("want 3 ticked items, got %d", got)
 	}
+	// Somebody's own shape: no Logbook, no DoD, a checklist under their own heading.
+	free := "# Importar CSV\n\n## Pasos\n- [x] leer el archivo\n- [ ] validar\n\n## Notas\n- [x] avisar al equipo\n"
+	if got := CountDone(free); got != 2 {
+		t.Fatalf("checkboxes outside the Logbook did not count: %d", got)
+	}
 	// Plain bullets are not checklist items, so they never count as done.
 	if got := CountDone("## Logbook\n- just a note\n- another"); got != 0 {
 		t.Fatalf("bullets counted as done: %d", got)
 	}
-	// A thread with no logbook at all has produced nothing.
-	if got := CountDone("# Brief\nNo logbook here."); got != 0 {
+	// A document with nothing ticked has produced nothing.
+	if got := CountDone("# Brief\nNo checklist here."); got != 0 {
 		t.Fatalf("want 0, got %d", got)
+	}
+}
+
+// In a free-form document a bullet is prose, not a task: ParseChecklist reads only
+// real boxes, and ParseThread addresses them so toggle_todo can reach them.
+func TestDocumentChecklistIsBoxesOnly(t *testing.T) {
+	body := "# Notes\n\n- an observation\n- another observation\n\n## Pasos\n- [ ] validar\n- [x] leer\n"
+	if got := len(ParseChecklist(body)); got != 2 {
+		t.Fatalf("want the 2 real boxes, got %d", got)
+	}
+	arts, _ := ParseThread(body, "Notes")
+	if len(arts) != 1 {
+		t.Fatalf("want one document artifact, got %d", len(arts))
+	}
+	todos := arts[0].Todos
+	if len(todos) != 2 {
+		t.Fatalf("the document's todos were not addressed: %+v", todos)
+	}
+	if todos[0].Region != string(RegionDocument) || todos[0].Index != 0 || todos[1].Index != 1 {
+		t.Errorf("todos must carry the address toggle_todo takes: %+v", todos)
+	}
+	// And the strict toggle addresses the same positions the reader reported.
+	out, err := ToggleTodoIn(body, 0, "validar", true, true)
+	if err != nil {
+		t.Fatalf("toggle: %v", err)
+	}
+	if !strings.Contains(out, "- [x] validar") {
+		t.Errorf("the wrong line moved:\n%s", out)
 	}
 }
 
@@ -317,5 +353,104 @@ func TestReplaceSectionAppendsWhenAbsent(t *testing.T) {
 	// ...and it must be findable by the parser that reads it back.
 	if sec, _, ok := ExtractSection(got, "logbook"); !ok || !strings.Contains(sec, "first todo") {
 		t.Errorf("the appended section does not round-trip: %q", sec)
+	}
+}
+
+// Every todo a reader receives carries the two values needed to act on it, because
+// inferring them is silent when it goes wrong: an index counted across the whole
+// page toggles a different item, or none at all.
+func TestInvariant_Artifacts_TodosCarryTheirAddress(t *testing.T) {
+	body := "# T\n\nwhy\n\n## Logbook\n\n### Fase 1\n\n- [x] uno\n- [ ] dos\n\n" +
+		"## Definition of Done\n\n- [ ] it works\n- [ ] it is measured"
+	_, log := ParseThread(body, "T")
+	if log == nil {
+		t.Fatal("no logbook")
+	}
+	for i, td := range log.Todos {
+		if td.Region != string(RegionLogbook) || td.Index != i {
+			t.Errorf("logbook todo %d addressed as %s[%d]", i, td.Region, td.Index)
+		}
+	}
+	for i, td := range log.DoD {
+		if td.Region != string(RegionDoD) || td.Index != i {
+			t.Errorf("dod todo %d addressed as %s[%d]", i, td.Region, td.Index)
+		}
+	}
+	// The two lists are indexed INDEPENDENTLY — the DoD's first item is dod[0], not
+	// logbook-count + 0. Counting across the page is the mistake this prevents.
+	if len(log.DoD) > 0 && log.DoD[0].Index != 0 {
+		t.Errorf("the DoD's first item is index %d", log.DoD[0].Index)
+	}
+}
+
+// A page with two of the same section is refused, because a duplicate does not just
+// look untidy: the first section's range stops at the second heading, so the
+// canonical region is EMPTY and every region-scoped write addresses nothing.
+func TestInvariant_Artifacts_DuplicateSectionsAreRefused(t *testing.T) {
+	dup := "## Brief\n\nwhy\n\n## Logbook\n\n- [ ] uno\n\n## Logbook\n\n- [ ] uno"
+	found := false
+	for _, f := range Refusals(Lint(dup)) {
+		if f.Rule == "duplicate-section" {
+			found = true
+			if f.N != 2 {
+				t.Errorf("N = %d, want 2", f.N)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("two Logbooks were not refused: %+v", Lint(dup))
+	}
+	// The shape it protects: the first region really is empty.
+	sec, _, _ := ExtractSection(dup, "logbook")
+	if len(ParseTodos(sec)) != 1 {
+		t.Logf("first logbook section: %q", sec)
+	}
+	// Phase headings repeating is fine — only the reserved H1/H2 names count.
+	ok := "## Logbook\n\n### Fase 1\n\n- [ ] a\n\n### Fase 1\n\n- [ ] b"
+	for _, f := range Lint(ok) {
+		if f.Rule == "duplicate-section" {
+			t.Errorf("a repeated ### heading was refused: %s", f.Message)
+		}
+	}
+}
+
+// Birth owns the section headings, so a caller may include them without producing
+// two: StripLeadingHeading takes off a leading one that matches, and nothing else.
+func TestStripLeadingHeading(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"## Logbook\n- [ ] uno", "- [ ] uno"},
+		{"# Logbook\n\n- [ ] uno", "- [ ] uno"},
+		{"\n\n## Logbook\n- [ ] uno", "- [ ] uno"},
+		{"- [ ] uno", "- [ ] uno"},                                       // no heading
+		{"## Fase 1\n- [ ] uno", "## Fase 1\n- [ ] uno"},                 // not ours
+		{"- [ ] see the Logbook", "- [ ] see the Logbook"},               // mentions it, not a heading
+		{"## Logbook\n\n## Logbook\n- [ ] uno", "## Logbook\n- [ ] uno"}, // strips ONE
+	}
+	for _, c := range cases {
+		if got := StripLeadingHeading(c.in, "logbook"); got != c.want {
+			t.Errorf("StripLeadingHeading(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+// The Logbook's `Next:` line is a convention, so the parse has to be forgiving about
+// how a human wrote it — and must not mistake prose that merely says "next" for a
+// declared action.
+func TestNextAction(t *testing.T) {
+	cases := []struct{ in, want string }{
+		// The shape the framework actually prescribes: three labels, one line.
+		{"**Owner:** me · **State:** building · **Next:** measure the push", "measure the push"},
+		{"**Next:** measure the push", "measure the push"},
+		{"Next: measure the push", "measure the push"},
+		{"- **Next:** measure the push", "measure the push"},
+		{"**next:** lowercase label", "lowercase label"},
+		{"### Fase 1\n\n**Next:** run the suite\n\n- [ ] thing", "run the suite"},
+		{"- [ ] do the next thing", ""},
+		{"no status line here", ""},
+	}
+	for _, c := range cases {
+		if got := NextAction(c.in); got != c.want {
+			t.Errorf("NextAction(%q) = %q, want %q", c.in, got, c.want)
+		}
 	}
 }

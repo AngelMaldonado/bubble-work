@@ -192,7 +192,7 @@ func (c *Client) send(ctx context.Context, method, path string, body, out any) e
 	// Writes draw on the same per-key allowance as reads, so they must be
 	// budgeted too — otherwise the auto-state writer could quietly drain what a
 	// human's page load needs. No retry here on purpose: a failed write is the
-	// outbox's job (docs/PLANE-SYNC.md Phase 5), not a silent repeat.
+	// outbox's job (docs/journal/PLANE-SYNC.md Phase 5), not a silent repeat.
 	bud := c.budget()
 	if err := bud.wait(ctx, laneOf(ctx)); err != nil {
 		return err
@@ -409,6 +409,122 @@ func (c *Client) RemoveIssueFromModule(ctx context.Context, moduleID, issueID st
 // AddIssuesToModule links work items to a module (bubble).
 func (c *Client) AddIssuesToModule(ctx context.Context, moduleID string, issueIDs []string) error {
 	return c.post(ctx, c.projectBase()+"/modules/"+moduleID+"/module-issues/", map[string]any{"issues": issueIDs}, nil)
+}
+
+// ---- labels, links and relations (docs/decisions/0006) ----
+//
+// These are Plane's own answers to questions we used to answer ourselves in an
+// overlay table or by parsing prose: what KIND of work this is (labels), where the
+// evidence lives (links), and how threads depend on each other (relations). Reading
+// them here means there is one answer rather than two.
+
+// Label is one of a project's labels.
+type Label struct {
+	ID    string `json:"id"`
+	Name  string `json:"name"`
+	Color string `json:"color,omitempty"`
+}
+
+// ListLabels returns the project's labels. Cheap and project-scoped, so it rides
+// the slow structure cadence rather than any read path.
+func (c *Client) ListLabels(ctx context.Context) ([]Label, error) {
+	var out []Label
+	err := c.getPaged(ctx, c.projectBase()+"/labels/", func(raw json.RawMessage) error {
+		var page []Label
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		out = append(out, page...)
+		return nil
+	})
+	return out, err
+}
+
+// CreateLabel adds a label to the project and returns it.
+func (c *Client) CreateLabel(ctx context.Context, name, color string) (Label, error) {
+	body := map[string]any{"name": name}
+	if color != "" {
+		body["color"] = color
+	}
+	var out Label
+	if err := c.post(ctx, c.projectBase()+"/labels/", body, &out); err != nil {
+		return Label{}, err
+	}
+	return out, nil
+}
+
+// SetWorkItemLabels replaces a work item's labels wholesale. Plane takes the full
+// list, so this is a set operation and not an append — the caller decides what the
+// item ends up carrying.
+func (c *Client) SetWorkItemLabels(ctx context.Context, workItemID string, labelIDs []string) error {
+	if labelIDs == nil {
+		labelIDs = []string{}
+	}
+	return c.patch(ctx, c.projectBase()+"/work-items/"+workItemID+"/", map[string]any{"labels": labelIDs}, nil)
+}
+
+// Link is an external URL hung off a work item: a commit, a PR, a deliverable.
+type Link struct {
+	ID        string    `json:"id"`
+	URL       string    `json:"url"`
+	Title     string    `json:"title,omitempty"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListLinks returns a work item's links.
+func (c *Client) ListLinks(ctx context.Context, workItemID string) ([]Link, error) {
+	var out []Link
+	err := c.getPaged(ctx, c.projectBase()+"/work-items/"+workItemID+"/links/", func(raw json.RawMessage) error {
+		var page []Link
+		if err := json.Unmarshal(raw, &page); err != nil {
+			return err
+		}
+		out = append(out, page...)
+		return nil
+	})
+	return out, err
+}
+
+// AddLink attaches an external URL to a work item.
+func (c *Client) AddLink(ctx context.Context, workItemID, url, title string) (Link, error) {
+	body := map[string]any{"url": url}
+	if title != "" {
+		body["title"] = title
+	}
+	var out Link
+	if err := c.post(ctx, c.projectBase()+"/work-items/"+workItemID+"/links/", body, &out); err != nil {
+		return Link{}, err
+	}
+	return out, nil
+}
+
+// RemoveLink deletes one link from a work item.
+func (c *Client) RemoveLink(ctx context.Context, workItemID, linkID string) error {
+	return c.del(ctx, c.projectBase()+"/work-items/"+workItemID+"/links/"+linkID+"/")
+}
+
+// Relation types Plane understands. The pairs are symmetric: writing `blocking` on
+// A shows as `blocked_by` on B, which is why we never write both sides.
+const (
+	RelRelatesTo = "relates_to"
+	RelDuplicate = "duplicate"
+	RelBlocking  = "blocking"
+	RelBlockedBy = "blocked_by"
+)
+
+// AddRelation relates work items. relationType is one of Plane's eight types;
+// issues are the ids on the other end.
+func (c *Client) AddRelation(ctx context.Context, workItemID, relationType string, issues []string) error {
+	return c.post(ctx, c.projectBase()+"/work-items/"+workItemID+"/relations/",
+		map[string]any{"relation_type": relationType, "issues": issues}, nil)
+}
+
+// RemoveRelation drops the relation between two work items. Plane models this as a
+// POST to .../relations/remove/ with the other id in the body — not a DELETE — and
+// it does not ask which TYPE, because a pair of items has at most one.
+func (c *Client) RemoveRelation(ctx context.Context, workItemID, relatedID string) error {
+	return c.post(ctx, c.projectBase()+"/work-items/"+workItemID+"/relations/remove/",
+		map[string]any{"related_issue": relatedID}, nil)
 }
 
 // getPaged walks a cursor-paginated list endpoint, invoking each with every

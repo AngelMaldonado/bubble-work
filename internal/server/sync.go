@@ -11,7 +11,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
-// Admin surface for the Plane mirror (docs/PLANE-SYNC.md Phase 1). Admin
+// Admin surface for the Plane mirror (docs/journal/PLANE-SYNC.md Phase 1). Admin
 // capability, so REST + CLI + web only — no MCP, matching autostate and tuning.
 
 // syncInstance resolves the {slug} path value to a configured instance, writing
@@ -154,7 +154,7 @@ func rfc3339(t time.Time) string {
 	return t.UTC().Format(time.RFC3339)
 }
 
-// ---- outbox (docs/PLANE-SYNC.md Phase 5) ----
+// ---- outbox (docs/journal/PLANE-SYNC.md Phase 5) ----
 
 // handleAdminOutbox lists queued and abandoned writes. An abandoned entry is the
 // point of this surface: it is a write that never reached Plane, and it must be

@@ -9,19 +9,19 @@ import (
 // the board at them and Phase 3 the thread interior.
 
 const itemCols = `id, project_id, seq, name, state_id, state_name, state_group,
-	priority, parent_id, assignees_json, description_html, description_hash,
+	priority, parent_id, assignees_json, labels_json, description_html, description_hash,
 	created_at, updated_at, completed_at`
 
 func scanItem(rows *sql.Rows) (Item, error) {
 	var it Item
-	var assignees, created, updated, completed string
+	var assignees, labels, created, updated, completed string
 	err := rows.Scan(&it.ID, &it.ProjectID, &it.Seq, &it.Name, &it.StateID,
-		&it.StateName, &it.StateGroup, &it.Priority, &it.ParentID, &assignees,
+		&it.StateName, &it.StateGroup, &it.Priority, &it.ParentID, &assignees, &labels,
 		&it.DescriptionHTML, &it.DescriptionHash, &created, &updated, &completed)
 	if err != nil {
 		return Item{}, err
 	}
-	it.Assignees = decodeIDs(assignees)
+	it.Assignees, it.Labels = decodeIDs(assignees), decodeIDs(labels)
 	it.CreatedAt, it.UpdatedAt, it.CompletedAt = parseTS(created), parseTS(updated), parseTSP(completed)
 	return it, nil
 }
@@ -364,6 +364,93 @@ func (m *Mirror) ModulesForItem(instance, itemID string) ([]string, error) {
 			return nil, err
 		}
 		out = append(out, id)
+	}
+	return out, rows.Err()
+}
+
+// Labels returns a project's label catalogue, keyed by id.
+func (m *Mirror) Labels(instance, projectID string) (map[string]Label, error) {
+	rows, err := m.db.Query(
+		`SELECT id, project_id, name, color FROM mirror_labels
+		 WHERE instance = ? AND project_id = ?`, instance, projectID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	out := map[string]Label{}
+	for rows.Next() {
+		var l Label
+		if err := rows.Scan(&l.ID, &l.ProjectID, &l.Name, &l.Color); err != nil {
+			return nil, err
+		}
+		out[l.ID] = l
+	}
+	return out, rows.Err()
+}
+
+// Links returns a work item's external links, newest first.
+func (m *Mirror) Links(instance, itemID string) ([]Link, error) {
+	rows, err := m.db.Query(
+		`SELECT id, url, title, created_at FROM mirror_item_links
+		 WHERE instance = ? AND item_id = ? ORDER BY created_at DESC, id`, instance, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Link
+	for rows.Next() {
+		var l Link
+		var created string
+		if err := rows.Scan(&l.ID, &l.URL, &l.Title, &created); err != nil {
+			return nil, err
+		}
+		l.CreatedAt = parseTS(created)
+		out = append(out, l)
+	}
+	return out, rows.Err()
+}
+
+// Relations returns a work item's typed edges.
+func (m *Mirror) Relations(instance, itemID string) ([]Relation, error) {
+	rows, err := m.db.Query(
+		`SELECT relation_type, related_id FROM mirror_item_relations
+		 WHERE instance = ? AND item_id = ? ORDER BY relation_type, related_id`, instance, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var out []Relation
+	for rows.Next() {
+		var r Relation
+		if err := rows.Scan(&r.Type, &r.RelatedID); err != nil {
+			return nil, err
+		}
+		out = append(out, r)
+	}
+	return out, rows.Err()
+}
+
+// LinkCount reports how many links each of the given items carries. The progress
+// sweep diffs it the same way it diffs revision counts: publishing evidence is
+// production (docs/decisions/0006).
+func (m *Mirror) LinkCount(instance string, itemIDs []string) (map[string]int, error) {
+	out := make(map[string]int, len(itemIDs))
+	if len(itemIDs) == 0 {
+		return out, nil
+	}
+	rows, err := m.db.Query(
+		`SELECT item_id, COUNT(*) FROM mirror_item_links WHERE instance = ? GROUP BY item_id`, instance)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		var n int
+		if err := rows.Scan(&id, &n); err != nil {
+			return nil, err
+		}
+		out[id] = n
 	}
 	return out, rows.Err()
 }

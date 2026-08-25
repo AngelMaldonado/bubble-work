@@ -117,24 +117,21 @@ func Classify(b domain.Bubble, tun domain.Tuning, now time.Time) Result {
 // thread's assignee standing in for the bubble's owner and its own openness
 // standing in for "active threads remain".
 //
-// One rule differs from the bubble grain: unless Tuning.ThreadBirthHeats is on,
-// a thread's own BIRTH does not heat it. A new work item is a real output for
-// the bubble that gained it, but the item itself has produced nothing by
-// existing — otherwise every freshly created thread would read 🔥 for a whole
-// cycle while sitting untouched in Backlog.
+// One distinction matters at this grain: a work item merely being CREATED does
+// not heat it, but being BORN does (docs/decisions/0002). An item that appeared in
+// Plane has produced nothing by existing — otherwise every untouched Backlog entry
+// would read 🔥 for a cycle. A thread born here could not exist without a Brief
+// carrying a Definition of Done and a seeded Logbook, which is production. Both
+// follow from EvidenceEvent.Progress; there is no knob, because "the birth
+// artifacts exist" is a fact about the thread rather than a preference.
 func ClassifyThread(t domain.Thread, ev []domain.EvidenceEvent, w Window, tun domain.Tuning, now time.Time) Result {
 	if !t.Active || t.CompletedAt != nil {
 		return Result{domain.Closed, 0, "thread completed", ReasonClosedThread, nil}
 	}
-	// Only production heats a thread. Comments are stripped always (presence), and
-	// the thread's own birth unless the calibration says otherwise.
-	keep := func(e domain.EvidenceEvent) bool { return e.Progress() }
-	if tun.ThreadBirthHeats {
-		keep = func(e domain.EvidenceEvent) bool { return !e.Pulse() }
-	}
+	// Only production heats a thread: comments are presence, creation is not output.
 	progress := make([]domain.EvidenceEvent, 0, len(ev))
 	for _, e := range ev {
-		if keep(e) {
+		if e.Progress() {
 			progress = append(progress, e)
 		}
 	}

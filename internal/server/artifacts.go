@@ -13,9 +13,10 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/mirror"
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
+	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
-// Editing a thread's artifacts (docs/MCP-ACCESS.md steps 1-2).
+// Editing a thread's artifacts (docs/journal/MCP-ACCESS.md steps 1-2).
 //
 // Until this existed the MCP surface could create a thread and comment on it and
 // change nothing else — which, since THREAD-LIFECYCLE.md treats a Logbook edit as
@@ -32,6 +33,36 @@ var editRegions = []struct {
 	{"brief", md.RegionDocument},
 	{"logbook", md.RegionLogbook},
 	{"dod", md.RegionDoD},
+}
+
+// docRegionTail is the stored region holding what follows the last section. It is
+// not editable and not part of editRegions on purpose: it exists so the document
+// store is a COMPLETE copy of the page (docs/decisions/0001), not so anyone can
+// write to it by name.
+const docRegionTail = "tail"
+
+// storedBody rebuilds a thread's markdown from the document store, and reports
+// whether the store had it. This is the read path: when it returns true, showing
+// the thread parses no Plane HTML at all.
+func (s *Server) storedBody(wid string) (map[string]store.ThreadDoc, string, bool) {
+	docs, err := s.store.ThreadDocs(wid)
+	if err != nil {
+		log.Printf("docs: read %s: %v", wid, err)
+		return nil, "", false
+	}
+	if len(docs) == 0 {
+		return nil, "", false // never edited since adoption: fall back to the mirror
+	}
+	body := md.AssembleBody(
+		docs[string(md.RegionDocument)].Markdown,
+		docs[string(md.RegionLogbook)].Markdown,
+		docs[string(md.RegionDoD)].Markdown,
+		docs[docRegionTail].Markdown,
+	)
+	if strings.TrimSpace(body) == "" {
+		return nil, "", false
+	}
+	return docs, body, true
 }
 
 // regionByName resolves the write API's name to a splice region. It exists
@@ -65,7 +96,7 @@ func regionByName(name string) (md.Region, bool) {
 // Until this, editing a Logbook re-derived the whole body from markdown, which
 // silently destroyed every image and mention on the page (48 mentions and 193
 // images across a live workspace). A block nobody edited now keeps its original
-// bytes (docs/ARTIFACT-EDITING.md Phase 1).
+// bytes (docs/journal/ARTIFACT-EDITING.md Phase 1).
 func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error) {
 	if edit.Empty() {
 		return domain.ThreadDetail{}, fmt.Errorf("%w: nothing to update", errBadRequest)
@@ -170,7 +201,7 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 		if want == nil {
 			continue
 		}
-		if err := checkBase(body, r.region, edit.Base[r.name]); err != nil {
+		if err := s.checkBase(wid, body, r.region, edit.Base[r.name]); err != nil {
 			return domain.ThreadDetail{}, err
 		}
 		spliced, err := md.Splice(body, r.region, *want)
@@ -179,10 +210,10 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 		}
 		if spliced != body {
 			body = spliced
-			// Only the Logbook and the DoD are production (§5.1); a Brief edit is
-			// not, and progressEvidenceFromMirror agrees by fingerprinting only
-			// those two.
-			production = production || r.region != md.RegionDocument
+			// ANY changed region is production (docs/decisions/0004), the Brief
+			// included: writing is the work here. progressEvidenceFromMirror agrees
+			// by fingerprinting the whole document rather than only the plan.
+			production = true
 		}
 	}
 
@@ -200,12 +231,14 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 		// this caller's fault, and refusing their one-line fix over it would make
 		// the tool unusable on everything that already exists.
 		broke := md.NewFindings(md.Lint(md.FromHTML(it.DescriptionHTML)), md.Lint(md.FromHTML(body)))
-		if len(broke) > 0 {
-			if !edit.Lenient {
-				return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errBadRequest, md.LintError(broke))
-			}
-			warnings = broke
+		// Only REFUSALS can fail a write (docs/decisions/0003). The advisory rules —
+		// a Brief getting long, a Definition of Done reading like a task list — are
+		// reported next to a write that succeeded; refusing on craft would teach
+		// people to pass lenient on everything, which costs the real rules too.
+		if refusals := md.Refusals(broke); len(refusals) > 0 && !edit.Lenient {
+			return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errBadRequest, md.LintError(refusals))
 		}
+		warnings = broke
 	}
 
 	if body == it.DescriptionHTML {
@@ -241,12 +274,44 @@ func (s *Server) UpdateThread(ctx context.Context, threadID string, edit domain.
 // of them. Not optimistic: Plane accepted the write and returned the row, so
 // this IS what Plane holds.
 func (s *Server) writeBody(ctx context.Context, cl *plane.Client, inst domain.Instance, it mirror.Item, html string) error {
-	updatedAt, err := cl.SetWorkItemBody(ctx, it.ID, html)
-	if err != nil {
-		return err
-	}
+	// The document goes into the RECORD first, and Plane is published to second
+	// (docs/decisions/0001). That order is the whole point of the inversion: the
+	// write is safe before the network is involved, so Plane being down costs a
+	// retry rather than the edit.
+	s.recordDocs(ctx, it.ID, html)
+
 	it.DescriptionHTML = html
 	it.DescriptionHash = mirror.HashBody(html)
+
+	updatedAt, err := cl.SetWorkItemBody(ctx, it.ID, html)
+	if err != nil {
+		// Optimistic: queue the publication and carry on. The mirror keeps our
+		// version — reads come from the store anyway, and the field lock stops an
+		// incoming sync from reverting it while the entry is pending, which is the
+		// same shield a queued state move already uses.
+		if _, derr := s.store.DiscardPendingDocs(inst.Slug, it.ID); derr != nil {
+			log.Printf("outbox: superseding queued publications for %s: %v", it.ID, derr)
+		}
+		if _, qerr := s.store.Enqueue(store.OutboxEntry{
+			Instance: inst.Slug, Kind: store.OutDoc, TargetID: it.ID,
+			Payload: map[string]string{"html": html}, FieldLock: "description",
+			CreatedAt: s.now(), LastError: err.Error(),
+		}); qerr != nil {
+			// Nothing queued and nothing published: the markdown is stored, but
+			// Plane will not converge on its own. That is worth failing the write
+			// over, because the caller can retry.
+			return fmt.Errorf("publish to Plane failed (%v) and could not be queued: %w", err, qerr)
+		}
+		log.Printf("docs: publication of %s queued — Plane said: %v", it.ID, err)
+		if merr := s.mirror.UpsertItems(inst.Slug, []mirror.Item{it}, s.now()); merr != nil {
+			log.Printf("mirror: record queued body %s: %v", it.ID, merr)
+		}
+		return nil
+	}
+
+	if err := s.store.SetPublished(it.ID, it.DescriptionHash, s.now()); err != nil {
+		log.Printf("docs: record publish of %s: %v", it.ID, err)
+	}
 	if !updatedAt.IsZero() {
 		it.UpdatedAt = updatedAt
 	}
@@ -254,6 +319,123 @@ func (s *Server) writeBody(ctx context.Context, cl *plane.Client, inst domain.In
 		log.Printf("mirror: record body write %s: %v", it.ID, err)
 	}
 	return nil
+}
+
+// recordDocs stores the markdown of every region of a body (docs/decisions/0001).
+//
+// It hangs off writeBody deliberately: that is the single place any artifact write
+// reaches Plane — an edit, a section, a ticked todo, a deleted region — so one hook
+// keeps the document store complete without every caller having to remember.
+//
+// Nothing READS these rows yet. Accumulating the record first, and switching reads
+// over separately, is what makes the change reversible: until the read path moves,
+// a wrong row is invisible rather than damaging.
+func (s *Server) recordDocs(ctx context.Context, wid, html string) {
+	actor, _ := domain.ActorFrom(ctx)
+	by := actor.Label()
+	now := s.now()
+
+	docs := make([]store.ThreadDoc, 0, len(editRegions)+1)
+	for _, r := range editRegions {
+		m, ok := md.RegionMarkdown(html, r.region)
+		if !ok {
+			// An absent region is stored as empty, which PutThreadDocs treats as a
+			// removal. A Logbook that was deleted must not linger in the record.
+			m = ""
+		}
+		docs = append(docs, store.ThreadDoc{
+			ThreadID: wid, Region: string(r.region), Markdown: m,
+			Hash: md.Hash(m), UpdatedAt: now, UpdatedBy: by,
+		})
+	}
+	// Whatever the author wrote AFTER the last section belongs to no region, so it
+	// has to be captured separately or the record would be a lossy copy of the page.
+	tail, _ := md.TailMarkdown(html)
+	docs = append(docs, store.ThreadDoc{
+		ThreadID: wid, Region: docRegionTail, Markdown: tail,
+		Hash: md.Hash(tail), UpdatedAt: now, UpdatedBy: by,
+	})
+	if err := s.store.PutThreadDocs(docs); err != nil {
+		log.Printf("docs: record %s: %v", wid, err)
+	}
+}
+
+// explainNoTodo turns "no todo at that position" into something a caller can act on.
+func (s *Server) explainNoTodo(it mirror.Item, region md.Region, index, have int) error {
+	body := md.FromHTML(it.DescriptionHTML)
+	if dup := md.Refusals(md.Lint(body)); len(dup) > 0 {
+		for _, f := range dup {
+			if f.Rule == "duplicate-section" {
+				return fmt.Errorf("no todo at index %d: the %s region is unreachable because this page "+
+					"has duplicate section headings — %s", index, region, f.Message)
+			}
+		}
+	}
+	if have <= 0 {
+		what := fmt.Sprintf("the %s has no checklist items at all", region)
+		if have < 0 {
+			what = fmt.Sprintf("this thread has no %s section", region)
+		}
+		// Where the items actually are. A caller off by one region gets an answer
+		// instead of a dead end.
+		var elsewhere []string
+		for _, other := range []md.Region{md.RegionLogbook, md.RegionDoD, md.RegionDocument} {
+			if other == region {
+				continue
+			}
+			if m, ok := md.RegionMarkdown(it.DescriptionHTML, other); ok {
+				if n := len(md.ParseTodos(m)); n > 0 {
+					elsewhere = append(elsewhere, fmt.Sprintf("%s has %d", other, n))
+				}
+			}
+		}
+		hint := ""
+		if len(elsewhere) > 0 {
+			hint = fmt.Sprintf(" The %s — did you mean one of those? read_thread reports each todo's region.",
+				strings.Join(elsewhere, ", the "))
+		}
+		return fmt.Errorf("no todo at index %d: %s.%s", index, what, hint)
+	}
+	return fmt.Errorf("no todo at index %d: the %s has %d (valid indices are 0..%d, counted within that "+
+		"region only — read_thread reports them per region)", index, region, have, have-1)
+}
+
+// closestLine names the line in a region that most resembles what a caller quoted,
+// so a failed exact edit points at the text instead of just refusing.
+//
+// Deliberately crude — token overlap, not an edit distance. The job is to answer
+// "did you mean this one?", and a caller who quoted from the rendered artifact
+// instead of from regions[] needs to SEE the difference, not a similarity score.
+func closestLine(region, want string) string {
+	norm := func(s string) []string { return strings.Fields(strings.ToLower(s)) }
+	wantTok := norm(want)
+	if len(wantTok) == 0 {
+		return ""
+	}
+	inWant := make(map[string]bool, len(wantTok))
+	for _, w := range wantTok {
+		inWant[w] = true
+	}
+	best, bestScore := "", 0.0
+	for _, ln := range strings.Split(region, "\n") {
+		toks := norm(ln)
+		if len(toks) == 0 {
+			continue
+		}
+		hits := 0
+		for _, tk := range toks {
+			if inWant[tk] {
+				hits++
+			}
+		}
+		if score := float64(hits) / float64(len(wantTok)); score > bestScore {
+			best, bestScore = strings.TrimSpace(ln), score
+		}
+	}
+	if bestScore < 0.4 {
+		return ""
+	}
+	return best
 }
 
 // applyRegionEdits turns find-and-replace edits into new region markdown.
@@ -331,9 +513,22 @@ func applyRegionEdits(descriptionHTML string, edits []domain.RegionEdit) (map[st
 		next, err := md.ApplyEdits(current, byRegion[name])
 		if err != nil {
 			// A miss or an ambiguity is the caller quoting something that is not
-			// there, which is a bad request rather than a server failure — and
-			// the message already says which text and why.
-			return nil, fmt.Errorf("%w: %s: %v", errBadRequest, name, err)
+			// there, which is a bad request rather than a server failure.
+			//
+			// The common cause is not a typo: it is text copied from the RENDERED
+			// artifact rather than from regions[].markdown, which is the only text a
+			// splice diffs against. So the message names the closest line it can find
+			// and says where to copy from — an agent recovers from an error that
+			// carries the fix, and gives up on one that does not.
+			hint := ""
+			for _, e := range byRegion[name] {
+				if near := closestLine(current, e.Old); near != "" {
+					hint = fmt.Sprintf(" The closest line in the %s is: %q. Quote from "+
+						"regions[%q].markdown, not from artifacts[].markdown.", name, near, name)
+					break
+				}
+			}
+			return nil, fmt.Errorf("%w: %s: %v%s", errBadRequest, name, err, hint)
 		}
 		out[name] = next
 	}
@@ -343,9 +538,21 @@ func applyRegionEdits(descriptionHTML string, edits []domain.RegionEdit) (map[st
 // checkBase enforces optimistic concurrency for one region. An absent base means
 // the caller did not read the page first — legitimate for CLI and MCP writes —
 // and is accepted rather than guessed at.
-func checkBase(descriptionHTML string, region md.Region, base string) error {
+// It compares against the DOCUMENT STORE when the thread has one, because that is
+// what the read served and therefore what the editor's base was computed from
+// (docs/decisions/0001). Comparing against Plane's HTML for a stored thread would
+// invent conflicts whenever the two representations differ by a byte.
+func (s *Server) checkBase(wid, descriptionHTML string, region md.Region, base string) error {
 	if base == "" {
 		return nil
+	}
+	if docs, _, ok := s.storedBody(wid); ok {
+		if d, has := docs[string(region)]; has {
+			if d.Hash != base {
+				return fmt.Errorf("%w: the %s changed while you were editing it", errConflict, region)
+			}
+			return nil
+		}
 	}
 	current, _ := md.RegionMarkdown(descriptionHTML, region)
 	if md.Hash(current) != base {
@@ -362,12 +569,26 @@ func checkBase(descriptionHTML string, region md.Region, base string) error {
 // ticking the wrong box is worse than refusing, because it is silent AND it
 // manufactures evidence of production. This is the same failure the mirror work
 // kept running into: a local copy confidently answering a question it does not
-// actually know (docs/PLANE-SYNC.md).
+// actually know (docs/journal/PLANE-SYNC.md).
 func (s *Server) ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error) {
-	switch region {
-	case md.RegionDocument, md.RegionLogbook, md.RegionDoD:
-	default:
-		return domain.ThreadDetail{}, fmt.Errorf("%w: unknown region %q", errBadRequest, region)
+	return s.ToggleTodos(ctx, threadID, []domain.TodoToggle{
+		{Region: string(region), Index: index, Text: text, Done: done},
+	})
+}
+
+// ToggleTodos ticks or un-ticks SEVERAL items in one operation.
+//
+// One call, one Plane write. Ticking five items used to be five calls, each with its
+// own read, splice and write — five round trips for the caller and five writes against
+// a 60-per-minute budget, for a change nobody would think of as five changes.
+//
+// It is all-or-nothing. A set that fails half way through leaves the caller unable to
+// say which half landed, which is the same reasoning applyRegionEdits already follows.
+// Indices stay valid across the batch because toggling rewrites a line in place — it
+// never reorders or removes one.
+func (s *Server) ToggleTodos(ctx context.Context, threadID string, items []domain.TodoToggle) (domain.ThreadDetail, error) {
+	if len(items) == 0 {
+		return domain.ThreadDetail{}, fmt.Errorf("%w: no items to toggle", errBadRequest)
 	}
 	full, err := s.resolveThreadID(ctx, threadID)
 	if err != nil {
@@ -388,27 +609,82 @@ func (s *Server) ToggleTodo(ctx context.Context, threadID string, region md.Regi
 		return domain.ThreadDetail{}, errNotFound
 	}
 
-	current, found := md.RegionMarkdown(it.DescriptionHTML, region)
-	if !found {
-		return domain.ThreadDetail{}, fmt.Errorf("%w: this thread has no %s", errNotFound, region)
+	// Resolve every item against the region text as it accumulates, so two toggles in
+	// the same region both land.
+	next := map[md.Region]string{}
+	for _, item := range items {
+		region := md.Region(strings.TrimSpace(strings.ToLower(item.Region)))
+		if region == "brief" { // the API's older word for the document
+			region = md.RegionDocument
+		}
+		if region == "" {
+			// A thread whose plan lives under its author's own headings has no
+			// Logbook to default to (docs/decisions/0005), and defaulting there
+			// anyway is how "no such todo" gets returned for an item that is
+			// plainly on the page.
+			region = md.RegionLogbook
+			if _, found := md.RegionMarkdown(it.DescriptionHTML, md.RegionLogbook); !found {
+				region = md.RegionDocument
+			}
+		}
+		switch region {
+		case md.RegionDocument, md.RegionLogbook, md.RegionDoD:
+		default:
+			return domain.ThreadDetail{}, fmt.Errorf("%w: unknown region %q", errBadRequest, item.Region)
+		}
+
+		current, ok := next[region]
+		if !ok {
+			var found bool
+			current, found = md.RegionMarkdown(it.DescriptionHTML, region)
+			if !found {
+				return domain.ThreadDetail{}, fmt.Errorf("%w: %v",
+					errNotFound, s.explainNoTodo(it, region, item.Index, -1))
+			}
+		}
+		// In the document a bullet is prose, so only real checkboxes are addressable
+		// there — the same rule ParseChecklist reads it by, or an index would mean
+		// two different things at the two ends of the call.
+		strict := region == md.RegionDocument
+		out, err := md.ToggleTodoIn(current, item.Index, item.Text, item.Done, strict)
+		switch {
+		case errors.Is(err, md.ErrTodoMoved):
+			return domain.ThreadDetail{}, fmt.Errorf("%w: %v — read the thread again and quote the item you meant",
+				errConflict, err)
+		case errors.Is(err, md.ErrNoSuchTodo):
+			have := len(md.ParseTodos(current))
+			if strict {
+				have = len(md.ParseChecklist(current))
+			}
+			return domain.ThreadDetail{}, fmt.Errorf("%w: %v",
+				errBadRequest, s.explainNoTodo(it, region, item.Index, have))
+		case err != nil:
+			return domain.ThreadDetail{}, err
+		}
+		next[region] = out
 	}
-	next, err := md.ToggleTodo(current, index, text, done)
-	switch {
-	case errors.Is(err, md.ErrTodoMoved):
-		return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errConflict, err)
-	case errors.Is(err, md.ErrNoSuchTodo):
-		return domain.ThreadDetail{}, fmt.Errorf("%w: %v", errBadRequest, err)
-	case err != nil:
-		return domain.ThreadDetail{}, err
+
+	edit := domain.ThreadEdit{}
+	changed := false
+	for region, out := range next {
+		before, _ := md.RegionMarkdown(it.DescriptionHTML, region)
+		if out == before {
+			continue // already in that state
+		}
+		changed = true
+		switch region {
+		case md.RegionDocument:
+			edit.Brief = &out
+		case md.RegionLogbook:
+			edit.Logbook = &out
+		case md.RegionDoD:
+			edit.DoD = &out
+		}
 	}
-	if next == current {
-		return s.ThreadDetail(ctx, full) // already in that state
+	if !changed {
+		return s.ThreadDetail(ctx, full)
 	}
-	return s.UpdateThread(ctx, full, domain.ThreadEdit{
-		Brief:   pick(region == md.RegionDocument, next),
-		Logbook: pick(region == md.RegionLogbook, next),
-		DoD:     pick(region == md.RegionDoD, next),
-	})
+	return s.UpdateThread(ctx, full, edit)
 }
 
 func pick(when bool, v string) *string {
@@ -476,10 +752,18 @@ func (s *Server) AddRevision(ctx context.Context, threadID, title, body string) 
 // every open client. Cheap since PLANE-SYNC Phase 2 — a handful of SQLite
 // queries and no network — which is what makes it reasonable on a write path.
 //
-// production says whether the write could have changed the board. Only a Logbook
-// or DoD edit can; a Brief edit cannot, and autosave means those arrive every
-// few seconds while somebody types. Skipping the rebuild for them still
-// repaints the open thread, which is the part anyone would notice.
+// production says whether the write could have changed the board. Since
+// docs/decisions/0004 every body edit can, the Brief included, so this is now true
+// for any changed region.
+//
+// The cost that used to justify the exception is real and has not gone away:
+// autosave means Brief edits arrive every few seconds while somebody types, and each
+// one rebuilds the instance snapshot. It is a local rebuild (SQLite only, no Plane
+// traffic) and singleflight coalesces concurrent ones, so it is affordable at
+// current sizes — but debouncing it is the obvious next move if a typing session
+// ever shows up in a profile. Skipping a rebuild would only DELAY heat, never lose
+// it: the fingerprint diff compares against what is stored, so whenever the next
+// rebuild runs it still fires.
 func (s *Server) rebuildAndNotify(inst domain.Instance, threadID string, production bool) {
 	if production {
 		if _, err := s.refreshInstance(context.Background(), inst); err != nil {
@@ -504,29 +788,33 @@ func (s *Server) handleUpdateThread(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleToggleTodo(w http.ResponseWriter, r *http.Request) {
+	// One item at the top level, or several under `items` — ticking five things is not
+	// five changes, and it should not be five writes to Plane either.
 	var in struct {
-		Region string `json:"region"`
-		Index  int    `json:"index"`
-		Text   string `json:"text"`
-		Done   bool   `json:"done"`
+		Region string              `json:"region"`
+		Index  int                 `json:"index"`
+		Text   string              `json:"text"`
+		Done   bool                `json:"done"`
+		Items  []domain.TodoToggle `json:"items"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&in); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid JSON body"})
 		return
 	}
-	region, ok := regionByName(in.Region)
-	if in.Region == "" {
-		region, ok = md.RegionLogbook, true
+	items := in.Items
+	if len(items) == 0 {
+		items = []domain.TodoToggle{{Region: in.Region, Index: in.Index, Text: in.Text, Done: in.Done}}
 	}
-	if !ok {
-		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "unknown region " + in.Region})
-		return
-	}
-	d, err := s.ToggleTodo(r.Context(), r.PathValue("id"), region, in.Index, in.Text, in.Done)
+	d, err := s.ToggleTodos(r.Context(), r.PathValue("id"), items)
 	if writeErr(w, err) {
 		return
 	}
-	writeJSON(w, http.StatusOK, d)
+	// The web repaints from the full interior; the compact confirmation rides along
+	// for callers that only want to know what landed.
+	writeJSON(w, http.StatusOK, struct {
+		domain.ThreadDetail
+		Confirmed domain.TodoResult `json:"confirmed"`
+	}{d, domain.NewTodoResult(d, items)})
 }
 
 func (s *Server) handleAddRevision(w http.ResponseWriter, r *http.Request) {

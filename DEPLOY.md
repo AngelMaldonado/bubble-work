@@ -156,7 +156,7 @@ thin rather than 429-ing a page load. Watch it with:
 …or the **Plane rate budget** card in God Mode.
 
 If `429s` climbs or background yields are constant, the real fix is
-[`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md) — not needing the calls. As a
+[`docs/journal/PLANE-SYNC.md`](./docs/journal/PLANE-SYNC.md) — not needing the calls. As a
 stopgap on a **self-hosted** Plane the ceiling itself is configurable; on the
 Plane host set the API rate-limit env var (`API_KEY_RATE_LIMIT`, format
 `number/timeunit`, e.g. `120/minute`) and restart it. This is a knob on *your*

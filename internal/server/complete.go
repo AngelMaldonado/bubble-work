@@ -13,7 +13,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/store"
 )
 
-// Finishing a thread (docs/THREAD-LIFECYCLE.md).
+// Finishing a thread (docs/journal/THREAD-LIFECYCLE.md).
 //
 // 🏆 is derived from Plane: a work item in a `completed` state, or one Plane says
 // is no longer active. Nothing in Bubble Work could put it there — autostate
@@ -27,43 +27,25 @@ import (
 // card in Plane. An agent that had just satisfied the DoD had no way to say so at
 // all.
 //
-// So completing is a first-class verb here, with one rule attached: the DoD is
-// the authority on "done", not the todo count and not the person's mood. A thread
-// whose Definition of Done still has unticked items is refused, and the refusal
-// names them. That is the closing counterpart of the §3 birth rule — the same
-// artifact gates both ends of a thread's life.
+// So completing is a first-class verb here. It used to carry a rule: a thread whose
+// Definition of Done still had unticked items was refused. That gate is gone
+// (docs/decisions/0005) — the person finishing the work is the authority on whether
+// it is finished, and a checklist written days ago is evidence, not a warden.
+//
+// What survives is the ANSWER: completing a thread with outstanding DoD items
+// reports them in `unmet_dod`, so the surface can show what was left rather than
+// pretend it did not exist.
 //
 // Note what is NOT here: no overlay flag, no second source of truth. This writes
 // Plane's state and lets the ordinary derivation report it, so a thread completed
 // from Plane's own UI and one completed here are indistinguishable afterwards —
 // which is the point of Plane being the system of record.
 
-// UnmetDoD is returned when a thread is asked to finish with its Definition of
-// Done unmet. It carries the outstanding items so the caller can show them
-// instead of a bare refusal.
-type UnmetDoD struct{ Items []string }
-
-func (e *UnmetDoD) Error() string {
-	if len(e.Items) == 1 {
-		return fmt.Sprintf("%s: the Definition of Done is not met yet — 1 item outstanding: %q",
-			errBadRequest, e.Items[0])
-	}
-	return fmt.Sprintf("%s: the Definition of Done is not met yet — %d items outstanding, starting with %q",
-		errBadRequest, len(e.Items), e.Items[0])
-}
-
-// Unwrap makes it a bad request, so every surface maps it to 400 without knowing
-// about this type.
-func (e *UnmetDoD) Unwrap() error { return errBadRequest }
-
 // CompleteThread moves a thread into its project's completed state, which is what
 // makes it 🏆 everywhere.
 //
-// force skips the Definition of Done check. It exists because a DoD can be
-// genuinely wrong — the work turned out to be something else, or a checklist item
-// describes a thing that will never happen — and refusing forever would just
-// teach people to keep threads open. It is a deliberate override, logged as one,
-// never the default on any surface.
+// force is accepted and does nothing: there is no longer a check to skip. It stays
+// in the signature so every caller written against the old gate keeps working.
 func (s *Server) CompleteThread(ctx context.Context, threadID string, force bool) (domain.ThreadDetail, error) {
 	return s.moveThreadState(ctx, threadID, "completed", force)
 }
@@ -100,12 +82,12 @@ func (s *Server) moveThreadState(ctx context.Context, threadID, group string, fo
 		return domain.ThreadDetail{}, errNotFound
 	}
 
-	// The DoD gate, on the way in only: reopening something is never blocked by a
-	// checklist, and force is the explicit override.
-	if group == "completed" && !force {
-		if unmet := unmetDoD(it.DescriptionHTML); len(unmet) > 0 {
-			return domain.ThreadDetail{}, &UnmetDoD{Items: unmet}
-		}
+	// What the Definition of Done still says is outstanding, reported and never
+	// enforced. Read on the way in, because the body is in hand here and the state
+	// write below is what makes it stale.
+	var unmet []string
+	if group == "completed" {
+		unmet = unmetDoD(it.DescriptionHTML)
 	}
 
 	// Resolved by GROUP, never by name: state names are project-configured and
@@ -124,7 +106,7 @@ func (s *Server) moveThreadState(ctx context.Context, threadID, group string, fo
 			errBadRequest, group)
 	}
 	if it.StateID == target.ID {
-		return s.ThreadDetail(ctx, full) // already there; not an error, just nothing to do
+		return s.withUnmet(ctx, full, unmet) // already there; not an error, just nothing to do
 	}
 
 	queued := false
@@ -132,7 +114,7 @@ func (s *Server) moveThreadState(ctx context.Context, threadID, group string, fo
 		// Queue rather than fail. The write is small, idempotent and worth
 		// retrying, and the field lock stops an incoming sync reverting the mirror
 		// to Plane's older state while it is still in flight
-		// (docs/PLANE-SYNC.md Phase 5).
+		// (docs/journal/PLANE-SYNC.md Phase 5).
 		if _, qerr := s.store.Enqueue(store.OutboxEntry{
 			Instance: slug, Kind: store.OutState, TargetID: wid,
 			Payload:   map[string]string{"state_id": target.ID},
@@ -188,24 +170,30 @@ func (s *Server) moveThreadState(ctx context.Context, threadID, group string, fo
 	}
 	log.Printf("%s by %s: %s → %q [%s]%s", verb, actor.Label(), wid, target.Name, group, extra)
 
-	return s.ThreadDetail(ctx, full)
+	return s.withUnmet(ctx, full, unmet)
+}
+
+// withUnmet reads the thread back and hangs the outstanding Definition of Done
+// items off it, which is the whole of what the old gate now does.
+func (s *Server) withUnmet(ctx context.Context, threadID string, unmet []string) (domain.ThreadDetail, error) {
+	d, err := s.ThreadDetail(ctx, threadID)
+	if err != nil {
+		return d, err
+	}
+	d.UnmetDoD = unmet
+	return d, nil
 }
 
 // unmetDoD returns the unticked Definition of Done items in a thread body.
 //
-// Read from the DoD section only. The Logbook's own todos are the plan, and a
-// plan can legitimately carry items that outlive the thread — "monitor for a
-// week" — whereas the DoD is the promise about when this is finished. Blocking on
-// the Logbook would make the gate unpassable in practice, which is how a rule
-// gets routed around instead of followed.
+// Read from the DoD section only. The Logbook's own todos are the plan, and a plan
+// can legitimately carry items that outlive the thread — "monitor for a week" —
+// whereas the DoD is the promise about when this is finished.
 func unmetDoD(descriptionHTML string) []string {
 	body := md.FromHTML(descriptionHTML)
 	dod, _, found := md.ExtractSection(body, "definition of done", "dod")
 	if !found {
-		// No DoD at all is not a gate. A thread born small is allowed to close on
-		// a paragraph (AGENTS.md), and refusing here would punish exactly the
-		// threads the rule exempts.
-		return nil
+		return nil // no DoD is not an unmet DoD
 	}
 	var out []string
 	for _, t := range md.ParseTodos(dod) {
@@ -222,7 +210,7 @@ func (s *Server) handleCompleteThread(w http.ResponseWriter, r *http.Request) {
 	var in struct {
 		Force bool `json:"force"`
 	}
-	// A body is optional: POST with nothing means "complete it, respecting the DoD".
+	// A body is optional: POST with nothing completes the thread.
 	if r.Body != nil {
 		_ = json.NewDecoder(r.Body).Decode(&in)
 	}

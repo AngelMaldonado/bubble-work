@@ -1,6 +1,6 @@
 <script lang="ts">
   // A workspace's documentation, as a SCREEN — the same shape as the thread
-  // interior (docs/ARTIFACT-EDITING.md, docs/PAGES-CAPABILITY.md).
+  // interior (docs/journal/ARTIFACT-EDITING.md, docs/journal/PAGES-CAPABILITY.md).
   //
   // It used to be a modal, which was wrong for what this is. A spec is something
   // you read for twenty minutes with the sidebar open, follow a heading rail

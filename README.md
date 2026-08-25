@@ -1,395 +1,459 @@
 # Bubble Work
 
-A personal way-of-working where **attention behaves like buoyancy**: work that
-produces evidence stays *hot* and rises; work that goes quiet *cools* and sinks.
-Time is the governing force — your only standing job is to tend what floats at
-the top.
+> A personal way-of-working where **attention behaves like buoyancy**.
+> Work that produces evidence stays *hot* and *rises*; work that goes quiet *cools* and *sinks*.
+> Time is the governing force. Your only standing job is to tend what floats at the top.
 
-Bubble Work ships as a single Go binary (`bubble`) that runs a small **server**
-(the "brain") and a thin **client**, and serves its own web UI. It sits on top of
-one or more [Plane](https://plane.so) instances: Plane stays the system of record
-for the actual work items, while the server owns the Bubble Work overlay — heat,
-lifecycle, contracts, and membership.
+**One-line model:**
+`Workspace = boundary · Bubble = attention · Cycle = pulse · Thread = execution · Artifacts = evidence`
 
-> **The full model lives in [`docs/bubble-work-spec.md`](./docs/bubble-work-spec.md).**
-> This README is how to run it. The operating rules both Claude Code and Codex
-> load are in [`AGENTS.md`](./AGENTS.md); the design worksheets are in
-> [`docs/`](./docs).
+This README is the **way of thinking** — the model, and nothing about how it is
+built. How it is built is [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); how to
+run it is [`docs/operations.md`](./docs/operations.md); what each part does today
+is [`docs/modules/`](./docs/modules). The rules agents load are
+[`AGENTS.md`](./AGENTS.md).
 
-## Concepts (one line each)
+---
 
-| Term | Meaning | Plane mapping |
-|------|---------|---------------|
-| **Workspace** | boundary for a body of work | Project |
-| **Bubble** | a durable grouping; the unit of *attention* | Module |
-| **Thread** | one executable unit of work | Work item |
-| **Cycle** | the repeating pulse heat is measured against | Cycle |
-| **Artifact** | the evidence a thread produces (Brief, Logbook, revisions) | Work-item body / sub-item |
-| **Page** | reference material for a whole workspace | Project page |
-| **Heat** | evidence of *changed reality*, never mere activity | (derived) |
+## 0. The central metaphor: heat *is* buoyancy
 
-A bubble is **Hot → Warm → Cooling → Dormant → Closed**, computed from the
-meaningful outputs on its threads. Threads carry their own derived buoyancy
-(🔥 in progress · 😴 zzzz · 🪦 rip · 🏆 done) which rolls up into the bubble — see
-[`docs/THREAD-LIFECYCLE.md`](./docs/THREAD-LIFECYCLE.md).
+Bubbles rise and sink. The physics that makes that literal is **temperature**:
+hot air rises, cold air sinks. So there aren't two metaphors — there is one.
 
-## Architecture
+| State | Temperature | Buoyancy | What it means |
+|-------|-------------|----------|---------------|
+| Fresh, producing evidence now | **Hot** | Rises to top | Work in progress, on your radar |
+| Recent evidence, threads still open | **Warm** | Floats | Alive but slowing |
+| No evidence this pulse or last | **Cooling** | Sinking | Being deferred |
+| Silent for 2+ pulses / no owner | **Dormant** | At the bottom | Needs revival or burial |
+| Outcome reached or abandoned | **Closed** | Removed | Done — stops taking attention |
 
-```
-  Browser (SPA)      Humans (CLI)      Agents (Claude Code / Codex, MCP)
-        \                 │                    /
-         \                │                   /   auth: a Plane API key
-          v               v                  v
-   ┌──────────────────────────────────────────────────┐
-   │              Bubble Work Server                  │ ← the only thing
-   │   /  SPA        /api  REST        /mcp  tools     │   clients talk to
-   │   policy engine · heat · lifecycle · scheduler    │
-   │   ┌─────────────────────┐  ┌───────────────────┐  │
-   │   │ overlay (SQLite)    │  │ mirror — L1       │  │
-   │   │ heat · contracts    │  │ local read model  │  │
-   │   │ members · outbox    │  │ of Plane          │  │
-   │   └─────────────────────┘  └───────────────────┘  │
-   └────────────────────────┬─────────────────────────┘
-                            │ one sync worker · REST only
-                            v
-              Plane instances (system of record)
-```
+A bubble rises **only** when reality changes (evidence), and sinks
+**automatically** as time passes without it. You never manually "keep something
+warm" — you either produce evidence or you let it sink honestly.
 
-- **One binary, two modes:** `bubble serve` is the brain; the other subcommands
-  are the thin client. The web bundle is embedded, so there is one origin and
-  one process.
-- **Reads come from the local mirror**, not from Plane. A single sync worker is
-  Plane's only reader (delta every ~2 min, full reconcile hourly), which is what
-  keeps the whole system inside Plane's 60 req/min budget.
-- **Writes are optimistic**: they land locally and drain to Plane through an
-  outbox with retry. `GET /api/status` reports when the mirror is ageing or you
-  have unsent drafts, so being behind is never silent.
-- **Members, not anonymous callers.** Every request authenticates as a member
-  (human or agent) and is attributed.
-- **Federates multiple Plane instances**, with members scoped per instance.
-- **The server is Plane's only client, over REST only** — no client ever calls
-  Plane directly or via Plane's MCP, so the policy engine cannot be bypassed.
+---
 
-## Install
+## 1. Vocabulary (and collision warnings)
 
-Requires Go 1.26+. The built web bundle (`web/dist`) is committed, so a plain
-build needs **no JS toolchain**:
+The metaphor lives in the **human-facing layer**. Every term below has an
+explicit meaning so it never collides with tool terms or engineering terms.
 
-```bash
-go build -o dist/bubble ./cmd/bubble
+| Term | Meaning in Bubble Work | ⚠️ Do not confuse with |
+|------|------------------------|------------------------|
+| **Workspace** | The boundary for a body of work (a project, or a temporal frame like a week/quarter) | A vendor "Workspace" (e.g. Plane's org-level container) |
+| **Bubble** | A durable grouping of related threads — a unit of *attention* | A folder — a bubble has an outcome and can die |
+| **Thread** | One executable unit of work inside a bubble | OS/CPU threads |
+| **Cycle** | The repeating pulse against which heat is measured (the *heat window*) | A calendar month — it's a rhythm, not a date |
+| **Heat** | Evidence of changed reality accumulated in the current cycle | Activity, comments, or motion |
+| **Artifact** | The evidence a thread produces: its document, links, commits, deliverables | A generic file |
+| **Page** | Reference material for a whole Workspace: a spec, a decision record | A thread's artifacts, which belong to *one* piece of work |
+
+---
+
+## 2. The model
+
+```mermaid
+flowchart TD
+    W["🗂️ Workspace<br/><i>boundary</i>"]
+    W --> B1["🫧 Bubble<br/><i>attention · has an outcome</i>"]
+    W --> B2["🫧 Bubble"]
+    B1 --> T1["🧵 Thread<br/><i>execution</i>"]
+    B1 --> T2["🧵 Thread"]
+    T1 --> BR["📄 document<br/><i>intent · why · what done means</i>"]
+    T1 --> LB["📓 LOGBOOK.md<br/><i>plan · phases · evidence</i>"]
+
+    classDef ws fill:#1e293b,stroke:#334155,color:#e2e8f0;
+    classDef bub fill:#0e7490,stroke:#155e75,color:#ecfeff;
+    classDef thr fill:#7c3aed,stroke:#5b21b6,color:#f5f3ff;
+    classDef art fill:#0f766e,stroke:#115e59,color:#ecfdf5;
+    class W ws;
+    class B1,B2 bub;
+    class T1,T2 thr;
+    class BR,LB art;
 ```
 
-Optionally add an alias:
+### 2.1 Workspace — the boundary
 
-```bash
-echo "alias bubble='$(pwd)/dist/bubble'" >> ~/.zshrc && source ~/.zshrc
+The outermost container. It can be **abstract** (a project, a domain) or
+**temporal** (a day, week, month, quarter, year). A workspace holds bubbles and
+nothing else. It answers: *within which frame am I paying attention?*
+
+### 2.2 Bubble — the unit of attention
+
+A bubble groups related threads. The point of thinking of it as a *bubble* is
+that it **may go up or down as any force interacts with it** — and here that
+force is time acting on evidence. Unlike a folder, a bubble is a **living object
+with a contract** (§4). It rises and sinks on its own heat, and it can *die*.
+Your job as the operator is to keep an eye on what floats at the top and decide,
+deliberately, whether to **revive**, **let sink**, or **close** what is below.
+
+- **Rises automatically** when its threads produce evidence.
+- **May be pushed up manually** when you consciously re-prioritise it.
+- **Sinks automatically** as cycles pass without evidence — no action required;
+  time defers it for you.
+
+If a bubble has sunk but still matters, you **revive** it: refresh it with real
+work to push it back to the top.
+
+### 2.3 Thread — the unit of execution
+
+The core executable unit: one scope of work, with one document. A thread needs a
+**name**; the document is written in whatever shape the work actually has (§3).
+
+### 2.4 Artifacts — the evidence
+
+Threads produce artifacts. The **document** is the one Bubble Work owns; everything
+else (commits, PRs, published deliverables, recorded decisions) is *external
+evidence* the thread links to.
+
+Artifacts are **markdown, and Bubble Work is their record.** A tracker it is bound
+to receives a published copy — otherwise the tracker's editor would decide what a
+document may contain. Editing that copy in the tracker still works: the edit is
+imported and becomes the record. See
+[`decisions/0001`](./docs/decisions/0001-plane-is-a-channel-not-the-record.md).
+
+### 2.5 Pages — what outlives the work
+
+A **Page** belongs to the Workspace, not to a bubble or a thread, and outlives
+both. It is what remains true after the work that produced it has closed: a
+product spec, a reference, an architecture decision.
+
+The dividing line is ownership, and it is the same §8 rule about not duplicating
+artifacts: anything about *one piece of work* — the plan, the progress, the
+Definition of Done — belongs in that thread's own document. Anything the
+whole Workspace has to stay consistent with belongs on a Page. A thread's document
+says what to do; a Page says what has to remain true of it.
+
+Writing a Page is **not evidence of production** (§5.1) — documenting what you
+intend is not the same as changing reality, so pages earn no heat.
+
+---
+
+## 3. Threads and their documents
+
+> A thread needs a **name**. Everything else is yours.
+
+This is the framework's central trade, and it used to run the other way. There was a
+*birth rule*: no thread entered implementation without a Brief carrying a Definition
+of Done and a seeded Logbook. It was severe, and severity turned out to cost more than
+it bought — the work simply moved somewhere the tool could not measure it. See
+[`decisions/0005`](./docs/decisions/0005-the-framework-does-not-own-your-format.md).
+
+So: **we give you an automated framework — use it however you want. Your ideas and
+your tasks are warmed or cooled by Bubble Work's policy, not by their shape.**
+
+```mermaid
+flowchart LR
+    I["💡 Idea"] --> N["Name it →<br/>thread exists"]
+    N --> W["Write the document<br/><i>your headings, your order</i>"]
+    W --> EV["🔥 Any edit is evidence.<br/>Any ticked box is evidence."]
+    EV --> W
+
+    classDef q fill:#78350f,stroke:#92400e,color:#fffbeb;
+    classDef born fill:#065f46,stroke:#047857,color:#ecfdf5;
+    class N q;
+    class EV born;
 ```
 
-## Quickstart (single machine)
+### 3.1 What is worth writing anyway
 
-Your laptop can be **both server and client** — that's the default. Everything
-lives in `~/.bubble/` (override with `$BUBBLE_HOME`): the client `config.json`
-and the server's `bubble.db`. The client talks to `http://localhost:4006` out of
-the box.
+Nothing here is required. It is still the difference between a thread that finishes
+and one that drifts, so the tool says it — once, at creation, and again in
+`audit_bubble` — and then gets out of the way:
 
-```bash
-# 1. Register a Plane instance (secrets stay server-side, never printed back).
-#    Omit --project to federate the WHOLE workspace (all its projects);
-#    add --project <id> to pin a single project instead.
-bubble instance add --slug ayetec \
-    --url https://plane.ayetec.space \
-    --key   <PLANE_API_KEY> \
-    --workspace <workspace-slug>
+- **why this exists**, in a sentence somebody else could act on
+- **what is true when it is done** — a finish line, however phrased
+- **the next concrete action**, for the version of you that returns in three weeks
+- **checkboxes** for the steps: `- [ ] …`
 
-# 2. Authenticate as yourself with your OWN Plane API key.
-#    The server derives your identity, role, and instance scope from Plane —
-#    no member to create, no grant to hand out.
-bubble init --token <your-plane-api-key>
+Checkboxes count **anywhere in the document**, under your own headings, in your own
+order. Ticking one is the smallest piece of evidence a thread can produce, and
+evidence is what keeps it warm (§5.1). Only real `- [ ]` boxes count outside a
+Logbook — a plain bullet in prose is a sentence.
 
-# 3. Run the brain, then look at your bubbles
-bubble serve            # foreground on :4006 (or `bubble serve &` to background it)
-bubble whoami           # confirm Plane resolved you (name, role, instances)
-bubble ls               # bubbles from every instance you belong to, hottest first
-```
+### 3.2 Two headings that carry machinery
 
-The first start backfills the mirror from Plane; `bubble admin sync <slug>` shows
-the census and cursor without spending a single Plane call.
+Use them if they help, skip them if they do not. They are an offer, and this is what
+the offer buys:
 
-Then open **http://localhost:4006** for the board.
-
-> **Humans don't get registered.** Your Plane API key *is* your credential —
-> identity, admin role, and which instances you see all come from Plane. If you
-> belong to several instances under the **same email**, one key gives you a
-> unified view (the server matches you by email across instances). Different
-> email per org? Use **credential profiles** + `bubble use` (see below).
-
-To keep the server strictly local, bind loopback only:
-
-```bash
-bubble serve --addr 127.0.0.1:4006
-```
-
-## Three surfaces, one server
-
-A server capability lands on all three client surfaces in the same change (the
-web UI follows when it has a visual form). The logic lives in a server method
-each surface reuses, so they don't drift.
-
-- **Web** — the buoyancy board at `/`: bubbles bucketed by level, thread
-  interiors with the Brief / Logbook / Definition of Done rendered and
-  **editable in place**, a ⌘K omnibar over workspaces · threads · bubbles and a
-  `>` command palette, per-workspace pages, God Mode for admins, live updates
-  over SSE, EN/ES, light/dark, and optional vim keys in the editor.
-- **CLI** — the commands below.
-- **MCP** — the same operations as agent tools at `/mcp`.
-
-## Commands
-
-```
-# server
-bubble serve [--addr :4006]      run the server (REST + MCP + web brain)
-bubble stop                      stop the running server (graceful)
-bubble attach                    follow the running server's log (Ctrl-C detaches)
-
-# looking around
-bubble ls                        list bubbles, hottest first (buoyancy view)
-bubble heat <id>                 explain a bubble's temperature
-bubble show <id>                 a bubble's thread timeline (git-log-oneline)
-bubble thread <id> [--comments]  a thread's interior: artifacts, logbook, revisions
-bubble search <query>            fuzzy-search threads across your instances
-bubble whoami                    the identity resolved from your credential
-
-# doing the work
-bubble birth <id> [flags]        create a thread in a bubble (needs Brief + Logbook)
-bubble logbook <id> [text|-]     rewrite a thread's Logbook (evidence → warms it)
-bubble dod <id> [text|-]         rewrite a thread's Definition of Done
-bubble section --id <id> --title <t> [--file <f>|-] [--delete]
-                                 add / rewrite / remove a ## section of a thread
-bubble todo <id> <n> done <text> tick the nth todo (text guards the position)
-bubble revision <id> <title> [-] attach a revision artifact to a thread
-bubble comment <id> <text...>    post a comment (as you; earns no heat)
-bubble rename <id> <title>       retitle a thread or a revision
-bubble move <thread> <bubble>    re-home a thread into another bubble
-bubble done <id> [--force]       mark a thread finished (🏆; refused if the DoD is unmet)
-bubble reopen <id>               put a finished thread back to work
-
-# structure
-bubble workspace new|list|rename a Plane project — our Workspace
-bubble bubble new|set|close|open create a bubble or set its contract (§4)
-bubble bubble rename <id> --name retitle a bubble (the handle, not the contract)
-bubble bubble review|unreview    the explicit 👀 stage overlay
-bubble page list|read|new|edit   a workspace's docs and specs (Plane pages)
-bubble delete <kind> <id> [-y]   PERMANENTLY delete a workspace/bubble/thread/artifact
-
-# attention
-bubble notifications             your inbox of cooling/dormant alerts (alias: inbox)
-bubble notifications on|off      opt in/out of notifications
-bubble notifications read <id|all>  mark notifications read
-bubble tick                      sweep now for cooling bubbles
-
-# setup
-bubble init [flags]              configure server URL + a credential profile
-bubble use [name]                switch active credential profile (no arg: list)
-bubble reset [--force]           purge all local state and start from scratch
-bubble version
-
-# server-host admin
-bubble instance add|list|remove [--force]
-bubble admin <cmd>               see below
-```
-
-`bubble birth` enforces the §3 birth rule: the Brief must contain a "Definition
-of Done", and a Logbook is required unless you pass `--small`.
-
-### Admin (godmode)
-
-Authenticates with `$BUBBLE_ADMIN_TOKEN` (break-glass) or your active profile
-when your email is an admin email. Also available in the web UI.
-
-```
-bubble admin instances               all instances, across orgs
-bubble admin bubbles                 bubbles across ALL instances
-bubble admin stats                   server health + Plane rate budget
-bubble admin refresh                 flush server caches
-bubble admin tick                    force a cooling sweep now
-bubble admin tuning [set k=v|reset]  the buoyancy calibration
-bubble admin autostate <inst> on|off write derived levels back to Plane (opt-in)
-bubble admin kiosk ls|new|rm         read-only display tokens
-bubble admin sync <inst>             mirror census + cursor (no Plane calls)
-bubble admin sync-diff <inst>        compare the mirror against a live fetch
-bubble admin sync-fidelity <inst>    what a write would do to mirrored bodies
-bubble admin sync-backfill <inst>    force a complete re-walk of one instance
-bubble admin sync-rebuild <inst>     drop the local mirror and rebuild it
-bubble admin outbox [drop <id>]      writes that have not reached Plane
-```
-
-## Multiple Plane instances
-
-Register each deployment under its own slug. Who sees what is **derived from
-Plane membership** — a caller sees an instance only if their email is in that
-Plane workspace, which is the isolation boundary between separate orgs:
-
-```bash
-bubble instance add --slug cuby --url https://plane.cuby.work \
-    --key <KEY> --workspace <ws>          # whole workspace; or add --project <id>
-```
-
-A person who belongs to both `ayetec` and `cuby` (same email) sees both from a
-single Plane key; someone in only one sees only that one.
-
-**Whole workspace vs. pinned project:** omit `--project` and the instance
-federates every project in the workspace; pass `--project <id>` to track just
-one.
-
-Ids are namespaced by instance — `<slug>:<project-id>` for a workspace,
-`<slug>:<project-id>:<module-id>` for a bubble, `<slug>:<project-id>:<item-id>`
-for a thread or page — so every operation routes to the right instance and
-project automatically. The CLI accepts any unique prefix.
-
-## Switching identities (credential profiles)
-
-The unified cross-instance view requires the **same email** in each workspace.
-If your Plane accounts use **different emails** (e.g. `you@gmail.com` on ayetec,
-`you@corp.com` on cuby), one key can't show both — each key is a distinct
-identity. Store one profile per identity and switch between them:
-
-```bash
-bubble init --name ayetec --token <ayetec-key> --server <url>
-bubble init --name cuby   --token <cuby-key>   --server <url>
-
-bubble use                # list profiles ('*' = active)
-bubble use ayetec         # switch; now whoami/ls resolve as your ayetec identity
-bubble use --tokens       # keys masked to a fingerprint (--reveal for full)
-```
-
-A profile carries **both** the credential and the server URL, so one `bubble use`
-moves you between deployments too. Switching is instant and client-side.
-`whoami` prints the active profile so you always know who you are.
-
-## Agents as members (MCP)
-
-The server exposes its **own** MCP endpoint at `/mcp` (not Plane's). An agent
-**impersonates a human** by using that human's Plane API key as its Bearer
-credential — so it acts as that person, with their identity, scope, and (on the
-write path) Plane attribution. The framework's rules are enforced server-side,
-so an agent cannot bypass them:
-
-```bash
-claude mcp add --transport http bubble http://localhost:4006/mcp \
-    --header "Authorization: Bearer <your plane API key>"
-```
-
-The web UI's **Connect** panel generates that command for you, plus a setup
-prompt, with the key masked until you ask to see it.
-
-29 tools, grouped by what they do:
-
-| | Tools |
+| Heading | What it buys |
 |---|---|
-| **Read** | `list_workspaces` `list_bubbles` `thread_timeline` `read_thread` `thread_comments` `list_pages` `read_page` |
-| **Create** | `create_workspace` `create_bubble` `birth_thread` `add_revision` `create_page` |
-| **Change** | `update_thread` `toggle_todo` `delete_artifact` `set_contract` `move_thread` `rename_bubble` `rename_workspace` `update_page` |
-| **Finish** | `complete_thread` `reopen_thread` |
-| **Discuss** | `post_comment` `mark_comments_read` |
-| **End** | `close_bubble` `delete_bubble` `delete_thread` `delete_page` `delete_workspace` |
+| `## Definition of Done` | `complete_thread` reports which items were still open when you finished; `audit_bubble` tracks progress against it |
+| `## Logbook` | its own addressable region, so the plan can be rewritten without touching the rest of the page |
 
-`birth_thread` is rejected without a Brief (carrying a Definition of Done) and a
-Logbook. `update_thread` prefers surgical `edits` (quote the old text, give the
-new) over wholesale section replacement, and `toggle_todo` refuses the write if
-the item text no longer matches that position. Destructive tools require the
-exact current name as confirmation.
+**Write each reserved heading at most once.** `## Logbook` and
+`## Definition of Done` are what make those parts addressable, so a second one is
+refused: the first section truncates at the second, and the region becomes
+unreachable. That is the only shape rule left in the system, and it is machinery
+rather than taste.
 
-> Trade-off: the agent is indistinguishable from the human it impersonates —
-> no agent-level audit, and revoking it means rotating that human's Plane key.
+A Definition of Done is worth writing as **facts, not tasks** — every item verifiable
+by someone else without asking you. "Implement the export command" is a task;
+"`bubble admin export` round-trips a thread identically" is a finish line. Nothing
+enforces this. It is simply what makes the section answer the question it exists for.
 
-## Development
+### 3.3 What is *not* prose — Plane's own relationships
 
-There is a [`justfile`](./justfile); `just` on its own lists every recipe.
+Three questions have structured answers already, and writing them into the document
+is how they get lost ([`decisions/0006`](./docs/decisions/0006-plane-holds-the-relationships.md)):
+
+| Question | Where it lives | Verb |
+|---|---|---|
+| what kind of work is this? | Plane **labels** — any word your team uses | `set_labels` · `bubble label` |
+| where is the evidence? | Plane **links** on the work item | `add_link` · `bubble link` |
+| what does this depend on? | Plane **relations**: `relates_to`, `duplicate`, `blocking`, `blocked_by` | `relate_threads` · `bubble relate` |
+| what is this part of? | the parent work item (revisions are sub-items) | `add_revision` |
+
+There is no thread "type" of our own and no Brief template. A tracker that already
+answers a question should not be answered a second time here — two answers that can
+disagree are worse than either.
+
+**Adding a link is production**; it is the proof reality changed outside the tool.
+Labelling and relating are classification: they warm nothing, the same as a rename.
+
+If a shape still helps your writing, write one — the tool simply does not read it.
+A Logbook reads well like this:
+
+```markdown
+## Logbook
+**Owner:** @you · **State:** building · **Next:** <one concrete action>
+
+### Phase 1 — <name>
+- [x] done thing
+- [ ] next thing
+
+### Decisions
+2026-08-15 — what was decided, and what it rules out
+```
+
+`Next` is the line that matters most when a thread has cooled: the operating loop (§6)
+already asks for the next concrete action, and this is where it lives instead of
+dissolving into prose. `Decisions` is append-only — recording one is heat, and it
+absorbs the urge to comment.
+
+**Single source of truth:** keep the intent and the plan in *one* place. Don't
+duplicate the same todos across a markdown file, a tracker, and code comments.
+
+### 3.4 Creating a thread is production
+
+Defining a piece of work is work. **So a new thread is hot from its first moment**, and
+the bubble that gained it rises.
+
+A work item that merely *appeared* — created in the bound tracker, with nobody
+defining anything — earns nothing. Creation here and creation there are different
+events; only one of them is evidence. See
+[`decisions/0002`](./docs/decisions/0002-birth-is-production.md).
+
+---
+
+## 4. The Bubble contract (outcome semantics)
+
+A bubble without an outcome is a thematic folder that never dies. Every bubble
+declares three things up front:
+
+| Field | Question it answers |
+|-------|---------------------|
+| **Intended outcome** | What reality looks like when this bubble is done |
+| **Owner** | Who is accountable for it right now |
+| **Closure condition** | The explicit signal that says "close this" |
+
+When the closure condition is met — or when the outcome no longer justifies the
+work — the bubble is **closed**, not left to drift.
+
+---
+
+## 5. Heat & the bubble lifecycle
+
+### 5.1 What generates heat (evidence of changed reality)
+
+- A thread being **created** — somebody defined a piece of work (§3.4)
+- A completed todo, anywhere in the document
+- **Any edit to a thread's document.** Writing is the work
+  ([`decisions/0004`](./docs/decisions/0004-writing-is-the-work.md))
+- A **link** to external evidence: the commit, the PR, the thing that shipped (§3.3)
+- A committed or reviewed implementation
+- A published deliverable
+- A recorded decision
+- Validated user / stakeholder feedback
+- Removal of a material blocker
+
+### 5.2 What does **not** generate heat
+
+Comments, status pings, renaming things, labelling, relating threads, re-planning
+without output, a work item merely appearing in the tracker. Motion is not progress,
+and classification is not production.
+
+A comment does one thing, and only at the bubble grain it did not reach before:
+**a bubble somebody is actively discussing is not called abandoned.** It floors the
+band at 😴 rather than 🪦, and touches neither temperature nor ordering — presence
+must not outrank output.
+
+### 5.3 Lifecycle
+
+```mermaid
+stateDiagram-v2
+    direction LR
+    [*] --> Hot: thread born
+    Hot --> Hot: evidence this cycle
+    Hot --> Warm: no evidence this cycle,<br/>threads still open
+    Warm --> Hot: meaningful output
+    Warm --> Cooling: no evidence this<br/>or previous cycle
+    Cooling --> Hot: revived (evidence)
+    Cooling --> Dormant: 2+ cycles silent<br/>or no owner
+    Dormant --> Hot: deliberate revival
+    Hot --> Closed: outcome reached
+    Warm --> Closed: outcome reached
+    Cooling --> Closed: abandoned
+    Dormant --> Closed: buried
+    Closed --> [*]
+```
+
+A bubble with no threads is Dormant, and correctly so: nothing has been promised
+yet. It leaves the bottom the moment a thread is created in it.
+
+> **Rule:** never create activity solely to keep a bubble warm. If a bubble keeps
+> cooling, the honest move is to **revive it with real work, redefine it, or close
+> it** — not to fake heat.
+
+---
+
+## 6. Way of work — the operating loop
+
+```mermaid
+flowchart TD
+    S(["Start on a Thread"]) --> R["Read the Thread:<br/>its Bubble, its document"]
+    R --> C{"Outcome + finish line<br/>legible?"}
+    C -- no --> FIX["Write down what you<br/>understood, or ask"]
+    FIX --> CONF
+    C -- yes --> CONF["Confirm intended outcome<br/>+ what done means"]
+    CONF --> WORK["Do the work"]
+    WORK --> EV{"Meaningful<br/>output?"}
+    EV -- no --> WORK
+    EV -- yes --> HEAT["Record evidence in the document<br/>→ Bubble gains heat → rises 🔼"]
+    HEAT --> NEXT["Record the next<br/>concrete action"]
+    NEXT --> DOD{"Finished?"}
+    DOD -- no --> WORK
+    DOD -- yes --> CLOSE["Close Thread ·<br/>close Bubble if outcome reached"]
+    CLOSE --> E(["End"])
+
+    classDef fix fill:#7f1d1d,stroke:#991b1b,color:#fef2f2;
+    classDef heat fill:#9a3412,stroke:#c2410c,color:#fff7ed;
+    class FIX fix;
+    class HEAT heat;
+```
+
+**Before** — read the thread and its bubble, and confirm what the work is for and
+what finishing means. If neither is written down, write what you understood (or ask)
+before implementing.
+**During** — update the plan when it materially changes; record blockers
+and decisions; link concrete evidence (commits, PRs, docs, builds, releases).
+**After** — tick completed todos, link produced artifacts, record the
+next concrete action, and change state only when it reflects reality.
+
+---
+
+## 7. Binding it to agents & a tracker
+
+The model is **tool-agnostic** — it works with nothing but Markdown. When you
+want AI agents (Claude Code, Codex) or a tracker (Plane) to execute the same
+model, bind it *without duplicating* the artifacts.
+
+### 7.1 Shared instruction source
+
+Put the operating rules once in `AGENTS.md`; have `CLAUDE.md` import it so both
+agents share one source of truth.
+
+```
+your-repo/
+├── AGENTS.md          # the rules in §1–§6
+├── CLAUDE.md          # contains only:  @AGENTS.md
+└── .codex/config.toml # optional MCP wiring
+```
+
+### 7.2 If you map onto Plane
+
+Keep the metaphor human-facing; give each concept an explicit Plane object. Note
+Plane already owns the word *Workspace*, so a Bubble Work Workspace maps to a
+Plane **Project**.
+
+| Bubble Work | Plane object | Who owns it |
+|-------------|--------------|-------------|
+| Workspace | **Project** | Plane |
+| Bubble | **Module** | Plane holds the object; Bubble Work holds its contract and heat |
+| Heat window | **Cycle** | Plane |
+| Thread | **Work item** | Plane holds the object; Bubble Work holds its level and stage |
+| The document · Logbook · DoD | regions of the work item's **description** | **Bubble Work** — Plane receives a rendered copy |
+| What kind of work · evidence · dependencies | **labels · links · relations** | Plane ([`decisions/0006`](./docs/decisions/0006-plane-holds-the-relationships.md)) |
+| Revision | **Sub-work-item** of the thread | Plane holds the object; Bubble Work holds the body |
+| Page | **Project page**, or Bubble Work's own store where Plane has no pages API | **Bubble Work** |
+| Discussion | **Comments** | Plane |
+
+> Interpretation: *the Bubble is the persistent body of work; Cycles are the
+> pulses that keep it warm.* Don't keep one Cycle alive forever — each new Cycle
+> is a fresh pulse against the same Bubble.
+
+**Plane is a channel, not the record.** It carries structure (projects, modules,
+cycles, states), identity (who the members are), and discussion — those it is
+genuinely the best owner of. What it does not get to own is the **format**: a
+tracker's rich-text editor deciding what your documents may contain is not a decision
+to outsource. So artifacts and pages live in Bubble Work and are published outward.
+
+Editing in the tracker still works. An edit made there is imported and wins — Bubble
+Work claims authority over the format and over where work is authored, not a monopoly
+on writing.
+
+Introduce reusable agent skills (e.g. a `create-thread` skill) **only after** you
+have run the process by hand enough to know which steps are actually stable.
+
+---
+
+## 8. Anti-patterns to design against
+
+| Risk | Guardrail |
+|------|-----------|
+| **Activity gaming** — motion masquerading as progress | Heat requires *evidence of changed reality* (§5.1–5.2) |
+| **Zombie bubbles** — nothing ever dies | Lifecycle has explicit Cooling → Dormant → Closed (§5.3) |
+| **Thematic-folder bubbles** — no purpose | Every bubble carries outcome + owner + closure condition (§4) |
+| **Duplicated artifacts** — same todos in 3 places | One source of truth per field; one owner per field (§3.2) |
+| **Terminology collisions** — "Workspace", "Thread" | Explicit mappings; metaphor stays human-facing (§1) |
+| **Ideas-straight-to-code** | A thread's document is where the idea gets thought through — and the tool says what is missing from it every time you create one or audit a bubble (§3) |
+| **Tracker drift** — the tool's format shapes the work | The tracker is a channel; Bubble Work owns the documents (§7.2) |
+
+---
+
+## Running it
+
+Bubble Work ships as one Go binary (`bubble`): a **server** that holds the state,
+serves its own web UI, and is the only thing clients talk to — plus a thin
+**client** (CLI for humans, MCP for agents).
 
 ```bash
-just dist          # the web bundle AND the binary — the full rebuild
-just build         # binary only (fast, and blind to frontend changes)
-just check         # gofmt + vet + go test + svelte-check, exactly what CI gates
-
-just dev           # rebuild + restart the local server, wait until healthy
-just dev-web       # ...rebuilding the web bundle first
-just ui            # vite with hot reload, proxying the API to that server
-just logs          # follow the running server's log
+go build -o dist/bubble ./cmd/bubble        # web bundle is committed; no JS toolchain needed
+bubble instance add --slug <s> --url <plane-url> --key <key> --workspace <ws>
+bubble init --token <your-plane-api-key>
+bubble serve                                # then open http://localhost:4006
 ```
 
-The one thing worth internalising: **the web bundle is embedded in the binary**
-(`web/embed.go`, `//go:embed all:dist`), so `just build` will not show a frontend
-change. Use `just dist`, or `just ui` while you are iterating. `web/dist` is
-committed, which is why a plain `go build` needs no JS toolchain — and why a UI
-change belongs in your commit as a rebuilt bundle.
-
-The frontend uses **bun** (a stray `package-lock.json` would resolve different
-versions and is git-ignored). The underlying commands, if you would rather not go
-through `just`:
-
-```bash
-cd frontend
-bun install
-bun run build      # → ../web/dist, which go:embed picks up (committed)
-bun run test       # vitest
-bun run check      # svelte-check
-bun run dev        # vite, proxying /api and /mcp to $BUBBLE_DEV_BACKEND
-```
-
-Layout:
-
-```
-cmd/bubble/        entrypoint + CLI subcommands
-internal/
-  domain/          shared types + DTOs
-  heat/            pure temperature function (Hot/Warm/Cooling/Dormant)
-  config/          client/server settings (XDG)
-  store/           SQLite overlay: contracts, progress, instances, outbox
-  mirror/          the local read model of Plane (L1)
-  sync/            the single sync worker: backfill, delta, reconcile, diff
-  plane/           Plane REST client + rate budget (the sole path to Plane)
-  md/              Markdown ↔ Plane HTML: splice engine, lint, fidelity
-  mcpapi/          our own MCP server (agent front door)
-  server/          the brain: REST + MCP + policy engine + SSE
-  client/          thin CLI client
-web/               the embedded SPA bundle (built from frontend/)
-frontend/          Svelte 5 + Skeleton 5 + Tailwind 4, built with bun
-docs/              the design worksheets (see below)
-scripts/dev.sh     rebuild + restart the local server (what `just dev` runs)
-justfile           the build/dev recipes — `just` lists them
-```
+Install, quickstart, credential profiles, admin and development live in
+[`docs/operations.md`](./docs/operations.md). The command surface is
+[`docs/modules/cli.md`](./docs/modules/cli.md); the agent tools are
+[`docs/modules/mcp.md`](./docs/modules/mcp.md); deployment is
+[`DEPLOY.md`](./DEPLOY.md).
 
 ## Documentation
 
-| Doc | What it covers |
-|-----|----------------|
+| Where | What |
+|-------|------|
+| this file | the model — the way of thinking |
 | [`AGENTS.md`](./AGENTS.md) | the operating rules agents load (`CLAUDE.md` imports it) |
-| [`docs/bubble-work-spec.md`](./docs/bubble-work-spec.md) | the canonical model, and the server/client design |
-| [`docs/THREAD-LIFECYCLE.md`](./docs/THREAD-LIFECYCLE.md) | per-thread buoyancy, evidence signals, the bubble roll-up |
-| [`docs/PLANE-SYNC.md`](./docs/PLANE-SYNC.md) | the mirror, the sync worker, the outbox, degraded mode |
-| [`docs/ARTIFACT-EDITING.md`](./docs/ARTIFACT-EDITING.md) | editing a thread's page: splice engine, editor, workspaces, pages |
-| [`docs/PAGES-CAPABILITY.md`](./docs/PAGES-CAPABILITY.md) | why pages are per-instance, and who holds them when Plane cannot |
-| [`docs/MCP-ACCESS.md`](./docs/MCP-ACCESS.md) | agents writing artifacts, live updates, how sign-in could work |
-| [`docs/web-ui-design.md`](./docs/web-ui-design.md) | the original board design |
-| [`DEPLOY.md`](./DEPLOY.md) | running it on a server, CI/CD, the Plane rate limit |
+| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | how it is built: topology, ownership, surfaces, storage |
+| [`docs/modules/`](./docs/modules) | one file per module — what is true today |
+| [`docs/decisions/`](./docs/decisions) | the decisions that changed the model, and why |
+| [`docs/journal/`](./docs/journal) | how the work went: worksheets, phases, live measurements |
+| [`prompts/`](./prompts) | what agents are told over MCP — markdown, embedded, meant to be tuned |
 
-## Status
-
-Working today, end to end: the server/client spine · Plane read **and** write
-paths · multi-instance federation with per-member scoping · the SQLite mirror as
-the read layer with an outbox for writes and degraded-mode reporting · derived
-thread and bubble buoyancy with opt-in write-back to Plane · the notification
-scheduler · the web board with in-place artifact editing · workspace pages, held
-by Plane or by the server depending on what the instance's Plane can do ·
-workspace and bubble lifecycle including renames and deletes · 29 MCP tools ·
-God Mode.
-
-Still open, each tracked in its own worksheet:
-
-- **Payload-aware webhooks** (`PLANE-SYNC.md` Phase 6). Today's webhook is a
-  blind "refresh everything" trigger; the delta covers correctness on its own,
-  so this buys freshness, not correctness.
-- **A stable public HTTPS URL and an OAuth AS** (`MCP-ACCESS.md` steps 4 and 6),
-  for hosted clients that can't paste a header.
+[`docs/README.md`](./docs/README.md) is the map, including which module file to
+read for a given question.
 
 The repository runs on its own framework: see [`AGENTS.md`](./AGENTS.md).

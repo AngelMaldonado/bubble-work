@@ -28,7 +28,7 @@
   let birthTarget = $state<BubbleView | null>(null);
   let showCreate = $state(false);
 
-  // The workspace tier: create, rename, delete (docs/ARTIFACT-EDITING.md).
+  // The workspace tier: create, rename, delete (docs/journal/ARTIFACT-EDITING.md).
   let wsForm = $state<{ mode: 'create' | 'rename'; id: string; current: string } | null>(null);
   let wsPendingDelete = $state<{ id: string; name: string; bubbles: number; threads: number } | null>(
     null,

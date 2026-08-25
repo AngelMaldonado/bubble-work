@@ -8,13 +8,16 @@ import (
 	"time"
 )
 
-// The outbox: writes that have not reached Plane (docs/PLANE-SYNC.md Phase 5).
+// The outbox: writes that have not reached Plane (docs/journal/PLANE-SYNC.md Phase 5).
 //
-// It holds two kinds, and they behave differently on purpose:
+// It holds three kinds, and they behave differently on purpose:
 //
 //   - OutState — an auto-state move. It is performed with the INSTANCE key,
 //     which the server already stores, so it can be drained by a worker with
 //     backoff and no human present.
+//   - OutDoc — an artifact body that has not reached Plane. Also drains
+//     unattended, for the same reason: the instance key can publish it, and the
+//     markdown itself is already safe in thread_docs (docs/decisions/0001).
 //   - OutComment — a comment draft. Comments are posted with the CALLER's own
 //     Plane key so the author in Plane is the real person; queueing a credential
 //     to replay later would put every user's key at rest in this database. So a
@@ -24,6 +27,11 @@ import (
 const (
 	OutState   = "state"   // payload: {"state_id": "..."}
 	OutComment = "comment" // payload: {"body": "..."} — a draft, never auto-drained
+	// OutDoc is a published artifact body that has not reached Plane
+	// (docs/decisions/0001). payload: {"html": "..."}. Unlike a comment draft it
+	// DOES auto-drain: the markdown is already safe in thread_docs, so this is a
+	// publication to retry rather than words that could be lost.
+	OutDoc = "doc"
 
 	OutPending   = "pending"
 	OutAbandoned = "abandoned"
@@ -50,6 +58,9 @@ func (e OutboxEntry) Body() string { return e.Payload["body"] }
 
 // StateID returns a queued state move's target state.
 func (e OutboxEntry) StateID() string { return e.Payload["state_id"] }
+
+// HTML returns a queued publication's rendered body.
+func (e OutboxEntry) HTML() string { return e.Payload["html"] }
 
 // Enqueue records a write that did not reach Plane. Returns the new row id.
 func (s *Store) Enqueue(e OutboxEntry) (int64, error) {
@@ -280,4 +291,20 @@ func tparse(s string) time.Time {
 		return time.Time{}
 	}
 	return t
+}
+
+// DiscardPendingDocs removes any pending publication for a work item, and reports
+// how many went. Called before queueing a new one: three edits during a Plane
+// outage should publish the final body once, not replay the whole sequence — the
+// intermediate states were never Plane's and nobody is waiting to see them.
+func (s *Store) DiscardPendingDocs(instance, targetID string) (int, error) {
+	res, err := s.db.Exec(`
+		DELETE FROM outbox
+		WHERE instance = ? AND target_id = ? AND kind = ? AND status = ?`,
+		instance, targetID, OutDoc, OutPending)
+	if err != nil {
+		return 0, err
+	}
+	n, _ := res.RowsAffected()
+	return int(n), nil
 }

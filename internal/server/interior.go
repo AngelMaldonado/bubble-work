@@ -209,6 +209,15 @@ func (s *Server) threadBuoyancyFor(ctx context.Context, wid string, d domain.Thr
 	if !d.CreatedAt.IsZero() {
 		solo.Evidence = append(solo.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadCreated, At: d.CreatedAt})
 	}
+	// A birth is the one piece of evidence no body can be read for
+	// (docs/decisions/0002), so this path has to ask the overlay for it. Without
+	// this, a thread the refresher has not put in a bubble yet — which includes
+	// every thread for the first seconds of its life — would be classified as a
+	// newborn that produced nothing, moments after someone wrote its Brief.
+	if p, err := s.store.ThreadProgressFor([]string{wid}); err == nil && !p[wid].BornAt.IsZero() {
+		solo.Evidence = append(solo.Evidence,
+			domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvThreadBorn, At: p[wid].BornAt})
+	}
 	if d.CompletedAt != nil {
 		solo.Evidence = append(solo.Evidence, domain.EvidenceEvent{ThreadID: wid, Kind: domain.EvCompletedTodo, At: *d.CompletedAt})
 	}
@@ -216,7 +225,7 @@ func (s *Server) threadBuoyancyFor(ctx context.Context, wid string, d domain.Thr
 }
 
 // buildThreadDetail renders a thread's interior from the MIRROR
-// (docs/PLANE-SYNC.md Phase 3).
+// (docs/journal/PLANE-SYNC.md Phase 3).
 //
 // This used to fan out four concurrent Plane calls — GetWorkItem, the revision
 // walk, members and states — and cache the result for 60s because building it
@@ -241,7 +250,17 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 		return domain.ThreadDetail{}, err
 	}
 
-	bodyMD := md.FromHTML(it.DescriptionHTML)
+	// The document store is the record (docs/decisions/0001), so a thread that has
+	// one is rendered from markdown we own. The mirrored HTML is the fallback for
+	// threads not yet adopted — Plane's copy is all there is for those.
+	//
+	// Note what this does NOT cover yet: a revision's body is its own work item and
+	// is still read through the mirror in revisions() below.
+	docs, storedMD, fromStore := s.storedBody(wid)
+	bodyMD := storedMD
+	if !fromStore {
+		bodyMD = md.FromHTML(it.DescriptionHTML)
+	}
 	arts, log := md.ParseThread(bodyMD, it.Name)
 	kind := "simple"
 	if log != nil && log.Phased {
@@ -273,15 +292,38 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 	// What an editor loads and writes back. Deliberately NOT derived from
 	// Artifacts: those are the rendered read model, while a splice diffs against
 	// exactly this markdown, and the hash is what proves an edit is writing over
-	// what it read (docs/ARTIFACT-EDITING.md Phase 3).
+	// what it read (docs/journal/ARTIFACT-EDITING.md Phase 3).
 	regions := map[string]domain.EditableRegion{}
 	for _, r := range editRegions {
+		if fromStore {
+			if d, ok := docs[string(r.region)]; ok {
+				regions[r.name] = domain.EditableRegion{Markdown: d.Markdown, Hash: d.Hash}
+			}
+			continue
+		}
 		if m, ok := md.RegionMarkdown(it.DescriptionHTML, r.region); ok {
 			regions[r.name] = domain.EditableRegion{Markdown: m, Hash: md.Hash(m)}
 		}
 	}
 
 	revisions := s.revisions(inst, projID, wid, names)
+
+	// Provenance: was this body last written in Plane's editor? Normal operation
+	// rather than a warning (docs/decisions/0001), but the import goes through the
+	// HTML bridge, so a reader deserves to know it may have lost detail.
+	var fromPlane bool
+	var importedAt *time.Time
+	if fromStore {
+		for _, d := range docs {
+			if d.UpdatedBy == importedBy {
+				fromPlane = true
+				at := d.UpdatedAt
+				if importedAt == nil || at.After(*importedAt) {
+					importedAt = &at
+				}
+			}
+		}
+	}
 
 	// Normalize to non-nil slices so the JSON is arrays, never null (the web
 	// client indexes/`.length`s them).
@@ -294,6 +336,15 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 	if log != nil && log.Todos == nil {
 		log.Todos = []md.Todo{}
 	}
+
+	// Plane's own relationships (docs/decisions/0006): what KIND of work this is
+	// (labels), where the evidence lives (links), and what it depends on
+	// (relations). All three come from the mirror, so this stays a local read — and
+	// a failure in any of them costs a chip in the UI rather than the thread, which
+	// is why none of them can fail this function.
+	labels := s.labelsOf(inst.Slug, it)
+	links := s.linksOf(inst.Slug, wid)
+	related := s.relatedOf(inst.Slug, projID, wid)
 
 	return domain.ThreadDetail{
 		ID:        full,
@@ -313,7 +364,76 @@ func (s *Server) buildThreadDetail(inst domain.Instance, projID, wid, full strin
 		Regions:     regions,
 		CreatedAt:   it.CreatedAt,
 		CompletedAt: it.CompletedAt,
+		Labels:      labels,
+		Links:       links,
+		Related:     related,
+		FromPlane:   fromPlane,
+		ImportedAt:  importedAt,
 	}, nil
+}
+
+// labelsOf resolves an item's label ids against the mirrored catalogue. An id the
+// catalogue has not caught up with yet is skipped rather than shown as a uuid: a
+// label nobody can read is worse than one fewer chip, and the next structure pass
+// fixes it.
+func (s *Server) labelsOf(slug string, it mirror.Item) []domain.Label {
+	if s.mirror == nil || len(it.Labels) == 0 {
+		return nil
+	}
+	cat, err := s.mirror.Labels(slug, it.ProjectID)
+	if err != nil {
+		log.Printf("labels: read catalogue for %s: %v", slug, err)
+		return nil
+	}
+	out := make([]domain.Label, 0, len(it.Labels))
+	for _, id := range it.Labels {
+		if l, ok := cat[id]; ok {
+			out = append(out, domain.Label{ID: l.ID, Name: l.Name, Color: l.Color})
+		}
+	}
+	return out
+}
+
+// linksOf reads a thread's external evidence out of the mirror.
+func (s *Server) linksOf(slug, wid string) []domain.Link {
+	if s.mirror == nil {
+		return nil
+	}
+	ls, err := s.mirror.Links(slug, wid)
+	if err != nil {
+		log.Printf("links: read %s: %v", wid, err)
+		return nil
+	}
+	out := make([]domain.Link, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, domain.Link{ID: l.ID, URL: l.URL, Title: l.Title, CreatedAt: l.CreatedAt})
+	}
+	return out
+}
+
+// relatedOf reads a thread's typed edges, filling in the other end's title and
+// state from the mirror when we know it. An edge pointing outside what we mirror
+// still comes back — knowing that something relates to work you cannot see is
+// better than silently dropping the edge.
+func (s *Server) relatedOf(slug, projID, wid string) []domain.Related {
+	if s.mirror == nil {
+		return nil
+	}
+	rs, err := s.mirror.Relations(slug, wid)
+	if err != nil {
+		log.Printf("relations: read %s: %v", wid, err)
+		return nil
+	}
+	out := make([]domain.Related, 0, len(rs))
+	for _, r := range rs {
+		rel := domain.Related{ID: slug + ":" + projID + ":" + r.RelatedID, Type: r.Type}
+		if other, ok, err := s.mirror.Item(slug, r.RelatedID); err == nil && ok {
+			rel.Title, rel.State = other.Name, other.StateName
+			rel.ID = slug + ":" + other.ProjectID + ":" + other.ID
+		}
+		out = append(out, rel)
+	}
+	return out
 }
 
 // resolveThreadID normalizes a thread query to a full namespaced id
@@ -650,7 +770,7 @@ func (s *Server) PostComment(ctx context.Context, threadID, body string) (domain
 	if err != nil {
 		// Plane refused or was unreachable. Keep the words: what a person
 		// actually loses here is their typing, and that is recoverable without
-		// storing their credential (docs/PLANE-SYNC.md Phase 5).
+		// storing their credential (docs/journal/PLANE-SYNC.md Phase 5).
 		//
 		// The draft carries no key on purpose, so nothing drains it
 		// automatically — only its author can re-send it, with their live

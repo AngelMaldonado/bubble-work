@@ -1,6 +1,6 @@
 // Package mirror is the local projection of Plane: a SQLite copy of the work
 // items, modules, states, members and comments the server reads (see
-// docs/PLANE-SYNC.md). It is the READ side — nothing here talks to Plane, and
+// docs/journal/PLANE-SYNC.md). It is the READ side — nothing here talks to Plane, and
 // nothing here decides what to fetch. internal/sync fills it; internal/server
 // queries it.
 //
@@ -97,6 +97,10 @@ CREATE TABLE IF NOT EXISTS mirror_items (
   priority         TEXT NOT NULL DEFAULT '',
   parent_id        TEXT NOT NULL DEFAULT '',
   assignees_json   TEXT NOT NULL DEFAULT '[]',
+  -- Plane's own labels on the item, as ids. They ride along in the same work-item
+  -- payload the delta already reads, so they cost nothing extra
+  -- (docs/decisions/0006).
+  labels_json      TEXT NOT NULL DEFAULT '[]',
   description_html TEXT NOT NULL DEFAULT '',
   -- lets the syncer tell a body edit from a comment without a second call, and
   -- lets the progress diff run without re-reading bodies (PLANE-SYNC.md)
@@ -132,6 +136,40 @@ CREATE TABLE IF NOT EXISTS mirror_comments (
   PRIMARY KEY (instance, id)
 );
 CREATE INDEX IF NOT EXISTS idx_mirror_comments_item ON mirror_comments(instance, item_id);
+-- The project's label catalogue: what each label id on an item actually says.
+-- Project-scoped and cheap, so it rides the slow structure cadence.
+CREATE TABLE IF NOT EXISTS mirror_labels (
+  instance   TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  project_id TEXT NOT NULL,
+  name       TEXT NOT NULL DEFAULT '',
+  color      TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (instance, id)
+);
+CREATE INDEX IF NOT EXISTS idx_mirror_labels_project ON mirror_labels(instance, project_id);
+-- External evidence hung off a work item: a commit, a PR, a published deliverable.
+-- Unlike labels these need a call PER ITEM, so they are filled in on a budget the
+-- same way comments are (docs/journal/PLANE-SYNC.md).
+CREATE TABLE IF NOT EXISTS mirror_item_links (
+  instance   TEXT NOT NULL,
+  id         TEXT NOT NULL,
+  item_id    TEXT NOT NULL,
+  url        TEXT NOT NULL DEFAULT '',
+  title      TEXT NOT NULL DEFAULT '',
+  created_at TEXT NOT NULL DEFAULT '',
+  PRIMARY KEY (instance, id)
+);
+CREATE INDEX IF NOT EXISTS idx_mirror_links_item ON mirror_item_links(instance, item_id);
+-- Typed relationships between work items (relates_to, duplicate, blocking,
+-- blocked_by, …). Also a per-item call, on the same budget.
+CREATE TABLE IF NOT EXISTS mirror_item_relations (
+  instance      TEXT NOT NULL,
+  item_id       TEXT NOT NULL,
+  relation_type TEXT NOT NULL,
+  related_id    TEXT NOT NULL,
+  PRIMARY KEY (instance, item_id, relation_type, related_id)
+);
+CREATE INDEX IF NOT EXISTS idx_mirror_relations_item ON mirror_item_relations(instance, item_id);
 CREATE TABLE IF NOT EXISTS sync_cursors (
   instance    TEXT NOT NULL,
   resource    TEXT NOT NULL,        -- "items" | "structure"
@@ -152,6 +190,11 @@ func New(db *sql.DB) (*Mirror, error) {
 	if _, err := db.Exec(schema); err != nil {
 		return nil, fmt.Errorf("mirror schema: %w", err)
 	}
+	// Best-effort migration for a mirror that predates the column (an error on an
+	// already-migrated DB is expected and ignored). A row that keeps the default
+	// simply carries no labels until the next pass reads the item again — the
+	// mirror is a rebuildable projection, so this is the cheapest safe path.
+	_, _ = db.Exec(`ALTER TABLE mirror_items ADD COLUMN labels_json TEXT NOT NULL DEFAULT '[]'`)
 	return &Mirror{db: db}, nil
 }
 
@@ -169,11 +212,35 @@ type Item struct {
 	Priority        string
 	ParentID        string
 	Assignees       []string
+	Labels          []string
 	DescriptionHTML string
 	DescriptionHash string
 	CreatedAt       time.Time
 	UpdatedAt       time.Time
 	CompletedAt     *time.Time
+}
+
+// Label is one of a project's labels, mirrored so a thread can say what KIND of
+// work it is without us keeping a second answer (docs/decisions/0006).
+type Label struct {
+	ID        string
+	ProjectID string
+	Name      string
+	Color     string
+}
+
+// Link is one external URL attached to a work item.
+type Link struct {
+	ID        string
+	URL       string
+	Title     string
+	CreatedAt time.Time
+}
+
+// Relation is one typed edge from a work item to another.
+type Relation struct {
+	Type      string // relates_to | duplicate | blocking | blocked_by | …
+	RelatedID string
 }
 
 // Module is one mirrored module (a Bubble).

@@ -10,7 +10,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 )
 
-// Round-trip fidelity over a whole instance (docs/ARTIFACT-EDITING.md Phase 0).
+// Round-trip fidelity over a whole instance (docs/journal/ARTIFACT-EDITING.md Phase 0).
 //
 // Sibling of `sync diff`, and deliberately its opposite in cost: diff walks Plane
 // to prove the mirror is faithful, this walks only the mirror to prove the

@@ -11,7 +11,7 @@ import (
 	"github.com/AngelMaldonado/bubble-work/internal/plane"
 )
 
-// Deleting things (docs/ARTIFACT-EDITING.md).
+// Deleting things (docs/journal/ARTIFACT-EDITING.md).
 //
 // These are IRREVERSIBLE and they delete from Plane, which is the system of
 // record. §5.3 says a bubble should normally die by being CLOSED — that keeps

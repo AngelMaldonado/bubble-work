@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The one guard on an irreversible act (docs/ARTIFACT-EDITING.md).
+  // The one guard on an irreversible act (docs/journal/ARTIFACT-EDITING.md).
   //
   // Deleting removes things from Plane, which is the system of record, so this
   // says exactly what goes and what stays rather than asking "are you sure?".

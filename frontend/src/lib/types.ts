@@ -82,6 +82,34 @@ export interface TOCEntry {
 export interface Todo {
   text: string;
   done: boolean;
+  /** The item's ADDRESS — exactly what toggle_todo takes. Indices are per region
+   *  and start at 0, so the DoD's first item is dod[0], never "after the logbook
+   *  items". Present because inferring it is silent when it goes wrong. */
+  region?: string;
+  index?: number;
+}
+
+export interface Label {
+  id: string;
+  name: string;
+  color?: string;
+}
+
+export interface ThreadLink {
+  id: string;
+  url: string;
+  title?: string;
+  created_at?: string;
+}
+
+export interface Related {
+  /** namespaced thread id, so the client can open it */
+  id: string;
+  /** relates_to | duplicate | blocking | blocked_by | start_/finish_ before/after */
+  type: string;
+  title?: string;
+  state?: string;
+  level?: string;
 }
 
 export interface Artifact {
@@ -104,7 +132,7 @@ export interface Logbook {
   phased: boolean;
 }
 
-/** One writable part of a thread's page (docs/ARTIFACT-EDITING.md). Distinct
+/** One writable part of a thread's page (docs/journal/ARTIFACT-EDITING.md). Distinct
  *  from Artifact, which is the RENDERED read model: this is the exact markdown a
  *  splice diffs against, and `hash` is what proves an edit is writing over what
  *  it read — the server answers 409 when it is not. */
@@ -127,7 +155,7 @@ export interface Page {
   updated_at: string;
   created_at: string;
   /** which system is the record for this page: Plane, or this server because the
-   *  instance's Plane has no pages API (docs/PAGES-CAPABILITY.md) */
+   *  instance's Plane has no pages API (docs/journal/PAGES-CAPABILITY.md) */
   storage: 'plane' | 'local';
   /** namespaced id of the page this one sits under, absent at the root. Plane
    *  models the tree and shows it in its own UI, so it is read from there. */
@@ -173,6 +201,22 @@ export interface ThreadDetail extends Buoyancy {
   /** markdown-standard violations this write introduced (spec §3.1, §3.2).
    *  Only present when the write was allowed through leniently. */
   warnings?: { rule: string; message: string; line?: number }[];
+  /** the body shown was last written in PLANE's editor and imported
+   *  (docs/decisions/0001). Not a warning — Plane is a writable surface — but the
+   *  import goes through the HTML bridge, so detail may have been lost. */
+  from_plane?: boolean;
+  imported_at?: string;
+  /** Definition of Done items still open when this thread was completed
+   *  (docs/decisions/0005). A report, never a refusal. */
+  unmet_dod?: string[];
+  /** Plane's own labels on the work item (docs/decisions/0006). They replaced the
+   *  overlay "thread type": categorising work is the tracker's job. */
+  labels?: Label[];
+  /** external evidence attached in Plane: a commit, a PR, a published thing.
+   *  Landing one is production, which is why it is a verb and not prose. */
+  links?: ThreadLink[];
+  /** Plane's typed relationships to other threads. */
+  related?: Related[];
   created_at: string;
   completed_at?: string;
 }
@@ -200,7 +244,7 @@ export interface Comment {
 }
 
 /** Round-trip fidelity over an instance's mirrored bodies
- *  (docs/ARTIFACT-EDITING.md Phase 0). Mirror-only, so it costs no Plane budget. */
+ *  (docs/journal/ARTIFACT-EDITING.md Phase 0). Mirror-only, so it costs no Plane budget. */
 export interface SyncFidelity {
   instance: string;
   bodies: number;
@@ -275,7 +319,7 @@ export interface AdminInstance {
   auto_state: boolean; // writes derived levels back to Plane (Phase B)
 }
 
-// ---- Plane mirror (docs/PLANE-SYNC.md) ----
+// ---- Plane mirror (docs/journal/PLANE-SYNC.md) ----
 
 /** One instance's mirror census and cursor. Cheap: no Plane calls. */
 /** One instance's sync freshness. */
@@ -411,7 +455,6 @@ export interface Tuning {
   ownerless_is_dormant: boolean;
   bubble_rip_needs_owner: boolean;
   bubble_level_rollup: boolean;
-  thread_birth_heats: boolean;
   thread_grace_cycles: number;
   thread_rip_needs_owner: boolean;
   pulse_cycles: number;

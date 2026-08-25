@@ -9,7 +9,7 @@ import (
 )
 
 // Live updates (F4): a Server-Sent Events stream of the caller's bubbles, plus
-// the fan-out it rides on. Split out of server.go in docs/PLANE-SYNC.md Phase 7.
+// the fan-out it rides on. Split out of server.go in docs/journal/PLANE-SYNC.md Phase 7.
 //
 // Since Phase 2 a broadcast is triggered by the MIRROR changing rather than by a
 // Plane fetch completing, which is why the board now repaints within a sync

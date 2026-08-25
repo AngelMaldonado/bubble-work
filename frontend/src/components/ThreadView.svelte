@@ -6,7 +6,7 @@
   import { api, ApiError } from '../lib/api';
   import { t } from '../lib/i18n.svelte';
   import { levelIcon, levelLabel } from '../lib/types';
-  import type { ThreadDetail, Comment, RegionName } from '../lib/types';
+  import type { ThreadDetail, Comment, RegionName, ThreadHit } from '../lib/types';
   import ThreadToc from './ThreadToc.svelte';
   import Prose from './Prose.svelte';
   import type { Heading } from '../lib/prose';
@@ -43,7 +43,7 @@
     store.setThreadSel(s);
   }
 
-  // ---- editing (docs/ARTIFACT-EDITING.md Phase 4) ----
+  // ---- editing (docs/journal/ARTIFACT-EDITING.md Phase 4) ----
   //
   // What the board calls an artifact and what the write path calls a region are
   // not the same shape: artifacts[0] is everything that is not the Logbook or
@@ -72,7 +72,7 @@
     await reloadDetail();
   }
 
-  // ---- inline checkboxes (docs/ARTIFACT-EDITING.md Phase 6) ----
+  // ---- inline checkboxes (docs/journal/ARTIFACT-EDITING.md Phase 6) ----
   //
   // Tick a todo straight from the rendered view. The server primitive shipped
   // with the write path; all this has to do is work out WHICH item was clicked
@@ -127,7 +127,7 @@
     }
   }
 
-  // ---- deleting (docs/ARTIFACT-EDITING.md) ----
+  // ---- deleting (docs/journal/ARTIFACT-EDITING.md) ----
   //
   // Irreversible, and it deletes from Plane. The menu only ARMS it; the dialog
   // is the act, and it says what goes and what stays rather than "are you sure".
@@ -208,33 +208,134 @@
   // ---- finishing ----
   //
   // 🏆 is Plane's state, so this asks the server to move the work item rather than
-  // recording anything of its own. The Definition of Done gates it: the server
-  // refuses while items are outstanding and names them, which is what dodBlock
-  // shows — with the override beside it, since a DoD can turn out to be wrong.
+  // recording anything of its own. The Definition of Done no longer gates it
+  // (docs/decisions/0005): finishing is a position somebody takes. What comes back
+  // is a REPORT — the items still open when they took it — which is what dodNote
+  // shows, once, after the fact.
   let completing = $state(false);
-  let dodBlock = $state<string | null>(null);
+  let dodNote = $state<string[] | null>(null);
 
-  async function completeThread(force: boolean): Promise<void> {
+  async function completeThread(): Promise<void> {
     if (!detail || completing) return;
     completing = true;
-    if (force) dodBlock = null;
     try {
-      detail = await api.completeThread(detail.id, force);
-      dodBlock = null;
+      detail = await api.completeThread(detail.id);
+      dodNote = detail.unmet_dod?.length ? detail.unmet_dod : null;
       // The bubble's band is derived from its threads, so the board behind this
       // is now stale.
       await store.refresh();
     } catch (e) {
-      const msg = e instanceof ApiError ? e.message : String(e);
-      // The DoD refusal is a 400 that names the outstanding items; anything else
-      // is a real error and belongs in the ordinary error line.
-      if (e instanceof ApiError && e.status === 400 && msg.includes('Definition of Done')) {
-        dodBlock = msg.replace(/^bad request:\s*/, '');
-      } else {
-        error = msg;
-      }
+      error = e instanceof ApiError ? e.message : String(e);
     } finally {
       completing = false;
+    }
+  }
+
+  // ---- links (docs/decisions/0006) ----
+  //
+  // External evidence lives in Plane as a link on the work item, not as a line of
+  // prose somebody typed into the document. Landing one is production, so the board
+  // behind this goes stale the moment it lands.
+  let addingLink = $state(false);
+  let linkURL = $state('');
+  let linkTitle = $state('');
+
+  async function submitLink(e: Event): Promise<void> {
+    e.preventDefault();
+    if (!detail || linkURL.trim() === '') return;
+    try {
+      detail = await api.addLink(detail.id, linkURL.trim(), linkTitle.trim());
+      linkURL = '';
+      linkTitle = '';
+      addingLink = false;
+      await store.refresh();
+    } catch (err) {
+      error = err instanceof ApiError ? err.message : String(err);
+    }
+  }
+
+  async function dropLink(linkId: string): Promise<void> {
+    if (!detail) return;
+    try {
+      detail = await api.removeLink(detail.id, linkId);
+    } catch (err) {
+      error = err instanceof ApiError ? err.message : String(err);
+    }
+  }
+
+  // ---- labels (docs/decisions/0006) ----
+  //
+  // Plane's labels, edited as a comma-separated list because that is how somebody
+  // thinks about them ("bug, infra") — the server resolves names to ids and creates
+  // what the project does not have yet.
+  let editingLabels = $state(false);
+  let labelText = $state('');
+
+  function startLabels(): void {
+    labelText = (detail?.labels ?? []).map((l) => l.name).join(', ');
+    editingLabels = true;
+  }
+
+  async function submitLabels(e: Event): Promise<void> {
+    e.preventDefault();
+    if (!detail) return;
+    const names = labelText
+      .split(',')
+      .map((n) => n.trim())
+      .filter((n) => n !== '');
+    try {
+      detail = await api.setLabels(detail.id, names);
+      editingLabels = false;
+    } catch (err) {
+      error = err instanceof ApiError ? err.message : String(err);
+    }
+  }
+
+  // ---- relations (docs/decisions/0006) ----
+  //
+  // The other end is chosen by SEARCH rather than by pasting an id: a namespaced id
+  // is not something anyone has in their head, and the ids that are easy to paste
+  // are the ones that are easy to get wrong.
+  const RELATION_TYPES = ['relates_to', 'duplicate', 'blocking', 'blocked_by'];
+  let addingRelation = $state(false);
+  let relQuery = $state('');
+  let relType = $state('relates_to');
+  let relHits = $state<ThreadHit[]>([]);
+
+  async function searchRelated(): Promise<void> {
+    const q = relQuery.trim();
+    if (q === '') {
+      relHits = [];
+      return;
+    }
+    try {
+      const hits = await api.threads(q);
+      // A thread cannot relate to itself, and the server relates only within one
+      // project — so filtering here turns two refusals into two fewer round trips.
+      relHits = hits.filter((h) => h.id !== detail?.id).slice(0, 6);
+    } catch {
+      relHits = [];
+    }
+  }
+
+  async function relate(other: string): Promise<void> {
+    if (!detail) return;
+    try {
+      detail = await api.relateThreads(detail.id, other, relType);
+      relQuery = '';
+      relHits = [];
+      addingRelation = false;
+    } catch (err) {
+      error = err instanceof ApiError ? err.message : String(err);
+    }
+  }
+
+  async function unrelate(other: string): Promise<void> {
+    if (!detail) return;
+    try {
+      detail = await api.unrelateThreads(detail.id, other);
+    } catch (err) {
+      error = err instanceof ApiError ? err.message : String(err);
     }
   }
 
@@ -243,7 +344,7 @@
     completing = true;
     try {
       detail = await api.reopenThread(detail.id);
-      dodBlock = null;
+      dodNote = null;
       await store.refresh();
     } catch (e) {
       error = e instanceof ApiError ? e.message : String(e);
@@ -329,7 +430,7 @@
   // badge is accurate before the panel is ever opened.
   // Repaint when an agent edits the thread that is on screen. Watching a
   // Logbook change as it happens is the whole point of the MCP surface
-  // (docs/MCP-ACCESS.md); before this, ThreadView loaded once on open and
+  // (docs/journal/MCP-ACCESS.md); before this, ThreadView loaded once on open and
   // nothing short of navigating away would refresh it.
   $effect(() => {
     const changed = store.threadChanged;
@@ -412,7 +513,7 @@
 
   // A comment that could not reach Plane comes back as a draft (202) rather
   // than an error, so the words stay put. Only its author can re-send it,
-  // because it deliberately carries no credential (docs/PLANE-SYNC.md Phase 5).
+  // because it deliberately carries no credential (docs/journal/PLANE-SYNC.md Phase 5).
   let draftBusy = $state<number | null>(null);
 
   async function retryDraft(c: Comment): Promise<void> {
@@ -643,6 +744,24 @@
         >{detail.title}</h2>
       {/if}
       <div class="chips">
+        <!-- Plane's own labels: what kind of work this is (docs/decisions/0006) -->
+        {#if editingLabels}
+          <form class="labelform" onsubmit={submitLabels}>
+            <!-- svelte-ignore a11y_autofocus -->
+            <input bind:value={labelText} placeholder={t('thread.labelsPlaceholder')} autofocus />
+            <button type="submit">{t('thread.save')}</button>
+            <button type="button" onclick={() => (editingLabels = false)}>{t('form.cancel')}</button>
+          </form>
+        {:else}
+          {#each detail.labels ?? [] as l (l.id)}
+            <span class="chip label">{l.name}</span>
+          {/each}
+          {#if !store.kiosk}
+            <button class="chip label add" onclick={startLabels} title={t('thread.editLabels')}>
+              {(detail.labels ?? []).length ? '✎' : '+ ' + t('thread.labels')}
+            </button>
+          {/if}
+        {/if}
         <span class="chip {detail.kind}">{detail.kind}</span>
         <!-- the thread's own buoyancy (THREAD-LIFECYCLE.md): subsumes open/done -->
         <span class="chip lvl lvl-{detail.level}" title={detail.reason}>
@@ -656,6 +775,11 @@
         {/if}
         {#if detail.assignees?.length}
           <span class="chip who">{detail.assignees.join(', ')}</span>
+        {/if}
+        <!-- written in Plane and imported (docs/decisions/0001). Deliberately a
+             quiet chip, not a banner: editing in Plane is allowed. -->
+        {#if detail.from_plane}
+          <span class="chip who" title={t('thread.fromPlaneHelp')}>{t('thread.fromPlane')}</span>
         {/if}
       </div>
       <button
@@ -744,6 +868,67 @@
               </button>
             {/if}
 
+            {#if detail.links?.length || (canEdit && !store.kiosk)}
+              <div class="sect">
+                {t('thread.links')}
+                {#if canEdit && !store.kiosk}
+                  <button class="sect-add" onclick={() => (addingLink = !addingLink)} title={t('thread.addLink')}>+</button>
+                {/if}
+              </div>
+              {#if addingLink}
+                <form class="linkform" onsubmit={submitLink}>
+                  <input bind:value={linkURL} placeholder="https://…" />
+                  <input bind:value={linkTitle} placeholder={t('thread.linkTitle')} />
+                  <button type="submit" disabled={linkURL.trim() === ''}>{t('thread.addLink')}</button>
+                </form>
+              {/if}
+              {#each detail.links ?? [] as l (l.id)}
+                <div class="pin-row">
+                  <a class="item" href={l.url} target="_blank" rel="noreferrer noopener" title={l.url}>
+                    <span class="ico">🔗</span>{l.title || l.url}
+                  </a>
+                  {#if canEdit && !store.kiosk}
+                    <button class="pin-x" onclick={() => dropLink(l.id)} aria-label="remove link">×</button>
+                  {/if}
+                </div>
+              {/each}
+            {/if}
+
+            {#if detail.related?.length || !store.kiosk}
+              <div class="sect">
+                {t('thread.related')}
+                {#if !store.kiosk}
+                  <button class="sect-add" onclick={() => (addingRelation = !addingRelation)} title={t('thread.addRelation')}>+</button>
+                {/if}
+              </div>
+              {#if addingRelation}
+                <div class="linkform">
+                  <select bind:value={relType}>
+                    {#each RELATION_TYPES as rt (rt)}
+                      <option value={rt}>{rt.replace('_', ' ')}</option>
+                    {/each}
+                  </select>
+                  <input bind:value={relQuery} oninput={searchRelated} placeholder={t('thread.findThread')} />
+                  {#each relHits as h (h.id)}
+                    <button type="button" class="hit" onclick={() => relate(h.id)} title={h.bubble_name}>
+                      {h.name}
+                    </button>
+                  {/each}
+                </div>
+              {/if}
+              {#each detail.related ?? [] as r (r.id + r.type)}
+                <div class="pin-row">
+                  <button class="item" onclick={() => store.openThread(r.id)} title={r.type}>
+                    <span class="ico">🔀</span>{r.title || r.id}
+                    <span class="reltype">{r.type.replace('_', ' ')}</span>
+                  </button>
+                  {#if !store.kiosk}
+                    <button class="pin-x" onclick={() => unrelate(r.id)} aria-label="remove relation">×</button>
+                  {/if}
+                </div>
+              {/each}
+            {/if}
+
             {#if detail.revisions?.length}
               <div class="sect">{t('thread.revisions')}</div>
               {#each detail.revisions as r, i (i)}
@@ -765,7 +950,7 @@
           <div class="edit-bar">
             <!-- Finishing leads the bar: it is the act the whole thread exists to
                  reach, and it used to be the one thing you had to leave for
-                 Plane's UI (docs/THREAD-LIFECYCLE.md). -->
+                 Plane's UI (docs/journal/THREAD-LIFECYCLE.md). -->
             {#if detail.level === 'done'}
               <button onclick={reopenThread} disabled={completing} title={t('thread.reopenThread')}>
                 ↩ {t('thread.reopenThread')}
@@ -773,7 +958,7 @@
             {:else}
               <button
                 class="finish"
-                onclick={() => completeThread(false)}
+                onclick={() => completeThread()}
                 disabled={completing}
                 title={t('thread.doneHint')}
               >
@@ -808,16 +993,13 @@
           </div>
         {/if}
 
-        <!-- The refusal is not a dead end: a DoD can be genuinely wrong, so the
-             override is offered right here rather than sending anyone to the CLI.
-             It says what is outstanding, because "not met" alone is unactionable. -->
-        {#if dodBlock}
+        <!-- Finished over an open Definition of Done. Not an error and not a
+             refusal — the record simply says what was left, so it is a decision
+             somebody can see rather than a shortcut nobody notices. -->
+        {#if dodNote}
           <p class="dodblock">
-            <b>{t('thread.dodBlocked')}</b>
-            {dodBlock}
-            <button type="button" class="link" onclick={() => completeThread(true)}>
-              {t('thread.forceDone')}
-            </button>
+            <b>{t('thread.dodLeftOpen')}</b>
+            {dodNote.join(' · ')}
           </p>
         {/if}
 
@@ -1192,6 +1374,108 @@
   .chip.who {
     text-transform: none;
   }
+  /* Plane's labels. Neutral rather than colour-coded: a label's own colour comes
+     from Plane and is not guaranteed to be legible against either theme. */
+  .sect-add {
+    float: right;
+    border: none;
+    background: none;
+    color: var(--faint);
+    cursor: pointer;
+    font: inherit;
+    line-height: 1;
+    padding: 0 0.2rem;
+  }
+  .sect-add:hover {
+    color: var(--wip);
+  }
+  .linkform {
+    display: grid;
+    gap: 0.25rem;
+    padding: 0.25rem 0.35rem 0.5rem;
+  }
+  .linkform select,
+  .linkform input {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem 0.4rem;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    background: color-mix(in oklab, var(--text) 6%, transparent);
+    color: var(--text);
+  }
+  .linkform button {
+    font: inherit;
+    font-size: 0.75rem;
+    padding: 0.3rem;
+    border-radius: 7px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .linkform button:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .labelform {
+    display: flex;
+    gap: 0.3rem;
+    align-items: center;
+    flex: 1 1 16rem;
+  }
+  .labelform input {
+    font: inherit;
+    font-size: 0.72rem;
+    padding: 0.15rem 0.45rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: color-mix(in oklab, var(--text) 6%, transparent);
+    color: var(--text);
+    flex: 1;
+  }
+  .labelform button {
+    font: inherit;
+    font-size: 0.68rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+    color: var(--muted);
+    padding: 0.12rem 0.5rem;
+    cursor: pointer;
+  }
+  .chip.label.add {
+    cursor: pointer;
+    border-style: dashed;
+    background: transparent;
+    font: inherit;
+    font-size: 0.68rem;
+    color: var(--faint);
+  }
+  .hit {
+    font: inherit;
+    font-size: 0.75rem;
+    text-align: left;
+    padding: 0.25rem 0.4rem;
+    border-radius: 7px;
+    border: 1px solid transparent;
+    background: color-mix(in oklab, var(--text) 5%, transparent);
+    color: var(--muted);
+    cursor: pointer;
+  }
+  .hit:hover {
+    border-color: var(--line);
+    color: var(--text);
+  }
+  .reltype {
+    margin-left: auto;
+    font-size: 0.65rem;
+    color: var(--faint);
+  }
+  .chip.label {
+    text-transform: none;
+    background: color-mix(in oklab, var(--text) 7%, transparent);
+  }
 
   .body {
     flex: 1;
@@ -1469,16 +1753,6 @@
     font-size: 0.8rem;
     color: var(--muted);
     line-height: 1.45;
-  }
-  .dodblock .link {
-    margin-left: 0.3rem;
-    border: none;
-    background: none;
-    padding: 0;
-    color: var(--wip);
-    cursor: pointer;
-    font: inherit;
-    text-decoration: underline;
   }
   .edit-bar .danger:hover {
     color: oklch(0.98 0 0);

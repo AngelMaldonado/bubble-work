@@ -6,36 +6,15 @@
 
   let { bubble, onclose }: { bubble: BubbleView; onclose: () => void } = $props();
 
+  // A name and a document. There is no template mode any more (docs/decisions/0006):
+  // the form asked for Context / Outcome / Symptom / Repro / Scope because the server
+  // read them, and the server does not read anything now.
   let name = $state('');
-  let problem = $state('');
-  let outcome = $state('');
-  let dod = $state('');
-  let logbook = $state('');
-  let small = $state(false);
+  let body = $state('');
   let busy = $state(false);
   let err = $state<string | null>(null);
 
-  const ready = $derived(
-    name.trim() !== '' &&
-      problem.trim() !== '' &&
-      outcome.trim() !== '' &&
-      dod.trim() !== '' &&
-      (small || logbook.trim() !== ''),
-  );
-
-  function buildBrief(): string {
-    // The §3 birth artifact: problem/outcome/constraints + a required DoD section.
-    return [
-      `## Problem / opportunity`,
-      problem.trim(),
-      ``,
-      `## Intended outcome`,
-      outcome.trim(),
-      ``,
-      `## Definition of Done`,
-      dod.trim(),
-    ].join('\n');
-  }
+  const ready = $derived(name.trim() !== '');
 
   async function submit(e: Event) {
     e.preventDefault();
@@ -43,13 +22,11 @@
     busy = true;
     err = null;
     try {
-      await api.birth({
+      await api.createThread({
         instance: bubble.instance,
         bubble_id: bubble.id,
         name: name.trim(),
-        brief: buildBrief(),
-        logbook: small ? '' : logbook.trim(),
-        small_thread: small,
+        body: body.trim(),
       });
       await store.refresh();
       onclose();
@@ -71,29 +48,13 @@
   <label for="bf-name">{t('form.title')}</label>
   <input id="bf-name" bind:value={name} placeholder={t('form.titlePlaceholder')} disabled={busy} />
 
-  <div class="two">
-    <div>
-      <label for="bf-problem">{t('form.problem')}</label>
-      <textarea id="bf-problem" bind:value={problem} rows="3" placeholder={t('form.problemPlaceholder')} disabled={busy}></textarea>
-    </div>
-    <div>
-      <label for="bf-outcome">{t('form.intended')}</label>
-      <textarea id="bf-outcome" bind:value={outcome} rows="3" placeholder={t('form.intendedPlaceholder')} disabled={busy}></textarea>
-    </div>
-  </div>
-
-  <label for="bf-dod">{t('form.dod')} <span class="req">{t('form.required')}</span></label>
-  <textarea id="bf-dod" bind:value={dod} rows="3" placeholder={t('form.dodPlaceholder')} disabled={busy}></textarea>
-
-  <label class="check">
-    <input type="checkbox" bind:checked={small} disabled={busy} />
-    {t('form.smallThread')}
-  </label>
-
-  {#if !small}
-    <label for="bf-logbook">{t('form.logbook')} <span class="req">{t('form.logbookHint')}</span></label>
-    <textarea id="bf-logbook" bind:value={logbook} rows="4" placeholder={'## Plan\n- [ ] first actionable todo\n\nOwner: …\nState: planning'} disabled={busy}></textarea>
-  {/if}
+  <label for="bf-body">{t('form.document')} <span class="req">{t('form.documentHint')}</span></label>
+  <textarea
+    id="bf-body"
+    bind:value={body}
+    rows="14"
+    placeholder={t('form.documentPlaceholder')}
+    disabled={busy}></textarea>
 
   {#if err}<p class="err">{err}</p>{/if}
 
@@ -175,28 +136,6 @@
   input:focus,
   textarea:focus {
     border-color: var(--wip);
-  }
-  .two {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 0.75rem;
-  }
-  @media (max-width: 520px) {
-    .two {
-      grid-template-columns: 1fr;
-    }
-  }
-  .check {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    font-size: 0.8rem;
-    color: var(--muted);
-    font-weight: 400;
-    margin-top: 0.5rem;
-  }
-  .check input {
-    width: auto;
   }
   .err {
     margin: 0.3rem 0 0;

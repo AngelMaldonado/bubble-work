@@ -6,14 +6,49 @@ package mcpapi
 import (
 	"context"
 	"fmt"
+	"log"
 	"net/http"
 	"strings"
 
+	"github.com/google/jsonschema-go/jsonschema"
 	sdk "github.com/modelcontextprotocol/go-sdk/mcp"
 
 	"github.com/AngelMaldonado/bubble-work/internal/domain"
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 )
+
+// schemaFor infers a tool's input schema from its Go type and lets the caller patch
+// it — which is the only way to express an ENUM here.
+//
+// The SDK's `jsonschema:"…"` struct tag sets a description and nothing else, so a
+// field with a closed set of legal values arrives at the model as a free-text string
+// and the restriction is discovered by being rejected at runtime. A real agent
+// session hit exactly that with `type`. Declaring the enum makes the client refuse
+// the bad value before the call, which is where a constraint belongs.
+func schemaFor[In any](patch func(*jsonschema.Schema)) *jsonschema.Schema {
+	s, err := jsonschema.For[In](nil)
+	if err != nil {
+		// A schema this package cannot infer is a programming error, not a runtime
+		// one, and it is caught the first time the server starts.
+		panic(fmt.Sprintf("mcp: inferring a schema: %v", err))
+	}
+	if patch != nil {
+		patch(s)
+	}
+	return s
+}
+
+// enumOn declares the legal values of one property, if the property exists.
+func enumOn(s *jsonschema.Schema, field string, values ...string) {
+	prop, ok := s.Properties[field]
+	if !ok || prop == nil {
+		return
+	}
+	prop.Enum = make([]any, 0, len(values))
+	for _, v := range values {
+		prop.Enum = append(prop.Enum, v)
+	}
+}
 
 // Backend is the server capability set the MCP tools call into. Keeping it an
 // interface avoids an import cycle and mirrors the HTTP surface exactly.
@@ -30,7 +65,7 @@ type Backend interface {
 	DeleteWorkspace(ctx context.Context, id string) (int, int, error)
 	CreateBubble(ctx context.Context, req domain.CreateBubbleRequest) (domain.NewBubble, error)
 	RenameBubble(ctx context.Context, bubbleID, name string) (domain.NewBubble, error)
-	BirthThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
+	CreateThread(ctx context.Context, req domain.BirthRequest) (domain.BirthResult, error)
 	SetContract(ctx context.Context, bubbleID string, in domain.ContractInput) (domain.Contract, error)
 	CloseBubble(ctx context.Context, bubbleID string) error
 	Timeline(ctx context.Context, bubbleID string) ([]domain.ThreadNode, error)
@@ -39,12 +74,19 @@ type Backend interface {
 	PostComment(ctx context.Context, threadID, body string) (domain.Comment, error)
 	UpdateThread(ctx context.Context, threadID string, edit domain.ThreadEdit) (domain.ThreadDetail, error)
 	MoveThread(ctx context.Context, threadID, bubbleID string) (domain.ThreadDetail, error)
+	SetLabels(ctx context.Context, threadID string, labels []string) (domain.ThreadDetail, error)
+	AddLink(ctx context.Context, threadID, url, title string) (domain.ThreadDetail, error)
+	RemoveLink(ctx context.Context, threadID, linkID string) (domain.ThreadDetail, error)
+	RelateThreads(ctx context.Context, threadID, otherID, relType string) (domain.ThreadDetail, error)
+	UnrelateThreads(ctx context.Context, threadID, otherID string) (domain.ThreadDetail, error)
 	CompleteThread(ctx context.Context, threadID string, force bool) (domain.ThreadDetail, error)
 	ReopenThread(ctx context.Context, threadID string) (domain.ThreadDetail, error)
 	DeleteBubble(ctx context.Context, bubbleID string) (int, error)
 	DeleteThread(ctx context.Context, threadID string) (int, error)
 	DeleteRegion(ctx context.Context, threadID string, region md.Region) (domain.ThreadDetail, error)
 	ToggleTodo(ctx context.Context, threadID string, region md.Region, index int, text string, done bool) (domain.ThreadDetail, error)
+	ToggleTodos(ctx context.Context, threadID string, items []domain.TodoToggle) (domain.ThreadDetail, error)
+	AuditBubble(ctx context.Context, bubbleID string) (domain.BubbleAudit, error)
 	AddRevision(ctx context.Context, threadID, title, body string) (domain.ThreadDetail, error)
 	MarkCommentsRead(ctx context.Context, threadID string, commentIDs []string) error
 }
@@ -117,7 +159,7 @@ func withActor(ctx context.Context, req *sdk.CallToolRequest) context.Context {
 
 // updateThreadIn patches a thread's artifact page. Both fields are optional and
 // a nil one is left untouched — an agent revising a plan must not be able to
-// erase the human's Brief.
+// erase what the human wrote.
 // sectionIn addresses one named section of a thread's document.
 type sectionIn struct {
 	Title    string  `json:"title" jsonschema:"the section's heading text, as read_thread shows it. Created as a ## section when it does not exist yet"`
@@ -129,7 +171,7 @@ type updateThreadIn struct {
 	ThreadID string  `json:"thread_id" jsonschema:"the namespaced thread id"`
 	Title    *string `json:"title,omitempty" jsonschema:"rename the thread. Not evidence of production — a title is what the work is called, not what has been done"`
 	Logbook  *string `json:"logbook,omitempty" jsonschema:"replace the Logbook section: the plan in phases, its todos, current owner and state. Markdown"`
-	Brief    *string `json:"brief,omitempty" jsonschema:"replace the Brief section: problem, intended outcome, constraints, links. Rarely what an agent should touch"`
+	Brief    *string `json:"brief,omitempty" jsonschema:"replace the whole DOCUMENT — everything that is not the Logbook or the Definition of Done. 'brief' is the API's older word for it. Rarely what an agent should touch"`
 	DoD      *string `json:"dod,omitempty" jsonschema:"replace the Definition of Done: the checklist that says the work is finished. Markdown"`
 	// Edits are the PREFERRED way to change an existing section.
 	Edits []editIn `json:"edits,omitempty" jsonschema:"change PART of a section instead of replacing it. Strongly preferred for an existing section: quote the exact text to change rather than reproducing the whole thing, which is how sections get paraphrased, truncated, or appended to twice"`
@@ -152,10 +194,13 @@ type editIn struct {
 // since it was read, and ticking the wrong box silently manufactures evidence.
 type toggleTodoIn struct {
 	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
-	Index    int    `json:"index" jsonschema:"zero-based position of the item within the section, as read_thread lists them"`
+	Index    int    `json:"index" jsonschema:"zero-based position of the item WITHIN its region, exactly as read_thread reports it"`
 	Text     string `json:"text" jsonschema:"the item's text as you read it — the write is REFUSED if it no longer matches, rather than ticking the wrong box"`
 	Done     bool   `json:"done" jsonschema:"true to tick, false to un-tick"`
 	Region   string `json:"region,omitempty" jsonschema:"logbook (default) or dod"`
+	// Items is the batch form. Ticking five things is one change, not five, and it
+	// should cost one call and one write — not five of each.
+	Items []domain.TodoToggle `json:"items,omitempty" jsonschema:"several items to toggle in ONE call and ONE write; when present the top-level index/text/done are ignored"`
 }
 
 // deleteIn asks for the thing's id AND its name.
@@ -187,6 +232,11 @@ type renameWorkspaceIn struct {
 // renameBubbleIn retitles a bubble. No name guard here, unlike the deletes: a
 // rename is reversible by renaming back, and demanding the old name would only
 // cost a read for something nothing is lost to.
+// bubbleIn asks for a bubble and nothing else.
+type bubbleIn struct {
+	BubbleID string `json:"bubble_id" jsonschema:"the bubble's id, short or namespaced, as list_bubbles reports it"`
+}
+
 type renameBubbleIn struct {
 	BubbleID string `json:"bubble_id" jsonschema:"the bubble's id (short id or namespaced)"`
 	Name     string `json:"name" jsonschema:"the new name"`
@@ -228,6 +278,33 @@ type deleteRegionIn struct {
 type moveThreadIn struct {
 	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
 	BubbleID string `json:"bubble_id" jsonschema:"the bubble to move it into. Must be in the same workspace — Plane groups work items only within their own project"`
+}
+
+type setLabelsIn struct {
+	ThreadID string   `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Labels   []string `json:"labels" jsonschema:"the labels this thread should carry, by NAME. Replaces whatever it has — pass an empty list to clear. A name the project does not have yet is created"`
+}
+
+type addLinkIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	URL      string `json:"url" jsonschema:"the URL: a commit, a PR, a deployed thing, a published document"`
+	Title    string `json:"title,omitempty" jsonschema:"what it is, e.g. 'PR #412'. Optional but worth writing — a bare URL tells the next reader nothing"`
+}
+
+type removeLinkIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	LinkID   string `json:"link_id" jsonschema:"the link's id, as read_thread reports it in links[].id"`
+}
+
+type relateIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Other    string `json:"other" jsonschema:"the other thread's id. Must be in the same workspace — Plane relates work items only within their own project"`
+	Type     string `json:"type,omitempty" jsonschema:"relates_to (default) | duplicate | blocking | blocked_by. 'blocking' means THIS thread blocks the other one"`
+}
+
+type unrelateIn struct {
+	ThreadID string `json:"thread_id" jsonschema:"the namespaced thread id"`
+	Other    string `json:"other" jsonschema:"the other thread's id. A pair has at most one relation, so the type is not needed"`
 }
 
 type addRevisionIn struct {
@@ -328,6 +405,13 @@ func Handler(b Backend) http.Handler {
 func newServer(b Backend) *sdk.Server {
 	srv := sdk.NewServer(&sdk.Implementation{Name: "bubble-work", Version: "0.1.0"}, nil)
 
+	// The prompts carry the reasoning a tool description has no room for: the
+	// vocabulary, the birth rule, and the addressing rules that a real agent session
+	// had to discover by failing. Markdown files under prompts/, embedded.
+	if n := addPrompts(srv); n > 0 {
+		log.Printf("mcp: %d prompt(s) registered", n)
+	}
+
 	sdk.AddTool(srv,
 		&sdk.Tool{Name: "list_bubbles", Description: "List bubbles sorted by temperature — the buoyancy view (§2.2, §5)."},
 		func(ctx context.Context, req *sdk.CallToolRequest, _ struct{}) (*sdk.CallToolResult, listOut, error) {
@@ -352,7 +436,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "create_bubble", Description: "Create a bubble (a Plane module) in a project. Optionally set its §4 outcome and owner. A bubble is the unit of attention; birth threads into it afterward."},
+		&sdk.Tool{Name: "create_bubble", Description: "Create a bubble (a Plane module) in a project. Optionally set its §4 outcome and owner. A bubble is the unit of attention — the house its threads live in; create threads into it afterward."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in domain.CreateBubbleRequest) (*sdk.CallToolResult, domain.NewBubble, error) {
 			nb, err := b.CreateBubble(withActor(ctx, req), in)
 			if err != nil {
@@ -361,15 +445,36 @@ func newServer(b Backend) *sdk.Server {
 			return nil, nb, nil
 		})
 
+	// create_thread and birth_thread are ONE tool under two names. The gate that made
+	// "birth" a meaningful word is gone (docs/decisions/0005), but every agent, script
+	// and transcript in existence says birth_thread, and breaking them to rename a verb
+	// would be a worse trade than carrying an alias.
+	createThread := func(ctx context.Context, req *sdk.CallToolRequest, in domain.BirthRequest) (*sdk.CallToolResult, domain.BirthResult, error) {
+		res, err := b.CreateThread(withActor(ctx, req), in)
+		if err != nil {
+			return nil, domain.BirthResult{}, err
+		}
+		return nil, res, nil
+	}
+	threadSchema := schemaFor[domain.BirthRequest](nil)
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "birth_thread", Description: "Create a thread. REJECTED unless a Brief (with Definition of Done) and a Logbook exist (§3)."},
-		func(ctx context.Context, req *sdk.CallToolRequest, in domain.BirthRequest) (*sdk.CallToolResult, domain.BirthResult, error) {
-			res, err := b.BirthThread(withActor(ctx, req), in)
-			if err != nil {
-				return nil, domain.BirthResult{}, err
-			}
-			return nil, res, nil
-		})
+		&sdk.Tool{
+			Name: "create_thread",
+			Description: "Create a thread. Needs a NAME and nothing else. " +
+				"Pass `body` to write its document: Markdown, in whatever shape the work has, stored exactly as you send it — no headings are added, no template is imposed, nothing is refused for its shape (docs/decisions/0005, docs/decisions/0006). " +
+				"Checkboxes count anywhere in it: ticking one is evidence of production, so a plan under your own headings warms the thread exactly as a Logbook does. " +
+				"Two headings are OFFERED, not required, because machinery hangs off them: `## Definition of Done` (its open items are reported when you complete the thread) and `## Logbook` (its own addressable region). Write each at most once — a duplicate IS refused, because the first section truncates at the second and the region becomes unreachable. " +
+				"To categorise the work use Plane's own labels, not a section of prose. See the `create-a-thread` prompt.",
+			InputSchema: threadSchema,
+		},
+		createThread)
+	sdk.AddTool(srv,
+		&sdk.Tool{
+			Name:        "birth_thread",
+			Description: "Alias of `create_thread` — same arguments, same behaviour. Prefer `create_thread`.",
+			InputSchema: threadSchema,
+		},
+		createThread)
 
 	sdk.AddTool(srv,
 		&sdk.Tool{Name: "set_contract", Description: "Set a bubble's contract — outcome, owner, closure condition (§4). Omitted fields are unchanged."},
@@ -394,7 +499,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "complete_thread", Description: "Mark a thread FINISHED (🏆). This moves the Plane work item into its project's completed state — the same thing a human does by dragging the card — so it is the real, visible declaration that the work is done, not a note about it. REFUSED while the Definition of Done still has unticked items, and the refusal names them: tick them with toggle_todo first. Use this when you have satisfied the DoD, instead of leaving the thread open for somebody to notice."},
+		&sdk.Tool{Name: "complete_thread", Description: "Mark a thread FINISHED (🏆). This moves the Plane work item into its project's completed state — the same thing a human does by dragging the card — so it is the real, visible declaration that the work is done, not a note about it. Never refused: finishing is a position somebody takes (docs/decisions/0005). If the Definition of Done still has unticked items the answer LISTS them in `unmet_dod` — tick what is genuinely done with toggle_todo first, and if you finish over an outstanding item, say why in the document in the same turn. `force` is accepted and does nothing."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in completeThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.CompleteThread(withActor(ctx, req), in.ThreadID, in.Force)
 			if err != nil {
@@ -404,7 +509,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "reopen_thread", Description: "Put a finished thread back to work: the Plane work item returns to a started state. For a thread completed by mistake, or one that turned out not to be done. Not for continuing new work — that is a new thread with its own Brief (§3)."},
+		&sdk.Tool{Name: "reopen_thread", Description: "Put a finished thread back to work: the Plane work item returns to a started state. For a thread completed by mistake, or one that turned out not to be done. Not for continuing new work — that is a new thread."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in threadRefIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.ReopenThread(withActor(ctx, req), in.ThreadID)
 			if err != nil {
@@ -433,7 +538,19 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "read_thread", Description: "Read a thread's interior: work artifacts (Brief), the Logbook, its Definition of Done, and revisions, plus its derived buoyancy (level/reason) and its Plane state. REQUIRED before implementing a thread — the birth rule says confirm the outcome and DoD first (§3)."},
+		&sdk.Tool{Name: "audit_bubble", Description: "Audit a whole bubble in ONE call — the framework's own questions, answered for every thread at once: its level and why, its labels, whether it has a document / Definition of Done / Logbook at all, how many DoD items and todos are done, what is still open, its declared **Next:** action, and when it last produced anything. " +
+			"Use it INSTEAD of thread_timeline followed by read_thread per thread: it costs no Plane calls and it reports what is MISSING as prominently as what is done, which is the finding you cannot get by reading threads one at a time. Read a single thread afterwards only for the one you are about to work on."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in bubbleIn) (*sdk.CallToolResult, domain.BubbleAudit, error) {
+			a, err := b.AuditBubble(withActor(ctx, req), in.BubbleID)
+			if err != nil {
+				return nil, domain.BubbleAudit{}, err
+			}
+			return nil, a, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "read_thread", Description: "Read a thread's interior: its document (with any checkboxes written in it, as `artifacts[].todos`), the Logbook and Definition of Done if it has them, and revisions, plus its derived buoyancy (level/reason) and its Plane state. Read it before implementing: confirm what the work is for and what finishing means. " +
+			"It returns SEVERAL views of the same page and only one is writable: `regions[\"brief\"|\"logbook\"|\"dod\"].markdown` is the exact text a write diffs against — quote from there for update_thread's `edits`, and send its `hash` as `base`. `artifacts[].markdown` and the rendered HTML are for reading and reasoning ONLY; text copied from them will not match. Every todo carries the `region` and `index` toggle_todo needs."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in threadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.ThreadDetail(withActor(ctx, req), in.ThreadID)
 			if err != nil {
@@ -463,7 +580,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its Brief. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. PREFER `edits` for anything that already exists: quote the exact text and say what it becomes, and everything else stays untouched. Passing a whole section replaces it, which is how sections get paraphrased, truncated, or appended to twice — only do that when writing one from scratch. Within a section only the blocks you actually changed are rewritten, so images, mentions and formatting elsewhere survive either way. To ADD a new part to the document, use `sections`: name a heading and it is created as a ## section, which the table of contents and the minimap can see. To tick a single existing todo, prefer toggle_todo."},
+		&sdk.Tool{Name: "update_thread", Description: "Rewrite a thread's Logbook, Definition of Done, or (rarely) its whole document. This is how an agent records that the plan changed — re-phasing, noting a decision, adding a todo. A Logbook or DoD change is EVIDENCE of production (§5.1), so it warms the thread and its bubble; the board updates immediately. PREFER `edits` for anything that already exists: quote the exact text and say what it becomes, and everything else stays untouched. Passing a whole section replaces it, which is how sections get paraphrased, truncated, or appended to twice — only do that when writing one from scratch. Within a section only the blocks you actually changed are rewritten, so images, mentions and formatting elsewhere survive either way. To ADD a new part to the document, use `sections`: name a heading and it is created as a ## section, which the table of contents and the minimap can see. To tick a single existing todo, prefer toggle_todo. Quote `edits.old` from `regions[…].markdown` as returned by read_thread — NOT from `artifacts[].markdown`, which is the rendered view and will not match. Never introduce a second `## Brief`, `## Logbook` or `## Definition of Done` heading: that is refused, because a duplicate truncates the first section and leaves its region unreachable."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in updateThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			edits := make([]domain.RegionEdit, 0, len(in.Edits))
 			for _, e := range in.Edits {
@@ -488,9 +605,59 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "move_thread", Description: "Move a thread into a different bubble. It LEAVES every other bubble, so this is a move and not a copy. Nothing is lost — the Brief, the Logbook, the comments, the history and the id are untouched, and moving it back is the same call. Use it when a thread turns out to belong to a different body of work; it is not evidence of production and warms nothing."},
+		&sdk.Tool{Name: "move_thread", Description: "Move a thread into a different bubble. It LEAVES every other bubble, so this is a move and not a copy. Nothing is lost — the document, the Logbook, the comments, the history and the id are untouched, and moving it back is the same call. Use it when a thread turns out to belong to a different body of work; it is not evidence of production and warms nothing."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in moveThreadIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			d, err := b.MoveThread(withActor(ctx, req), in.ThreadID, in.BubbleID)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "set_labels", Description: "Set a thread's LABELS — Plane's own, by name. This is where 'what kind of work is this' lives (bug, infra, needs-design, whatever your team says): the framework keeps no type of its own (docs/decisions/0006), so do not encode it in a heading or a line of prose where nothing can filter on it. Replaces the whole set, so include the labels it should keep; an unknown name is created. Classification is not production, so this warms nothing."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in setLabelsIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.SetLabels(withActor(ctx, req), in.ThreadID, in.Labels)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "add_link", Description: "Attach EXTERNAL EVIDENCE to a thread: the commit, the PR, the deployed thing, the published document. Landing one is production (§5.1) — it warms the thread and its bubble — because it is the proof that reality changed outside this tool. Prefer this over pasting a URL into the document: a link here is structured, is visible in Plane, and cannot be lost in a paragraph rewrite."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in addLinkIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.AddLink(withActor(ctx, req), in.ThreadID, in.URL, in.Title)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "remove_link", Description: "Detach one link from a thread, by the id read_thread reports. Removing evidence produces nothing, so it warms nothing."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in removeLinkIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.RemoveLink(withActor(ctx, req), in.ThreadID, in.LinkID)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "relate_threads", Description: "Record that two threads are related, in Plane's own vocabulary: relates_to, duplicate, blocking, blocked_by. Use it instead of describing the dependency in prose — a sentence in a Logbook is invisible to every other surface, while a relation shows on both threads and in Plane. Both ends must be in the same workspace. Relating changes neither thread, so it warms nothing."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in relateIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.RelateThreads(withActor(ctx, req), in.ThreadID, in.Other, in.Type)
+			if err != nil {
+				return nil, domain.ThreadDetail{}, err
+			}
+			return nil, d, nil
+		})
+
+	sdk.AddTool(srv,
+		&sdk.Tool{Name: "unrelate_threads", Description: "Drop the relationship between two threads. A pair carries at most one relation, so the type is not needed."},
+		func(ctx context.Context, req *sdk.CallToolRequest, in unrelateIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
+			d, err := b.UnrelateThreads(withActor(ctx, req), in.ThreadID, in.Other)
 			if err != nil {
 				return nil, domain.ThreadDetail{}, err
 			}
@@ -508,17 +675,31 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "toggle_todo", Description: "Tick or un-tick one checklist item in a thread's Logbook or Definition of Done. A completed todo is EVIDENCE of production (§5.1): it warms the thread and its bubble. Pass the item's text as you read it — if it no longer matches that position the write is refused rather than ticking the wrong box."},
-		func(ctx context.Context, req *sdk.CallToolRequest, in toggleTodoIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
-			region := md.Region(in.Region)
-			if region == "" {
-				region = md.RegionLogbook
+		&sdk.Tool{
+			Name: "toggle_todo",
+			Description: "Tick or un-tick ONE checklist item in a thread — its Logbook, its Definition of Done, or the document itself. A completed todo is EVIDENCE of production (§5.1): it warms the thread and its bubble, wherever on the page it was written (docs/decisions/0005). " +
+				"Pass `region` and `index` exactly as read_thread reported them — every todo it returns carries both. Indices are per region and start at 0: the DoD's first item is dod[0], never \"after the logbook items\"; a box written in the document is region `document`, reported on artifacts[].todos. In the document only real `- [ ]` boxes are addressable, because a plain bullet there is prose. " +
+				"Pass the item's `text` as you read it; if it no longer matches that position the write is refused rather than ticking the wrong box. Prefer this over rewriting a whole region to tick something. " +
+				"To tick SEVERAL items, pass `items` — one call, one write, all-or-nothing. " +
+				"It answers with the PERSISTED state: each item as it now stands, the open/done counts per region, what still blocks completion, and the thread's level after the write. You do not need to re-read the thread to confirm.",
+			InputSchema: schemaFor[toggleTodoIn](func(s *jsonschema.Schema) {
+				enumOn(s, "region", "document", "logbook", "dod")
+			}),
+		},
+		func(ctx context.Context, req *sdk.CallToolRequest, in toggleTodoIn) (*sdk.CallToolResult, domain.TodoResult, error) {
+			items := in.Items
+			if len(items) == 0 {
+				items = []domain.TodoToggle{{Region: in.Region, Index: in.Index, Text: in.Text, Done: in.Done}}
 			}
-			d, err := b.ToggleTodo(withActor(ctx, req), in.ThreadID, region, in.Index, in.Text, in.Done)
+			d, err := b.ToggleTodos(withActor(ctx, req), in.ThreadID, items)
 			if err != nil {
-				return nil, domain.ThreadDetail{}, err
+				return nil, domain.TodoResult{}, err
 			}
-			return nil, d, nil
+			// A COMPACT confirmation instead of the whole interior. Returning the full
+			// thread technically answered "did it land?" and practically did not — the
+			// answer was buried in a large object, so a caller re-read the thread to be
+			// sure. This says it in one place, read back from the stored page.
+			return nil, domain.NewTodoResult(d, items), nil
 		})
 
 	sdk.AddTool(srv,
@@ -533,7 +714,7 @@ func newServer(b Backend) *sdk.Server {
 
 	// ---- project pages: the documentation a workspace accumulates ----
 	//
-	// A Brief says why one piece of work exists; a page is the standing
+	// A thread's document says why one piece of work exists; a page is the standing
 	// reference it is written against — the product spec, the API contract, the
 	// decision record. Reading one before implementing is usually the difference
 	// between building the thing and building something like it.
@@ -549,7 +730,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "read_page", Description: "Read one page in full, as Markdown. Read the relevant spec BEFORE implementing a thread — the thread's Brief says what to do, the page says what it has to be true of. Returns a hash to pass back to update_page."},
+		&sdk.Tool{Name: "read_page", Description: "Read one page in full, as Markdown. Read the relevant spec BEFORE implementing a thread — the thread's document says what to do, the page says what it has to be true of. Returns a hash to pass back to update_page."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in pageIn) (*sdk.CallToolResult, domain.PageDetail, error) {
 			d, err := b.Page(withActor(ctx, req), in.PageID)
 			if err != nil {
@@ -559,7 +740,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "create_page", Description: "Add a document to a workspace: a spec, a reference, a decision record. Use this for what outlives a thread — anything about ONE piece of work belongs in that thread's Brief or Logbook instead. Writing documentation is not evidence of production, so this warms nothing."},
+		&sdk.Tool{Name: "create_page", Description: "Add a document to a workspace: a spec, a reference, a decision record. Use this for what outlives a thread — anything about ONE piece of work belongs in that thread's own document instead. Writing documentation is not evidence of production, so this warms nothing."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in createPageIn) (*sdk.CallToolResult, domain.PageDetail, error) {
 			d, err := b.CreatePage(withActor(ctx, req), domain.CreatePageRequest{
 				Workspace: in.Workspace, Title: in.Title, Markdown: in.Markdown,
@@ -638,7 +819,7 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "delete_thread", Description: "PERMANENTLY delete a thread — or a revision, which is also a work item — from Plane, taking its Brief, Logbook, comments and revisions with it. IRREVERSIBLE, and it erases evidence of work that actually happened. Pass the thread's exact title to confirm — the delete is refused if it does not match, so read it first."},
+		&sdk.Tool{Name: "delete_thread", Description: "PERMANENTLY delete a thread — or a revision, which is also a work item — from Plane, taking its document, Logbook, comments and revisions with it. IRREVERSIBLE, and it erases evidence of work that actually happened. Pass the thread's exact title to confirm — the delete is refused if it does not match, so read it first."},
 		func(ctx context.Context, req *sdk.CallToolRequest, in deleteIn) (*sdk.CallToolResult, deletedOut, error) {
 			actx := withActor(ctx, req)
 			d, err := b.ThreadDetail(actx, in.ID)
@@ -656,7 +837,13 @@ func newServer(b Backend) *sdk.Server {
 		})
 
 	sdk.AddTool(srv,
-		&sdk.Tool{Name: "delete_artifact", Description: "Remove one artifact from a thread's page — its Logbook, its Definition of Done, or its document — heading and all. The thread itself survives. Everything you do not name keeps its exact bytes, so images and mentions elsewhere on the page are untouched."},
+		&sdk.Tool{
+			Name:        "delete_artifact",
+			Description: "Remove one artifact from a thread's page — its Logbook, its Definition of Done, or its document — heading and all. The thread itself survives. Everything you do not name keeps its exact bytes, so images and mentions elsewhere on the page are untouched.",
+			InputSchema: schemaFor[deleteRegionIn](func(s *jsonschema.Schema) {
+				enumOn(s, "region", "document", "logbook", "dod")
+			}),
+		},
 		func(ctx context.Context, req *sdk.CallToolRequest, in deleteRegionIn) (*sdk.CallToolResult, domain.ThreadDetail, error) {
 			region := md.Region(in.Region)
 			if region == "brief" {

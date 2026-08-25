@@ -1,5 +1,5 @@
 // Package sync fills the mirror from Plane. It is the WRITE side of
-// docs/PLANE-SYNC.md: the only place that decides what to fetch and when.
+// docs/journal/PLANE-SYNC.md: the only place that decides what to fetch and when.
 //
 // Two passes, deliberately different in cost:
 //
@@ -42,6 +42,15 @@ const (
 	// Note the cost is paid per ITEM, not per comment: an item with no comments
 	// still costs a call to discover that. So this bounds calls, not rows.
 	commentFetchPerPass = 25
+
+	// edgeFetchPerPass bounds how many items ONE PASS pulls links and relations
+	// for, across every project. They are per-item calls like comments, and worse:
+	// TWO per item. So the cap is lower, and the same reasoning applies — a burst
+	// spreads over passes rather than blowing the whole minute's budget at once.
+	//
+	// Our OWN writes update the mirror directly, so this fill-in only exists to
+	// notice edges added in Plane's UI.
+	edgeFetchPerPass = 8
 )
 
 // Syncer keeps one server's mirror current.
@@ -50,6 +59,7 @@ type Syncer struct {
 	now          func() time.Time
 	onChange     func(slug string) // see OnChange
 	onReconciled func(slug string) // see OnReconciled
+	onBodies     BodyFunc          // see OnBodies
 	locks        LockFunc          // see SetLocks
 }
 
@@ -57,7 +67,7 @@ type Syncer struct {
 // items, because a write to them is queued and has not reached Plane yet.
 type LockFunc func(instance string, ids []string) (map[string]map[string]bool, error)
 
-// SetLocks installs the conflict shield (docs/PLANE-SYNC.md Phase 5).
+// SetLocks installs the conflict shield (docs/journal/PLANE-SYNC.md Phase 5).
 //
 // Plane remains the system of record, so a sync normally overwrites the mirror
 // wholesale. The one exception is a field with a write still in flight: applying
@@ -65,6 +75,19 @@ type LockFunc func(instance string, ids []string) (map[string]map[string]bool, e
 // user already made, then flip back when the write lands. The lock lifts as soon
 // as the write succeeds or is abandoned, and Plane is truth again.
 func (s *Syncer) SetLocks(fn LockFunc) { s.locks = fn }
+
+// BodyFunc receives the description_html Plane is currently serving for each work
+// item a pass saw, keyed by id.
+type BodyFunc func(instance string, bodies map[string]string)
+
+// OnBodies installs the hook that notices an edit made in Plane
+// (docs/decisions/0001).
+//
+// The syncer deliberately does not decide anything about it: it does not know what
+// was published, what is queued, or what the overlay holds. It reports what Plane
+// says, and the server — which owns all three — decides whether that is somebody
+// else's edit to import or merely an echo of its own publication.
+func (s *Syncer) OnBodies(fn BodyFunc) { s.onBodies = fn }
 
 // New builds a Syncer over a mirror.
 func New(m *mirror.Mirror) *Syncer {
@@ -246,8 +269,10 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 		log.Printf("sync %s: full walk of %d project(s) starting", inst.Slug, len(projects))
 	}
 
-	// One comment budget for the WHOLE pass, shared across projects.
+	// One comment budget for the WHOLE pass, shared across projects. Links and
+	// relations share a second one.
 	commentBudget := commentFetchPerPass
+	edgeBudget := edgeFetchPerPass
 
 	// newest tracks the high-water mark actually OBSERVED. Deliberately not
 	// time.Now(): an item written while we were paging would otherwise fall
@@ -306,6 +331,13 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 				log.Printf("sync %s: project %s: cycles: %v (heat falls back to the rolling window)",
 					inst.Slug, short(p.ID), err)
 			}
+			// The label catalogue: what the label ids on an item actually say
+			// (docs/decisions/0006). One project-scoped call, so it rides here with
+			// states and cycles. Best-effort: a thread with unknown label ids simply
+			// shows none, which is better than failing the project's walk.
+			if err := s.labels(ctx, cl, inst, p.ID); err != nil {
+				log.Printf("sync %s: project %s: labels: %v", inst.Slug, short(p.ID), err)
+			}
 		}
 
 		since := cur.Watermark
@@ -360,6 +392,14 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 					it.StateID, it.StateName, it.StateGroup = prev.StateID, prev.StateName, prev.StateGroup
 				}
 			}
+			if locked[r.ID]["description"] {
+				// A publication is still queued, so the body Plane is serving is
+				// OLDER than ours (docs/decisions/0001). Taking it would make the
+				// board revert an edit that is merely waiting to be sent.
+				if prev, ok, err := s.m.Item(inst.Slug, r.ID); err == nil && ok {
+					it.DescriptionHTML, it.DescriptionHash = prev.DescriptionHTML, prev.DescriptionHash
+				}
+			}
 			items = append(items, it)
 		}
 		if len(items) > 0 {
@@ -368,6 +408,17 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 			}
 		}
 		res.Items += len(items)
+
+		// What Plane is serving as each body, for whoever cares to compare it with
+		// what we published. Reported AFTER the upsert so the mirror and the hook
+		// cannot disagree about what this pass saw.
+		if s.onBodies != nil && len(rows) > 0 {
+			bodies := make(map[string]string, len(rows))
+			for _, r := range rows {
+				bodies[r.ID] = r.DescriptionHTML
+			}
+			s.onBodies(inst.Slug, bodies)
+		}
 
 		// Prunes ride ONLY on a complete walk. rows is every item in the project
 		// here, so anything mirrored and absent is genuinely deleted.
@@ -406,6 +457,12 @@ func (s *Syncer) run(ctx context.Context, inst domain.Instance, full, resume boo
 			log.Printf("sync %s: project %s: comments: %v", inst.Slug, short(p.ID), err)
 		}
 		res.Comments += n
+
+		// Links and relations, on the same terms: a fill-in, never a reason to hold
+		// back a project's cursor (docs/decisions/0006).
+		if err := s.edges(ctx, cl, inst, rows, &edgeBudget); err != nil {
+			log.Printf("sync %s: project %s: links/relations: %v", inst.Slug, short(p.ID), err)
+		}
 
 		// This project walked cleanly — record it so a later pass can skip it and
 		// spend its budget on the projects still outstanding.
@@ -569,6 +626,83 @@ func (s *Syncer) cycles(ctx context.Context, cl *plane.Client, inst domain.Insta
 	return nil
 }
 
+// labels mirrors a project's label catalogue.
+func (s *Syncer) labels(ctx context.Context, cl *plane.Client, inst domain.Instance, projID string) error {
+	ls, err := cl.ListLabels(ctx)
+	if err != nil {
+		return fmt.Errorf("list labels for project %s: %w", projID, err)
+	}
+	out := make([]mirror.Label, 0, len(ls))
+	for _, l := range ls {
+		out = append(out, mirror.Label{ID: l.ID, ProjectID: projID, Name: l.Name, Color: l.Color})
+	}
+	if err := s.m.UpsertLabels(inst.Slug, out); err != nil {
+		return fmt.Errorf("write labels: %w", err)
+	}
+	return nil
+}
+
+// edges fills in links and relations for a few of the items this pass named.
+//
+// Two calls per item and no bulk endpoint, so this is deliberately the thinnest
+// stream in the sync: it exists to notice edges somebody added in PLANE's UI. Edges
+// written through Bubble Work update the mirror at write time and do not wait for
+// this.
+//
+// Items are taken in the order the delta returned them, which is newest-updated
+// first — so the ones somebody just touched are the ones that get refreshed.
+func (s *Syncer) edges(ctx context.Context, cl *plane.Client, inst domain.Instance, rows []plane.ItemRow, budget *int) error {
+	for _, r := range rows {
+		if *budget <= 0 {
+			return nil
+		}
+		*budget--
+		links, err := cl.ListLinks(ctx, r.ID)
+		if err != nil {
+			return fmt.Errorf("links for %s: %w", r.ID, err)
+		}
+		out := make([]mirror.Link, 0, len(links))
+		for _, l := range links {
+			out = append(out, mirror.Link{ID: l.ID, URL: l.URL, Title: l.Title, CreatedAt: l.CreatedAt})
+		}
+		if err := s.m.ReplaceLinks(inst.Slug, r.ID, out); err != nil {
+			return fmt.Errorf("write links for %s: %w", r.ID, err)
+		}
+
+		if *budget <= 0 {
+			return nil
+		}
+		*budget--
+		rel, err := cl.ListRelations(ctx, r.ID)
+		if err != nil {
+			return fmt.Errorf("relations for %s: %w", r.ID, err)
+		}
+		if err := s.m.ReplaceRelations(inst.Slug, r.ID, flattenRelations(rel)); err != nil {
+			return fmt.Errorf("write relations for %s: %w", r.ID, err)
+		}
+	}
+	return nil
+}
+
+// flattenRelations turns Plane's eight arrays into rows.
+func flattenRelations(r plane.Relations) []mirror.Relation {
+	var out []mirror.Relation
+	add := func(kind string, ids []string) {
+		for _, id := range ids {
+			out = append(out, mirror.Relation{Type: kind, RelatedID: id})
+		}
+	}
+	add("blocking", r.Blocking)
+	add("blocked_by", r.BlockedBy)
+	add("duplicate", r.Duplicate)
+	add("relates_to", r.RelatesTo)
+	add("start_after", r.StartAfter)
+	add("start_before", r.StartBefore)
+	add("finish_after", r.FinishAfter)
+	add("finish_before", r.FinishBefore)
+	return out
+}
+
 // comments fetches comments for the items worth fetching them for.
 //
 // The rule comes straight from the 2026-08-04 probe: a comment bumps its parent
@@ -640,7 +774,7 @@ func toItem(r plane.ItemRow, projID string) mirror.Item {
 	return mirror.Item{
 		ID: r.ID, ProjectID: projID, Seq: r.Sequence, Name: r.Name,
 		StateID: r.StateID, StateName: r.StateName, StateGroup: r.StateGroup,
-		Priority: r.Priority, ParentID: r.Parent, Assignees: r.Assignees,
+		Priority: r.Priority, ParentID: r.Parent, Assignees: r.Assignees, Labels: r.Labels,
 		DescriptionHTML: r.DescriptionHTML, DescriptionHash: mirror.HashBody(r.DescriptionHTML),
 		CreatedAt: r.CreatedAt, UpdatedAt: r.UpdatedAt, CompletedAt: r.CompletedAt,
 	}

@@ -147,11 +147,19 @@ just dist          # the web bundle AND the binary — the full rebuild
 just build         # binary only (fast, and blind to frontend changes)
 just check         # gofmt + vet + go test + svelte-check, exactly what CI gates
 
-just dev           # rebuild + restart the local server, wait until healthy
-just dev-web       # ...rebuilding the web bundle first
-just ui            # vite with hot reload, proxying the API to that server
-just logs          # follow the running server's log
+just dev           # THE dev session: server + UI in one terminal, Ctrl-C stops both
+just dev-server    # server only, still in the foreground
+just daemon        # the BACKGROUND server instead (what `bubble attach`/`stop` talk to)
+just daemon-web    # ...rebuilding the web bundle first
+just ui            # vite alone, proxying the API to an already-running server
+just logs          # follow the background server's log
 ```
+
+`just dev` runs both processes as children of one script, in its process group, so
+Ctrl-C reaches both at once; the trap cleans up when the signal arrives some other
+way. Server logs are tagged `[server]`, vite's `[ui]`. Ports: `PORT` (4006) and
+`UI_PORT` (5173). **Open the UI on `UI_PORT`** while developing — that is the one
+with hot reload; the server's own port serves the last built bundle.
 
 The one thing worth internalising: **the web bundle is embedded in the binary**
 (`web/embed.go`, `//go:embed all:dist`), so `just build` will not show a frontend
@@ -192,7 +200,8 @@ prompts/           the MCP prompts, as markdown files embedded into the binary
 web/               the embedded SPA bundle (built from frontend/)
 frontend/          Svelte 5 + Skeleton 5 + Tailwind 4, built with bun
 docs/              the model's documentation (see docs/README.md)
-scripts/dev.sh     rebuild + restart the local server (what `just dev` runs)
+scripts/dev.sh     server + UI in one foreground session (what `just dev` runs)
+scripts/daemon.sh  the background server (what `just daemon` runs)
 justfile           the build/dev recipes — `just` lists them
 ```
 

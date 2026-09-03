@@ -36,13 +36,27 @@ install:
 
 # ---- running ----
 
-# Rebuild and restart the local server (Go only), then wait until it is healthy.
+# THE dev session: server + UI in one terminal, both stopped by Ctrl-C.
 dev:
     scripts/dev.sh
 
-# Same, rebuilding the web bundle first — the one to use after a UI change.
-dev-web:
-    scripts/dev.sh --web
+# Server only, still in the foreground (no vite).
+dev-server:
+    scripts/dev.sh --no-ui
+
+# The BACKGROUND server, for when you want the terminal back: this is the one
+# `bubble attach` and `bubble stop` talk to.
+
+# Start the local server in the background and wait until it is healthy.
+daemon:
+    scripts/daemon.sh
+
+# A backgrounded server serves the EMBEDDED bundle, so a UI change is invisible
+# to it until the bundle is rebuilt.
+
+# Same as `daemon`, rebuilding the web bundle first.
+daemon-web:
+    scripts/daemon.sh --web
 
 # Run the server in the foreground (PORT, default 4006).
 serve: build
@@ -56,9 +70,8 @@ stop:
 logs:
     {{bin}} attach
 
-# THE way to iterate on the UI: no bundle build, no Go build, no restart. Vite
-# proxies /api, /mcp, /webhooks and /health to the server, so that has to be
-# running already (`just dev`) — this serves the frontend only.
+# For when the server is already running some other way (`just daemon`, or a
+# `just dev` in another terminal). `just dev` runs this for you.
 
 # Vite with hot reload, proxying the API to the running server.
 ui:

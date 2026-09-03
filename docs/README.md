@@ -21,6 +21,7 @@ journal and a module file disagree, **the module file wins**.
 | What is Bubble Work? | [`../README.md`](../README.md) |
 | How is it built? | [`ARCHITECTURE.md`](./ARCHITECTURE.md) |
 | How do I run / tune / develop it? | [`operations.md`](./operations.md) |
+| What is in the database? | [`DATABASE.md`](./DATABASE.md) |
 | How do I deploy it on a server? | [`../DEPLOY.md`](../DEPLOY.md) |
 | What rules do agents load? | [`../AGENTS.md`](../AGENTS.md) |
 

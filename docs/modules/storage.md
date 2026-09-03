@@ -31,8 +31,11 @@ with itself.
 
 **Mirror tables:** `mirror_projects`, `mirror_modules`, `mirror_module_items`,
 `mirror_items`, `mirror_comments`, `mirror_cycles`, `mirror_states`,
-`mirror_members`, `mirror_project_members`, `mirror_project_member_sync`,
-`sync_cursors`.
+`mirror_labels`, `mirror_item_links`, `mirror_item_relations`, `mirror_members`,
+`mirror_project_members`, `mirror_project_member_sync`, `sync_cursors`.
+
+Column by column, with the reasoning attached to each one:
+[`DATABASE.md`](../DATABASE.md).
 
 ### What is precious, and why it changed
 

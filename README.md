@@ -8,10 +8,14 @@
 `Workspace = boundary · Bubble = attention · Cycle = pulse · Thread = execution · Artifacts = evidence`
 
 This README is the **way of thinking** — the model, and nothing about how it is
-built. How it is built is [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md); how to
-run it is [`docs/operations.md`](./docs/operations.md); what each part does today
-is [`docs/modules/`](./docs/modules). The rules agents load are
-[`AGENTS.md`](./AGENTS.md).
+built. The rules agents load are [`AGENTS.md`](./AGENTS.md);
+[`docs/README.md`](./docs/README.md) is the documentation map.
+
+> **The implementation is archived.** v0 — in which Plane held the record — is at
+> the tag `v0-plane-as-record`, and its documentation moved to
+> [`docs/journal/v0/`](./docs/journal/v0). This model is what survived it and is
+> unchanged; §7.2 below still describes v0's division of ownership, and stays as
+> written until a decision replaces it.
 
 ---
 

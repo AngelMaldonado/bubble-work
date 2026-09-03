@@ -8,14 +8,13 @@
 `Workspace = boundary · Bubble = attention · Cycle = pulse · Thread = execution · Artifacts = evidence`
 
 This README is the **way of thinking** — the model, and nothing about how it is
-built. The rules agents load are [`AGENTS.md`](./AGENTS.md);
-[`docs/README.md`](./docs/README.md) is the documentation map.
+built. The rules agents load are [`AGENTS.md`](./AGENTS.md); what is being built
+and why is [`PLAN.md`](./PLAN.md).
 
 > **The implementation is archived.** v0 — in which Plane held the record — is at
-> the tag `v0-plane-as-record`, and its documentation moved to
-> [`docs/journal/v0/`](./docs/journal/v0). This model is what survived it and is
-> unchanged; §7.2 below still describes v0's division of ownership, and stays as
-> written until a decision replaces it.
+> the tag `v0-plane-as-record`. This model is what survived it and is unchanged.
+> §7.2 below describes v0's division of ownership and is now history:
+> [`PLAN.md`](./PLAN.md) supersedes it, and Bubble owns the record.
 
 ---
 
@@ -115,7 +114,7 @@ Artifacts are **markdown, and Bubble Work is their record.** A tracker it is bou
 to receives a published copy — otherwise the tracker's editor would decide what a
 document may contain. Editing that copy in the tracker still works: the edit is
 imported and becomes the record. See
-[`decisions/0001`](./docs/decisions/0001-plane-is-a-channel-not-the-record.md).
+decision 0001.
 
 ### 2.5 Pages — what outlives the work
 
@@ -142,7 +141,7 @@ This is the framework's central trade, and it used to run the other way. There w
 *birth rule*: no thread entered implementation without a Brief carrying a Definition
 of Done and a seeded Logbook. It was severe, and severity turned out to cost more than
 it bought — the work simply moved somewhere the tool could not measure it. See
-[`decisions/0005`](./docs/decisions/0005-the-framework-does-not-own-your-format.md).
+decision 0005.
 
 So: **we give you an automated framework — use it however you want. Your ideas and
 your tasks are warmed or cooled by Bubble Work's policy, not by their shape.**
@@ -200,7 +199,7 @@ enforces this. It is simply what makes the section answer the question it exists
 ### 3.3 What is *not* prose — Plane's own relationships
 
 Three questions have structured answers already, and writing them into the document
-is how they get lost ([`decisions/0006`](./docs/decisions/0006-plane-holds-the-relationships.md)):
+is how they get lost (decision 0006):
 
 | Question | Where it lives | Verb |
 |---|---|---|
@@ -247,7 +246,7 @@ the bubble that gained it rises.
 A work item that merely *appeared* — created in the bound tracker, with nobody
 defining anything — earns nothing. Creation here and creation there are different
 events; only one of them is evidence. See
-[`decisions/0002`](./docs/decisions/0002-birth-is-production.md).
+decision 0002.
 
 ---
 
@@ -274,7 +273,7 @@ work — the bubble is **closed**, not left to drift.
 - A thread being **created** — somebody defined a piece of work (§3.4)
 - A completed todo, anywhere in the document
 - **Any edit to a thread's document.** Writing is the work
-  ([`decisions/0004`](./docs/decisions/0004-writing-is-the-work.md))
+  (decision 0004)
 - A **link** to external evidence: the commit, the PR, the thing that shipped (§3.3)
 - A committed or reviewed implementation
 - A published deliverable
@@ -388,7 +387,7 @@ Plane **Project**.
 | Heat window | **Cycle** | Plane |
 | Thread | **Work item** | Plane holds the object; Bubble Work holds its level and stage |
 | The document · Logbook · DoD | regions of the work item's **description** | **Bubble Work** — Plane receives a rendered copy |
-| What kind of work · evidence · dependencies | **labels · links · relations** | Plane ([`decisions/0006`](./docs/decisions/0006-plane-holds-the-relationships.md)) |
+| What kind of work · evidence · dependencies | **labels · links · relations** | Plane (decision 0006) |
 | Revision | **Sub-work-item** of the thread | Plane holds the object; Bubble Work holds the body |
 | Page | **Project page**, or Bubble Work's own store where Plane has no pages API | **Bubble Work** |
 | Discussion | **Comments** | Plane |
@@ -430,34 +429,22 @@ have run the process by hand enough to know which steps are actually stable.
 
 Bubble Work ships as one Go binary (`bubble`): a **server** that holds the state,
 serves its own web UI, and is the only thing clients talk to — plus a thin
-**client** (CLI for humans, MCP for agents).
-
-```bash
-go build -o dist/bubble ./cmd/bubble        # web bundle is committed; no JS toolchain needed
-bubble instance add --slug <s> --url <plane-url> --key <key> --workspace <ws>
-bubble init --token <your-plane-api-key>
-bubble serve                                # then open http://localhost:4006
-```
-
-Install, quickstart, credential profiles, admin and development live in
-[`docs/operations.md`](./docs/operations.md). The command surface is
-[`docs/modules/cli.md`](./docs/modules/cli.md); the agent tools are
-[`docs/modules/mcp.md`](./docs/modules/mcp.md); deployment is
-[`DEPLOY.md`](./DEPLOY.md).
+**client**. That is v0, and it is archived — see [`PLAN.md`](./PLAN.md) for what
+replaces it and why.
 
 ## Documentation
 
 | Where | What |
 |-------|------|
 | this file | the model — the way of thinking |
+| [`PLAN.md`](./PLAN.md) | what is being built, what was decided and against what, in what order |
 | [`AGENTS.md`](./AGENTS.md) | the operating rules agents load (`CLAUDE.md` imports it) |
-| [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) | how it is built: topology, ownership, surfaces, storage |
-| [`docs/modules/`](./docs/modules) | one file per module — what is true today |
-| [`docs/decisions/`](./docs/decisions) | the decisions that changed the model, and why |
-| [`docs/journal/`](./docs/journal) | how the work went: worksheets, phases, live measurements |
-| [`prompts/`](./prompts) | what agents are told over MCP — markdown, embedded, meant to be tuned |
 
-[`docs/README.md`](./docs/README.md) is the map, including which module file to
-read for a given question.
+v0's own documentation — its architecture, fourteen module files, the schema
+reference and the numbered decisions 0001–0007 — is in git rather than deleted:
 
-The repository runs on its own framework: see [`AGENTS.md`](./AGENTS.md).
+```
+git show 2cf0c71:docs/DATABASE.md
+git show 2cf0c71:docs/decisions/
+git show 2cf0c71:docs/journal/v0/
+```

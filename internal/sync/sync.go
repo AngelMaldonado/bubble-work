@@ -652,33 +652,57 @@ func (s *Syncer) labels(ctx context.Context, cl *plane.Client, inst domain.Insta
 // Items are taken in the order the delta returned them, which is newest-updated
 // first — so the ones somebody just touched are the ones that get refreshed.
 func (s *Syncer) edges(ctx context.Context, cl *plane.Client, inst domain.Instance, rows []plane.ItemRow, budget *int) error {
+	// Plane deployments differ in what the public API exposes, and the relations
+	// endpoint is one of the differences: plane.ayetec.space answers 404 for it.
+	// A 404 there is not a failure — it is "this instance cannot answer" — so the
+	// stream switches off for the REST OF THE PASS rather than spending budget
+	// re-asking once per item and logging it each time. The next pass tries again,
+	// which is what makes an upgraded Plane light up on its own.
+	relationsOK := true
+	linksOK := true
+
 	for _, r := range rows {
 		if *budget <= 0 {
 			return nil
 		}
-		*budget--
-		links, err := cl.ListLinks(ctx, r.ID)
-		if err != nil {
-			return fmt.Errorf("links for %s: %w", r.ID, err)
-		}
-		out := make([]mirror.Link, 0, len(links))
-		for _, l := range links {
-			out = append(out, mirror.Link{ID: l.ID, URL: l.URL, Title: l.Title, CreatedAt: l.CreatedAt})
-		}
-		if err := s.m.ReplaceLinks(inst.Slug, r.ID, out); err != nil {
-			return fmt.Errorf("write links for %s: %w", r.ID, err)
+		if linksOK {
+			*budget--
+			links, err := cl.ListLinks(ctx, r.ID)
+			switch {
+			case plane.IsNotFound(err):
+				linksOK = false
+				log.Printf("sync %s: this Plane does not serve work-item links — skipping them", inst.Slug)
+			case err != nil:
+				return fmt.Errorf("links for %s: %w", r.ID, err)
+			default:
+				out := make([]mirror.Link, 0, len(links))
+				for _, l := range links {
+					out = append(out, mirror.Link{ID: l.ID, URL: l.URL, Title: l.Title, CreatedAt: l.CreatedAt})
+				}
+				if err := s.m.ReplaceLinks(inst.Slug, r.ID, out); err != nil {
+					return fmt.Errorf("write links for %s: %w", r.ID, err)
+				}
+			}
 		}
 
+		if !relationsOK {
+			continue
+		}
 		if *budget <= 0 {
 			return nil
 		}
 		*budget--
 		rel, err := cl.ListRelations(ctx, r.ID)
-		if err != nil {
+		switch {
+		case plane.IsNotFound(err):
+			relationsOK = false
+			log.Printf("sync %s: this Plane does not serve work-item relations — skipping them", inst.Slug)
+		case err != nil:
 			return fmt.Errorf("relations for %s: %w", r.ID, err)
-		}
-		if err := s.m.ReplaceRelations(inst.Slug, r.ID, flattenRelations(rel)); err != nil {
-			return fmt.Errorf("write relations for %s: %w", r.ID, err)
+		default:
+			if err := s.m.ReplaceRelations(inst.Slug, r.ID, flattenRelations(rel)); err != nil {
+				return fmt.Errorf("write relations for %s: %w", r.ID, err)
+			}
 		}
 	}
 	return nil

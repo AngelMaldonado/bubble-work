@@ -126,7 +126,7 @@ func (s *Server) AddLink(ctx context.Context, threadID, url, title string) (doma
 	cl := plane.New(inst.BaseURL, s.writeKey(ctx, inst), inst.Workspace, projID)
 
 	if _, err := cl.AddLink(ctx, wid, url, strings.TrimSpace(title)); err != nil {
-		return domain.ThreadDetail{}, fmt.Errorf("add link: %w", err)
+		return domain.ThreadDetail{}, unsupported(err, "links")
 	}
 	s.refreshLinks(ctx, cl, slug, wid)
 	// The link count is what the progress sweep diffs, so rebuild the snapshot to
@@ -215,7 +215,7 @@ func (s *Server) RelateThreads(ctx context.Context, threadID, otherID, relType s
 	_ = other
 
 	if err := cl.AddRelation(ctx, wid, relType, []string{otherWID}); err != nil {
-		return domain.ThreadDetail{}, fmt.Errorf("relate: %w", err)
+		return domain.ThreadDetail{}, unsupported(err, "work-item relations")
 	}
 	// Both ends change, because Plane's pairs are symmetric: writing `blocking` on
 	// one shows as `blocked_by` on the other.
@@ -236,7 +236,7 @@ func (s *Server) UnrelateThreads(ctx context.Context, threadID, otherID string) 
 		return domain.ThreadDetail{}, err
 	}
 	if err := cl.RemoveRelation(ctx, wid, otherWID); err != nil {
-		return domain.ThreadDetail{}, fmt.Errorf("unrelate: %w", err)
+		return domain.ThreadDetail{}, unsupported(err, "work-item relations")
 	}
 	s.refreshRelations(ctx, cl, slug, wid)
 	s.refreshRelations(ctx, cl, slug, otherWID)
@@ -306,6 +306,21 @@ func (s *Server) refreshRelations(ctx context.Context, cl *plane.Client, slug, w
 	if err := s.mirror.ReplaceRelations(slug, wid, out); err != nil {
 		log.Printf("relations: mirror %s: %v", wid, err)
 	}
+}
+
+// unsupported turns a Plane 404 into a sentence somebody can act on.
+//
+// Plane deployments differ in what their public API exposes, and an unrouted URL
+// answers 404 with `{"error": "Page not found."}` — "Page" as in web page
+// ([`plane-channel.md`]). Relayed raw, that reads as "your thread does not exist",
+// which sends people looking for the wrong bug: plane.ayetec.space serves links and
+// not relations, and nothing about the thread is wrong.
+func unsupported(err error, what string) error {
+	if plane.IsNotFound(err) {
+		return fmt.Errorf("%w: this Plane deployment does not expose %s — it answers 404 for that endpoint",
+			errBadRequest, what)
+	}
+	return err
 }
 
 // ---- REST ----

@@ -29,6 +29,18 @@ func (e *APIError) Error() string {
 	return fmt.Sprintf("plane %s: HTTP %d", e.Path, e.Status)
 }
 
+// IsNotFound reports whether err is a Plane 404. On an endpoint the deployment
+// simply does not serve — Plane versions differ in what the public API exposes —
+// that is "this instance cannot answer", not a failure worth retrying or logging
+// every pass.
+func IsNotFound(err error) bool {
+	var e *APIError
+	if errors.As(err, &e) {
+		return e.Status == 404
+	}
+	return false
+}
+
 // IsAuthError reports whether err is a Plane 401/403 (credential rejected).
 // Anything else (transient status, timeout, network) is not an auth failure.
 func IsAuthError(err error) bool {

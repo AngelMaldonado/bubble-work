@@ -8,6 +8,7 @@ running system. See [the archive](#the-archive).
 |------|---------|---------------|
 | [the model](../README.md) | *how do I think about work?* | yes — it is the framework |
 | [`decisions/`](./decisions) | *why did the model change?* | written once, superseded rather than edited |
+| [`V2-PLAN.md`](./V2-PLAN.md) | *what is being built, in what order?* | yes — the current plan |
 | [`DATABASE.md`](./DATABASE.md) | *what did v0 store, and why?* | frozen — the migration source |
 | [`journal/`](./journal) | *how did the work actually go?* | **no** — kept as written |
 | `modules/` | *what is true about this part today?* | **empty** — v1 has not been built |
@@ -17,7 +18,8 @@ running system. See [the archive](#the-archive).
 | Question | File |
 |---|---|
 | What is Bubble Work? | [`../README.md`](../README.md) |
-| Why is the code gone? | [`decisions/0007`](./decisions) *(pending)* |
+| Why is the code gone? | [`decisions/0007`](./decisions/0007-bubble-owns-the-record.md) |
+| What is being built? | [`V2-PLAN.md`](./V2-PLAN.md) |
 | What did v0 store? | [`DATABASE.md`](./DATABASE.md) |
 | What rules do agents load? | [`../AGENTS.md`](../AGENTS.md) |
 
@@ -58,14 +60,16 @@ Still in force. The model is not what was archived.
 | [0003](./decisions/0003-briefs-have-a-type.md) | A Brief has a type, and the type keeps it short *(superseded by 0006)* |
 | [0004](./decisions/0004-writing-is-the-work.md) | Any edit is production; a discussed bubble is not a grave |
 | [0005](./decisions/0005-the-framework-does-not-own-your-format.md) | A thread needs a name; the birth rule and the DoD gate are gone |
-| [0006](./decisions/0006-plane-holds-the-relationships.md) | No Brief template; labels, links and relations come from Plane |
+| [0006](./decisions/0006-plane-holds-the-relationships.md) | No Brief template; labels, links and relations come from Plane *(superseded by 0007)* |
+| [0007](./decisions/0007-bubble-owns-the-record.md) | Bubble owns the record; PocketBase, markdown on disk under git, priority derived like heat |
 
 0001 said Plane is a channel and then made that true only of the *bodies*;
 structure and identity stayed upstream, which is why every v0 overlay row was
 keyed by a Plane id. 0006 leaned further in, handing labels, links and relations
-back to Plane. The pending 0007 turns both around: Bubble owns the record and
-Plane becomes one channel among several. Until it is written, that is an
-intention and not a decision.
+back to Plane. 0007 turns both around: Bubble owns the record, Plane becomes one
+optional channel, and the four choices that rest on it — PocketBase embedded as a
+Go framework, markdown on disk under git, a file-shaped MCP whose server supplies
+belonging and concurrency, and priority derived the way heat is.
 
 ## Journal
 

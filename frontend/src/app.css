@@ -1,170 +1,227 @@
 @import 'tailwindcss' source(none);
 @source '.';
+@import '@skeletonlabs/skeleton';
+/* The COMPONENT styles, which live in a second package.
+ *
+ * `@skeletonlabs/skeleton` ships the utility classes — btn, input, card. The
+ * interactive components are headless Zag.js primitives with no classes at all,
+ * and their base styling lives here. Without this import they render as bare
+ * markup: a switch is its label, a slider is nothing, tabs are three words in a
+ * row. Everything looks almost right, which is the worst way for it to be wrong.
+ */
+@import '@skeletonlabs/skeleton-svelte';
+@import './bubble.css';
 
 @custom-variant dark (&:where([data-mode='dark'], [data-mode='dark'] *));
 
-/* ── Theme tokens ─────────────────────────────────────────────────────────
-   Light is the :root default; dark overrides under [data-mode="dark"].
-   Light is the default; dark overrides under [data-mode="dark"]. */
+/* ── Semantic names ───────────────────────────────────────────────────────
+   These are what the app writes. They ALIAS the theme's scales rather than
+   carrying their own values, so a colour lives in exactly one place: change a
+   step in bubble.css and both Skeleton's controls and our own surfaces follow.
+
+   Light is :root; dark overrides under [data-mode="dark"]. (data-theme stays
+   the theme's own name, which is how Skeleton finds it.) */
 :root {
-  --bg: oklch(0.97 0.008 265);
-  --bg-2: oklch(0.93 0.012 265);
+  --bg: var(--color-surface-100);
+  --bg-2: var(--color-surface-200);
   --glow-1: oklch(0.85 0.09 275 / 0.5);
   --glow-2: oklch(0.88 0.08 210 / 0.45);
-  --surface: color-mix(in oklab, white 68%, transparent);
-  --surface-solid: oklch(0.995 0.004 265);
-  --line: color-mix(in oklab, black 12%, transparent);
-  --text: oklch(0.24 0.02 265);
-  --muted: oklch(0.44 0.02 265);
-  --faint: oklch(0.58 0.02 265);
+  /* The card's glassiness is a mix of the scale, not a colour of its own. */
+  --surface: color-mix(in oklab, var(--color-surface-50) 68%, transparent);
+  --surface-solid: var(--color-surface-50);
+  --line: color-mix(in oklab, var(--color-surface-950) 12%, transparent);
+  --text: var(--color-surface-900);
+  --muted: var(--color-surface-600);
+  --faint: var(--color-surface-500);
   --shadow: oklch(0.55 0.05 265 / 0.18);
   --shadow-strong: oklch(0.4 0.05 265 / 0.25);
-  --sheen: oklch(1 0 0 / 0.85);
-  --hover: color-mix(in oklab, black 7%, transparent);
+  --hover: color-mix(in oklab, var(--color-surface-950) 7%, transparent);
 
-  /* per-band accents — the five lifecycles, vivid in both modes so a
-     bubble reads the same whatever the theme */
+  /* ── The five lifecycles ────────────────────────────────────────────────
+     The domain speaking, not UI semantics. They are deliberately outside the
+     theme: a bubble's band must not change because somebody restyled a button.
+     Vivid in both modes so a bubble reads the same whatever the theme. */
+  /* ── Layers ─────────────────────────────────────────────────────────────
+     Skeleton's floating parts carry NO z-index of their own — they rely on
+     being positioned, which is enough until something is stacked over. The
+     drawer is stacked over, so a menu opened inside it would slide underneath.
+     One scale, in one place, rather than a number invented per component. */
+  /* The page's own chrome — presence, the HUD buttons, the minimap. BELOW the
+     drawer on purpose: a panel that covers the board should cover the things
+     floating over the board too, or it reads as a layer that failed to open. */
+  --z-chrome: 40;
+  --z-drawer-scrim: 50;
+  --z-drawer: 51;
+  --z-float: 60; /* menus, tooltips, comboboxes, popovers */
+  --z-toast: 80; /* above everything: it reports on what is underneath */
+
   --hot: oklch(0.68 0.2 40);
-  --cooling: oklch(0.66 0.15 210);
   --dormant: oklch(0.64 0.11 275);
-  --closed: oklch(0.6 0.02 265);
-  --warm: oklch(0.76 0.16 90);
+  --rip: oklch(0.6 0.02 265);
+  --closed: oklch(0.76 0.16 90);
 }
 
-:root[data-mode='dark'] {
-  --bg: oklch(0.18 0.03 265);
-  --bg-2: oklch(0.14 0.03 265);
-  --glow-1: oklch(0.3 0.08 275 / 0.5);
-  --glow-2: oklch(0.32 0.09 210 / 0.35);
-  --surface: color-mix(in oklab, oklch(0.28 0.03 265) 82%, transparent);
-  --surface-solid: oklch(0.24 0.03 265);
-  --line: color-mix(in oklab, white 12%, transparent);
-  --text: oklch(0.96 0.01 265);
-  --muted: oklch(0.78 0.02 265);
-  --faint: oklch(0.68 0.02 265);
+[data-mode='dark'] {
+  --bg: var(--color-surface-950);
+  --bg-2: oklch(0.14 0.02 265);
+  --glow-1: oklch(0.4 0.09 275 / 0.35);
+  --glow-2: oklch(0.38 0.08 210 / 0.3);
+  --surface: color-mix(in oklab, var(--color-surface-900) 72%, transparent);
+  --surface-solid: var(--color-surface-900);
+  --line: color-mix(in oklab, var(--color-surface-50) 12%, transparent);
+  --text: var(--color-surface-100);
+  --muted: var(--color-surface-300);
+  --faint: var(--color-surface-400);
   --shadow: oklch(0.08 0.03 265 / 0.45);
   --shadow-strong: oklch(0.06 0.03 265 / 0.6);
-  --sheen: oklch(1 0 0 / 0.28);
-  --hover: color-mix(in oklab, white 12%, transparent);
+  --hover: color-mix(in oklab, var(--color-surface-50) 12%, transparent);
 
   --hot: oklch(0.72 0.19 40);
-  --cooling: oklch(0.75 0.15 200);
   --dormant: oklch(0.7 0.1 275);
-  --closed: oklch(0.6 0.02 265);
-  --warm: oklch(0.82 0.16 95);
+  --rip: oklch(0.6 0.02 265);
+  --closed: oklch(0.82 0.16 95);
 }
-
-* {
-  box-sizing: border-box;
-}
-
-html,
-body {
-  margin: 0;
-  min-height: 100%;
-}
-
-body {
-  min-width: 320px;
-  min-height: 100vh;
-  color: var(--text);
-  background:
-    radial-gradient(1200px 800px at 15% -10%, var(--glow-1), transparent 60%),
-    radial-gradient(1000px 700px at 110% 20%, var(--glow-2), transparent 55%),
-    linear-gradient(180deg, var(--bg), var(--bg-2));
-  background-attachment: fixed;
-  font-family: 'Avenir Next', Inter, ui-sans-serif, system-ui, -apple-system, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  text-rendering: optimizeLegibility;
-  overflow-x: hidden;
-  transition:
-    background 0.4s ease,
-    color 0.4s ease;
-}
-
-/* Fine film-grain over the gradient — a fixed SVG turbulence layer. */
-body::before {
-  content: '';
-  position: fixed;
-  inset: 0;
-  z-index: 0;
-  pointer-events: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
-  background-size: 160px 160px;
-  mix-blend-mode: overlay;
-  opacity: 0.09;
-}
-:root[data-mode='dark'] body::before {
-  opacity: 0.14;
-}
-
-#app {
-  position: relative;
-  z-index: 1;
-}
-
-button,
-input,
-select,
-textarea {
-  font: inherit;
-}
-
-* {
-  scrollbar-width: thin;
-  scrollbar-color: color-mix(in oklab, var(--faint) 50%, transparent) transparent;
-}
-
-/* the gentle bob every floating bubble shares, phase-shifted per card */
-@keyframes bob {
-  0%,
-  100% {
-    transform: translateY(0);
-  }
-  50% {
-    transform: translateY(-6px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  * {
-    animation: none !important;
-  }
-}
-
-/* ---- right-click context menus (bubble + board) ------------------------- */
-/* Global so both menus are the same object to the eye; scoped styles would
-   drift the moment one is edited. */
 
 /* ── The board ────────────────────────────────────────────────────────────
    Buoyancy is SPATIAL here: that is the whole claim of the model, and a list
-   of statuses cannot make it. Hot floats to the top and reads bright; what
-   has gone cold sinks and desaturates. */
+   of statuses cannot make it. Hot floats to the top and reads bright; what has
+   gone cold sinks and desaturates. */
+
+/* Every floating part of every component, above the drawer. Attribute-based so a
+   component added later is covered without anybody remembering to.
+ *
+ * NOT wrapped in :global() — that is Svelte's syntax for a component's <style>
+ * block, and in a plain stylesheet it is simply an invalid selector that browsers
+ * drop. The rule was here and doing nothing.
+ *
+ * z-index alone is still not enough; see .glass below for the other half. */
+/* Only the FLOATING ones. `[data-scope][data-part='content']` also matched the
+ * navigation sidebar and anything else with a part by that name, quietly
+ * lifting page furniture to the popover layer. */
+[data-scope='menu'][data-part='content'],
+[data-scope='tooltip'][data-part='content'],
+[data-scope='combobox'][data-part='content'],
+[data-scope='listbox'][data-part='content'],
+[data-scope='select'][data-part='content'],
+[data-scope='popover'][data-part='content'],
+[data-scope='hover-card'][data-part='content'],
+[data-scope='date-picker'][data-part='content'] {
+  z-index: var(--z-float);
+}
+
+/* Skeleton ships no CSS for the tooltip, so this is ours. Small, opaque and
+ * high-contrast: it is read in the half second before the pointer moves on. */
+[data-scope='tooltip'][data-part='content'] {
+  padding: 0.25rem 0.55rem;
+  border-radius: 8px;
+  background: var(--text);
+  color: var(--bg);
+  font-size: 0.78rem;
+  font-weight: 600;
+  line-height: 1.3;
+  white-space: nowrap;
+  box-shadow: 0 6px 18px var(--shadow-strong);
+}
+[data-scope='toast'][data-part='group'] {
+  z-index: var(--z-toast);
+}
 
 body {
   margin: 0;
+  /* A board is read at arm's length on a big screen. 15px was the browser
+     default doing the deciding. */
+  font-size: 16px;
   background:
     radial-gradient(60rem 40rem at 15% -10%, var(--glow-1), transparent 60%),
     radial-gradient(50rem 35rem at 85% 0%, var(--glow-2), transparent 55%),
     linear-gradient(var(--bg), var(--bg-2));
   background-attachment: fixed;
   color: var(--text);
-  font: 15px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
   min-height: 100vh;
 }
 
-.card {
+/* Fine film-grain over the gradient — a fixed SVG turbulence layer, ported from
+   v0. It is what stops a big flat gradient from reading as a screenshot of a
+   gradient: the grain gives the surface a material. Turned up from v0's 0.09 /
+   0.14; the two numbers are the whole control. */
+:root { --grain: 0.16; }
+:root[data-mode='dark'] { --grain: 0.25; }
+
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  /* BEHIND the content, not in front of it under a raised #app. Lifting #app to
+     `z-index: 1` to clear the grain also lifted it over everything portalled to
+     <body> — which is every menu, tooltip and popover Skeleton draws. A negative
+     z-index paints the grain above the body's background and below the content,
+     which is what it was for, and leaves the portal layer alone. */
+  z-index: -1;
+  pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-size: 160px 160px;
+  mix-blend-mode: overlay;
+  opacity: var(--grain);
+}
+
+/* The pointer, everywhere.
+ *
+ * A custom cursor is a system affordance being replaced, so it has to survive
+ * every background the app has: the arrow is drawn TWICE — a wide round-joined
+ * stroke in the contrasting colour, then the fill on top — which is also what
+ * rounds the three convex corners. The NOTCH is a quadratic in the path,
+ * because a round line-join rounds the outside of a turn and does nothing to a
+ * concave one: it was the single sharp corner on an otherwise pillowy shape. Themed rather than tinted: a data
+ * URI cannot read a custom property, so the two modes carry two images.
+ *
+ * The viewBox holds the OUTLINE, not the path: half of the halo stroke reaches
+ * 77 units past every vertex, and a 0 0 512 512 box cut the tip and both points
+ * off. 30px so it stays under the 128px browsers silently ignore, and the hotspot
+ * is 4 4 — where the tip actually lands once the box is padded. `auto` is the
+ * fallback for anything that refuses an SVG cursor. */
+:root {
+  --cur-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='-27 -28 571 571'><path d='M56 55 L461 199 L347 248 Q288 273 262 336 L211 457 Z' fill='%23ffffff' stroke='%23ffffff' stroke-width='154' stroke-linejoin='round'/><path d='M56 55 L461 199 L347 248 Q288 273 262 336 L211 457 Z' fill='%23111318' stroke='%23111318' stroke-width='110' stroke-linejoin='round'/></svg>") 4 4, auto;
+}
+:root[data-mode='dark'] {
+  --cur-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='-27 -28 571 571'><path d='M56 55 L461 199 L347 248 Q288 273 262 336 L211 457 Z' fill='%23111318' stroke='%23111318' stroke-width='154' stroke-linejoin='round'/><path d='M56 55 L461 199 L347 248 Q288 273 262 336 L211 457 Z' fill='%23f2f4f8' stroke='%23f2f4f8' stroke-width='110' stroke-linejoin='round'/></svg>") 4 4, auto;
+}
+
+/* One cursor. Not "ours plus the system's where the system insists" — every
+ * element, every state, including the I-beam a text field would otherwise show
+ * and the barred circle a disabled control would.
+ *
+ * `*` with `!important` because there is no other way to say it. Every
+ * component writes `cursor: pointer` from its own stylesheet at its own
+ * specificity; no selector out-ranks all of them, and a page that shows our
+ * arrow in some places and a system cursor in others is worse than either one
+ * alone. The cost is real and worth naming: a text field no longer says it is a
+ * text field with its cursor, so it has to say it with its border. */
+*,
+*::before,
+*::after {
+  cursor: var(--cur-arrow) !important;
+}
+
+ /* Skeleton owns `.card` — shape and an interactive hover, composed with a
+    preset for colour. Ours is the SURFACE, so it is named for what it is and the
+    two compose: `class="card glass"`. Overriding a library's utility would have
+    worked and would have left the next reader unsure which one they were looking
+    at. */
+.glass {
   background: var(--surface);
   border: 1px solid var(--line);
-  border-radius: 14px;
   box-shadow: 0 1px 2px var(--shadow);
+  /* `backdrop-filter` CREATES A STACKING CONTEXT. Anything floating inside this
+     card — a menu, a combobox list — is then trapped in it, and the next card
+     down the page paints straight over the top however high its z-index is.
+     That is why the floating parts are portalled to <body> rather than left
+     where they are written; see Portal in the components. */
   backdrop-filter: blur(8px);
 }
 
 .band-hot { --accent: var(--hot); }
-.band-warm { --accent: var(--warm); }
-.band-cooling { --accent: var(--cooling); }
 .band-dormant { --accent: var(--dormant); }
+.band-rip { --accent: var(--rip); }
 .band-closed { --accent: var(--closed); }
 
 .dot {
@@ -174,6 +231,21 @@ body {
   background: var(--accent, var(--faint));
   box-shadow: 0 0 0.5rem var(--accent, transparent);
   flex: none;
+}
+
+/* The display face, on SECTION titles only: the band a bubble sits in, the name
+   of the app. Not on a bubble's own name — that is data, often a hostname or
+   somebody's shorthand, and a display face turns data into decoration. Not on
+   controls either: a button in a display face is a button people misread. */
+.display {
+  font-family: var(--font-display);
+  /* Boogaloo has ONE weight. Asking for bold makes the browser synthesise it —
+     smearing the outline sideways — and on a display face that reads as a
+     rendering bug rather than emphasis. So weight is fixed here and `font-bold`
+     alongside `.display` cannot do damage. Size and colour carry the emphasis
+     instead, which is what a display face is for anyway. */
+  font-weight: 400;
+  letter-spacing: 0;
 }
 
 /* Sinking is legible without reading the label. */

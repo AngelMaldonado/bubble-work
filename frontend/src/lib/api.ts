@@ -5,7 +5,7 @@
 // express — the board, documents, the tree, search, assets. Both are the same
 // origin (vite proxies in development), so nothing here deals with CORS.
 
-export type Lifecycle = 'hot' | 'warm' | 'cooling' | 'dormant' | 'closed';
+export type Lifecycle = 'hot' | 'dormant' | 'rip' | 'closed';
 
 export type Heat = {
   lifecycle: Lifecycle;
@@ -50,7 +50,10 @@ export type Doc = {
   path: string;
   thread?: string;
   hash: string;
+  /** the markdown — the record, and what an `edits` quote must match */
   content: string;
+  /** the same text rendered by the SERVER, so every surface shows one thing */
+  html: string;
   done: number;
 };
 
@@ -134,6 +137,13 @@ class Api {
       '/api/collections/workspaces/records?perPage=200&sort=name',
     );
     return out.items;
+  }
+
+  createWorkspace(name: string, slug: string) {
+    return this.call<Workspace>('/api/collections/workspaces/records', {
+      method: 'POST',
+      body: JSON.stringify({ name, slug }),
+    });
   }
 
   board(workspace: string) {

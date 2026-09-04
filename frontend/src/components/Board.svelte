@@ -1,6 +1,8 @@
 <script lang="ts">
+  import { bandFace, bandName, bandOrder } from '../lib/bands';
   import { api, type Board, type BubbleHeat, type ThreadHeat, type Workspace } from '../lib/api';
   import BubbleCard from './BubbleCard.svelte';
+  import Minimap, { type MapItem } from './Minimap.svelte';
 
   let {
     workspace,
@@ -26,11 +28,6 @@
     load();
   });
 
-  const bands = ['hot', 'warm', 'cooling', 'dormant', 'closed'] as const;
-  const label: Record<string, string> = {
-    hot: 'Caliente', warm: 'Tibio', cooling: 'Enfriando',
-    dormant: 'Dormido', closed: 'Cerrado',
-  };
 
   const byBand = $derived(() => {
     const out: Record<string, BubbleHeat[]> = {};
@@ -38,28 +35,38 @@
     return out;
   });
   const unfiled = $derived((board?.threads ?? []).filter((t) => !t.bubble && t.heat.lifecycle !== 'closed'));
+
+  // The minimap reads the same list the board draws, so the two cannot disagree
+  // about what is on the page.
+  const mapItems = $derived<MapItem[]>(
+    (board?.bubbles ?? []).map((b) => ({ id: b.id, name: b.name, life: b.heat.lifecycle })),
+  );
 </script>
 
+<Minimap items={mapItems} />
+
 {#if error}
-  <p class="card p-4 text-sm" style="color: var(--hot)">{error}</p>
+  <p class="card glass p-4 text-sm text-error-500">{error}</p>
 {:else if !board}
   <p class="faint p-4 text-sm">…</p>
 {:else}
   <div class="space-y-8">
-    {#each bands as band}
+    {#each bandOrder as band}
       {@const items = byBand()[band] ?? []}
       {#if items.length}
-        <section>
-          <h2 class="band-{band} mb-3 flex items-center gap-2 text-sm font-medium tracking-wide uppercase">
-            <span class="dot"></span>{label[band]}
+        <section id="band-{band}">
+          <h2 class="band-{band} display mb-3 flex items-center gap-2 text-sm tracking-widest uppercase">
+            <span>{bandFace(band)}</span>{bandName(band)}
             <span class="faint font-normal normal-case">{items.length}</span>
           </h2>
           <div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {#each items as b (b.id)}
-              <BubbleCard
-                bubble={b}
-                threads={board.threads.filter((t) => t.bubble === b.id)}
-                {onOpen} />
+              <div id="bw-{b.id}">
+                <BubbleCard
+                  bubble={b}
+                  threads={board.threads.filter((t) => t.bubble === b.id)}
+                  {onOpen} />
+              </div>
             {/each}
           </div>
         </section>
@@ -68,8 +75,8 @@
 
     {#if unfiled.length}
       <section>
-        <h2 class="faint mb-3 text-sm font-medium tracking-wide uppercase">Sin burbuja</h2>
-        <ul class="card divide-y p-2" style="border-color: var(--line)">
+        <h2 class="faint display mb-3 text-sm tracking-widest uppercase">Sin burbuja</h2>
+        <ul class="card glass divide-y-[1px] divide-[var(--line)] p-2">
           {#each unfiled as t (t.id)}
             <li>
               <button

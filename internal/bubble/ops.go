@@ -100,12 +100,18 @@ func ThreadFor(app core.App, auth *core.Record, id string) (*core.Record, *core.
 }
 
 // Doc is a document as anyone reads it.
+//
+// `content` is the record — the markdown, which is what a write diffs against
+// and what an agent quotes from. `html` is the SAME text rendered, and it is
+// rendered HERE rather than in the browser so that every surface showing a
+// document shows the identical thing. Two renderers agree until they do not.
 type Doc struct {
 	Workspace string `json:"workspace"`
 	Path      string `json:"path"`
 	Thread    string `json:"thread,omitempty"`
 	Hash      string `json:"hash"`
 	Content   string `json:"content"`
+	HTML      string `json:"html"`
 	Done      int    `json:"done"`
 }
 
@@ -118,7 +124,8 @@ func ReadDoc(app core.App, t *tree.Tree, ws *core.Record, repo, path string) (Do
 	threadID, _ := ownerOf(app, ws, path)
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: content, Done: md.CountDone(content),
+		Hash: hash, Content: content, HTML: md.RenderHTML(content),
+		Done: md.CountDone(content),
 	}, nil
 }
 
@@ -236,7 +243,8 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: next, Done: md.CountDone(next),
+		Hash: hash, Content: next, HTML: md.RenderHTML(next),
+		Done: md.CountDone(next),
 	}, nil
 }
 

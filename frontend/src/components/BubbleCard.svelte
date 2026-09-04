@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { bandFace, bandName } from '../lib/bands';
   import type { BubbleHeat, ThreadHeat } from '../lib/api';
 
   let {
@@ -11,23 +12,18 @@
     onOpen: (t: ThreadHeat) => void;
   } = $props();
 
-  // What the model measures, said in one glyph.
-  const face: Record<string, string> = {
-    hot: '🔥', warm: '🌤', cooling: '🌥', dormant: '😴', closed: '✓',
-  };
   const open = $derived(threads.filter((t) => t.heat.lifecycle !== 'closed'));
 </script>
 
-<article class="card band-{bubble.heat.lifecycle} p-4" class:sunk={bubble.heat.lifecycle === 'dormant' || bubble.closed}>
+<article class="card glass band-{bubble.heat.lifecycle} p-4" class:sunk={bubble.heat.lifecycle === 'dormant' || bubble.closed}>
   <header class="flex items-start gap-2">
-    <span class="dot mt-1.5"></span>
     <div class="min-w-0 flex-1">
-      <h3 class="truncate font-medium">{bubble.name}</h3>
+      <h3 class="truncate text-base font-semibold">{bubble.name}</h3>
       {#if bubble.outcome}
         <p class="faint mt-0.5 line-clamp-2 text-sm">{bubble.outcome}</p>
       {/if}
     </div>
-    <span class="text-lg" title={bubble.heat.reason}>{face[bubble.heat.lifecycle] ?? ''}</span>
+    <span class="text-lg" title={bubble.heat.reason}>{bandFace(bubble.heat.lifecycle)}</span>
   </header>
 
   <!-- The reason, not just the verdict: a band nobody can explain is a band

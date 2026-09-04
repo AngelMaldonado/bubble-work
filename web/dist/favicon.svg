@@ -1,0 +1,22 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- The same bubble as the wordmark in BrandOrb.svelte: one sphere with a
+       sheen. Written with radialGradient elements and hex rather than the app's
+       oklch tokens, because a favicon is parsed outside the page and has
+       neither the custom properties nor a guarantee of modern colour support.
+       The hex is the rendered value of the hot accent.
+       No double hyphen anywhere in here: it is illegal inside an XML comment,
+       and the whole file silently stops being an image. -->
+  <defs>
+    <radialGradient id="body" cx="38%" cy="34%" r="72%">
+      <stop offset="0%" stop-color="#ff8a5c"/>
+      <stop offset="55%" stop-color="#f2551f"/>
+      <stop offset="100%" stop-color="#c93c12"/>
+    </radialGradient>
+    <radialGradient id="sheen" cx="34%" cy="30%" r="26%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.85"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <circle cx="32" cy="32" r="28" fill="url(#body)"/>
+  <circle cx="32" cy="32" r="28" fill="url(#sheen)"/>
+</svg>

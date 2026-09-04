@@ -205,6 +205,28 @@ PocketBase collections. `users` is its built-in auth collection.
 `memberships` is what every API rule reads. Authorization stops being derived from a
 mirror of somebody else's membership.
 
+### The superuser operates the box; it does not work in it
+
+PocketBase's `_superusers` is not a person in the model. It bypasses every
+collection rule, so it **reads** everything through Bubble's own routes too —
+refusing it there made the halves disagree, with the dashboard showing every row
+and the board answering 404.
+
+It does not **write**. Every write here is attributed to a person: `events.actor`,
+a git commit's author, who signed a comment. A principal with no row in `users` has
+nothing to attribute, and unattributed writing is what phase 2 exists to prevent.
+The attempt is refused with a sentence saying so rather than a mysterious 404.
+
+The same human usually wants both accounts, **with the same email**: PocketBase
+keeps them in separate collections and they do not collide. `just person <email>
+<password> [lead|member]` creates the working one without the dashboard — until it
+existed, a fresh clone could reach the dashboard and could not sign in to the UI at
+all — and `just dev` now creates both from the same `.env`.
+
+The cost, stated rather than hidden: two passwords that can drift. In development
+they cannot, because `just dev` upserts both on every start; anywhere else,
+changing yours is two commands.
+
 Only **people** are identified, and only people publish. An agent acts with a
 person's credential and therefore *is* that person for every rule in the system —
 which is v0's identity model unchanged, and why nothing here distinguishes a human

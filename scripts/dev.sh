@@ -29,6 +29,16 @@ if [[ -n "$BUBBLE_DEV_SUPERUSER_EMAIL" && -n "$BUBBLE_DEV_SUPERUSER_PASSWORD" ]]
       "$BUBBLE_DEV_SUPERUSER_EMAIL" "$BUBBLE_DEV_SUPERUSER_PASSWORD" \
       --dir "$BUBBLE_DATA" 2>&1)"; then
     echo "superuser  $BUBBLE_DEV_SUPERUSER_EMAIL  (from .env)"
+    # And the PERSON, with the same credentials.
+    #
+    # They are two records in two collections and PocketBase keeps them apart —
+    # same email, separate passwords. The superuser operates the box; the person
+    # does the work, and is who a write gets attributed to. Creating only the
+    # first is what left a fresh clone able to reach the dashboard and unable to
+    # sign in to the UI at all.
+    if scripts/person.sh "$BUBBLE_DEV_SUPERUSER_EMAIL" "$BUBBLE_DEV_SUPERUSER_PASSWORD" lead >/dev/null 2>&1; then
+      echo "person     $BUBBLE_DEV_SUPERUSER_EMAIL  (role: lead)"
+    fi
   else
     cat >&2 <<ERR
 

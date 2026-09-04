@@ -64,6 +64,13 @@ migrate *ARGS:
     scripts/build.sh
     {{env('BUBBLE_BIN', './dist/bubble')}} migrate {{ARGS}} --dir {{env('BUBBLE_DATA', './pb_data')}}
 
+# `just person you@example.com <password> [lead|member]`
+
+# Create a PERSON — the account that works, as opposed to the one that operates
+# the box. Without this the only way to make the first one is the dashboard.
+person +ARGS:
+    scripts/person.sh {{ARGS}}
+
 # Create or update a superuser. `just superuser upsert you@example.com <password>`
 superuser *ARGS:
     scripts/build.sh

@@ -272,14 +272,14 @@ func patchDocument(e *core.RequestEvent, t *tree.Tree, ws *core.Record, repo, do
 
 // reachWorkspace is reachThread's other half: same question, one level up.
 func reachWorkspace(e *core.RequestEvent, id string) (*core.Record, string, error) {
-	if e.Auth == nil || e.Auth.Collection().Name != "users" {
+	if e.Auth == nil || (!isPersonAuth(e.Auth) && !IsSuperuser(e.Auth)) {
 		return nil, "", e.NotFoundError("", nil)
 	}
 	ws, err := e.App.FindRecordById("workspaces", id)
 	if err != nil {
 		return nil, "", e.NotFoundError("", err)
 	}
-	if e.Auth.GetString("role") != "lead" {
+	if !IsSuperuser(e.Auth) && e.Auth.GetString("role") != "lead" {
 		var n int
 		err := e.App.DB().NewQuery(
 			`SELECT COUNT(*) FROM memberships WHERE workspace = {:ws} AND user = {:u}`).
@@ -325,14 +325,14 @@ func isPersonAuth(auth *core.Record) bool {
 // the same question the rules ask: are you a member of this thread's workspace, or
 // the global lead.
 func reachThread(e *core.RequestEvent, id string) (*core.Record, string, error) {
-	if e.Auth == nil || e.Auth.Collection().Name != "users" {
+	if e.Auth == nil || (!isPersonAuth(e.Auth) && !IsSuperuser(e.Auth)) {
 		return nil, "", e.NotFoundError("", nil)
 	}
 	th, err := e.App.FindRecordById("threads", id)
 	if err != nil {
 		return nil, "", e.NotFoundError("", err)
 	}
-	if e.Auth.GetString("role") != "lead" {
+	if !IsSuperuser(e.Auth) && e.Auth.GetString("role") != "lead" {
 		var n int
 		err := e.App.DB().NewQuery(
 			`SELECT COUNT(*) FROM memberships WHERE workspace = {:ws} AND user = {:u}`).

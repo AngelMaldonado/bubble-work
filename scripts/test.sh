@@ -628,5 +628,30 @@ chk "y quedó commiteada como todo lo demás" \
   "$(cd "$R/alpha" && git log --oneline -- assets/mi-diagrama.png | wc -l | tr -d ' ')" 1
 rm -f "$PNG" "$BIG"
 
+
+# --------------------------------- el superuser: opera la caja, no trabaja ----
+echo
+chk ">>> el superuser SÍ ve el board (se salta las reglas en todos lados o en ninguno)" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $SU")" 200
+chk ">>> y el documento de un thread" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC" -H "Authorization: $SU")" 200
+SUH=$(getdoc "$SU" | j "['hash']")
+BODY="{\"base\":\"$SUH\",\"content\":\"escrito por nadie\"}"
+CODE=$(patchdoc "$SU" "$BODY")
+chk ">>> pero NO escribe: no hay a quién atribuirle la escritura" "$CODE" 400
+chk "...y lo dice, en vez de un 404 misterioso" \
+  "$(python3 -c 'import json;print("si" if "attributed to a person" in json.load(open("/tmp/bubble-put.json"))["message"] else "no")')" si
+chk "el contenido quedó intacto" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
+
+# la misma persona puede tener las dos cuentas, con el mismo correo
+chk ">>> el mismo correo existe en users y en _superusers a la vez" \
+  "$(pcode users "$SU" '{"email":"root@bubble.test","password":"passwordpass","passwordConfirm":"passwordpass","role":"member","verified":true}')" 200
+chk "...y autentica como persona" \
+  "$(curl -s -X POST "$API/api/collections/users/auth-with-password" -H "$JS" \
+     -d '{"identity":"root@bubble.test","password":"passwordpass"}' | j "['record']['email']")" "root@bubble.test"
+chk "...sin dejar de autenticar como superuser" \
+  "$(curl -s -X POST "$API/api/collections/_superusers/auth-with-password" -H "$JS" \
+     -d '{"identity":"root@bubble.test","password":"rootrootroot"}' | j "['record']['email']")" "root@bubble.test"
+
 echo; echo "  $pass pasaron, $fail fallaron"
 [ "$fail" = "0" ]

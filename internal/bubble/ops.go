@@ -29,8 +29,30 @@ var ErrDenied = errors.New("not found")
 // ErrConflict is a write against a version somebody has already replaced.
 var ErrConflict = errors.New("the document changed since you read it")
 
+// IsSuperuser reports whether the caller is operating the box rather than working
+// in it.
+//
+// A superuser bypasses every PocketBase collection rule, so refusing them on OUR
+// routes made the two halves disagree: everything visible in the dashboard, and a
+// 404 from the board. They READ everything here for the same reason.
+//
+// They do not write. Every write in this system is attributed to a person —
+// events.actor, a git commit's author, who signed a comment — and a superuser has
+// no row in `users` to attribute it to. The same human can hold both accounts,
+// with the same email; working is what the person account is for.
+func IsSuperuser(auth *core.Record) bool {
+	return auth != nil && auth.Collection().Name == core.CollectionNameSuperusers
+}
+
+// ErrNotAPerson is a write attempted by something the model cannot attribute.
+var ErrNotAPerson = errors.New(
+	"a write is attributed to a person — sign in as one rather than as a superuser")
+
 // canSee answers the one question every operation starts with.
 func canSee(app core.App, auth *core.Record, workspace string) bool {
+	if IsSuperuser(auth) {
+		return true // reads only; Apply refuses the write itself
+	}
 	if auth == nil || auth.Collection().Name != "users" {
 		return false
 	}
@@ -131,6 +153,9 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 	if path == "" {
 		return Doc{}, fmt.Errorf("no document path")
 	}
+	if !isPersonAuth(auth) {
+		return Doc{}, ErrNotAPerson
+	}
 	shapes := 0
 	for _, present := range []bool{p.Content != nil, len(p.Edits) > 0, p.Todo != nil} {
 		if present {
@@ -219,6 +244,9 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 // its document path, and the evidence that defining a piece of work is production.
 func CreateThread(app core.App, auth *core.Record, ws *core.Record,
 	name, bubbleID, impact, urgency string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
 
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -273,6 +301,9 @@ func CreateThread(app core.App, auth *core.Record, ws *core.Record,
 // AddLink hangs external evidence off a thread. Landing one is production: it is
 // proof that reality changed somewhere this tool cannot see.
 func AddLink(app core.App, auth *core.Record, threadID, url, title string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
 	th, ws, _, err := ThreadFor(app, auth, threadID)
 	if err != nil {
 		return nil, err
@@ -308,6 +339,9 @@ func AddLink(app core.App, auth *core.Record, threadID, url, title string) (*cor
 // refused to complete a thread with an unticked Definition of Done, and a
 // checklist written days ago is evidence, not a warden.
 func CompleteThread(app core.App, auth *core.Record, threadID string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
 	th, ws, _, err := ThreadFor(app, auth, threadID)
 	if err != nil {
 		return nil, err

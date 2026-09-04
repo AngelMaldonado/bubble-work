@@ -3,6 +3,17 @@
 
   let { onDone }: { onDone: () => void } = $props();
   let identity = $state('');
+  // Whether anybody can sign in at all. A superuser is not a person: it operates
+  // the box and has no row in `users`.
+  let empty = $state(false);
+  (async () => {
+    try {
+      const res = await fetch('/api/collections/users/records?perPage=1');
+      if (res.ok) empty = (await res.json()).totalItems === 0;
+    } catch {
+      /* the server will say so when the form is submitted */
+    }
+  })();
   let password = $state('');
   let error = $state('');
   let busy = $state(false);
@@ -15,7 +26,13 @@
       await api.signIn(identity, password);
       onDone();
     } catch (err) {
-      error = (err as Error).message;
+      // PocketBase answers "Failed to authenticate." whether the person does not
+      // exist or the password is wrong. When NOBODY exists, that reads as a bug in
+      // your typing rather than an empty database — so say which it is.
+      const msg = (err as Error).message;
+      error = empty
+        ? 'Todavía no hay ninguna persona en este servidor. Créala con `just person <correo> <contraseña> lead` — un superuser opera la caja, pero no trabaja aquí.'
+        : msg;
     } finally {
       busy = false;
     }

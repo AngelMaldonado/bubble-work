@@ -53,6 +53,8 @@ func main() {
 		log.Fatal(err)
 	}
 
+	app.RootCmd.AddCommand(personCommand(app))
+
 	bubble.Register(app, t)
 
 	// The agent surface. Every tool calls the same function the REST route calls,

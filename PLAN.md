@@ -186,12 +186,79 @@ PocketBase collections. `users` is its built-in auth collection.
 
 | Collection | Fields |
 |---|---|
-| `users` *(auth)* | built-in, plus `display_name`, `kind` (`human` \| `agent`) |
+| `users` *(auth)* | built-in, plus `display_name`, `role` (`lead` \| `member`) |
 | `workspaces` | `name`, `slug`, `repo_path` (root of the markdown tree) |
-| `memberships` | `workspace` →, `user` →, `role` |
+| `memberships` | `workspace` →, `user` →, `role` (`lead` \| `member`) |
 
 `memberships` is what every API rule reads. Authorization stops being derived from a
 mirror of somebody else's membership.
+
+Only **people** are identified, and only people publish. An agent acts with a
+person's credential and therefore *is* that person for every rule in the system —
+which is v0's identity model unchanged, and why nothing here distinguishes a human
+principal from a non-human one.
+
+### Two things are called "lead"
+
+The two layers meet here, and they use the same word for different scopes. Keep
+them apart when reading a rule:
+
+| | Where | What it is |
+|---|---|---|
+| **global lead** | `users.role` | the strategic layer — the department head. Sees **every** workspace and administers it without being a member of any. |
+| **workspace lead** | `memberships.role` | whoever founded a workspace. Invites people, sets its workflow, deletes its bubbles. |
+
+Every collection rule carries the global bypass, composed **once** rather than
+restated:
+
+```go
+const globalLead = `@request.auth.role = 'lead'`
+func orLead(rule string) string { return globalLead + " || (" + rule + ")" }
+```
+
+The original rule is parenthesised because a rule like "member AND lead" joined by
+a bare `||` makes the meaning depend on which operator binds tighter. And the
+bypass is defined once because a mis-typed rule does not fail — it grants the
+wrong access, silently. One place to get wrong beats twenty-six, and the test that
+catches an over-generous prefix is the **opposite** one: somebody with no
+memberships must still see nothing.
+
+`role` is not self-writable (`@request.body.role:isset = false` on the owner's own
+update rule), or anybody promotes themselves by editing their profile.
+
+### Who may do what
+
+Nothing is scoped to a record's creator. The founder of a workspace simply gets
+the founding `lead` membership; after that "lead" is a role, not a claim on what
+you made.
+
+| | see | create | edit | delete |
+|---|---|---|---|---|
+| workspace | member | anyone signed in | ws lead | ws lead |
+| bubble | member | member | member | ws lead |
+| thread | member | member | member | member |
+| link · relation | member | member | member | member |
+| comment | member | member | **its author** | **its author** |
+| state (workflow) | member | ws lead | ws lead | ws lead |
+| label | member | member | member | ws lead |
+| membership | member | ws lead | ws lead | ws lead |
+
+…and the global lead, everywhere.
+
+Two rules cannot be written as filters and are hooks instead, because a filter
+answers "may you touch this row" and never "what about the other rows":
+
+- **A workspace keeps at least one lead.** A lead may demote or remove themselves;
+  the last one may not, or the workspace reaches a state nobody can administer and
+  only a superuser can repair.
+- **Authorship is stamped, not submitted.** The rule can say "you may edit a
+  comment whose author is you", which protects updates and says nothing about
+  creates — so without the hook a member posts a comment signed as somebody else.
+
+Listing people is open to anyone signed in. PocketBase's default is owner-only,
+which makes inviting impossible: a lead cannot see the person they want to add.
+The cost is that the department's names and emails are visible to the department,
+which is what a staff list is.
 
 ### Structure
 
@@ -235,6 +302,46 @@ policy to design.
 rows that are stored plus the current time — so there is no cooling job that can
 fall behind and no stored level that can be wrong.
 
+### Where each derived axis is computed
+
+**Priority is a view collection.** It is a pure function of two stored columns, so
+`CASE WHEN impact='high' AND urgency='high' THEN 'P1' …` gives the planner
+PocketBase's whole API — filter, sort, rules — with no endpoint written, and makes
+the wrong value unrepresentable because the column does not exist. Wrap the
+expression in `CAST(… AS REAL)` for anything numeric: PocketBase infers a computed
+column's type from the view, and without a cast it types it `json`, which makes
+`GetFloat` return zero and sorting go through `JSON_EXTRACT`.
+
+**Heat is a hybrid, and the reason is not what it first looked like.** The obvious
+objection — "a view is schema, so recalibrating means a migration" — is **false**,
+and was disproved rather than argued: put the calibration in a `tuning` ROW that
+the view joins, and the SELECT text stays fixed while the numbers are data.
+Recalibrating is an `UPDATE`, same view, no migration. The arithmetic is there too:
+`exp()`, `ln()` and `pow()` are all available in `modernc.org/sqlite`, and a view
+reproduces v0's documented curve exactly (1.0 at zero, 0.37 at one decay window,
+0.14 at two).
+
+What actually argues against a pure view is different:
+
+- **Time stops being a parameter.** v0's `Classify(bubble, tuning, now)` takes
+  `now` as an argument, which is why its tests can pin the curve at a fixed
+  instant. A view calling `unixepoch()` cannot be frozen — and it closes the door
+  on asking what a bubble's temperature was at some past moment, which an event log
+  otherwise makes possible.
+- **The ladder is not the score.** Hot/Warm/Cooling/Dormant is an ordered rule set
+  (something producing stays Hot with no owner; ownerlessness sinks what has
+  already gone quiet) plus stable reason codes and args so clients can translate.
+  That is a `CASE` cascade and a `json_object` built in SQL: possible, ugly, and
+  untested by construction.
+- **The window depends on the workspace's cycle** when it has one and a rolling
+  window when it does not, replacing the configured length with the real one.
+
+So: **the view aggregates** — most recent evidence per kind per thread and bubble,
+the counts, the decay score — because that runs over `events`, the largest table,
+and aggregation is what SQL is for. **Go decides** — the ladder, the reason codes,
+the window — because that is what `internal/heat`'s tests already pin, and it ports
+unchanged. The `tuning` row is a row either way.
+
 ## On disk
 
 ```
@@ -268,16 +375,37 @@ extensions, `workspaces`, `memberships`. API rules read `memberships`.
 **Done when:** a person signs in, a workspace exists, the dashboard shows it.
 
 ### Phase 1 — structure and the markdown store
-Remaining collections. `internal/md` ported verbatim with its tests. The path
-resolver: `path → entity`, containment inside a workspace root, per-path locking,
-git commit per write.
+
+Split, because the two halves fail in different worlds and mixing them means a
+failure that could have come from either.
+
+**1a — the structure.** `bubbles`, `threads`, `states`, `labels`,
+`thread_relations`, `thread_links`, `comments`. The same boundary work as phase 0
+at scale: every new collection is insecure until its rule says which workspace it
+belongs to, and each one is proved the same way — assertions against a running
+server.
+
+Plus the global lead and the invite path, which were planned for phase 5 and moved
+here: without somebody able to add a member, every workspace is single-player and
+nothing above it can be tried at all.
+
+**Done when:** a thread lives in a bubble in a workspace, a member of one workspace
+can reach none of another's, and a lead can invite.
+
+**1b — the markdown store.** `repo_path`, `internal/md` ported verbatim with its
+tests, the path resolver (`path → entity`, containment inside a workspace root),
+per-path locking, and a git commit per write.
+
+The risk this half carries is the one the decision above already names: the file
+and its row are two sources that can drift. Writing both under one lock is the
+whole of the answer, so 1b has to prove it rather than assume it.
 
 **Done when:** a thread exists, its `.md` exists, and editing either through the
 server keeps them consistent and produces a commit.
 
 ### Phase 2 — evidence and the two derived axes
-`events` written on every observed production. `internal/heat` ported and pointed at
-the event stream. The priority map as a read-time function.
+`events` written on every observed production. The `tuning` row. The priority view
+collection. The aggregation view, with `internal/heat` ported and deciding over it.
 
 **Done when:** a bubble's temperature and a thread's priority are both computed and
 neither is stored anywhere.
@@ -304,7 +432,8 @@ renderer.
 
 ### Phase 5 — the planner view
 Inbox, calendar over `due_date` with timeline / week / day modes, the high-level
-kanban by objective, and objectives editable in place.
+kanban by objective, and objectives editable in place. The role it is built for
+already exists — see the global lead above.
 
 **Done when:** a lead triages an inbox item into a thread without leaving the view.
 

@@ -2,10 +2,9 @@
 # The dev session: every service in one tmux session, one window each.
 #
 # tmux rather than a foreground process because of what v0 learned: the second
-# process is the one nobody remembers. There is one service today and there will
-# be two once the SPA lands, and a session you attach to cannot leave one of them
-# running against a server that was rebuilt out from under it — `just stop` takes
-# the whole thing down, and reattaching shows you both.
+# process is the one nobody remembers — left running against a server that was
+# rebuilt out from under it. Both live in one session, `just stop` takes the whole
+# thing down, and reattaching shows you both.
 #
 # Go has no hot reload: after a change to .go, `just dev` again. It rebuilds and
 # replaces the running session rather than stacking a second one on the same port.
@@ -49,7 +48,8 @@ fi
 banner() {
   cat <<MSG
 
-  server     http://${BUBBLE_HTTP}/
+  UI         http://localhost:${BUBBLE_UI_PORT}/     <- open THIS one (hot reload)
+  server     http://${BUBBLE_HTTP}/            (the last built bundle)
   dashboard  http://${BUBBLE_HTTP}/_/
   data       ${BUBBLE_DATA}
   repos      ${BUBBLE_REPOS}
@@ -72,8 +72,18 @@ tmux kill-session -t "$BUBBLE_TMUX" 2>/dev/null || true
 # one. remain-on-exit keeps a crashed service's last output on screen instead of
 # closing the window on the error you needed to read.
 tmux new-session -d -s "$BUBBLE_TMUX" -n server \
-  "$BUBBLE_BIN serve --http $BUBBLE_HTTP --dir $BUBBLE_DATA --dev"
+  "BUBBLE_REPOS=$BUBBLE_REPOS $BUBBLE_BIN serve --http $BUBBLE_HTTP --dir $BUBBLE_DATA --dev"
 tmux set-option -t "$BUBBLE_TMUX" -w remain-on-exit on >/dev/null
+
+# vite, in its own window. It proxies /api and /mcp back to the server, so there
+# is one origin in development exactly as there is in production.
+if [[ -d frontend/node_modules ]]; then
+  tmux new-window -d -t "$BUBBLE_TMUX" -n ui -c "$PWD/frontend" \
+    "BUBBLE_DEV_BACKEND=http://$BUBBLE_HTTP bun run dev --port $BUBBLE_UI_PORT"
+  tmux set-option -t "$BUBBLE_TMUX:ui" -w remain-on-exit on >/dev/null
+else
+  echo "frontend/node_modules is missing — run \`just install\` for the UI window" >&2
+fi
 
 banner
 cat <<MSG

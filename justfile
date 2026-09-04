@@ -25,6 +25,18 @@ stop:
 build:
     scripts/build.sh
 
+# Install the frontend toolchain. bun, never npm: package-lock.json is ignored,
+# so npm resolves a different tree than anything else here.
+install:
+    cd frontend && bun install
+
+# The bundle is COMMITTED, so `just build` needs no JS toolchain and a UI change
+# is invisible until this runs.
+
+# Rebuild the SPA into web/dist.
+bundle:
+    cd frontend && bun run build
+
 # ---- checking ----
 
 # Run once per clone. `git commit --no-verify` is the escape hatch.

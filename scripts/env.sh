@@ -45,6 +45,10 @@ BUBBLE_DATA="${BUBBLE_DATA:-./pb_data}"
 # database rather than inside it, so a person can open it with their own git.
 BUBBLE_REPOS="${BUBBLE_REPOS:-./repos}"
 
+# Where vite serves the UI in development. THIS is the one to open while
+# developing: the server's own port serves the last BUILT bundle.
+BUBBLE_UI_PORT="${BUBBLE_UI_PORT:-5173}"
+
 # Where the binary is built.
 BUBBLE_BIN="${BUBBLE_BIN:-./dist/bubble}"
 
@@ -57,4 +61,4 @@ BUBBLE_TMUX="${BUBBLE_TMUX:-bubble}"
 BUBBLE_DEV_SUPERUSER_EMAIL="${BUBBLE_DEV_SUPERUSER_EMAIL:-}"
 BUBBLE_DEV_SUPERUSER_PASSWORD="${BUBBLE_DEV_SUPERUSER_PASSWORD:-}"
 
-export BUBBLE_HTTP BUBBLE_DATA BUBBLE_REPOS BUBBLE_BIN BUBBLE_TMUX
+export BUBBLE_HTTP BUBBLE_DATA BUBBLE_REPOS BUBBLE_BIN BUBBLE_TMUX BUBBLE_UI_PORT

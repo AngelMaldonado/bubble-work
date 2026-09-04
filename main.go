@@ -10,12 +10,15 @@ import (
 	"os"
 
 	"github.com/pocketbase/pocketbase"
+	"github.com/pocketbase/pocketbase/apis"
+	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"github.com/pocketbase/pocketbase/tools/osutils"
 
 	"github.com/AngelMaldonado/bubble-work/internal/bubble"
 	"github.com/AngelMaldonado/bubble-work/internal/mcpapi"
 	"github.com/AngelMaldonado/bubble-work/internal/tree"
+	"github.com/AngelMaldonado/bubble-work/web"
 
 	// Registers the schema migrations by side effect. Without this import the
 	// binary starts against an empty database and every rule silently refers to
@@ -55,6 +58,14 @@ func main() {
 	// The agent surface. Every tool calls the same function the REST route calls,
 	// so the two cannot drift and neither can bypass what the other enforces.
 	mcpapi.Register(app, t)
+
+	// The SPA, last: a catch-all route must not shadow /api or /mcp, and
+	// registering it after them is what keeps that true. `true` serves index.html
+	// for an unknown path, which is what a client-side router needs.
+	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		se.Router.GET("/{path...}", apis.Static(web.Dist(), true))
+		return se.Next()
+	})
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)

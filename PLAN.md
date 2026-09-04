@@ -552,16 +552,43 @@ because of it. — *it does: create by slug, write, tick, search, link, and the
 thread reads hot with its priority beside it.*
 
 ### Phase 4 — the operative board
-Ported from the tag, served from `pb_public`: `Prose.svelte` + `lib/prose.ts` (the
-one renderer), `Omnibar.svelte` + `lib/fuzzy.ts`, `lib/vim.svelte.ts`,
-`lib/slash.ts`, `lib/editor.ts`, `ThreadToc.svelte`, and `Band` / `BubbleCard` /
-`BubblePool`. Live updates come from PocketBase realtime instead of the bespoke SSE.
 
-Not ported: `GodMode` (the dashboard replaces it), `McpConnect`, `ProjectCombobox`,
-and everything that named an instance.
+Svelte 5 + Tailwind 4, built with bun into `web/dist`, embedded and served at `/`.
+The bundle is committed, so a plain `go build` needs no JS toolchain — and a UI
+change is invisible until `just bundle` runs, which is why it belongs in the same
+commit as the source that produced it.
 
-**Done when:** the board looks and moves like v0's and nobody wrote a second markdown
-renderer.
+The SPA's catch-all route is registered LAST, after `/api` and `/mcp`, or it
+shadows them.
+
+**Skeleton is not ported.** None of the components worth taking from v0 imported
+it; what carries the visual identity is the token block in `app.css`, and that came
+across whole, with the band accents renamed from v0's levels to the five
+lifecycles.
+
+**4a — the board.** *(built)* Sign-in against PocketBase, the workspace switcher,
+and buoyancy made spatial: bands top to bottom, bubbles inside them, threads inside
+those. What has gone cold sinks and desaturates, so the state is legible before
+anybody reads a label. Each card carries its REASON and not just its verdict — a
+band nobody can explain is a band nobody trusts — and the footer says which
+calibration it was computed against, because a cold board and a short cycle look
+identical otherwise.
+
+Heat is refetched, never recomputed in the browser: it is a pure function of
+evidence and TIME, the server holds both, and a board that ages client-side drifts
+from the one everybody else is looking at.
+
+**4b — the thread interior.** `Prose.svelte` + `lib/prose.ts` — the ONE renderer,
+because a second copy of that CSS is how two documents start looking different —
+plus `ThreadToc` and an editor over the base-hash write.
+
+**4c — the keyboard.** `Omnibar` + `lib/fuzzy.ts`, vim keys, slash commands.
+
+Not ported at all: `GodMode` (PocketBase's dashboard replaces it), `McpConnect`,
+`ProjectCombobox`, and everything that named a Plane instance.
+
+**Done when:** the board looks and moves like v0's and nobody wrote a second
+markdown renderer.
 
 ### Phase 5 — the planner view
 Inbox, calendar over `due_date` with timeline / week / day modes, the high-level

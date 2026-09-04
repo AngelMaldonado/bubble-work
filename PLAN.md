@@ -108,7 +108,14 @@ transactions, but it is the thing being changed.
 
 The tool surface is generic file editing, modelled on
 [`mcp-file-edit`](https://github.com/patrickomatik/mcp-file-edit). Agents address
-**paths**, not regions.
+**paths**, not regions — and the layout below is what makes a path enough to know
+who a write belongs to:
+
+| path | owner | event grain |
+|---|---|---|
+| `threads/<seq>-<slug>.md` | that thread | thread |
+| `docs/**` and `README.md` | the workspace | workspace |
+| anything else | refused | — |
 
 The objection this had to answer: v0's model lives on *editing the document IS the
 evidence*, and a generic `write_file` that nobody observes puts heat back to being
@@ -346,21 +353,42 @@ unchanged. The `tuning` row is a row either way.
 
 ```
 <repo_path>/
-  <bubble-slug>/
-    <thread-slug>.md
-    <thread-slug>.excalidraw
-  pages/
-    <page>.md
+  README.md                     the workspace's front page
+  threads/                      planning and execution — one file per thread, FLAT
+    1-primer-thread.md
+  docs/                         the wiki — guides, references, whatever the team keeps
+    onboarding.md
+    diagrama.excalidraw
+    arquitectura/decisiones.md
 ```
 
-- The file is the record. `threads.doc_path` points at it.
+Two directories, and they are the whole of the belonging rule. A tree where files
+can appear anywhere is a tree nobody can reason about, and attribution would have
+nowhere to come from — so the layout is **enforced**, not suggested: a path that
+does not fit it is refused.
+
+`threads/` is flat. Threads are enumerated by `seq`, nesting adds nothing, and it
+would make the rename that already moves files ambiguous. `docs/` nests freely,
+because a wiki wants folders.
+
+**`docs/` has no rows anywhere.** The directory IS the index — which is what "the
+file is the record" means when taken seriously — so a page is created by writing
+to a path that does not exist yet, and a document's TITLE is its filename. Nothing
+to keep in step, and no schema for a wiki to outgrow.
+
+Writable extensions are `.md` and `.excalidraw` (the plugin's own JSON; its
+`.excalidraw.md` form needs no special case). Binary attachments are refused: they
+want an upload path with size limits of its own, and a git repository is a poor
+place to put them without deciding that first.
+
+- The file is the record. `threads.doc_path` points at a thread's; everything else
+  is reached by path alone.
 - Every server write is one git commit, authored as the actor. Git log is the content
   history; `events` stays the index.
 - One lock per path across read-modify-write.
 - `internal/md` is unchanged: it already speaks markdown regions, and the bytes come
   from a file instead of a column.
-- Mermaid carries over from v0's renderer. Excalidraw is new — sidecar files
-  referenced from the document.
+- Mermaid carries over from v0's renderer.
 
 ---
 
@@ -400,8 +428,13 @@ The risk this half carries is the one the decision above already names: the file
 and its row are two sources that can drift. Writing both under one lock is the
 whole of the answer, so 1b has to prove it rather than assume it.
 
-**Done when:** a thread exists, its `.md` exists, and editing either through the
-server keeps them consistent and produces a commit.
+Plus the workspace tree — `GET /api/workspaces/{id}/tree` — which is two things at
+once: the `list_files` an agent needs before it can discover anything, and the file
+browser that makes `docs/` feel like a wiki rather than an invisible folder.
+
+**Done when:** a thread exists, its `.md` exists, a wiki page exists without any
+row, and editing any of them through the server keeps everything consistent and
+produces a commit.
 
 ### Phase 2 — evidence and the two derived axes
 `events` written on every observed production. The `tuning` row. The priority view
@@ -443,6 +476,19 @@ Read the two v0 `bubble.db` files: mint local ids, write the markdown tree from
 exist. That backfill is lossy and says so; it does not invent history it does not
 have.
 
+### Later — editing from outside
+
+Anything that writes to the tree without going through the server — Plane, a
+person with an editor, Obsidian over a git clone — is the same problem wearing
+different clothes: the write is not observed, so there is no base hash, no
+attribution and no event, and heat goes back to being inferred. That is a CHANNEL
+problem and it belongs here, after everything above, not in the main write path.
+
+Obsidian was explored for this and set aside: a vault is a plain folder of `.md`
+so the tree already is one, but there is no headless runtime — the official
+headless client does Sync and Publish only, and the REST API plugin needs the
+desktop app running. It is a fine client and cannot be a backend.
+
 ### Later — Plane as a channel
 Synchronising specific things, owning none of them. Deliberately after everything
 above, so nothing is shaped around it a second time.
@@ -478,8 +524,26 @@ Two packages owe nothing to Plane:
 
 | Package | Code | Tests | What it is |
 |---|---|---|---|
-| `internal/md` | 2408 | 1546 | the splice engine, regions, `ApplyEdits`, `ToggleTodo`, `ParseChecklist`, fingerprints, markdown/HTML fidelity |
+| `internal/md` | 260 | 190 | rendering, checkboxes, surgical edits |
 | `internal/heat` | 265 | 327 | the pure function |
+
+`internal/md` was ported verbatim and then cut in half, which is worth recording
+because the plan used to promise the first part and not the second. What went:
+`plane.go`, `html.go` and `fidelity.go` (Plane's ProseMirror HTML), every splice
+function that operated on a `description_html` rather than on markdown, and the
+LINTER — with 39 of its 45 tests, because they tested code that no longer exists.
+
+The linter went on purpose, not as collateral. It warned about extra H1s, heading
+skips, a Logbook with no todo, a Logbook with no `Next:`, more than five phases —
+and refused a page with two `## Logbook` headings. Those are opinions about how
+somebody writes, and how work gets written down is the writer's to decide: every
+team thinks about its artifacts differently, and the guidance belongs in whatever
+a team writes for itself. Its `Refuses()` also returned true for the zero value,
+so a rule added without an explicit severity would silently start blocking writes.
+
+The same reasoning removed one behaviour from the engine: a plain bullet is no
+longer treated as a task when a section has no checkboxes. That was v0's Logbook
+convention leaking into the parser. Only a real `- [ ]` box is a box.
 
 The 5868 lines of tests in `internal/server` are the executable specification of what
 the thing does — a source to re-key, not a cost to re-pay.
@@ -488,7 +552,9 @@ the thing does — a source to re-key, not a cost to re-pay.
 
 - Who commits, and how often. One commit per write is the plan; whether an agent's
   rapid edits should be squashed per session is not decided.
-- Whether a page and a thread's document are still different things now that both are
-  files. v0 kept two stores for one renderer.
+- Binary attachments. Images and PDFs are refused today; they want their own
+  upload path, with size limits, before a git repository starts holding them.
+- Searching document CONTENT. The tree lists; nothing greps yet, and that is the
+  half an agent misses most.
 - Excalidraw's editing surface. The sidecar file is decided; the editor is not.
 - Whether `cycles` still earns its place now that no upstream tool supplies them.

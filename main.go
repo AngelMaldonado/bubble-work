@@ -7,12 +7,14 @@ package main
 
 import (
 	"log"
+	"os"
 
 	"github.com/pocketbase/pocketbase"
 	"github.com/pocketbase/pocketbase/plugins/migratecmd"
 	"github.com/pocketbase/pocketbase/tools/osutils"
 
 	"github.com/AngelMaldonado/bubble-work/internal/bubble"
+	"github.com/AngelMaldonado/bubble-work/internal/tree"
 
 	// Registers the schema migrations by side effect. Without this import the
 	// binary starts against an empty database and every rule silently refers to
@@ -36,7 +38,18 @@ func main() {
 		Automigrate: osutils.IsProbablyGoRun(),
 	})
 
-	bubble.Register(app)
+	// Where the markdown tree lives: one git repository per workspace, beside the
+	// database rather than inside it. `BUBBLE_REPOS` moves it without touching a row.
+	repos := os.Getenv("BUBBLE_REPOS")
+	if repos == "" {
+		repos = "./repos"
+	}
+	t, err := tree.New(repos)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	bubble.Register(app, t)
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)

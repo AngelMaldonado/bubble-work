@@ -1,5 +1,6 @@
 .env
 /dist/
 /pb_data/
+/repos/
 *.db
 .DS_Store

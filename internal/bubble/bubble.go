@@ -10,10 +10,12 @@ import (
 	"fmt"
 
 	"github.com/pocketbase/pocketbase/core"
+
+	"github.com/AngelMaldonado/bubble-work/internal/tree"
 )
 
-// Register binds Bubble's hooks to the app.
-func Register(app core.App) {
+// Register binds Bubble's hooks and routes to the app.
+func Register(app core.App, t *tree.Tree) {
 	app.OnRecordCreateRequest("workspaces").BindFunc(foundingMembership)
 
 	app.OnRecordCreateRequest("threads").BindFunc(assignSeq)
@@ -25,6 +27,8 @@ func Register(app core.App) {
 
 	app.OnRecordUpdateRequest("memberships").BindFunc(keepALead(false))
 	app.OnRecordDeleteRequest("memberships").BindFunc(keepALead(true))
+
+	registerDocuments(app, t)
 }
 
 // keepALead refuses the write that would leave a workspace with no lead.

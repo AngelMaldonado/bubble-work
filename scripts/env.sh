@@ -41,6 +41,10 @@ BUBBLE_HTTP="${BUBBLE_HTTP:-127.0.0.1:8090}"
 # eventually delete. Data next to a build artifact is data waiting to be lost.
 BUBBLE_DATA="${BUBBLE_DATA:-./pb_data}"
 
+# Where the markdown tree lives: one git repository per workspace. Beside the
+# database rather than inside it, so a person can open it with their own git.
+BUBBLE_REPOS="${BUBBLE_REPOS:-./repos}"
+
 # Where the binary is built.
 BUBBLE_BIN="${BUBBLE_BIN:-./dist/bubble}"
 
@@ -53,4 +57,4 @@ BUBBLE_TMUX="${BUBBLE_TMUX:-bubble}"
 BUBBLE_DEV_SUPERUSER_EMAIL="${BUBBLE_DEV_SUPERUSER_EMAIL:-}"
 BUBBLE_DEV_SUPERUSER_PASSWORD="${BUBBLE_DEV_SUPERUSER_PASSWORD:-}"
 
-export BUBBLE_HTTP BUBBLE_DATA BUBBLE_BIN BUBBLE_TMUX
+export BUBBLE_HTTP BUBBLE_DATA BUBBLE_REPOS BUBBLE_BIN BUBBLE_TMUX

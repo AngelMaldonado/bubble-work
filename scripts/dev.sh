@@ -52,6 +52,7 @@ banner() {
   server     http://${BUBBLE_HTTP}/
   dashboard  http://${BUBBLE_HTTP}/_/
   data       ${BUBBLE_DATA}
+  repos      ${BUBBLE_REPOS}
   session    ${BUBBLE_TMUX}
 MSG
 }

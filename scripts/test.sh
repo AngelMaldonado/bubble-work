@@ -16,13 +16,14 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 
 echo "==> go test"
-go test ./... || exit 1
+go test -race ./... || exit 1
 
 echo "==> live"
 D=${TMPDIR:-/tmp}/bubble-test-data
 B=./dist/bubble
 API=http://127.0.0.1:8099
-pkill -f "bubble serve" 2>/dev/null; sleep 0.5; rm -rf "$D"
+R=${TMPDIR:-/tmp}/bubble-test-repos
+pkill -f "bubble serve" 2>/dev/null; sleep 0.5; rm -rf "$D" "$R"
 [[ -x "$B" ]] || scripts/build.sh
 
 pass=0; fail=0
@@ -31,7 +32,7 @@ no(){ echo "  FAIL  $1  -> $2"; fail=$((fail+1)); }
 chk(){ if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "esperaba $3, dio $2"; fi; }
 
 "$B" superuser upsert root@bubble.test rootrootroot --dir "$D" >/dev/null 2>&1
-"$B" serve --http 127.0.0.1:8099 --dir "$D" >/tmp/bubble-test.log 2>&1 &
+BUBBLE_REPOS="$R" "$B" serve --http 127.0.0.1:8099 --dir "$D" >/tmp/bubble-test.log 2>&1 &
 trap 'pkill -f "bubble serve" 2>/dev/null' EXIT
 for i in $(seq 1 60); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.25; done
 if ! curl -sf "$API/api/health" >/dev/null 2>&1; then
@@ -217,6 +218,190 @@ chk "alice promueve a bob a lead" \
   "$(code -X PATCH "$API/api/collections/memberships/records/$BOBROW" -H "Authorization: $A" -H "$JS" -d '{"role":"lead"}')" 200
 chk "con dos leads, alice YA puede degradarse" \
   "$(code -X PATCH "$API/api/collections/memberships/records/$LEADROW" -H "Authorization: $A" -H "$JS" -d '{"role":"member"}')" 200
+
+
+# ------------------------------------------- documentos: el árbol de markdown ----
+#
+# Las peticiones que MUTAN se arman en una variable y se llaman directo, nunca
+# dentro de $( ) como argumento de chk. Tres veces en esta sesión una llamada así
+# no ocurrió y la aserción pasó de todas formas — con el cuerpo llegando vacío al
+# curl, que el server contesta 200 sin escribir nada. Un test que silenciosamente
+# no corre es peor que uno que falla.
+echo
+GETDOC="$API/api/threads/$T1ID/document"
+getdoc(){ curl -s "$GETDOC" -H "Authorization: $1"; }
+patchdoc(){ # $1 token, $2 body -> imprime el código; el cuerpo queda en /tmp/bubble-put.json
+  curl -s -o /tmp/bubble-put.json -w '%{http_code}' -X PATCH "$GETDOC" \
+    -H "Authorization: $1" -H "$JS" -d "$2"; }
+
+WSA=$(curl -s "$API/api/collections/workspaces/records/$ALPHA" -H "Authorization: $SU")
+chk "el workspace tiene repo_path" "$(echo "$WSA" | j "['repo_path']")" "alpha"
+TH1=$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $SU")
+chk "el thread tiene doc_path derivado de seq y nombre" \
+  "$(echo "$TH1" | j "['doc_path']")" "threads/1-primer-thread.md"
+
+D0=$(getdoc "$A")
+chk "un documento que no existe se lee vacío" "$(echo "$D0" | j "['content']")" ""
+H0=$(echo "$D0" | j "['hash']")
+
+BODY="{\"content\":\"# Uno\\n\\n- [ ] algo\\n\",\"base\":\"$H0\",\"message\":\"born: uno\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk "primera escritura con el hash de vacío" "$CODE" 200
+D1=$(getdoc "$A")
+chk "y se lee de vuelta" "$(echo "$D1" | j "['content']" | head -c 5)" "# Uno"
+H1=$(echo "$D1" | j "['hash']")
+
+BODY="{\"content\":\"pisado\",\"base\":\"$H0\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> escribir con un base viejo es CONFLICTO, no sobreescritura" "$CODE" 400
+chk "...y el contenido sigue intacto" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
+
+BODY="{\"content\":\"# Uno\\n\\n- [x] algo\\n\",\"base\":\"$H1\",\"message\":\"tick\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk "con el base correcto sí escribe" "$CODE" 200
+H2=$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["hash"])')
+
+# --- el PATCH único: tres formas, un solo endpoint ---
+echo
+BODY="{\"base\":\"$H2\",\"edits\":[{\"old\":\"# Uno\",\"new\":\"# Uno editado\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> edits: parche por contexto" "$CODE" 200
+chk "...aplicado" "$(getdoc "$A" | j "['content']" | head -c 13)" "# Uno editado"
+H3=$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["hash"])')
+
+BODY="{\"base\":\"$H3\",\"edits\":[{\"old\":\"no existe en el documento\",\"new\":\"x\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> un edit que no encuentra su texto se rechaza" "$CODE" 400
+chk "...con un mensaje accionable" \
+  "$(python3 -c 'import json;print("si" if "not in this section" in json.load(open("/tmp/bubble-put.json"))["message"] else "no")')" si
+
+BODY="{\"base\":\"$H3\",\"edits\":[{\"old\":\"o\",\"new\":\"0\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> un edit ambiguo se rechaza en vez de adivinar" "$CODE" 400
+chk "...y dice que cites más" \
+  "$(python3 -c 'import json;print("si" if "quote more" in json.load(open("/tmp/bubble-put.json"))["message"] else "no")')" si
+
+# La casilla viene marcada de la escritura anterior, así que desmarcarla es lo
+# que de verdad cambia el archivo. Marcar lo ya marcado no cambia nada y por eso
+# no produce commit — eso se comprueba aparte, abajo.
+BODY="{\"base\":\"$H3\",\"todo\":{\"index\":0,\"done\":false}}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> todo: desmarcar una casilla por índice" "$CODE" 200
+chk "...y devuelve cuántas van hechas" \
+  "$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["done"])')" 0
+H4=$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["hash"])')
+
+BODY="{\"base\":\"$H4\",\"todo\":{\"index\":0,\"text\":\"otra cosa\",\"done\":false}}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> ...pero no si el texto citado ya no coincide" "$CODE" 400
+
+BODY="{\"base\":\"$H4\",\"todo\":{\"index\":0,\"done\":false}}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> una escritura que no cambia nada responde 200" "$CODE" 200
+
+BODY="{\"base\":\"$H4\",\"content\":\"x\",\"edits\":[{\"old\":\"a\",\"new\":\"b\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> dos formas a la vez se rechazan" "$CODE" 400
+BODY="{\"base\":\"$H4\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> ninguna forma también" "$CODE" 400
+
+# erin: recién creada, sin membresías y sin promover. dave YA es lead global a
+# estas alturas — lo promovió carol arriba — así que no sirve para esta prueba.
+ERIN=$(mkuser erin@bubble.test Erin | j "['id']")
+ER=$(login erin@bubble.test)
+echo
+chk ">>> erin (sin membresía) no alcanza el documento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC" -H "Authorization: $ER")" 404
+BODY='{"content":"x","base":""}'
+CODE=$(patchdoc "$ER" "$BODY")
+chk ">>> erin tampoco puede escribirlo" "$CODE" 404
+chk "anónimo tampoco" "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC")" 401
+chk "carol (lead global) sí lo lee sin ser miembro" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC" -H "Authorization: $C")" 200
+
+echo
+NCOM=$(curl -s "$API/api/threads/$T1ID/history" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin).get("commits") or []; print(len(d))')
+# 4 escrituras que cambiaron algo: la primera, la del base correcto, el parche
+# por contexto y el desmarcado. La que no cambió nada NO cuenta.
+chk ">>> cada escritura que cambia algo es un commit (4)" "$NCOM" 4
+WHO=$(curl -s "$API/api/threads/$T1ID/history" -H "Authorization: $A" | python3 -c 'import sys,json
+c=json.load(sys.stdin).get("commits") or [""]; print("si" if "alice@bubble.test" in c[0] else "no")')
+chk ">>> y queda firmado por quien escribió" "$WHO" si
+
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d '{"name":"Renombrado"}' >/dev/null
+TH2=$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $SU")
+chk ">>> al renombrar, el archivo se mueve con el thread" \
+  "$(echo "$TH2" | j "['doc_path']")" "threads/1-renombrado.md"
+chk "...el contenido sobrevive la mudanza" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
+NC2=$(curl -s "$API/api/threads/$T1ID/history" -H "Authorization: $A" | python3 -c 'import sys,json
+c=json.load(sys.stdin).get("commits") or []; print("si" if len(c)>=3 else "no")')
+chk ">>> ...y la historia la sigue (git mv, no copiar y borrar)" "$NC2" si
+
+
+# ------------------------------------- la wiki: docs/ y el árbol del workspace ----
+echo
+WSDOC="$API/api/workspaces/$ALPHA/document"
+wpatch(){ curl -s -o /tmp/bubble-put.json -w '%{http_code}' -X PATCH "$WSDOC" \
+  -H "Authorization: $1" -H "$JS" -d "$2"; }
+E0=$(python3 -c 'import hashlib;print(hashlib.sha256(b"").hexdigest()[:32])')
+
+BODY="{\"path\":\"docs/onboarding.md\",\"base\":\"$E0\",\"content\":\"# Onboarding\\n\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> una página de docs/ nace sin crear ningún thread" "$CODE" 200
+BODY="{\"path\":\"docs/guias/estilo.md\",\"base\":\"$E0\",\"content\":\"# Estilo\\n\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> docs/ anida" "$CODE" 200
+BODY="{\"path\":\"README.md\",\"base\":\"$E0\",\"content\":\"# Alpha\\n\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk "README.md en la raíz" "$CODE" 200
+BODY="{\"path\":\"docs/diagrama.excalidraw\",\"base\":\"$E0\",\"content\":\"{}\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk "excalidraw se acepta" "$CODE" 200
+
+BODY="{\"path\":\"threads/sub/anidado.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> threads/ NO anida" "$CODE" 400
+BODY="{\"path\":\"suelto.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> en la raíz solo va README" "$CODE" 400
+BODY="{\"path\":\"docs/foto.png\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> un binario se rechaza (quiere otra puerta)" "$CODE" 400
+BODY="{\"path\":\"../fuera.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> una ruta que se escapa se rechaza" "$CODE" 400
+
+chk "un miembro raso también escribe la wiki" \
+  "$(wpatch "$B" "{\"path\":\"docs/de-bob.md\",\"base\":\"$E0\",\"content\":\"# Bob\\n\"}")" 200
+chk ">>> erin (sin membresía) no escribe la wiki" \
+  "$(wpatch "$ER" "{\"path\":\"docs/colado.md\",\"base\":\"$E0\",\"content\":\"x\"}")" 404
+
+TREE=$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A")
+chk ">>> el árbol lista docs, threads y README" \
+  "$(echo "$TREE" | python3 -c 'import sys,json
+p={e["path"] for e in json.load(sys.stdin)["entries"]}
+need={"README.md","threads","docs","docs/onboarding.md","docs/guias","docs/guias/estilo.md"}
+print("si" if need <= p else "faltan "+str(need-p))')" si
+chk "...el título de un archivo es su nombre" \
+  "$(echo "$TREE" | python3 -c 'import sys,json
+print(next(e["title"] for e in json.load(sys.stdin)["entries"] if e["path"]=="docs/onboarding.md"))')" onboarding
+chk "...y .git no se filtra" \
+  "$(echo "$TREE" | python3 -c 'import sys,json
+print("si" if not any(e["path"].startswith(".git") for e in json.load(sys.stdin)["entries"]) else "no")')" si
+chk "erin no ve el árbol" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $ER")" 404
+
+chk "borrar una página de docs/" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$WSDOC?path=docs/de-bob.md" -H "Authorization: $A")" 200
+chk ">>> pero no el documento de un thread por esa puerta" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$WSDOC?path=threads/1-renombrado.md" -H "Authorization: $A")" 400
+
+chk "el repo del workspace es un git de verdad" "$([ -d "$R/alpha/.git" ] && echo si || echo no)" si
+chk "y el árbol queda limpio tras las escrituras" \
+  "$(cd "$R/alpha" && git status --porcelain | wc -l | tr -d ' ')" 0
 
 echo; echo "  $pass pasaron, $fail fallaron"
 [ "$fail" = "0" ]

@@ -9,7 +9,7 @@ import (
 var now = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 
 // One-week cycles, dormant after 2, decay over 2, one cycle of grace.
-var tun = Tuning{CycleHours: 168, DormantCycles: 2, DecayCycles: 2, GraceCycles: 1, OwnerlessIsDormant: true}
+var tun = Tuning{CycleHours: 168, DormantCycles: 2, DecayCycles: 2, GraceCycles: 1, OwnerlessIsRip: true}
 
 func ago(d time.Duration) time.Time { return now.Add(-d) }
 
@@ -26,11 +26,11 @@ func TestClassify_TheLadder(t *testing.T) {
 		code string
 	}{
 		{"output today", Evidence{LastWarmAt: ago(day), WarmCount: 1}, Hot, ReasonHotCurrent},
-		{"output last cycle", Evidence{LastWarmAt: ago(10 * day), WarmCount: 1}, Warm, ReasonWarmPrevious},
+		{"output last cycle", Evidence{LastWarmAt: ago(10 * day), WarmCount: 1}, Hot, ReasonHotCurrent},
 		{"quiet two cycles", Evidence{LastWarmAt: ago(3 * week), WarmCount: 1}, Dormant, ReasonDormantSilent},
 		{"never produced", Evidence{CreatedAt: ago(8 * week)}, Dormant, ReasonDormantNever},
 		{"completed", Evidence{Completed: true, LastWarmAt: ago(day)}, Closed, ReasonClosed},
-		{"born a moment ago", Evidence{CreatedAt: ago(time.Hour)}, Cooling, ReasonNewborn},
+		{"born a moment ago", Evidence{CreatedAt: ago(time.Hour)}, Dormant, ReasonNewborn},
 	}
 	for _, c := range cases {
 		got := Classify(c.ev, tun, now)
@@ -51,17 +51,31 @@ func TestInvariant_Heat_OutputOutranksPaperwork(t *testing.T) {
 	if got := RollUp([]Result{producing}, false, tun); got.Lifecycle != Hot {
 		t.Errorf("ownerless but producing = %s, want hot", got.Lifecycle)
 	}
-	cooling := Classify(Evidence{LastWarmAt: ago(3 * week), WarmCount: 3}, tun, now)
-	if got := RollUp([]Result{cooling}, false, tun); got.Code != ReasonDormantOwnerless {
-		t.Errorf("ownerless and quiet = %s/%s, want dormant/ownerless", got.Lifecycle, got.Code)
+	quiet := Classify(Evidence{LastWarmAt: ago(3 * week), WarmCount: 3}, tun, now)
+	if got := RollUp([]Result{quiet}, false, tun); got.Lifecycle != Rip || got.Code != ReasonRipOwnerless {
+		t.Errorf("ownerless and quiet = %s/%s, want rip/ownerless", got.Lifecycle, got.Code)
 	}
-	if got := RollUp([]Result{cooling}, true, tun); got.Code != ReasonDormantSilent {
+	if got := RollUp([]Result{quiet}, true, tun); got.Lifecycle != Dormant || got.Code != ReasonDormantSilent {
 		t.Errorf("with an owner = %s/%s, want dormant/silent", got.Lifecycle, got.Code)
 	}
 	off := tun
-	off.OwnerlessIsDormant = false
-	if got := RollUp([]Result{cooling}, false, off); got.Code != ReasonDormantSilent {
-		t.Errorf("with the knob off = %s/%s, want dormant/silent", got.Lifecycle, got.Code)
+	off.OwnerlessIsRip = false
+	if got := RollUp([]Result{quiet}, false, off); got.Lifecycle != Dormant {
+		t.Errorf("with the knob off = %s/%s, want dormant", got.Lifecycle, got.Code)
+	}
+}
+
+// Grace is what keeps a newborn out of the grave. Nothing has been produced
+// because there has been no time to produce it, and burying a bubble on its
+// first morning is how a band stops being believed.
+func TestInvariant_Heat_GraceOutranksTheGrave(t *testing.T) {
+	newborn := Classify(Evidence{CreatedAt: ago(time.Hour)}, tun, now)
+	if got := RollUp([]Result{newborn}, false, tun); got.Lifecycle != Dormant {
+		t.Errorf("a newborn with no owner = %s, want dormant", got.Lifecycle)
+	}
+	old := Classify(Evidence{CreatedAt: ago(8 * week)}, tun, now)
+	if got := RollUp([]Result{old}, false, tun); got.Lifecycle != Rip {
+		t.Errorf("never produced, no owner = %s, want rip", got.Lifecycle)
 	}
 }
 
@@ -86,7 +100,7 @@ func TestInvariant_Heat_TheDecayCurve(t *testing.T) {
 // stored and no job running.
 func TestInvariant_Heat_TimeIsTheOnlyThingThatChanges(t *testing.T) {
 	ev := Evidence{LastWarmAt: now, WarmCount: 1}
-	want := []Lifecycle{Hot, Hot, Warm, Dormant}
+	want := []Lifecycle{Hot, Hot, Hot, Dormant}
 	for i, at := range []time.Time{now, now.Add(6 * day), now.Add(10 * day), now.Add(4 * week)} {
 		if got := Classify(ev, tun, at).Lifecycle; got != want[i] {
 			t.Errorf("at +%v: %s, want %s", at.Sub(now), got, want[i])
@@ -96,9 +110,9 @@ func TestInvariant_Heat_TimeIsTheOnlyThingThatChanges(t *testing.T) {
 
 // Recalibrating changes every verdict at once, because nothing was stored.
 func TestHeat_RecalibrationIsImmediate(t *testing.T) {
-	ev := Evidence{LastWarmAt: ago(10 * day), WarmCount: 1}
-	if got := Classify(ev, tun, now).Lifecycle; got != Warm {
-		t.Fatalf("with weekly cycles: %s, want warm", got)
+	ev := Evidence{LastWarmAt: ago(4 * week), WarmCount: 1}
+	if got := Classify(ev, tun, now).Lifecycle; got != Dormant {
+		t.Fatalf("with weekly cycles: %s, want dormant", got)
 	}
 	monthly := tun
 	monthly.CycleHours = 24 * 30

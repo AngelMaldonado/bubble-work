@@ -366,11 +366,27 @@ the wrong value unrepresentable because the column does not exist. Two things ev
 - **One line, parenthesised.** PocketBase parses the SELECT list itself; a
   multi-line `CASE` comes back as `invalid identifier parts`.
 
+**Four bands: Hot 🔥 → Dormant 😴 → Rip 🪦 → Closed 🏆.** There were five. *Warm*
+and *Cooling* sat between Hot and Dormant and were a gradient nobody acted on:
+"produced last cycle" and "produced neither cycle" lead to the same morning. What
+is left is what v0 shipped (its `LEVELS`) minus `reviewed`, and every band names a
+different **action** — leave it alone / somebody to ask / a decision to make /
+read it once. Nothing stores a lifecycle, so collapsing them migrated no data;
+the only thing on disk that mentioned a band was the tuning flag, renamed to
+`ownerless_is_rip` in `1788488000_rip_band.go`.
+
+**Rip is a band, not a badge on Dormant.** Quiet with somebody accountable is a
+person to ask; quiet with nobody accountable is a decision to make. Same silence,
+different problem, so it gets its own place to sit — and the board stops needing a
+second signal beside the glyph to tell them apart.
+
 **Ownerlessness is a BUBBLE rule.** A thread has assignees; the contract is what
 needs somebody accountable, so it is applied in the roll-up and nowhere else — at
 thread grain it could never fire. The order inside the roll-up is the model: a
 bubble still producing stays Hot with nobody named, and the missing owner only
-sinks what had already stopped. Output outranks paperwork.
+buries what had already stopped. Output outranks paperwork. Grace outranks the
+grave: a newborn that has produced nothing has had no time to, and burying it on
+its first morning is how a band stops being believed.
 
 **A bubble takes the band of its hottest OPEN thread**, not the union of its
 threads' evidence. That is not a setting: v0 made it one and then found the union
@@ -393,7 +409,7 @@ What actually argues against a pure view is different:
   instant. A view calling `unixepoch()` cannot be frozen — and it closes the door
   on asking what a bubble's temperature was at some past moment, which an event log
   otherwise makes possible.
-- **The ladder is not the score.** Hot/Warm/Cooling/Dormant is an ordered rule set
+- **The ladder is not the score.** Hot/Dormant/Rip is an ordered rule set
   (something producing stays Hot with no owner; ownerlessness sinks what has
   already gone quiet) plus stable reason codes and args so clients can translate.
   That is a `CASE` cascade and a `json_object` built in SQL: possible, ugly, and

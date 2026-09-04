@@ -23,13 +23,18 @@ and why is [`PLAN.md`](./PLAN.md).
 Bubbles rise and sink. The physics that makes that literal is **temperature**:
 hot air rises, cold air sinks. So there aren't two metaphors — there is one.
 
-| State | Temperature | Buoyancy | What it means |
-|-------|-------------|----------|---------------|
-| Fresh, producing evidence now | **Hot** | Rises to top | Work in progress, on your radar |
-| Recent evidence, threads still open | **Warm** | Floats | Alive but slowing |
-| No evidence this pulse or last | **Cooling** | Sinking | Being deferred |
-| Silent for 2+ pulses / no owner | **Dormant** | At the bottom | Needs revival or burial |
-| Outcome reached or abandoned | **Closed** | Removed | Done — stops taking attention |
+| State | Glyph | Buoyancy | What it means | What to do |
+|-------|-------|----------|---------------|------------|
+| Producing evidence in the cycle window | **Hot** 🔥 | Rises to top | Work in progress | Nothing — leave it alone |
+| Silent, with somebody accountable | **Dormant** 😴 | Sinks | Stalled | Somebody to ask |
+| Silent, with nobody accountable | **Rip** 🪦 | At the bottom | Abandoned | A decision to make |
+| Outcome reached | **Closed** 🏆 | Below the board | Done — stops taking attention | Read it, once |
+
+Four bands, and every one names a different **action**. There were five: *Warm*
+and *Cooling* sat between Hot and Dormant, and they were a gradient nobody acted
+on — "produced last cycle" and "produced neither cycle" lead to the same
+morning. Rip is a band of its own and not a decoration on Dormant, for the same
+reason: the same silence, with and without an owner, is two different problems.
 
 A bubble rises **only** when reality changes (evidence), and sinks
 **automatically** as time passes without it. You never manually "keep something
@@ -298,17 +303,15 @@ must not outrank output.
 stateDiagram-v2
     direction LR
     [*] --> Hot: thread born
-    Hot --> Hot: evidence this cycle
-    Hot --> Warm: no evidence this cycle,<br/>threads still open
-    Warm --> Hot: meaningful output
-    Warm --> Cooling: no evidence this<br/>or previous cycle
-    Cooling --> Hot: revived (evidence)
-    Cooling --> Dormant: 2+ cycles silent<br/>or no owner
-    Dormant --> Hot: deliberate revival
+    Hot --> Hot: evidence in the window
+    Hot --> Dormant: silent past the window
+    Dormant --> Hot: meaningful output
+    Dormant --> Rip: nobody accountable<br/>(grace protects a newborn)
+    Rip --> Hot: revived, with an owner
+    Rip --> Dormant: an owner is named
     Hot --> Closed: outcome reached
-    Warm --> Closed: outcome reached
-    Cooling --> Closed: abandoned
     Dormant --> Closed: buried
+    Rip --> Closed: buried
     Closed --> [*]
 ```
 

@@ -63,7 +63,10 @@ it, or close it.
 
 ## Lifecycle
 
-Hot → Warm → Cooling → Dormant → Closed, computed against the Cycle. Recommend
+Hot 🔥 → Dormant 😴 → Rip 🪦 → Closed 🏆, computed against the Cycle. Four
+bands, each naming a different action: producing / somebody to ask / a decision
+to make / done. Rip is Dormant with nobody accountable, and it is a band rather
+than a badge because the two silences want different things. Recommend
 closing or redefining a bubble when its outcome no longer justifies the work.
 
 ## Where the repository stands

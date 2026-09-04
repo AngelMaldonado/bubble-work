@@ -135,7 +135,7 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 // inside it. A cold thing never outranks a warm one on score alone.
 func floats(r heat.Result) float64 {
 	band := map[heat.Lifecycle]float64{
-		heat.Hot: 4, heat.Warm: 3, heat.Cooling: 2, heat.Dormant: 1, heat.Closed: 0,
+		heat.Hot: 3, heat.Dormant: 2, heat.Rip: 1, heat.Closed: 0,
 	}
 	return band[r.Lifecycle] + r.Score
 }
@@ -147,11 +147,11 @@ func tuningOf(app core.App) (heat.Tuning, error) {
 	}
 	r := rows[0]
 	return heat.Tuning{
-		CycleHours:         r.GetFloat("cycle_hours"),
-		DormantCycles:      r.GetFloat("dormant_cycles"),
-		DecayCycles:        r.GetFloat("decay_cycles"),
-		GraceCycles:        r.GetFloat("grace_cycles"),
-		OwnerlessIsDormant: r.GetBool("ownerless_is_dormant"),
+		CycleHours:     r.GetFloat("cycle_hours"),
+		DormantCycles:  r.GetFloat("dormant_cycles"),
+		DecayCycles:    r.GetFloat("decay_cycles"),
+		GraceCycles:    r.GetFloat("grace_cycles"),
+		OwnerlessIsRip: r.GetBool("ownerless_is_rip"),
 	}, nil
 }
 

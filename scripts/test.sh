@@ -23,7 +23,16 @@ D=${TMPDIR:-/tmp}/bubble-test-data
 B=./dist/bubble
 API=http://127.0.0.1:8099
 R=${TMPDIR:-/tmp}/bubble-test-repos
-pkill -f "bubble serve" 2>/dev/null; sleep 0.5; rm -rf "$D" "$R"
+
+# Kill only OUR leftover, matched by the test port — never a bare
+# `pkill -f "bubble serve"`.
+#
+# That pattern matches every server on the machine, including the one somebody is
+# looking at in a browser. It ran at the start AND in the trap, so every
+# `just check` took down a running `just dev` twice. The tests are supposed to be
+# invisible to whoever is working.
+pkill -f "bubble serve.*8099" 2>/dev/null; sleep 0.3
+rm -rf "$D" "$R"
 [[ -x "$B" ]] || scripts/build.sh
 
 pass=0; fail=0
@@ -33,7 +42,9 @@ chk(){ if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "esperaba $3, dio $2"; fi;
 
 "$B" superuser upsert root@bubble.test rootrootroot --dir "$D" >/dev/null 2>&1
 BUBBLE_REPOS="$R" "$B" serve --http 127.0.0.1:8099 --dir "$D" >/tmp/bubble-test.log 2>&1 &
-trap 'pkill -f "bubble serve" 2>/dev/null' EXIT
+SRV=$!
+# By PID: the only process this script is entitled to end is the one it started.
+trap 'kill "$SRV" 2>/dev/null' EXIT
 for i in $(seq 1 60); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.25; done
 if ! curl -sf "$API/api/health" >/dev/null 2>&1; then
   echo "  el server no arrancó — ver /tmp/bubble-test.log" >&2; exit 1

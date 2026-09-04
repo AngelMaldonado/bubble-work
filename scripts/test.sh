@@ -588,5 +588,45 @@ print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'")
 chk ">>> erin no alcanza el thread por MCP" \
   "$(mcptext "$ER" read "{\"thread\":\"$NTID\"}" | grep -c "not found")" 1
 
+
+# ------------------------------------------------------------ imágenes ----
+echo
+PNG=/tmp/bubble-test.png
+printf '\x89PNG\r\n\x1a\n' > "$PNG"; head -c 300 /dev/urandom >> "$PNG"
+UP=$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+  -F "file=@$PNG" -F "name=Mi Diagrama.png")
+chk ">>> se sube una imagen y aterriza en assets/" "$(echo "$UP" | j "['path']")" "assets/mi-diagrama.png"
+chk "...y devuelve la url para embeberla" \
+  "$(echo "$UP" | j "['url']")" "/api/workspaces/$ALPHA/file?path=assets/mi-diagrama.png"
+
+FILEURL="$API/api/workspaces/$ALPHA/file?path=assets/mi-diagrama.png"
+chk ">>> se sirve con su content-type" \
+  "$(curl -s -o /dev/null -w '%{content_type}' "$FILEURL" -H "Authorization: $A")" "image/png"
+chk ">>> y con la política que impide que un svg ejecute algo" \
+  "$(curl -s -D - -o /dev/null "$FILEURL" -H "Authorization: $A" | grep -ci "content-security-policy: default-src 'none'; sandbox")" 1
+chk "...y con nosniff" \
+  "$(curl -s -D - -o /dev/null "$FILEURL" -H "Authorization: $A" | grep -ci "x-content-type-options: nosniff")" 1
+chk ">>> los bytes vuelven idénticos" \
+  "$(curl -s "$FILEURL" -H "Authorization: $A" | cmp -s - "$PNG" && echo si || echo no)" si
+
+chk ">>> una imagen es tan privada como la escritura: erin no la ve" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$FILEURL" -H "Authorization: $ER")" 404
+chk "anónimo tampoco" "$(curl -s -o /dev/null -w '%{http_code}' "$FILEURL")" 401
+
+chk ">>> en assets/ no entra un documento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$PNG" -F "name=notas.md")" 400
+BIG=/tmp/bubble-big.png; head -c 200000 /dev/urandom > "$BIG"
+chk "una imagen dentro del límite pasa" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$BIG" -F "name=grande.png")" 200
+chk ">>> el árbol lista la imagen" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A" | python3 -c 'import sys,json
+e=json.load(sys.stdin)["entries"]
+print(next((x["area"] for x in e if x["path"]=="assets/mi-diagrama.png"), "falta"))')" asset
+chk "y quedó commiteada como todo lo demás" \
+  "$(cd "$R/alpha" && git log --oneline -- assets/mi-diagrama.png | wc -l | tr -d ' ')" 1
+rm -f "$PNG" "$BIG"
+
 echo; echo "  $pass pasaron, $fail fallaron"
 [ "$fail" = "0" ]

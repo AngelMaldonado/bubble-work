@@ -140,6 +140,11 @@ lines, not line numbers — which is v0's `edits` under another name.
 **Not taken:** the code-analysis tools, the SSH tools, and the twelve git tools. The
 server owns committing, so an agent must not.
 
+**Comments, labels, relations and states have no MCP tool, deliberately.** They are
+what people do to each other's work — discussing it, classifying it, saying what
+blocks what — and none of them warms anything. They are reachable over REST for the
+UI; an agent works without them.
+
 **Rejected:** thread-and-region-shaped tools, as v0 had. Safer by construction, but
 it makes every non-thread document unreachable and forces an agent to learn a
 vocabulary instead of using the one it already has.
@@ -391,6 +396,8 @@ unchanged. The `tuning` row is a row either way.
     onboarding.md
     diagrama.excalidraw
     arquitectura/decisiones.md
+  assets/                       images, referenced from anywhere as assets/<name>
+    mi-diagrama.png
 ```
 
 Two directories, and they are the whole of the belonging rule. A tree where files
@@ -408,9 +415,25 @@ to a path that does not exist yet, and a document's TITLE is its filename. Nothi
 to keep in step, and no schema for a wiki to outgrow.
 
 Writable extensions are `.md` and `.excalidraw` (the plugin's own JSON; its
-`.excalidraw.md` form needs no special case). Binary attachments are refused: they
-want an upload path with size limits of its own, and a git repository is a poor
-place to put them without deciding that first.
+`.excalidraw.md` form needs no special case).
+
+**Images live in `assets/`, and only images live there.** One directory rather than
+beside the page that uses them: a thread would have to write `../docs/…` and a
+nested page `../../…`, and a path that depends on where the writer is standing is a
+path people get wrong. From anywhere it is `assets/<name>`.
+
+They arrive over multipart (`POST …/asset`) and are served by a route of their own
+with the same boundary as the writing — a workspace's pictures are as private as
+its documents. SVG is accepted because that is how diagrams arrive, and every asset
+is served under `Content-Security-Policy: default-src 'none'; sandbox` with
+`nosniff`, so neither an `<img>` nor somebody opening the URL can run anything out
+of one.
+
+There is a size ceiling (5 MiB, `BUBBLE_MAX_ASSET`) and the body is capped before
+it is read. It is deliberately small: committing pictures is the honest consequence
+of git being the content history, and **a repository that holds pictures grows and
+never shrinks**. An image does not warm anything — it is something somebody
+attached; the writing that uses it is the production.
 
 - The file is the record. `threads.doc_path` points at a thread's; everything else
   is reached by path alone.
@@ -627,11 +650,9 @@ the thing does — a source to re-key, not a cost to re-pay.
 
 # Open
 
-- Comments, labels, relations and states have no MCP tool yet. They are reachable
-  over REST, and none of them warms anything, so an agent can work without them.
 - Who commits, and how often. One commit per write is the plan; whether an agent's
   rapid edits should be squashed per session is not decided.
-- Binary attachments. Images and PDFs are refused today; they want their own
-  upload path, with size limits, before a git repository starts holding them.
+- Non-image attachments — PDFs and the like — are still refused. Nothing has
+  needed one yet, and each type added is more in the repository forever.
 - Excalidraw's editing surface. The sidecar file is decided; the editor is not.
 - Whether `cycles` still earns its place now that no upstream tool supplies them.

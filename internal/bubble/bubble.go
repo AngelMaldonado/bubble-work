@@ -8,6 +8,7 @@ package bubble
 
 import (
 	"fmt"
+	"os"
 
 	"github.com/pocketbase/pocketbase/core"
 
@@ -31,7 +32,12 @@ func Register(app core.App, t *tree.Tree) {
 	registerDocuments(app, t)
 	registerEvidence(app)
 	registerBoard(app)
+	registerAssets(app, t)
 }
+
+// getenv is here rather than inline so the one place that reads the environment is
+// easy to find.
+func getenv(k string) string { return os.Getenv(k) }
 
 // keepALead refuses the write that would leave a workspace with no lead.
 //

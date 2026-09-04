@@ -378,3 +378,61 @@ func TestTree_Search(t *testing.T) {
 		t.Errorf(".git leaked into search: %+v", got)
 	}
 }
+
+// Images live in one place, and only images live there.
+func TestInvariant_Tree_AssetsAreImagesUnderAssets(t *testing.T) {
+	ok := []string{
+		"assets/diagrama.png", "assets/foto.JPG", "assets/a/b/hondo.svg",
+		"assets/x.webp", "assets/y.avif", "assets/z.gif",
+	}
+	for _, p := range ok {
+		if area, err := Classify(p); err != nil || area != AreaAsset {
+			t.Errorf("%q -> %q, %v; want an asset", p, area, err)
+		}
+	}
+	bad := []string{
+		"assets/notas.md",     // assets/ holds images, not documents
+		"assets/script.js",    //
+		"docs/foto.png",       // and images do not live beside the page
+		"threads/foto.png",    //
+		"foto.png",            //
+		"assets/../fuera.png", //
+	}
+	for _, p := range bad {
+		if area, err := Classify(p); err == nil {
+			t.Errorf("%q was accepted as %q; it must not be", p, area)
+		}
+	}
+}
+
+func TestTree_AssetRoundTripAndCommit(t *testing.T) {
+	tr := newTree(t)
+	png := []byte("\x89PNG\r\n\x1a\n not really a png")
+	if err := tr.WriteBytes("alpha", "assets/d.png", png, "a@b", "asset: d.png"); err != nil {
+		t.Fatal(err)
+	}
+	got, err := tr.ReadBytes("alpha", "assets/d.png")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(got) != string(png) {
+		t.Errorf("bytes did not round-trip")
+	}
+	// Committed like everything else — the repository is the history, pictures
+	// included.
+	log, _ := tr.Log("alpha", "assets/d.png", 5)
+	if len(log) != 1 {
+		t.Errorf("want 1 commit for the asset, got %d: %v", len(log), log)
+	}
+	// And it shows up in the tree, so a browser can find it.
+	entries, _ := tr.Tree("alpha")
+	found := false
+	for _, e := range entries {
+		if e.Path == "assets/d.png" && e.Area == AreaAsset {
+			found = true
+		}
+	}
+	if !found {
+		t.Error("the asset is not in the tree")
+	}
+}

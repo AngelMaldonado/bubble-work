@@ -152,6 +152,38 @@ func (t *Tree) gitLockFor(repo string) *sync.Mutex {
 	return l
 }
 
+// ReadBytes returns a file's raw bytes — what an image needs.
+func (t *Tree) ReadBytes(repo, doc string) ([]byte, error) {
+	full, err := t.resolve(repo, doc)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(full)
+}
+
+// WriteBytes replaces a file with raw bytes and commits it.
+//
+// No base hash: this is for assets, which are replaced whole or not at all. There
+// is no such thing as a surgical edit to a PNG, and a conflict on one is a person
+// uploading the same picture twice.
+func (t *Tree) WriteBytes(repo, doc string, content []byte, actor, message string) error {
+	full, err := t.resolve(repo, doc)
+	if err != nil {
+		return err
+	}
+	l := t.lockFor(full)
+	l.Lock()
+	defer l.Unlock()
+
+	if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+		return err
+	}
+	if err := os.WriteFile(full, content, 0o644); err != nil {
+		return err
+	}
+	return t.commit(repo, []string{full}, actor, message)
+}
+
 // Read returns a document's content and its hash. A file that does not exist
 // reads as empty with the hash of empty, so a first write and a rewrite are the
 // same operation to the caller.

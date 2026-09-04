@@ -19,6 +19,7 @@ import (
 //	  docs/              the wiki — guides, references, whatever the team keeps
 //	    onboarding.md
 //	    arquitectura/decisiones.md
+//	  assets/            images, referenced from anywhere as assets/<name>
 //
 // The two directories are the whole of the "belonging" rule: a write under
 // `threads/` is attributed to the thread that owns that path, and everything else
@@ -32,6 +33,7 @@ import (
 const (
 	DirThreads = "threads"
 	DirDocs    = "docs"
+	DirAssets  = "assets"
 	Readme     = "README.md"
 )
 
@@ -41,6 +43,7 @@ type Area string
 const (
 	AreaThread Area = "thread" // threads/<file> — owned by one thread
 	AreaDoc    Area = "doc"    // docs/** and README.md — owned by the workspace
+	AreaAsset  Area = "asset"  // assets/** — images, owned by the workspace
 )
 
 // writable extensions.
@@ -57,6 +60,24 @@ var writableExt = map[string]bool{
 	".excalidraw": true,
 }
 
+// Images, and only under assets/.
+//
+// One directory rather than beside the page that uses them: a thread would have to
+// write `../docs/…` and a nested page `../../…`, and a path that depends on where
+// the writer happens to be is a path people get wrong. From anywhere it is
+// `assets/<name>`, and the renderer resolves it against the workspace root.
+//
+// SVG is here because it is what diagrams arrive as. It is also markup that can
+// carry script, so every asset is served with a Content-Security-Policy that
+// permits nothing and with nosniff — see the serving route.
+var imageExt = map[string]bool{
+	".png": true, ".jpg": true, ".jpeg": true, ".gif": true,
+	".webp": true, ".svg": true, ".avif": true,
+}
+
+// IsImage reports whether a path is an image this store accepts.
+func IsImage(p string) bool { return imageExt[strings.ToLower(path.Ext(p))] }
+
 // Classify says where a document path sits in the layout, refusing anything that
 // does not fit it.
 func Classify(doc string) (Area, error) {
@@ -66,8 +87,19 @@ func Classify(doc string) (Area, error) {
 	}
 	rel = filepath.ToSlash(rel)
 
-	if !writableExt[strings.ToLower(path.Ext(rel))] {
-		return "", fmt.Errorf("%w: %q — only .md and .excalidraw files live here", ErrOutside, doc)
+	ext := strings.ToLower(path.Ext(rel))
+
+	// assets/ is the one place a non-text file lives, and the only thing that
+	// lives there.
+	if strings.HasPrefix(rel, DirAssets+"/") {
+		if !imageExt[ext] {
+			return "", fmt.Errorf("%w: %q — %s/ holds images", ErrOutside, doc, DirAssets)
+		}
+		return AreaAsset, nil
+	}
+	if !writableExt[ext] {
+		return "", fmt.Errorf("%w: %q — documents are .md or .excalidraw; images go in %s/",
+			ErrOutside, doc, DirAssets)
 	}
 
 	switch {
@@ -84,8 +116,8 @@ func Classify(doc string) (Area, error) {
 	case strings.HasPrefix(rel, DirDocs+"/"):
 		return AreaDoc, nil
 	}
-	return "", fmt.Errorf("%w: %q — a document lives in %s/, in %s/, or is %s",
-		ErrOutside, doc, DirThreads, DirDocs, Readme)
+	return "", fmt.Errorf("%w: %q — a file lives in %s/, %s/ or %s/, or is %s",
+		ErrOutside, doc, DirThreads, DirDocs, DirAssets, Readme)
 }
 
 // Entry is one node of a workspace's tree.

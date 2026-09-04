@@ -504,5 +504,89 @@ chk "...y un miembro raso no puede recalibrar" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/tuning/records/$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")" \
      -H "Authorization: $B" -H "$JS" -d '{"cycle_hours":72}')" 404
 
+
+# --------------------------------------------------- el MCP (fase 3) ----
+echo
+# El transporte es SSE: `event: message` y luego `data: {json}`. Se extrae el
+# último objeto JSON de la respuesta.
+mcp(){ # $1 token, $2 method, $3 params-json -> imprime el result como json
+  curl -s -X POST "$API/mcp" -H "Authorization: $1" -H "$JS" \
+    -H 'Accept: application/json, text/event-stream' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$2\",\"params\":$3}" \
+  | python3 -c 'import sys,json,re
+raw=sys.stdin.read()
+objs=re.findall(r"^data: (.*)$", raw, re.M) or [raw]
+try: print(json.dumps(json.loads(objs[-1])))
+except Exception: print("{}")'
+}
+mcptool(){ mcp "$1" "tools/call" "{\"name\":\"$2\",\"arguments\":$3}"; }
+# el texto que devuelve una tool
+mcptext(){ mcptool "$1" "$2" "$3" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+r=d.get("result",{})
+c=r.get("content") or []
+print(c[0]["text"] if c else json.dumps(d))'; }
+
+chk ">>> tools/list expone la superficie" \
+  "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
+n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
+print(",".join(n))')" \
+  "board,complete_thread,create_thread,edit,guide,link,read,search,tree,workspaces"
+chk ">>> la guía es prompt Y tool (no todo cliente lista prompts)" \
+  "$(mcp "$A" "prompts/list" "{}" | python3 -c 'import sys,json
+print(",".join(p["name"] for p in json.load(sys.stdin)["result"]["prompts"]))')" bubble-work
+chk "la tool guide devuelve el mismo markdown que /api/guide" \
+  "$(mcptext "$A" guide '{}' | head -1)" "# Bubble Work"
+chk "sin token, /mcp no responde" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/mcp" -H "$JS" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" 401
+
+chk ">>> workspaces respeta la frontera: erin no ve ninguno" \
+  "$(mcptext "$ER" workspaces '{}' | python3 -c 'import sys,json
+try: print(len(json.loads(sys.stdin.read()) or []))
+except Exception: print(0)')" 0
+
+# ---- el bucle completo de un agente, por slug ----
+echo
+NT=$(mcptext "$A" create_thread '{"workspace":"alpha","name":"Trabajo del agente","impact":"high","urgency":"high"}')
+NTID=$(echo "$NT" | j "['id']")
+chk ">>> un agente crea un thread por SLUG, sin conocer ids" "$([ -n "$NTID" ] && echo si || echo no)" si
+chk "...y el server le puso número y ruta" "$(echo "$NT" | j "['doc_path']")" "threads/$(echo "$NT" | j "['seq']")-trabajo-del-agente.md"
+
+RD=$(mcptext "$A" read "{\"thread\":\"$NTID\"}")
+H=$(echo "$RD" | j "['hash']")
+chk "read devuelve el hash que la escritura necesita" "$([ -n "$H" ] && echo si || echo no)" si
+W1=$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"# Trabajo\\n\\n- [ ] investigar el rate limit\\n\"}")
+chk ">>> escribe el documento" "$(echo "$W1" | j "['done']")" 0
+H2=$(echo "$W1" | j "['hash']")
+chk ">>> escribir con el base viejo se rechaza también por MCP" \
+  "$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"pisado\"}" | grep -c "changed since you read it")" 1
+W2=$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H2\",\"todo\":{\"index\":0,\"done\":true}}")
+chk ">>> marca la casilla y devuelve el conteo" "$(echo "$W2" | j "['done']")" 1
+
+chk ">>> search encuentra lo que acaba de escribir" \
+  "$(mcptext "$A" search '{"workspace":"alpha","query":"rate limit"}' | python3 -c 'import sys,json
+h=json.loads(sys.stdin.read()) or []
+print("si" if any("trabajo-del-agente" in x["path"] for x in h) else "no")')" si
+chk ">>> link: evidencia externa" \
+  "$(mcptext "$A" link "{\"thread\":\"$NTID\",\"url\":\"https://example.com/pr/9\",\"title\":\"PR\"}" | j "['url']")" "https://example.com/pr/9"
+
+chk ">>> y la burbuja se calienta por eso: el thread sale hot" \
+  "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" hot
+chk "...con su prioridad derivada al lado, sin mezclarse" \
+  "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(next(t["priority"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" P1
+chk ">>> completar es un cambio de estado, no un examen" \
+  "$(mcptext "$A" complete_thread "{\"thread\":\"$NTID\"}" | j "['id']")" "$NTID"
+chk "...y el board lo refleja" \
+  "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" closed
+
+chk ">>> erin no alcanza el thread por MCP" \
+  "$(mcptext "$ER" read "{\"thread\":\"$NTID\"}" | grep -c "not found")" 1
+
 echo; echo "  $pass pasaron, $fail fallaron"
 [ "$fail" = "0" ]

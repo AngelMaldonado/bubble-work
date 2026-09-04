@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"fmt"
 	"net/http"
 	"sort"
 	"time"
@@ -26,90 +27,108 @@ func registerBoard(app core.App) {
 			if err != nil {
 				return err
 			}
-			tun, err := tuningOf(e.App)
+			b, err := BoardFor(e.App, ws)
 			if err != nil {
-				return e.InternalServerError("no calibration", err)
+				return e.InternalServerError(err.Error(), err)
 			}
-			now := time.Now().UTC()
-
-			rows, err := e.App.FindAllRecords("thread_evidence",
-				dbx.HashExp{"workspace": ws.Id})
-			if err != nil {
-				return e.InternalServerError("could not read the evidence", err)
-			}
-
-			type threadOut struct {
-				ID       string      `json:"id"`
-				Seq      int         `json:"seq"`
-				Name     string      `json:"name"`
-				Bubble   string      `json:"bubble,omitempty"`
-				Priority string      `json:"priority,omitempty"`
-				Heat     heat.Result `json:"heat"`
-				Pulse    bool        `json:"pulse"`
-			}
-
-			prio := priorityOf(e.App, ws.Id)
-			byBubble := map[string][]heat.Result{}
-			threads := make([]threadOut, 0, len(rows))
-
-			for _, r := range rows {
-				ev := heat.Evidence{
-					LastWarmAt: parseTS(r.GetString("last_warm_at")),
-					LastAnyAt:  parseTS(r.GetString("last_any_at")),
-					WarmCount:  r.GetInt("warm_count"),
-					CreatedAt:  r.GetDateTime("created").Time(),
-					Completed:  isCompleted(e.App, r.GetString("state")),
-				}
-				res := heat.Classify(ev, tun, now)
-				b := r.GetString("bubble")
-				byBubble[b] = append(byBubble[b], res)
-				threads = append(threads, threadOut{
-					ID: r.Id, Seq: r.GetInt("seq"), Name: r.GetString("name"),
-					Bubble: b, Priority: prio[r.Id], Heat: res,
-					Pulse: heat.HasPulse(ev, tun, now),
-				})
-			}
-
-			// Hottest first, and within a band the buoyancy score orders it — which
-			// is the whole claim of the model made spatial.
-			sort.SliceStable(threads, func(i, j int) bool {
-				return floats(threads[i].Heat) > floats(threads[j].Heat)
-			})
-
-			bubbles, _ := e.App.FindAllRecords("bubbles", dbx.HashExp{"workspace": ws.Id})
-			type bubbleOut struct {
-				ID      string      `json:"id"`
-				Name    string      `json:"name"`
-				Owner   string      `json:"owner,omitempty"`
-				Outcome string      `json:"outcome,omitempty"`
-				Closed  bool        `json:"closed"`
-				Heat    heat.Result `json:"heat"`
-			}
-			out := make([]bubbleOut, 0, len(bubbles))
-			for _, b := range bubbles {
-				closed := !b.GetDateTime("closed_at").IsZero()
-				res := heat.RollUp(byBubble[b.Id], b.GetString("owner") != "", tun)
-				if closed {
-					res = heat.Result{Lifecycle: heat.Closed, Code: heat.ReasonClosed,
-						Reason: "outcome reached or explicitly abandoned"}
-				}
-				out = append(out, bubbleOut{
-					ID: b.Id, Name: b.GetString("name"), Owner: b.GetString("owner"),
-					Outcome: b.GetString("outcome"), Closed: closed, Heat: res,
-				})
-			}
-			sort.SliceStable(out, func(i, j int) bool { return floats(out[i].Heat) > floats(out[j].Heat) })
-
-			return e.JSON(http.StatusOK, map[string]any{
-				"workspace": ws.Id,
-				"at":        now.Format(time.RFC3339),
-				"tuning":    tun,
-				"bubbles":   out,
-				"threads":   threads,
-			})
+			return e.JSON(http.StatusOK, b)
 		}).Bind(apis.RequireAuth())
 		return se.Next()
 	})
+}
+
+// ThreadHeat is one thread as the board reports it: both axes, side by side and
+// never mixed.
+type ThreadHeat struct {
+	ID       string      `json:"id"`
+	Seq      int         `json:"seq"`
+	Name     string      `json:"name"`
+	Bubble   string      `json:"bubble,omitempty"`
+	Priority string      `json:"priority,omitempty"`
+	Heat     heat.Result `json:"heat"`
+	Pulse    bool        `json:"pulse"`
+}
+
+// BubbleHeat is one bubble, banded by its hottest OPEN thread.
+type BubbleHeat struct {
+	ID      string      `json:"id"`
+	Name    string      `json:"name"`
+	Owner   string      `json:"owner,omitempty"`
+	Outcome string      `json:"outcome,omitempty"`
+	Closed  bool        `json:"closed"`
+	Heat    heat.Result `json:"heat"`
+}
+
+// Board is the whole answer, including the calibration it was computed against —
+// so a reader can tell a cold thread from a short cycle.
+type Board struct {
+	Workspace string       `json:"workspace"`
+	At        string       `json:"at"`
+	Tuning    heat.Tuning  `json:"tuning"`
+	Bubbles   []BubbleHeat `json:"bubbles"`
+	Threads   []ThreadHeat `json:"threads"`
+}
+
+// BoardFor computes both axes for a workspace, storing nothing.
+func BoardFor(app core.App, ws *core.Record) (Board, error) {
+	tun, err := tuningOf(app)
+	if err != nil {
+		return Board{}, fmt.Errorf("no calibration: %w", err)
+	}
+	now := time.Now().UTC()
+
+	rows, err := app.FindAllRecords("thread_evidence", dbx.HashExp{"workspace": ws.Id})
+	if err != nil {
+		return Board{}, err
+	}
+
+	prio := priorityOf(app, ws.Id)
+	byBubble := map[string][]heat.Result{}
+	threads := make([]ThreadHeat, 0, len(rows))
+
+	for _, r := range rows {
+		ev := heat.Evidence{
+			LastWarmAt: parseTS(r.GetString("last_warm_at")),
+			LastAnyAt:  parseTS(r.GetString("last_any_at")),
+			WarmCount:  r.GetInt("warm_count"),
+			CreatedAt:  r.GetDateTime("created").Time(),
+			Completed:  completedState(app, r.GetString("state")),
+		}
+		res := heat.Classify(ev, tun, now)
+		b := r.GetString("bubble")
+		byBubble[b] = append(byBubble[b], res)
+		threads = append(threads, ThreadHeat{
+			ID: r.Id, Seq: r.GetInt("seq"), Name: r.GetString("name"),
+			Bubble: b, Priority: prio[r.Id], Heat: res,
+			Pulse: heat.HasPulse(ev, tun, now),
+		})
+	}
+	// Hottest first, and within a band the buoyancy score orders it — the model's
+	// whole claim, made spatial.
+	sort.SliceStable(threads, func(i, j int) bool {
+		return floats(threads[i].Heat) > floats(threads[j].Heat)
+	})
+
+	bubbles, _ := app.FindAllRecords("bubbles", dbx.HashExp{"workspace": ws.Id})
+	out := make([]BubbleHeat, 0, len(bubbles))
+	for _, b := range bubbles {
+		closed := !b.GetDateTime("closed_at").IsZero()
+		res := heat.RollUp(byBubble[b.Id], b.GetString("owner") != "", tun)
+		if closed {
+			res = heat.Result{Lifecycle: heat.Closed, Code: heat.ReasonClosed,
+				Reason: "outcome reached or explicitly abandoned"}
+		}
+		out = append(out, BubbleHeat{
+			ID: b.Id, Name: b.GetString("name"), Owner: b.GetString("owner"),
+			Outcome: b.GetString("outcome"), Closed: closed, Heat: res,
+		})
+	}
+	sort.SliceStable(out, func(i, j int) bool { return floats(out[i].Heat) > floats(out[j].Heat) })
+
+	return Board{
+		Workspace: ws.Id, At: now.Format(time.RFC3339), Tuning: tun,
+		Bubbles: out, Threads: threads,
+	}, nil
 }
 
 // floats turns a verdict into one number to sort by: the band first, the score
@@ -149,8 +168,6 @@ func priorityOf(app core.App, workspace string) map[string]string {
 	}
 	return out
 }
-
-func isCompleted(app core.App, stateID string) bool { return completedState(app, stateID) }
 
 // parseTS reads the timestamp shape PocketBase stores dates in. A view hands them
 // back as text, so there is nothing typed to lean on.

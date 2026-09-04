@@ -4,13 +4,14 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
-	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/tree"
+	"github.com/AngelMaldonado/bubble-work/prompts"
 )
 
 // The document half: a thread's markdown is a FILE, and the row only says where.
@@ -121,8 +122,11 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			if err != nil {
 				return err
 			}
-			return patchDocument(e, t, th.GetString("workspace"), repo,
-				th.GetString("doc_path"), th.Id, th.GetString("name"))
+			ws, err := e.App.FindRecordById("workspaces", th.GetString("workspace"))
+			if err != nil {
+				return e.NotFoundError("", err)
+			}
+			return patchDocument(e, t, ws, repo, th.GetString("doc_path"), th.GetString("name"))
 		}).Bind(apis.RequireAuth())
 
 		se.Router.GET("/api/threads/{id}/history", func(e *core.RequestEvent) error {
@@ -186,9 +190,33 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			if err := e.BindBody(&where); err != nil || where.Path == "" {
 				return e.BadRequestError("say which `path`", err)
 			}
-			threadID, subject := ownerOf(e.App, ws, where.Path)
-			return patchDocument(e, t, ws.Id, repo, where.Path, threadID, subject)
+			_, subject := ownerOf(e.App, ws, where.Path)
+			return patchDocument(e, t, ws, repo, where.Path, subject)
 		}).Bind(apis.RequireAuth())
+
+		se.Router.GET("/api/workspaces/{id}/search", func(e *core.RequestEvent) error {
+			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
+			if err != nil {
+				return err
+			}
+			q := e.Request.URL.Query()
+			hits, err := t.Search(repo, q.Get("q"), atoiOr(q.Get("limit"), 50))
+			if err != nil {
+				return e.BadRequestError(err.Error(), err)
+			}
+			if hits == nil {
+				hits = []tree.Hit{}
+			}
+			return e.JSON(http.StatusOK, map[string]any{"hits": hits})
+		}).Bind(apis.RequireAuth())
+
+		// The one document this server ships, served as markdown so a browser, a
+		// curl and the web UI reach the same bytes the MCP prompt does.
+		se.Router.GET("/api/guide", func(e *core.RequestEvent) error {
+			e.Response.Header().Set("Content-Type", "text/markdown; charset=utf-8")
+			_, err := e.Response.Write([]byte(prompts.Guide))
+			return err
+		})
 
 		se.Router.DELETE("/api/workspaces/{id}/document", func(e *core.RequestEvent) error {
 			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
@@ -211,124 +239,35 @@ func registerDocuments(app core.App, t *tree.Tree) {
 	})
 }
 
-// patchDocument is the one way a document changes, whichever door it came through.
-//
-// ONE endpoint shape for every kind of change, because an agent that has to pick
-// between three verbs picks wrong. The body says which shape it is; exactly one
-// may be present:
+// patchDocument parses an HTTP body and hands it to bubble.Apply, which is the
+// one place a document actually changes. The MCP tools call the same function
+// with the same arguments; only the door differs.
 //
 //	{"base": h, "content": "..."}                    replace the whole file
 //	{"base": h, "edits": [{"old": …, "new": …}]}      surgical, by quoting
 //	{"base": h, "todo": {"index": 0, "done": true}}   tick a checkbox
 //
 // `base` is the hash the caller read. It is the only thing standing between two
-// writers and a lost paragraph, so it is required — an edit is always against a
-// version somebody has seen.
-func patchDocument(e *core.RequestEvent, t *tree.Tree, workspace, repo, doc, threadID, subject string) error {
-	if doc == "" {
-		return e.BadRequestError("this document has no path", nil)
-	}
+// writers and a lost paragraph, so it is required.
+func patchDocument(e *core.RequestEvent, t *tree.Tree, ws *core.Record, repo, doc, subject string) error {
 	var body struct {
 		Base    string  `json:"base"`
 		Message string  `json:"message"`
 		Content *string `json:"content"`
-		Edits   []struct {
-			Old string `json:"old"`
-			New string `json:"new"`
-			All bool   `json:"all"`
-		} `json:"edits"`
-		Todo *struct {
-			Index int    `json:"index"`
-			Text  string `json:"text"`
-			Done  bool   `json:"done"`
-		} `json:"todo"`
+		Edits   []Edit  `json:"edits"`
+		Todo    *Todo   `json:"todo"`
 	}
 	if err := e.BindBody(&body); err != nil {
 		return e.BadRequestError("could not read the body", err)
 	}
-
-	shapes := 0
-	for _, present := range []bool{body.Content != nil, len(body.Edits) > 0, body.Todo != nil} {
-		if present {
-			shapes++
-		}
-	}
-	if shapes != 1 {
-		return e.BadRequestError("say exactly one of `content`, `edits` or `todo`", nil)
-	}
-
-	cur, curHash, err := t.Read(repo, doc)
-	if err != nil {
-		return e.BadRequestError(err.Error(), err)
-	}
-	// Checked here as well as inside the write, so an edit is applied to the version
-	// the caller actually saw rather than to whatever is there now.
-	if body.Base != curHash {
-		return e.BadRequestError(fmt.Sprintf(
-			"the document changed since you read it (on disk %s, you had %s)", curHash, body.Base), nil)
-	}
-
-	next := cur
-	msg := strings.TrimSpace(body.Message)
-	switch {
-	case body.Content != nil:
-		next = *body.Content
-		if msg == "" {
-			msg = "write: " + subject
-		}
-	case len(body.Edits) > 0:
-		edits := make([]md.Edit, 0, len(body.Edits))
-		for _, x := range body.Edits {
-			edits = append(edits, md.Edit{Old: x.Old, New: x.New, All: x.All})
-		}
-		next, err = md.ApplyEdits(cur, edits)
-		if err != nil {
-			// "quote more of it" is the useful half of this error, so it reaches the
-			// caller verbatim.
-			return e.BadRequestError(err.Error(), err)
-		}
-		if msg == "" {
-			msg = "edit: " + subject
-		}
-	default:
-		next, err = md.ToggleTodo(cur, body.Todo.Index, body.Todo.Text, body.Todo.Done)
-		if err != nil {
-			return e.BadRequestError(err.Error(), err)
-		}
-		if msg == "" {
-			verb := "untick"
-			if body.Todo.Done {
-				verb = "tick"
-			}
-			msg = verb + ": " + subject
-		}
-	}
-
-	hash, err := t.Write(repo, doc, body.Base, next, actorLabel(e.Auth), msg)
-	if err != nil {
-		return e.BadRequestError(err.Error(), err)
-	}
-
-	// Evidence, and only when something actually moved. A write that leaves the
-	// file byte-identical is not production — it is somebody pressing save, which
-	// is exactly the "activity is not evidence" line the model is built on.
-	if next != cur {
-		actor := ""
-		if isPersonAuth(e.Auth) {
-			actor = e.Auth.Id
-		}
-		if threadID != "" {
-			record(e.App, workspace, "thread", threadID, EvDocumentChanged, actor,
-				map[string]any{"path": doc, "done": md.CountDone(next)})
-		} else {
-			record(e.App, workspace, "workspace", workspace, EvDocChanged, actor,
-				map[string]any{"path": doc})
-		}
-	}
-
-	return e.JSON(http.StatusOK, map[string]any{
-		"path": doc, "hash": hash, "content": next, "done": md.CountDone(next),
+	out, err := Apply(e.App, e.Auth, t, ws, repo, doc, subject, Patch{
+		Base: body.Base, Message: body.Message,
+		Content: body.Content, Edits: body.Edits, Todo: body.Todo,
 	})
+	if err != nil {
+		return e.BadRequestError(err.Error(), err)
+	}
+	return e.JSON(http.StatusOK, out)
 }
 
 // reachWorkspace is reachThread's other half: same question, one level up.
@@ -463,4 +402,12 @@ func slugify(s string) string {
 		s = strings.Trim(s[:60], "-")
 	}
 	return s
+}
+
+func atoiOr(s string, def int) int {
+	n, err := strconv.Atoi(s)
+	if err != nil || n <= 0 {
+		return def
+	}
+	return n
 }

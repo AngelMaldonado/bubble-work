@@ -333,3 +333,48 @@ func TestTree_TreeListing(t *testing.T) {
 		}
 	}
 }
+
+func TestTree_Search(t *testing.T) {
+	tr := newTree(t)
+	write := func(doc, body string) {
+		if _, err := tr.Write("alpha", doc, Hash(""), body, "a@b", "born"); err != nil {
+			t.Fatalf("%s: %v", doc, err)
+		}
+	}
+	write("threads/1-uno.md", "# Uno\n\nel presupuesto de rate limiting\n")
+	write("docs/onboarding.md", "# Onboarding\n\nnada que ver\n")
+	write("docs/guias/api.md", "# API\n\nhablar del PRESUPUESTO otra vez\n")
+
+	hits, err := tr.Search("alpha", "presupuesto", 50)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(hits) != 2 {
+		t.Fatalf("got %d hits, want 2: %+v", len(hits), hits)
+	}
+	// Case-insensitive, and threads come first because somebody searching is
+	// usually looking for work.
+	if hits[0].Path != "threads/1-uno.md" || hits[0].Area != AreaThread {
+		t.Errorf("first hit is %+v, want the thread", hits[0])
+	}
+	if hits[0].Line != 3 || !strings.Contains(hits[0].Text, "rate limiting") {
+		t.Errorf("hit does not carry its line and text: %+v", hits[0])
+	}
+	if hits[1].Path != "docs/guias/api.md" {
+		t.Errorf("second hit is %+v, want the nested doc", hits[1])
+	}
+	if got, _ := tr.Search("alpha", "no-existe-en-ningun-lado", 50); len(got) != 0 {
+		t.Errorf("a miss returned %d hits", len(got))
+	}
+	if got, _ := tr.Search("alpha", "  ", 50); len(got) != 0 {
+		t.Errorf("an empty needle returned %d hits", len(got))
+	}
+	// The limit is a cap, not a suggestion.
+	if got, _ := tr.Search("alpha", "e", 1); len(got) != 1 {
+		t.Errorf("limit 1 returned %d hits", len(got))
+	}
+	// git's own files are not documents.
+	if got, _ := tr.Search("alpha", "ref:", 50); len(got) != 0 {
+		t.Errorf(".git leaked into search: %+v", got)
+	}
+}

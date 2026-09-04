@@ -482,22 +482,51 @@ ordering rules and the decay curve are the same, and `now` is still a parameter.
 neither is stored anywhere.
 
 ### Phase 3 — MCP
-A route on PocketBase's router, mostly wrapping endpoints that already exist and
-are already proved: the one PATCH with its three shapes, the tree, the history, the
-board. What does NOT exist yet is `search` — the tree lists, nothing greps content
-— and that is the half an agent misses most: without it, it only ever operates on
-what it was told about.
+Ten tools on `/mcp`: `guide` · `workspaces` · `board` · `tree` · `search` · `read` ·
+`edit` · `create_thread` · `link` · `complete_thread`. Authentication is
+PocketBase's own — an agent presents a person's token and IS that person for every
+rule, so there is no agent identity to manage and nothing an agent can reach that
+its person cannot.
 
-**v0's four prompts are not ported.** They were `create-a-thread`, `work-a-thread`
-and `finish-a-thread`, and they were full of opinions about shape: what a Brief
-needs, the DoD gate, what belongs in a Logbook. Shipping them would put the linter
-back through the side door. One prompt instead, teaching the MODEL — what warms and
-what does not, how the base-hash conflict works, what the bands mean — and nothing
-about how to write a document. A team that wants templates puts them in its own
-`docs/`.
+**Surface parity is structural, not a promise.** The operations live in
+`internal/bubble/ops.go` as plain functions taking `(app, auth, …)`, and both the
+REST route and the MCP tool call the same one. They cannot drift, and neither door
+can bypass what the other enforces. A surface's only job is to parse its own kind
+of request and render its own kind of answer.
+
+`search` was the missing half: the tree lists, and without a way to grep content an
+agent only ever acts on what it was told about. Substring, case-insensitive,
+threads before wiki pages. Not a regex — a wrong one from an agent is a silent
+empty result or a runaway scan. Not an index — the walk is cheaper than keeping one
+in step, and an index that can be stale is another source of truth.
+
+Both addressing forms are accepted. A thread id never goes stale; a path is what an
+agent already thinks in; and `workspace` takes a slug, so an agent works with
+`"alpha"` without looking anything up.
+
+**One guide, three doors, one file.** `prompts/bubble-work.md` is embedded and
+served as an MCP prompt, an MCP tool and `GET /api/guide` in `text/markdown`. As a
+tool as well as a prompt because not every client lists prompts, and one that does
+not would never see it. Embedded rather than read from disk because the guide makes
+promises about the API, and a guide deployed separately drifts from it and then
+lies.
+
+**v0's other prompts are not ported.** `create-a-thread`, `work-a-thread` and
+`finish-a-thread` were full of opinions about shape — what a Brief needs, the DoD
+gate, what belongs in a Logbook — and shipping them would put the linter back
+through the side door. The one guide teaches the MODEL and says explicitly that
+nothing validates a document's shape, then points at the workspace's own
+`README.md`: a team's conventions are data in their repo, not code in ours.
+
+`DisableLocalhostProtection` is set, with the reason next to it. The SDK refuses a
+loopback request whose Host header is not loopback — correct against DNS rebinding,
+and wrong behind a reverse proxy, where every legitimate request looks exactly like
+that. v0 met it as `Forbidden: invalid Host header`, with the web UI fine and only
+agents locked out.
 
 **Done when:** an agent does a real piece of work end to end and the bubble warms
-because of it.
+because of it. — *it does: create by slug, write, tick, search, link, and the
+thread reads hot with its priority beside it.*
 
 ### Phase 4 — the operative board
 Ported from the tag, served from `pb_public`: `Prose.svelte` + `lib/prose.ts` (the
@@ -598,10 +627,11 @@ the thing does — a source to re-key, not a cost to re-pay.
 
 # Open
 
+- Comments, labels, relations and states have no MCP tool yet. They are reachable
+  over REST, and none of them warms anything, so an agent can work without them.
 - Who commits, and how often. One commit per write is the plan; whether an agent's
   rapid edits should be squashed per session is not decided.
 - Binary attachments. Images and PDFs are refused today; they want their own
   upload path, with size limits, before a git repository starts holding them.
-- Searching document CONTENT. The tree lists; nothing greps yet. Phase 3 needs it.
 - Excalidraw's editing surface. The sidecar file is decided; the editor is not.
 - Whether `cycles` still earns its place now that no upstream tool supplies them.

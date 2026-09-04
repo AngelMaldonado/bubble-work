@@ -14,6 +14,7 @@ import (
 	"github.com/pocketbase/pocketbase/tools/osutils"
 
 	"github.com/AngelMaldonado/bubble-work/internal/bubble"
+	"github.com/AngelMaldonado/bubble-work/internal/mcpapi"
 	"github.com/AngelMaldonado/bubble-work/internal/tree"
 
 	// Registers the schema migrations by side effect. Without this import the
@@ -50,6 +51,10 @@ func main() {
 	}
 
 	bubble.Register(app, t)
+
+	// The agent surface. Every tool calls the same function the REST route calls,
+	// so the two cannot drift and neither can bypass what the other enforces.
+	mcpapi.Register(app, t)
 
 	if err := app.Start(); err != nil {
 		log.Fatal(err)

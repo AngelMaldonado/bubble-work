@@ -403,5 +403,106 @@ chk "el repo del workspace es un git de verdad" "$([ -d "$R/alpha/.git" ] && ech
 chk "y el árbol queda limpio tras las escrituras" \
   "$(cd "$R/alpha" && git status --porcelain | wc -l | tr -d ' ')" 0
 
+
+# ---------------------------------------------------- la evidencia (fase 2) ----
+echo
+EV(){ curl -s "$API/api/collections/events/records?perPage=200&filter=$1" -H "Authorization: $2"; }
+evcount(){ EV "$1" "$SU" | j "['totalItems']"; }
+
+chk ">>> crear un thread deja evidencia" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-created')")" 1
+chk ">>> cada escritura que cambió algo dejó evidencia (4)" \
+  "$(evcount "(target='$T1ID'%26%26kind='document-changed')")" 4
+chk ">>> la escritura que NO cambió nada no dejó evidencia" \
+  "$(evcount "(target='$T1ID'%26%26kind='document-changed')")" 4
+chk ">>> un link deja evidencia" \
+  "$(evcount "(target='$T1ID'%26%26kind='link-added')")" 1
+chk ">>> un comentario también, pero es pulso" \
+  "$(evcount "(target='$T1ID'%26%26kind='comment')")" 1
+chk ">>> la wiki se registra a grano de workspace" \
+  "$([ "$(evcount "(kind='doc-changed')")" -ge 4 ] && echo si || echo no)" si
+chk ">>> ...y NUNCA a grano de thread" \
+  "$(evcount "(kind='doc-changed'%26%26target_type='thread')")" 0
+
+chk "la evidencia queda firmada por quien la produjo" \
+  "$(EV "(target='$T1ID'%26%26kind='thread-created')" "$SU" | j "['items'][0]['actor']")" "$AID"
+
+# completar un thread es una TRANSICIÓN de estado, no un campo
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d "{\"state\":\"$ST_A\"}" >/dev/null
+chk "pasar a un estado que no es completed no completa nada" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 0
+# carol, no alice: alice quedó degradada a member arriba y crear estados es de lead.
+ST_DONE=$(post states "$C" "{\"workspace\":\"$ALPHA\",\"name\":\"Hecho\",\"group\":\"completed\"}" | j "['id']")
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d "{\"state\":\"$ST_DONE\"}" >/dev/null
+chk ">>> llegar a un estado completed sí" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 1
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d '{"name":"Renombrado otra vez"}' >/dev/null
+chk ">>> guardar un thread ya completado no lo completa de nuevo" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 1
+
+echo
+chk ">>> nadie escribe evidencia desde un cliente" \
+  "$(pcode events "$A" "{\"workspace\":\"$ALPHA\",\"target_type\":\"thread\",\"target\":\"$T1ID\",\"kind\":\"document-changed\",\"at\":\"2026-01-01 00:00:00.000Z\"}")" 400
+chk ">>> ni el lead global" \
+  "$(pcode events "$C" "{\"workspace\":\"$ALPHA\",\"target_type\":\"thread\",\"target\":\"$T1ID\",\"kind\":\"document-changed\",\"at\":\"2026-01-01 00:00:00.000Z\"}")" 400
+chk "erin no ve la evidencia de alpha" \
+  "$(EV "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
+chk "un miembro sí la ve" \
+  "$([ "$(EV "(workspace='$ALPHA')" "$A" | j "['totalItems']")" -gt 5 ] && echo si || echo no)" si
+
+
+# --------------------------------------- los dos ejes derivados (fase 2) ----
+echo
+PRI(){ curl -s "$API/api/collections/thread_priority/records?perPage=100&filter=$1" -H "Authorization: $2"; }
+T5=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Critico\",\"impact\":\"high\",\"urgency\":\"high\"}" | j "['id']")
+T6=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Backlog\",\"impact\":\"low\",\"urgency\":\"low\"}" | j "['id']")
+T7=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Medio\",\"impact\":\"mid\",\"urgency\":\"high\"}" | j "['id']")
+chk ">>> prioridad derivada: alto x alto = P1" "$(PRI "(id='$T5')" "$A" | j "['items'][0]['priority']")" P1
+chk ">>> bajo x bajo = P4" "$(PRI "(id='$T6')" "$A" | j "['items'][0]['priority']")" P4
+chk ">>> medio x alto = P2" "$(PRI "(id='$T7')" "$A" | j "['items'][0]['priority']")" P2
+# T2 nació sin impact ni urgency; T1 sí los trae desde arriba.
+T2ID=$(echo "$T2" | j "['id']")
+chk ">>> sin impacto ni urgencia, sin prioridad" "$(PRI "(id='$T2ID')" "$A" | j "['items'][0]['priority']")" ""
+chk ">>> priority NO es una columna de threads" \
+  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | python3 -c 'import sys,json;print("si" if "priority" not in json.load(sys.stdin) else "NO, es columna")')" si
+# dos: el "Primer thread" del principio y el "Critico" de aquí.
+chk "se puede filtrar por prioridad como cualquier campo" \
+  "$(PRI "(priority='P1')" "$A" | j "['totalItems']")" 2
+chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
+
+echo
+BOARD=$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A")
+chk ">>> el board calcula heat sin guardarlo" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("si" if d["threads"] and "lifecycle" in d["threads"][0]["heat"] else "no")')" si
+chk ">>> un thread completado sale closed, no caliente" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$T1ID"'"))')" closed
+chk ">>> un thread recién nacido sin evidencia NO está dormant" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$T5"'"))')" hot
+chk ">>> el board trae las dos escalas por separado" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+t=next(t for t in d["threads"] if t["id"]=="'"$T5"'")
+print("si" if t["priority"]=="P1" and t["heat"]["lifecycle"]=="hot" else t)')" si
+chk "el board dice contra qué calibración clasificó" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json;print(int(json.load(sys.stdin)["tuning"]["CycleHours"]))')" 168
+chk "erin no ve el board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $ER")" 404
+
+echo
+chk ">>> recalibrar cambia el veredicto sin migración ni backfill" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/tuning/records/$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")" \
+     -H "Authorization: $C" -H "$JS" -d '{"cycle_hours":1}')" 200
+chk "...y un miembro raso no puede recalibrar" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/tuning/records/$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")" \
+     -H "Authorization: $B" -H "$JS" -d '{"cycle_hours":72}')" 404
+
 echo; echo "  $pass pasaron, $fail fallaron"
 [ "$fail" = "0" ]

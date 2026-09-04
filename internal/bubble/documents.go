@@ -46,7 +46,19 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			return err
 		}
 		// After the save, because the path carries `seq` and only the save knows it.
-		return stampDocPath(e.App, e.Record)
+		if err := stampDocPath(e.App, e.Record); err != nil {
+			return err
+		}
+		// Recorded here rather than in a model hook: defining a piece of work is
+		// production (decision 0002) and the credit belongs to whoever did it,
+		// which only the REQUEST knows.
+		actor := ""
+		if isPersonAuth(e.Auth) {
+			actor = e.Auth.Id
+		}
+		record(e.App, e.Record.GetString("workspace"), "thread", e.Record.Id,
+			EvThreadCreated, actor, map[string]any{"name": e.Record.GetString("name")})
+		return nil
 	})
 
 	app.OnRecordUpdateRequest("threads").BindFunc(func(e *core.RecordRequestEvent) error {
@@ -109,7 +121,8 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			if err != nil {
 				return err
 			}
-			return patchDocument(e, t, repo, th.GetString("doc_path"), th.GetString("name"))
+			return patchDocument(e, t, th.GetString("workspace"), repo,
+				th.GetString("doc_path"), th.Id, th.GetString("name"))
 		}).Bind(apis.RequireAuth())
 
 		se.Router.GET("/api/threads/{id}/history", func(e *core.RequestEvent) error {
@@ -173,7 +186,8 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			if err := e.BindBody(&where); err != nil || where.Path == "" {
 				return e.BadRequestError("say which `path`", err)
 			}
-			return patchDocument(e, t, repo, where.Path, labelFor(e.App, ws, where.Path))
+			threadID, subject := ownerOf(e.App, ws, where.Path)
+			return patchDocument(e, t, ws.Id, repo, where.Path, threadID, subject)
 		}).Bind(apis.RequireAuth())
 
 		se.Router.DELETE("/api/workspaces/{id}/document", func(e *core.RequestEvent) error {
@@ -210,7 +224,7 @@ func registerDocuments(app core.App, t *tree.Tree) {
 // `base` is the hash the caller read. It is the only thing standing between two
 // writers and a lost paragraph, so it is required — an edit is always against a
 // version somebody has seen.
-func patchDocument(e *core.RequestEvent, t *tree.Tree, repo, doc, subject string) error {
+func patchDocument(e *core.RequestEvent, t *tree.Tree, workspace, repo, doc, threadID, subject string) error {
 	if doc == "" {
 		return e.BadRequestError("this document has no path", nil)
 	}
@@ -294,6 +308,24 @@ func patchDocument(e *core.RequestEvent, t *tree.Tree, repo, doc, subject string
 	if err != nil {
 		return e.BadRequestError(err.Error(), err)
 	}
+
+	// Evidence, and only when something actually moved. A write that leaves the
+	// file byte-identical is not production — it is somebody pressing save, which
+	// is exactly the "activity is not evidence" line the model is built on.
+	if next != cur {
+		actor := ""
+		if isPersonAuth(e.Auth) {
+			actor = e.Auth.Id
+		}
+		if threadID != "" {
+			record(e.App, workspace, "thread", threadID, EvDocumentChanged, actor,
+				map[string]any{"path": doc, "done": md.CountDone(next)})
+		} else {
+			record(e.App, workspace, "workspace", workspace, EvDocChanged, actor,
+				map[string]any{"path": doc})
+		}
+	}
+
 	return e.JSON(http.StatusOK, map[string]any{
 		"path": doc, "hash": hash, "content": next, "done": md.CountDone(next),
 	})
@@ -324,19 +356,26 @@ func reachWorkspace(e *core.RequestEvent, id string) (*core.Record, string, erro
 	return ws, repo, nil
 }
 
-// labelFor names what a commit is about. A path under threads/ belongs to a
-// thread even when it is reached by path, so the message says which one — that
-// resolution is the "belonging" rule, and phase 2 attributes the EVENT the same way.
-func labelFor(app core.App, ws *core.Record, doc string) string {
+// ownerOf resolves a path to the thread that owns it, if any.
+//
+// This IS the belonging rule. A path under threads/ belongs to a thread even when
+// it is reached by path, so both the commit message and the EVENT name that
+// thread; everything else belongs to the workspace. Nothing is written that is not
+// attributed.
+func ownerOf(app core.App, ws *core.Record, doc string) (threadID, subject string) {
 	if area, err := tree.Classify(doc); err == nil && area == tree.AreaThread {
 		th, err := app.FindFirstRecordByFilter("threads",
 			"workspace = {:ws} && doc_path = {:p}",
 			map[string]any{"ws": ws.Id, "p": doc})
 		if err == nil {
-			return th.GetString("name")
+			return th.Id, th.GetString("name")
 		}
 	}
-	return doc
+	return "", doc
+}
+
+func isPersonAuth(auth *core.Record) bool {
+	return auth != nil && auth.Collection().Name == "users"
 }
 
 // reachThread loads a thread and its repository, refusing anybody who could not

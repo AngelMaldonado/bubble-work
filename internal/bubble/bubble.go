@@ -29,6 +29,8 @@ func Register(app core.App, t *tree.Tree) {
 	app.OnRecordDeleteRequest("memberships").BindFunc(keepALead(true))
 
 	registerDocuments(app, t)
+	registerEvidence(app)
+	registerBoard(app)
 }
 
 // keepALead refuses the write that would leave a workspace with no lead.

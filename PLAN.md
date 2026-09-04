@@ -297,10 +297,27 @@ implemented elsewhere, so Bubble exposes rather than enforces) · **maintenance*
 Append-only, and the reason heat stops being inferred: with Bubble owning the write
 path, a production event is **observed as it happens**.
 
-Kinds carry over from v0: `thread-born` · `completed-todo` · `logbook-updated` ·
-`body-updated` · `revision-added` · `link-added` · `thread-completed`, plus
-`thread-created` (a record exists; nothing was produced) and `comment` as **pulse** —
-presence only: it holds 😴, blocks 🪦, never wakes.
+Four kinds warm, and one of them covers every change to a thread's document:
+
+| kind | grain | warms |
+|---|---|---|
+| `document-changed` | thread | **yes** — any write under `threads/`, whatever moved |
+| `thread-created` | thread | yes — defining a piece of work is production |
+| `thread-completed` | thread | yes — reaching a state in the `completed` group |
+| `link-added` | thread | yes — proof reality changed outside this tool |
+| `doc-changed` | workspace | **no** — the wiki is recorded, never warms |
+| `comment` | thread | no — **pulse**: holds 😴, blocks 🪦, never wakes |
+
+v0 had three document kinds — `body-updated`, `logbook-updated`, `completed-todo` —
+because it was INFERRING what had happened from hashes and counters, and the shape
+of the change was its only clue about the kind of work. Owning the write path
+removes the need to guess, and with it the need to distinguish.
+
+What is deliberately not collapsed is the evidence that is not a file write. A link
+landing and a thread completing say something a document edit does not.
+
+A write that leaves the file byte-identical records nothing. Pressing save is
+activity, and activity is not evidence.
 
 At five people this is roughly 18k rows a year, about 4 MB. There is no retention
 policy to design.
@@ -314,10 +331,24 @@ fall behind and no stored level that can be wrong.
 **Priority is a view collection.** It is a pure function of two stored columns, so
 `CASE WHEN impact='high' AND urgency='high' THEN 'P1' …` gives the planner
 PocketBase's whole API — filter, sort, rules — with no endpoint written, and makes
-the wrong value unrepresentable because the column does not exist. Wrap the
-expression in `CAST(… AS REAL)` for anything numeric: PocketBase infers a computed
-column's type from the view, and without a cast it types it `json`, which makes
-`GetFloat` return zero and sorting go through `JSON_EXTRACT`.
+the wrong value unrepresentable because the column does not exist. Two things every view here has to survive, both learned by hitting them:
+
+- **CAST every computed column.** PocketBase infers a field's type from the view,
+  and an uncast expression is typed `json` — the value arrives quoted and
+  `priority = 'P1'` filters through `JSON_EXTRACT`.
+- **One line, parenthesised.** PocketBase parses the SELECT list itself; a
+  multi-line `CASE` comes back as `invalid identifier parts`.
+
+**Ownerlessness is a BUBBLE rule.** A thread has assignees; the contract is what
+needs somebody accountable, so it is applied in the roll-up and nowhere else — at
+thread grain it could never fire. The order inside the roll-up is the model: a
+bubble still producing stays Hot with nobody named, and the missing owner only
+sinks what had already stopped. Output outranks paperwork.
+
+**A bubble takes the band of its hottest OPEN thread**, not the union of its
+threads' evidence. That is not a setting: v0 made it one and then found the union
+misleading, because it counts every thread's birth as the bubble's own output, so a
+pile of untouched work reads Hot.
 
 **Heat is a hybrid, and the reason is not what it first looked like.** The obvious
 objection — "a view is schema, so recalibrating means a migration" — is **false**,
@@ -437,16 +468,33 @@ row, and editing any of them through the server keeps everything consistent and
 produces a commit.
 
 ### Phase 2 — evidence and the two derived axes
-`events` written on every observed production. The `tuning` row. The priority view
-collection. The aggregation view, with `internal/heat` ported and deciding over it.
+`events` written on every observed production. The `tuning` row. The
+`thread_priority` view. The `thread_evidence` aggregation view, with
+`internal/heat` deciding over it, and `GET /api/workspaces/{id}/board` tying them
+together.
+
+`internal/heat` was rewritten rather than ported: v0's `domain.Bubble`, `Thread`
+and `Tuning` were shaped by Plane, and two of its knobs stopped meaning anything
+once any write under `threads/` became one kind of evidence. The classifier, the
+ordering rules and the decay curve are the same, and `now` is still a parameter.
 
 **Done when:** a bubble's temperature and a thread's priority are both computed and
 neither is stored anywhere.
 
 ### Phase 3 — MCP
-A route on PocketBase's router. File-shaped tools — read, write, patch by context,
-list, search, move — with belonging, base-hash conflicts and containment enforced by
-the server. v0's four markdown prompts are ported.
+A route on PocketBase's router, mostly wrapping endpoints that already exist and
+are already proved: the one PATCH with its three shapes, the tree, the history, the
+board. What does NOT exist yet is `search` — the tree lists, nothing greps content
+— and that is the half an agent misses most: without it, it only ever operates on
+what it was told about.
+
+**v0's four prompts are not ported.** They were `create-a-thread`, `work-a-thread`
+and `finish-a-thread`, and they were full of opinions about shape: what a Brief
+needs, the DoD gate, what belongs in a Logbook. Shipping them would put the linter
+back through the side door. One prompt instead, teaching the MODEL — what warms and
+what does not, how the base-hash conflict works, what the bands mean — and nothing
+about how to write a document. A team that wants templates puts them in its own
+`docs/`.
 
 **Done when:** an agent does a real piece of work end to end and the bubble warms
 because of it.
@@ -554,7 +602,6 @@ the thing does — a source to re-key, not a cost to re-pay.
   rapid edits should be squashed per session is not decided.
 - Binary attachments. Images and PDFs are refused today; they want their own
   upload path, with size limits, before a git repository starts holding them.
-- Searching document CONTENT. The tree lists; nothing greps yet, and that is the
-  half an agent misses most.
+- Searching document CONTENT. The tree lists; nothing greps yet. Phase 3 needs it.
 - Excalidraw's editing surface. The sidecar file is decided; the editor is not.
 - Whether `cycles` still earns its place now that no upstream tool supplies them.

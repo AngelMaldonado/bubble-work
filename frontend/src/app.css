@@ -50,6 +50,10 @@
      drawer on purpose: a panel that covers the board should cover the things
      floating over the board too, or it reads as a layer that failed to open. */
   --z-chrome: 40;
+  /* A full-screen VIEW — a thread over the board. Above the page's chrome,
+     below anything modal, because a drawer or the omnibar opened from inside it
+     has to land on top of it. */
+  --z-view: 45;
   --z-drawer-scrim: 50;
   --z-drawer: 51;
   --z-float: 60; /* menus, tooltips, comboboxes, popovers */

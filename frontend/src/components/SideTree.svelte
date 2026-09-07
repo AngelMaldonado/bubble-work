@@ -136,10 +136,18 @@
      Overriding any of it is how the guide became one long line down the page.
      What is left here is only what Skeleton has no opinion about: the count, a
      row's own buttons, and a long name ending in an ellipsis. */
-  /* Every box between the row and the name has to be allowed to shrink, or the
-     ellipsis never happens: a flex item's default `min-width: auto` is its
-     content, so one un-shrinkable ancestor is enough to push the name past the
-     panel's edge and have `overflow-x: hidden` cut it mid-word. */
+  /* Skeleton's tree root is `align-items: flex-start`, which makes every row as
+     wide as its own text instead of as wide as the column — so nothing ever had
+     a width to be too long FOR, and the ellipsis never fired. Stretch first. */
+  .tree :global([data-part='root']) { align-items: stretch; }
+  .tree { min-width: 0; }
+  .tree :global([data-part='tree']),
+  .tree :global([data-part='branch']),
+  .tree :global([data-part='branch-content']) { min-width: 0; }
+
+  /* Then every box between the row and the name has to be allowed to shrink: a
+     flex item's default `min-width: auto` is its content, so one un-shrinkable
+     ancestor is enough to push the name past the panel's edge. */
   .tree :global([data-part='item']),
   .tree :global([data-part='branch-control']),
   .tree :global([data-part='branch-text']) { min-width: 0; }

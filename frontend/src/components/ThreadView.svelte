@@ -14,7 +14,7 @@
   //   · the `kind` chip — there is no thread type;
   //   · the "from Plane" chip — there is no Plane.
   // Everything else is where v0 put it.
-  import { Portal, Menu, Navigation } from '@skeletonlabs/skeleton-svelte';
+  import { Portal, Menu, Navigation, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
   import FileTextIcon from '@lucide/svelte/icons/file-text';
   import LinkIcon from '@lucide/svelte/icons/link';
@@ -24,6 +24,8 @@
   import type { Lifecycle } from '../lib/api';
   import Prose from './Prose.svelte';
   import SideTree, { type TreeNode } from './SideTree.svelte';
+  import ThreadToc from './ThreadToc.svelte';
+  import ThemeToggle from './ThemeToggle.svelte';
   import type { Heading } from '../lib/prose';
 
   let {
@@ -43,6 +45,11 @@
     pinned = false,
     elsewhere = false,
     onback,
+    onsearch,
+    onfinish,
+    onreopen,
+    onmove,
+    ondelete,
   }: {
     seq: number;
     title: string;
@@ -65,6 +72,12 @@
     pinned?: boolean;
     elsewhere?: boolean;
     onback?: () => void;
+    /** open the omnibar — the one field that finds a thread, a bubble or a page */
+    onsearch?: () => void;
+    onfinish?: () => void;
+    onreopen?: () => void;
+    onmove?: () => void;
+    ondelete?: () => void;
   } = $props();
 
 
@@ -77,11 +90,22 @@
     isPinned = pinned;
   });
   let addingLink = $state(false);
-  let addingRelation = $state(false);
   // The table of contents comes from the RENDERED document, not from parsing the
   // markdown a second time: the ids it links to are the ones goldmark produced,
   // and re-deriving them here is how a link ends up pointing at nothing.
   let headings = $state<Heading[]>([]);
+
+  // The HUD's verbs, in reading order. Finishing first because it is what the
+  // thread is for; deleting last and tinted, because it is the one that cannot
+  // be taken back.
+  const actions = $derived([
+    lifecycle === 'closed'
+      ? { k: 'reopen', face: '↩', label: 'Reabrir', go: onreopen }
+      : { k: 'finish', face: '🏆', label: 'Terminar', go: onfinish },
+    { k: 'move', face: '↔', label: 'Mover de burbuja', go: onmove },
+    { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
+    { k: 'delete', face: '🗑', label: 'Borrar el thread', tone: 'danger', go: ondelete },
+  ]);
 
   // The headings nest by depth, so the table of contents is a real tree rather
   // than a flat list wearing indentation.
@@ -230,7 +254,12 @@
                 {#if node.id === 'links'}
                   <button class="sect-add" onclick={() => (addingLink = !addingLink)} title="añadir enlace">+</button>
                 {:else if node.id === 'related'}
-                  <button class="sect-add" onclick={() => (addingRelation = !addingRelation)} title="relacionar">+</button>
+                  <!-- Relating is a SEARCH: you have to find the other thread
+                       before you can say how it relates. A picker and a text
+                       field nailed to the bottom of the column were answering
+                       the second half first, so this opens the omnibar and the
+                       kind of relation is asked once you have picked one. -->
+                  <button class="sect-add" onclick={onsearch} title="relacionar (buscar)">+</button>
                 {/if}
               {/snippet}
               {#snippet itemActions(node)}
@@ -249,40 +278,47 @@
                 <button type="submit">añadir</button>
               </form>
             {/if}
-            {#if addingRelation}
-              <div class="linkform">
-                <select>
-                  <option>relates_to</option><option>duplicate</option>
-                  <option>blocking</option><option>blocked_by</option>
-                </select>
-                <input placeholder="buscar un thread…" />
-              </div>
-            {/if}
           </Navigation.Group>
         {/if}
       </Navigation.Content>
     </Navigation>
 
-    <main class="content">
-      <div class="edit-bar">
-        <!-- Finishing leads the bar: it is the act the whole thread exists to
-             reach. -->
-        {#if lifecycle === 'closed'}
-          <button title="reabrir">↩ reabrir</button>
-        {:else}
-          <button class="finish" title="marcar como terminado">🏆 terminar</button>
-        {/if}
-        <button title="mover de burbuja">↔</button>
-        <Menu>
-          <Menu.Trigger><button class="danger" title="más">🗑 borrar</button></Menu.Trigger>
+    <!-- The heading rail: where you are in the document, and what else is in
+         it, without opening the sidebar. -->
+    <ThreadToc {headings} />
+
+    <!-- The thread's verbs, in the same place and the same shape as the board's:
+         a thread covers the board and its HUD, so what you can do to it has to
+         be reachable from the same corner. Finish leads — it is the act the
+         whole thread exists to reach — and delete sits at the far end, away
+         from it. -->
+    <div class="hud">
+      {#each actions as a (a.k)}
+        <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+          <Tooltip.Trigger>
+            {#snippet element(attributes: Record<string, unknown>)}
+              <button class="hud-btn {a.tone ?? ''}" {...attributes} onclick={a.go}>
+                <span aria-hidden="true">{a.face}</span>
+              </button>
+            {/snippet}
+          </Tooltip.Trigger>
           <Portal>
-            <Menu.Positioner>
-              <Menu.Content>
-                <Menu.Item value="del"><Menu.ItemText>Borrar el thread</Menu.ItemText></Menu.Item>
-              </Menu.Content>
-            </Menu.Positioner>
+            <Tooltip.Positioner>
+              <Tooltip.Content>{a.label}</Tooltip.Content>
+            </Tooltip.Positioner>
           </Portal>
-        </Menu>
+        </Tooltip>
+      {/each}
+      <!-- Last, and the same button the board uses: a control that changes place
+           between screens is a control people stop looking for. -->
+      <ThemeToggle floating={false} />
+    </div>
+
+    <main class="content">
+      <!-- Only the view switch stays in the document's own bar: it changes how
+           you READ this page, so it belongs to the page. What you can DO to the
+           thread moved to the HUD, where the board keeps its verbs. -->
+      <div class="edit-bar">
         <div class="seg" role="group" aria-label="modo de vista">
           <button class:on={!editing} aria-pressed={!editing} onclick={() => (editing = false)}>renderizado</button>
           <button class:on={editing} aria-pressed={editing} onclick={() => (editing = true)}>markdown</button>
@@ -311,13 +347,16 @@
 </div>
 
 <style>
-  /* The PAGE scrolls — like the board — so the sticky top bar reliably blurs the
-     content passing under it. */
+  /* The shell holds still and the DOCUMENT scrolls, the same way the board
+     works: the tree and the top bar are not in the scrolling box, so they stay
+     put because of where they are rather than because they are pinned on top of
+     something moving. */
   .screen {
     --topbar-h: 46px;
     display: flex;
     flex-direction: column;
-    min-height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
     background: transparent;
   }
   .topbar {
@@ -410,13 +449,38 @@
 
   /* `items-stretch`, as Skeleton's own example does it: Navigation asks for
      `height: 100%`, which means nothing unless the row lets it stretch. */
-  .body { flex: 1; display: flex; align-items: stretch; }
+  .body { flex: 1; min-height: 0; display: flex; align-items: stretch; }
 
   /* The file tree lives in Skeleton's Navigation, which sets the width, the
      padding and the 200ms width transition per layout. Ours is the hairline
      that separates it from the document and the fact that it does not float:
      it is in the flow and scrolls with the page. */
-  .side { flex: none; border-right: 1px solid var(--line); background: transparent; }
+  /* Skeleton aligns the navigation column to `start`, which makes every child
+     as wide as its own text — so the tree had no width to be too long for and
+     nothing ever ellipsised. Stretch it, and constrain the group. */
+  /* Anchored on `.body`, not on `.side`: `class="side"` is a PROP handed to the
+     Navigation component, so Svelte never stamps its scope hash on it and
+     `.side :global(...)` matched nothing. `.body` is a real element here. */
+  .body :global([data-part='content'][data-layout='sidebar']),
+  .body :global([data-part='group']) {
+    align-items: stretch;
+    min-width: 0;
+  }
+
+  /* The column runs the full viewport. It was as tall as its own contents, so
+     the hairline stopped where the tree stopped and the panel ended mid-page. */
+  /* `:global`, and for the same reason as the rule above: `class="side"` is a
+     prop handed to a component, so Svelte never stamps its scope hash on the
+     element. `.side { … }` compiled to `.side.svelte-xxx` and matched nothing —
+     which is why the column kept ending where its contents did. */
+  .body :global(.side) {
+    flex: none;
+    /* The row already gives it the full height; `100dvh` here would add the top
+       bar's height on top of it and push the bottom off screen. */
+    height: 100%;
+    border-right: 1px solid var(--line);
+    background: transparent;
+  }
   .side-title {
     font-size: 0.7rem; font-weight: 800; letter-spacing: 0.09em;
     text-transform: uppercase; color: var(--faint);
@@ -426,7 +490,7 @@
   .pin-x { flex: none; border: none; background: none; color: var(--faint); cursor: pointer; padding: 0 0.4rem; }
   .pin-x:hover { color: var(--text); }
   .linkform { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.25rem 0.4rem 0.5rem; }
-  .linkform input, .linkform select {
+  .linkform input {
     border: 1px solid var(--line); border-radius: 8px;
     background: var(--surface-solid); color: var(--text);
     padding: 0.3rem 0.45rem; font-size: 0.8rem;
@@ -437,7 +501,40 @@
     padding: 0.3rem; font-size: 0.8rem; cursor: pointer;
   }
 
-  .content { flex: 1; min-width: 0; padding: 1rem 1.5rem 4rem; }
+  .content { flex: 1; min-width: 0; overflow-y: auto; padding: 1rem 1.5rem 4rem; }
+
+  /* Same corner and same shape as the board's HUD: it is the same kind of
+     control, and a verb that changes place between screens is a verb people
+     stop looking for. */
+  .hud {
+    position: fixed;
+    right: 1rem;
+    bottom: 1rem;
+    z-index: var(--z-chrome);
+    display: flex;
+    gap: 0.6rem;
+  }
+  .hud-btn {
+    width: 42px;
+    height: 42px;
+    display: grid;
+    place-content: center;
+    font-size: 1.15rem;
+    line-height: 1;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-solid);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+    transition: transform 0.15s ease, background 0.15s ease;
+  }
+  .hud-btn:hover,
+  .hud :global(.theme-toggle:hover) { background: var(--hover); transform: translateY(-1px); }
+  .hud-btn:active { transform: translateY(0); }
+  /* The only one that cannot be undone says so before it is pressed. */
+  .hud-btn.danger:hover {
+    background: color-mix(in oklab, var(--color-error-500) 16%, transparent);
+    border-color: color-mix(in oklab, var(--color-error-500) 45%, transparent);
+  }
   .edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 1rem; }
   .edit-bar button {
     border: 1px solid var(--line); border-radius: 999px;

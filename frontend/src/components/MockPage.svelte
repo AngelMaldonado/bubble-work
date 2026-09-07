@@ -16,6 +16,7 @@
   import SideTree from './SideTree.svelte';
   import Minimap, { type MapItem } from './Minimap.svelte';
   import BrandOrb from './BrandOrb.svelte';
+  import Omnibar, { type Hit } from './Omnibar.svelte';
   import { edgeFade } from '../lib/fade.svelte';
   import Prose from './Prose.svelte';
   import {
@@ -43,6 +44,14 @@
 
   // You first. A presence row is read left to right, and the one avatar you
   // already know is yours is the one that should not have to be searched for.
+  // ⌘K, because the omnibar is the one control worth a shortcut.
+  function hotkey(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      search();
+    }
+  }
+
   const here = $derived([
     ...online.filter((o) => o.name === me.name),
     ...online.filter((o) => o.name !== me.name),
@@ -66,6 +75,24 @@
   // nothing about whether it is in the right place.
   let threads = $state([...drawerThreads]);
   let nextSeq = $state(Math.max(...drawerThreads.map((t) => t.seq)) + 1);
+
+  // The omnibar searches everything the workspace holds, which is why it is one
+  // field and not three.
+  let omni = $state(false);
+  let omniPrompt = $state('');
+  const omniItems = $derived<Hit[]>([
+    ...threads.map((t) => ({ id: `t${t.seq}`, kind: 'thread', icon: '🧵', title: t.title, hint: `#${t.seq}` })),
+    ...bubbles.map((b) => ({ id: `b:${b.name}`, kind: 'burbuja', icon: bandFace(b.life), title: b.name, hint: b.outcome })),
+    ...wiki.flatMap(function walk(n): Hit[] {
+      return n.children?.length
+        ? n.children.flatMap(walk)
+        : [{ id: `d:${n.id}`, kind: 'página', icon: '📄', title: n.name, hint: n.id }];
+    }),
+  ]);
+  function search(prompt = '') {
+    omniPrompt = prompt;
+    omni = true;
+  }
 
   // The mock's bubbles have names, not ids. One place to turn one into the other.
   const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -110,6 +137,8 @@
     P4: 'faint',
   };
 </script>
+
+<svelte:window onkeydown={hotkey} />
 
 <div class="mock">
   <!-- The projects live here. A workspace is the boundary for a body of work
@@ -455,20 +484,55 @@
      three are the only controls that live over the page instead of in it, and
      an emoji reads as a thing you press rather than as chrome. -->
 {#if me.isLead}
-  <button
-    class="float-btn planner-btn"
-    title={view === 'planner' ? 'volver al board' : 'Planeador'}
-    onclick={() => toggle('planner')}>
-    <span aria-hidden="true">{view === 'planner' ? '←' : '🗓'}</span>
-  </button>
+  <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+    <Tooltip.Trigger>
+      {#snippet element(attributes: Record<string, unknown>)}
+        <button class="float-btn planner-btn" {...attributes} onclick={() => toggle('planner')}>
+          <span aria-hidden="true">{view === 'planner' ? '←' : '🗓'}</span>
+        </button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Portal>
+      <Tooltip.Positioner>
+        <Tooltip.Content>{view === 'planner' ? 'Volver al board' : 'Planeador'}</Tooltip.Content>
+      </Tooltip.Positioner>
+    </Portal>
+  </Tooltip>
 {/if}
 
-<button
-  class="float-btn wiki-btn"
-  title={view === 'wiki' ? 'volver al board' : `Wiki de ${currentName}`}
-  onclick={() => toggle('wiki')}>
-  <span aria-hidden="true">{view === 'wiki' ? '←' : '📖'}</span>
-</button>
+<Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+  <Tooltip.Trigger>
+    {#snippet element(attributes: Record<string, unknown>)}
+      <button class="float-btn search-btn" {...attributes} onclick={() => search()}>
+        <span aria-hidden="true">🔍</span>
+      </button>
+    {/snippet}
+  </Tooltip.Trigger>
+  <Portal>
+    <Tooltip.Positioner>
+      <Tooltip.Content>Buscar · ⌘K</Tooltip.Content>
+    </Tooltip.Positioner>
+  </Portal>
+</Tooltip>
+
+<Omnibar bind:open={omni} items={omniItems} prompt={omniPrompt} />
+
+<Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+  <Tooltip.Trigger>
+    {#snippet element(attributes: Record<string, unknown>)}
+      <button class="float-btn wiki-btn" {...attributes} onclick={() => toggle('wiki')}>
+        <span aria-hidden="true">{view === 'wiki' ? '←' : '📖'}</span>
+      </button>
+    {/snippet}
+  </Tooltip.Trigger>
+  <Portal>
+    <Tooltip.Positioner>
+      <Tooltip.Content>
+        {view === 'wiki' ? 'Volver al board' : `Wiki de ${currentName}`}
+      </Tooltip.Content>
+    </Tooltip.Positioner>
+  </Portal>
+</Tooltip>
 
 <!-- One panel, driven by whichever orb was clicked. -->
 <BubbleDrawer
@@ -486,7 +550,8 @@
   ondeletethread={(seq) => (threads = threads.filter((t) => t.seq !== seq))} />
 
 {#if thread}
-  <div class="fixed inset-0 z-[70] overflow-y-auto" style="background: var(--bg)">
+  <!-- A view, not a modal: it covers the board and brings its own chrome. -->
+  <div class="fixed inset-0" style="background: var(--bg); z-index: var(--z-view)">
     <ThreadView
       seq={14}
       title="Evidencia observada, no inferida"
@@ -507,7 +572,11 @@
         { id: 'b', title: 'Portar el motor de markdown', type: 'relates_to' },
       ]}
       revisions={[{ id: 'r1', title: 'Revisión de Bea · 2 sep' }]}
-      onback={() => (thread = false)} />
+      onback={() => (thread = false)}
+      onsearch={() => search('Buscar el thread a relacionar…')}
+      onfinish={() => (thread = false)}
+      onmove={() => search('¿A qué burbuja se mueve?')}
+      ondelete={() => { threads = threads.filter((t) => t.seq !== 14); thread = false; }} />
   </div>
 {/if}
 
@@ -763,6 +832,7 @@
   .float-btn { bottom: 1rem; }
   .wiki-btn { right: 4.2rem; }
   .planner-btn { right: 7.4rem; }
+  .search-btn { right: 10.6rem; }
 
 
   .planner {

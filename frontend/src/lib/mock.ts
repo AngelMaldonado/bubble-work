@@ -77,6 +77,8 @@ export const drawerThreads = [
   { seq: 4, title: 'Decidir qué pasa con los adjuntos binarios', lifecycle: 'rip' as Lifecycle, priority: 'P4', state: 'Backlog', age: 'hace 41 d' },
 ];
 
+// The fences are escaped: this is a template literal, and an unescaped ``` ends
+// it at the first backtick.
 export const threadDoc = `# Evidencia observada, no inferida
 
 ## Por qué existe
@@ -96,7 +98,335 @@ autoría nunca llegaba.
 ## Pasos
 
 - [ ] Portar heat sobre el stream real
-- [ ] Decidir qué pasa con docs/`;
+- [ ] Decidir qué pasa con docs/
+
+\`\`\`mermaid
+flowchart LR
+  A[PATCH] --> B[escribe el archivo]
+  B --> C[commit de git]
+  B --> D[evento]
+\`\`\`
+
+## Quién escribe qué
+
+\`\`\`mermaid
+sequenceDiagram
+  participant Agente
+  participant MCP
+  participant Git
+  Agente->>MCP: read_file
+  MCP-->>Agente: contenido + hash
+  Agente->>MCP: write_file (base = hash)
+  alt el hash sigue vigente
+    MCP->>Git: commit, autoría del actor
+    MCP-->>Agente: nuevo hash
+  else alguien escribió antes
+    MCP-->>Agente: 409 con el contenido vigente
+  end
+\`\`\`
+
+## Las bandas
+
+\`\`\`mermaid
+stateDiagram-v2
+  direction LR
+  [*] --> Hot: thread nacido
+  Hot --> Hot: evidencia en la ventana
+  Hot --> Dormant: en silencio pasada la ventana
+  Dormant --> Hot: salida real
+  Dormant --> Rip: nadie responsable
+  Rip --> Hot: revivido, con dueño
+  Hot --> Closed: resultado alcanzado
+  Closed --> [*]
+\`\`\`
+
+## El ciclo
+
+\`\`\`mermaid
+gantt
+  dateFormat YYYY-MM-DD
+  axisFormat %d %b
+  title Ciclo de 14 días
+  section Evidencia
+  Portar heat sobre el stream :done, a1, 2026-09-01, 4d
+  Vista de evidencia :active, a2, 2026-09-05, 5d
+  section Documentos
+  Decidir qué pasa con docs/ :a3, after a2, 3d
+\`\`\`
+
+## A dónde va la atención
+
+\`\`\`excalidraw
+{
+ "type": "excalidraw",
+ "version": 2,
+ "source": "bubble.work",
+ "elements": [
+  {
+   "type": "rectangle",
+   "x": 20,
+   "y": 60,
+   "width": 150,
+   "height": 70,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "#ffec99",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 11
+  },
+  {
+   "type": "text",
+   "x": 30,
+   "y": 84,
+   "width": 130,
+   "height": 25,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 12,
+   "text": "el agente escribe",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "arrow",
+   "x": 180,
+   "y": 95,
+   "width": 90,
+   "height": 0,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 13,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     90,
+     0
+    ]
+   ]
+  },
+  {
+   "type": "diamond",
+   "x": 280,
+   "y": 40,
+   "width": 190,
+   "height": 110,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "#b2f2bb",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 14
+  },
+  {
+   "type": "text",
+   "x": 300,
+   "y": 84,
+   "width": 150,
+   "height": 25,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 15,
+   "text": "¿el hash vive?",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "arrow",
+   "x": 480,
+   "y": 95,
+   "width": 90,
+   "height": -40,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 16,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     90,
+     -40
+    ]
+   ]
+  },
+  {
+   "type": "arrow",
+   "x": 480,
+   "y": 95,
+   "width": 90,
+   "height": 60,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 17,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     90,
+     60
+    ]
+   ]
+  },
+  {
+   "type": "rectangle",
+   "x": 580,
+   "y": 10,
+   "width": 150,
+   "height": 60,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "#d0ebff",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 18
+  },
+  {
+   "type": "text",
+   "x": 590,
+   "y": 30,
+   "width": 130,
+   "height": 25,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 19,
+   "text": "commit",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "rectangle",
+   "x": 580,
+   "y": 130,
+   "width": 150,
+   "height": 60,
+   "strokeColor": "#e03131",
+   "backgroundColor": "#ffc9c9",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 20
+  },
+  {
+   "type": "text",
+   "x": 590,
+   "y": 150,
+   "width": 130,
+   "height": 25,
+   "strokeColor": "#c92a2a",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 21,
+   "text": "409",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "freedraw",
+   "x": 40,
+   "y": 200,
+   "width": 240,
+   "height": 30,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 22,
+   "points": [
+    [
+     0,
+     12
+    ],
+    [
+     30,
+     2
+    ],
+    [
+     60,
+     20
+    ],
+    [
+     95,
+     4
+    ],
+    [
+     130,
+     18
+    ],
+    [
+     170,
+     3
+    ],
+    [
+     210,
+     16
+    ],
+    [
+     240,
+     8
+    ]
+   ]
+  },
+  {
+   "type": "text",
+   "x": 40,
+   "y": 236,
+   "width": 300,
+   "height": 20,
+   "strokeColor": "#868e96",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 23,
+   "text": "una escritura que no cambia bytes no deja nada",
+   "fontSize": 14
+  }
+ ],
+ "appState": {
+  "viewBackgroundColor": "#ffffff"
+ }
+}
+\`\`\`
+
+## A dónde va la atención
+
+\`\`\`mermaid
+pie showData
+  title Threads por banda
+  "Caliente" : 4
+  "Dormido" : 3
+  "Abandonado" : 2
+  "Terminado" : 1
+\`\`\`
+`;
 
 // What the server would return: goldmark's output for the markdown above. The
 // page never renders markdown itself — one renderer, server-side, so that every
@@ -123,6 +453,310 @@ y la autoría nunca llegaba.</p>
   A[PATCH] --> B[escribe el archivo]
   B --> C[commit de git]
   B --> D[evento]
+</code></pre>
+<h2 id="quien-escribe-que">Quién escribe qué</h2>
+<pre><code class="language-mermaid">sequenceDiagram
+  participant Agente
+  participant MCP
+  participant Git
+  Agente->>MCP: read_file
+  MCP-->>Agente: contenido + hash
+  Agente->>MCP: write_file (base = hash)
+  alt el hash sigue vigente
+    MCP->>Git: commit, autoría del actor
+    MCP-->>Agente: nuevo hash
+  else alguien escribió antes
+    MCP-->>Agente: 409 con el contenido vigente
+  end
+</code></pre>
+<h2 id="las-bandas">Las bandas</h2>
+<pre><code class="language-mermaid">stateDiagram-v2
+  direction LR
+  [*] --> Hot: thread nacido
+  Hot --> Hot: evidencia en la ventana
+  Hot --> Dormant: en silencio pasada la ventana
+  Dormant --> Hot: salida real
+  Dormant --> Rip: nadie responsable
+  Rip --> Hot: revivido, con dueño
+  Hot --> Closed: resultado alcanzado
+  Closed --> [*]
+</code></pre>
+<h2 id="el-ciclo">El ciclo</h2>
+<pre><code class="language-mermaid">gantt
+  dateFormat YYYY-MM-DD
+  axisFormat %d %b
+  title Ciclo de 14 días
+  section Evidencia
+  Portar heat sobre el stream :done, a1, 2026-09-01, 4d
+  Vista de evidencia :active, a2, 2026-09-05, 5d
+  section Documentos
+  Decidir qué pasa con docs/ :a3, after a2, 3d
+</code></pre>
+<h2 id="a-mano">Lo mismo, a mano</h2>
+<pre><code class="language-excalidraw">{
+ "type": "excalidraw",
+ "version": 2,
+ "source": "bubble.work",
+ "elements": [
+  {
+   "type": "rectangle",
+   "x": 20,
+   "y": 60,
+   "width": 150,
+   "height": 70,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "#ffec99",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 11
+  },
+  {
+   "type": "text",
+   "x": 30,
+   "y": 84,
+   "width": 130,
+   "height": 25,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 12,
+   "text": "el agente escribe",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "arrow",
+   "x": 180,
+   "y": 95,
+   "width": 90,
+   "height": 0,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 13,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     90,
+     0
+    ]
+   ]
+  },
+  {
+   "type": "diamond",
+   "x": 280,
+   "y": 40,
+   "width": 190,
+   "height": 110,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "#b2f2bb",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 14
+  },
+  {
+   "type": "text",
+   "x": 300,
+   "y": 84,
+   "width": 150,
+   "height": 25,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 15,
+   "text": "¿el hash vive?",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "arrow",
+   "x": 480,
+   "y": 95,
+   "width": 90,
+   "height": -40,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 16,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     90,
+     -40
+    ]
+   ]
+  },
+  {
+   "type": "arrow",
+   "x": 480,
+   "y": 95,
+   "width": 90,
+   "height": 60,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 17,
+   "points": [
+    [
+     0,
+     0
+    ],
+    [
+     90,
+     60
+    ]
+   ]
+  },
+  {
+   "type": "rectangle",
+   "x": 580,
+   "y": 10,
+   "width": 150,
+   "height": 60,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "#d0ebff",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 18
+  },
+  {
+   "type": "text",
+   "x": 590,
+   "y": 30,
+   "width": 130,
+   "height": 25,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 19,
+   "text": "commit",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "rectangle",
+   "x": 580,
+   "y": 130,
+   "width": 150,
+   "height": 60,
+   "strokeColor": "#e03131",
+   "backgroundColor": "#ffc9c9",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 20
+  },
+  {
+   "type": "text",
+   "x": 590,
+   "y": 150,
+   "width": 130,
+   "height": 25,
+   "strokeColor": "#c92a2a",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 21,
+   "text": "409",
+   "fontSize": 18,
+   "textAlign": "center"
+  },
+  {
+   "type": "freedraw",
+   "x": 40,
+   "y": 200,
+   "width": 240,
+   "height": 30,
+   "strokeColor": "#1e1e1e",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 22,
+   "points": [
+    [
+     0,
+     12
+    ],
+    [
+     30,
+     2
+    ],
+    [
+     60,
+     20
+    ],
+    [
+     95,
+     4
+    ],
+    [
+     130,
+     18
+    ],
+    [
+     170,
+     3
+    ],
+    [
+     210,
+     16
+    ],
+    [
+     240,
+     8
+    ]
+   ]
+  },
+  {
+   "type": "text",
+   "x": 40,
+   "y": 236,
+   "width": 300,
+   "height": 20,
+   "strokeColor": "#868e96",
+   "backgroundColor": "transparent",
+   "fillStyle": "solid",
+   "strokeWidth": 2,
+   "roughness": 1,
+   "seed": 23,
+   "text": "una escritura que no cambia bytes no deja nada",
+   "fontSize": 14
+  }
+ ],
+ "appState": {
+  "viewBackgroundColor": "#ffffff"
+ }
+}</code></pre>
+<h2 id="a-donde-va-la-atencion">A dónde va la atención</h2>
+<pre><code class="language-mermaid">pie showData
+  title Threads por banda
+  "Caliente" : 4
+  "Dormido" : 3
+  "Abandonado" : 2
+  "Terminado" : 1
 </code></pre>`;
 
 export const history = [

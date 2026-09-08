@@ -13,12 +13,11 @@
   import Orb from './Orb.svelte';
   import BubbleDrawer from './BubbleDrawer.svelte';
   import ThreadView from './ThreadView.svelte';
-  import SideTree from './SideTree.svelte';
   import Minimap, { type MapItem } from './Minimap.svelte';
   import BrandOrb from './BrandOrb.svelte';
   import Omnibar, { type Hit } from './Omnibar.svelte';
+  import WikiView from './WikiView.svelte';
   import { edgeFade } from '../lib/fade.svelte';
-  import Prose from './Prose.svelte';
   import {
     bubbles, drawerThreads,
     threadDoc, threadHTML, wiki, wikiHTML,
@@ -424,20 +423,6 @@
           </section>
         </div>
 
-      {:else}
-        <!-- ── the wiki ─────────────────────────────────────────────────── -->
-        <div class="wiki">
-          <aside class="wiki-tree">
-            <div class="faint mb-2 px-1 text-xs font-bold tracking-widest uppercase">
-              Workspace
-            </div>
-            <SideTree nodes={wiki} onselect={(n) => (picked = n.id)} />
-          </aside>
-          <article class="wiki-doc">
-            <div class="faint mb-3 font-mono text-xs">{picked}</div>
-            <Prose html={wikiHTML} />
-          </article>
-        </div>
       {/if}
     </main>
   </div>
@@ -549,6 +534,23 @@
   onnewthread={() => (threads = [{ seq: nextSeq++, title: 'Thread nuevo', lifecycle: 'hot', state: 'Backlog', age: 'ahora' }, ...threads])}
   ondeletethread={(seq) => (threads = threads.filter((t) => t.seq !== seq))} />
 
+{#if view === 'wiki'}
+  <!-- The wiki is a VIEW, like a thread: same shell, its own way back. It used
+       to be a column inside the board's pane, which made a page feel like a
+       panel on the board rather than a place. -->
+  <div class="fixed inset-0" style="background: var(--bg); z-index: var(--z-view)">
+    <WikiView
+      workspace={currentName}
+      path={picked}
+      html={wikiHTML}
+      tree={wiki}
+      onback={() => (view = 'board')}
+      onopen={(id) => (picked = id)}
+      onsearch={() => search()}
+      onnew={() => search('¿Dónde va la página nueva?')} />
+  </div>
+{/if}
+
 {#if thread}
   <!-- A view, not a modal: it covers the board and brings its own chrome. -->
   <div class="fixed inset-0" style="background: var(--bg); z-index: var(--z-view)">
@@ -602,12 +604,14 @@
      column) and floated mid-way in the sidebar. Make `content` the full-height
      column instead. Only in the sidebar layout: the rail's content is
      `display: contents`, and giving that a height would undo the rail. */
+  /* A flex chain rather than a percentage: `height: 100%` resolves against the
+     root's own height, which comes from `align-items: stretch` and is not
+     definite, so the percentage falls back to auto and the column grows to its
+     contents — taking the pinned footer past the bottom edge with it. */
+  .mock :global(.shell-nav) { display: flex; flex-direction: column; }
   .mock :global(.shell-nav [data-part='content'][data-layout='sidebar']) {
-    /* `height`, not `min-height`: a minimum still lets the column grow past it,
-       and a grown column pushed the footer under the bottom edge — which is the
-       bug pinning it was supposed to fix. A definite height is what makes
-       `flex: 1` on the list mean "whatever is left". */
-    height: 100%;
+    flex: 1 1 auto;
+    min-height: 0;
     display: flex;
     flex-direction: column;
     /* Skeleton aligns this column to `start`, which makes every child as wide as
@@ -638,7 +642,8 @@
        the bar ended up further from the edge, not nearer. */
     width: auto;
     margin-inline: -1rem;
-    padding-inline: 1rem;
+    /* More on the right than the left: the scrollbar lives there. */
+    padding-inline: 1rem 1.5rem;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in oklab, var(--muted) 35%, transparent) transparent;
   }
@@ -845,7 +850,4 @@
     .planner { grid-template-columns: minmax(0, 1fr); }
   }
 
-  .wiki { display: grid; grid-template-columns: 260px minmax(0, 1fr); align-items: start; }
-  .wiki-tree { padding: 1rem 0.75rem; border-right: 1px solid var(--line); }
-  .wiki-doc { padding: 1.25rem 1.5rem; min-width: 0; }
 </style>

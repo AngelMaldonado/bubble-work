@@ -26,6 +26,9 @@
   import SideTree, { type TreeNode } from './SideTree.svelte';
   import ThreadToc from './ThreadToc.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
+  import { untrack } from 'svelte';
+  import type { MarkdownEditor } from '../lib/editor';
+  import { vimPref } from '../lib/vim.svelte';
   import type { Heading } from '../lib/prose';
 
   let {
@@ -94,6 +97,61 @@
   // markdown a second time: the ids it links to are the ones goldmark produced,
   // and re-deriving them here is how a link ends up pointing at nothing.
   let headings = $state<Heading[]>([]);
+
+  // The editor is built on demand and torn down when the mode changes, so
+  // CodeMirror never exists while you are reading. `@attach` gives us the box
+  // and the cleanup in one place.
+  //
+  // The caret position survives the round trip: switching to rendered and back
+  // should not send you to the top of a long document.
+  let editor: MarkdownEditor | null = null;
+  let caretAt = 0;
+  let draft = $state('');
+  $effect(() => {
+    draft = markdown;
+  });
+
+  function mountEditor(el: HTMLElement) {
+    // What this attachment depends on, spelled out. `vimPref.on` is READ here,
+    // synchronously, because toggling vim has to rebuild the editor — read
+    // inside the dynamic import's callback it is outside the reactive context
+    // and the toggle does nothing. `draft` is read UNTRACKED for the opposite
+    // reason: it changes on every keystroke, and tracking it would tear the
+    // editor down and build a new one per character.
+    const useVim = vimPref.on;
+    const doc = untrack(() => draft);
+
+    let live = true;
+    let made: MarkdownEditor | null = null;
+    // Imported HERE, not at the top of the file. A static import puts
+    // CodeMirror and its markdown grammar in the main bundle, which everyone
+    // downloads to look at a board they may never edit — measured at +240 kB
+    // gzip before this line was a function call.
+    import('../lib/editor').then(({ createMarkdownEditor }) => createMarkdownEditor({
+      parent: el,
+      doc,
+      dark: document.documentElement.getAttribute('data-mode') === 'dark',
+      vim: useVim,
+      cursor: caretAt,
+      onChange: (doc) => (draft = doc),
+      onSave: () => {},
+      onEscape: () => (editing = false),
+      onBlur: () => {},
+    })).then((made_) => {
+      // The mode can change while the dynamic import is in flight; without this
+      // the editor lands in a box that is no longer on the page.
+      if (!live) return made_.destroy();
+      made = made_;
+      editor = made_;
+      made_.focus();
+    });
+    return () => {
+      live = false;
+      caretAt = made?.cursor() ?? caretAt;
+      made?.destroy();
+      if (editor === made) editor = null;
+    };
+  }
 
   // The HUD's verbs, in reading order. Finishing first because it is what the
   // thread is for; deleting last and tinted, because it is the one that cannot
@@ -323,6 +381,16 @@
           <button class:on={!editing} aria-pressed={!editing} onclick={() => (editing = false)}>renderizado</button>
           <button class:on={editing} aria-pressed={editing} onclick={() => (editing = true)}>markdown</button>
         </div>
+        {#if editing}
+          <!-- Only while there is an editor to apply it to. A preference for how
+               to type, shown where you chose to type. -->
+          <button
+            class="vim"
+            class:on={vimPref.on}
+            aria-pressed={vimPref.on}
+            title="teclas de vim ({vimPref.on ? 'activadas' : 'desactivadas'})"
+            onclick={() => vimPref.toggle()}>vim</button>
+        {/if}
       </div>
 
       <!-- Somebody else wrote while this was open. Not an error and not a
@@ -336,9 +404,12 @@
       {/if}
 
       {#if editing}
-        <div class="editors">
-          <textarea class="src" spellcheck="false" value={markdown}></textarea>
-        </div>
+        <!-- CodeMirror mounts into this box. It was a bare <textarea>, which is
+             the honest first cut and a poor one: no highlighting, no list
+             continuation, no undo grouping. `lang-markdown` brings the two
+             commands that make markdown editing feel like markdown — Enter
+             continues a list or a checkbox, Backspace unwinds the marker. -->
+        <div class="editors" {@attach mountEditor}></div>
       {:else}
         <Prose {html} onheadings={(h) => (headings = h)} />
       {/if}
@@ -560,14 +631,37 @@
   .elsewhere .link { border: none; background: none; color: inherit; text-decoration: underline; cursor: pointer; padding: 0; }
 
   .prose { max-width: 72ch; white-space: pre-wrap; line-height: 1.65; }
-  .editors { max-width: 72ch; }
-  .src {
-    width: 100%; min-height: 60vh;
-    border: 1px solid var(--line); border-radius: 12px;
-    background: var(--surface-solid); color: var(--text);
-    padding: 0.9rem 1rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.86rem; line-height: 1.6;
-    resize: vertical;
+  /* The box CodeMirror mounts into. `overflow: hidden` so the rounded corners
+     clip its scroller, and the height is fixed so the editor scrolls itself
+     rather than growing the page under it. */
+  .editors {
+    max-width: 72ch;
+    height: calc(100dvh - var(--topbar-h) - 8rem);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-solid);
+    overflow: hidden;
   }
+  /* vim's own status line, themed to match the rest. */
+  .editors :global(.cm-vim-panel) {
+    padding: 0.2rem 0.6rem;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+  }
+  .editors :global(.cm-vim-panel input) { color: var(--text); background: transparent; }
+
+  .vim {
+    padding: 0.28rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: transparent;
+    color: var(--faint);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.76rem;
+  }
+  .vim:hover { color: var(--text); background: var(--hover); }
+  .vim.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
 </style>

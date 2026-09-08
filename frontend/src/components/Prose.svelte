@@ -10,7 +10,13 @@
   // class on the .prose element here and every rule below reaches into it with
   // :global, so nothing about the styling depends on who is calling.
   import type { Snippet } from 'svelte';
-  import { enableCheckboxes, extractHeadings, renderMermaid, type Heading } from '../lib/prose';
+  import {
+    enableCheckboxes,
+    extractHeadings,
+    renderExcalidraw,
+    renderMermaid,
+    type Heading,
+  } from '../lib/prose';
 
   let {
     html = '',
@@ -58,6 +64,7 @@
       enableCheckboxes(node);
       void (async () => {
         await renderMermaid(node);
+        await renderExcalidraw(node);
         onheadings?.(extractHeadings(node));
         onrendered?.();
       })();
@@ -275,8 +282,10 @@
     content: '';
     transform: translate(0, -0.06em) rotate(-45deg);
   }
-  /* mermaid diagrams */
-  .prose :global(.mermaid-diagram) {
+  /* Diagrams — mermaid and excalidraw sit in the same card, because they are
+     the same thing to a reader: a picture the document drew for itself. */
+  .prose :global(.mermaid-diagram),
+  .prose :global(.excalidraw-diagram) {
     margin: 28px 0;
     padding: 20px;
     overflow: auto;
@@ -286,10 +295,15 @@
     box-shadow: 0 18px 48px var(--shadow);
     text-align: center;
   }
-  .prose :global(.mermaid-diagram svg) {
+  .prose :global(.mermaid-diagram svg),
+  .prose :global(.excalidraw-diagram svg) {
     max-width: 100%;
     height: auto;
   }
+  /* A drawing is ink on paper: its strokes carry their own colours from the
+     scene, and `currentColor` is only used by the note an unknown element
+     leaves behind. */
+  .prose :global(.excalidraw-diagram) { color: var(--muted); }
   .prose :global(.mermaid-error) {
     color: oklch(0.62 0.2 20);
     font-family: var(--sans);

@@ -7,6 +7,32 @@
 // than in a component because "the same render" has to mean the same code, not
 // two copies that agree today.
 
+/**
+ * Replace ```excalidraw blocks with the drawing they describe.
+ *
+ * Same shape as the mermaid pass and lazy for the same reason: roughjs and the
+ * renderer only load once a document actually contains a drawing.
+ */
+export async function renderExcalidraw(el: HTMLElement): Promise<void> {
+  const blocks = [...el.querySelectorAll<HTMLElement>('pre > code.language-excalidraw')];
+  if (!blocks.length) return;
+  const { sceneToSvg } = await import('./excalidraw');
+  for (const code of blocks) {
+    const pre = code.parentElement;
+    if (!pre) continue;
+    const holder = document.createElement('div');
+    holder.className = 'excalidraw-diagram';
+    try {
+      holder.append(sceneToSvg(JSON.parse(code.textContent ?? '{}')));
+    } catch (err) {
+      // A scene that will not parse is a broken document, not a broken app: say
+      // which one and leave the rest of the page alone.
+      holder.innerHTML = `<div class="mermaid-error">excalidraw: ${String(err)}</div>`;
+    }
+    pre.replaceWith(holder);
+  }
+}
+
 export interface Heading {
   id: string;
   title: string;

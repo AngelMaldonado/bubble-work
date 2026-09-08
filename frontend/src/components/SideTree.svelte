@@ -154,6 +154,16 @@
   .tree :global([data-part='branch-text']) { flex: 1; }
   /* Not `.label`: Skeleton owns that class (`width: 100%; display: block`). */
   .node-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* Skeleton marks the selected node with `preset-filled` — a solid block of
+     ink in a column of quiet rows. The selection is a place you are, not an
+     alarm; the same tonal fill hover uses, plus weight, says it. */
+  .tree :global([data-part='item'][data-selected]),
+  .tree :global([data-part='branch-control'][data-selected]) {
+    background: var(--hover);
+    color: var(--text);
+    font-weight: 600;
+  }
+
   .badge, .count {
     margin-left: auto; flex: none;
     font-size: 0.68rem; color: var(--faint);

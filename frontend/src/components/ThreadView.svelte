@@ -48,6 +48,8 @@
     pinned = false,
     elsewhere = false,
     onback,
+    onsave,
+    onreload,
     onsearch,
     onfinish,
     onreopen,
@@ -75,6 +77,11 @@
     pinned?: boolean;
     elsewhere?: boolean;
     onback?: () => void;
+    /** hand the edited markdown back. The caller owns the write, the hash and
+     *  what to do when somebody else got there first. */
+    onsave?: (markdown: string) => void;
+    /** re-read the document, discarding what is in the editor */
+    onreload?: () => void;
     /** open the omnibar — the one field that finds a thread, a bubble or a page */
     onsearch?: () => void;
     onfinish?: () => void;
@@ -109,7 +116,18 @@
   let draft = $state('');
   $effect(() => {
     draft = markdown;
+    // And into the editor, if one is open. The editor is built ONCE (it reads
+    // `draft` untracked, or every keystroke would rebuild it), so without this
+    // a reload after a conflict changed the document underneath and left the
+    // old text on screen — the reload appeared to do nothing.
+    editor?.setDoc(markdown);
   });
+
+  /** Saving is explicit and cheap to trigger: ⌘S, `:w`, and leaving the editor.
+   *  A document that only saves on a button is a document somebody loses. */
+  function save() {
+    if (draft !== markdown) onsave?.(draft);
+  }
 
   function mountEditor(el: HTMLElement) {
     // What this attachment depends on, spelled out. `vimPref.on` is READ here,
@@ -134,9 +152,15 @@
       vim: useVim,
       cursor: caretAt,
       onChange: (doc) => (draft = doc),
-      onSave: () => {},
-      onEscape: () => (editing = false),
-      onBlur: () => {},
+      // The three ways out of the editor all write. They were wired to nothing,
+      // which meant ⌘S looked like it saved and the only real save was
+      // switching to "renderizado" — the one nobody presses when they are done.
+      onSave: save,
+      onEscape: () => {
+        save();
+        editing = false;
+      },
+      onBlur: save,
     })).then((made_) => {
       // The mode can change while the dynamic import is in flight; without this
       // the editor lands in a box that is no longer on the page.
@@ -163,7 +187,10 @@
     { k: 'move', face: '↔', label: 'Mover de burbuja', go: onmove },
     { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
     { k: 'delete', face: '🗑', label: 'Borrar el thread', tone: 'danger', go: ondelete },
-  ]);
+    // A verb nobody gave a handler is not drawn. The alternative is a button
+    // that swallows the click, which reads as broken rather than as absent —
+    // and the real view wires these one at a time.
+  ].filter((a) => a.go));
 
   // The headings nest by depth, so the table of contents is a real tree rather
   // than a flat list wearing indentation.
@@ -378,7 +405,13 @@
            thread moved to the HUD, where the board keeps its verbs. -->
       <div class="edit-bar">
         <div class="seg" role="group" aria-label="modo de vista">
-          <button class:on={!editing} aria-pressed={!editing} onclick={() => (editing = false)}>renderizado</button>
+          <button
+            class:on={!editing}
+            aria-pressed={!editing}
+            onclick={() => {
+              save();
+              editing = false;
+            }}>renderizado</button>
           <button class:on={editing} aria-pressed={editing} onclick={() => (editing = true)}>markdown</button>
         </div>
         {#if editing}
@@ -398,8 +431,9 @@
            rather than a save silently lost. -->
       {#if elsewhere}
         <p class="elsewhere">
-          Este documento cambió en otro lado.
-          <button type="button" class="link">recargar</button>
+          Este documento cambió en otro lado, así que tu escritura no se guardó.
+          Lo que escribiste sigue en el editor.
+          <button type="button" class="link" onclick={onreload}>recargar</button>
         </p>
       {/if}
 

@@ -260,11 +260,15 @@ CODE=$(patchdoc "$A" "$BODY")
 chk "primera escritura con el hash de vacío" "$CODE" 200
 D1=$(getdoc "$A")
 chk "y se lee de vuelta" "$(echo "$D1" | j "['content']" | head -c 5)" "# Uno"
+# Leer y escribir responden la misma forma: la web redibuja con lo que devolvió
+# la escritura, así que un campo que solo aparece en una de las dos se pierde.
+chk "la lectura trae el html del servidor" "$(echo "$D1" | j "['html']" | head -c 7)" "<h1 id="
+chk "...y la cuenta de casillas hechas" "$(echo "$D1" | j "['done']")" "0"
 H1=$(echo "$D1" | j "['hash']")
 
 BODY="{\"content\":\"pisado\",\"base\":\"$H0\"}"
 CODE=$(patchdoc "$A" "$BODY")
-chk ">>> escribir con un base viejo es CONFLICTO, no sobreescritura" "$CODE" 400
+chk ">>> escribir con un base viejo es CONFLICTO, no sobreescritura" "$CODE" 409
 chk "...y el contenido sigue intacto" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
 
 BODY="{\"content\":\"# Uno\\n\\n- [x] algo\\n\",\"base\":\"$H1\",\"message\":\"tick\"}"

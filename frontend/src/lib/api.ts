@@ -68,6 +68,28 @@ export type Entry = {
 
 const TOKEN = 'bubble.token';
 
+/**
+ * A failed call, with the status kept.
+ *
+ * The status is what tells a caller WHICH failure this is: 409 means somebody
+ * wrote first and the honest answer is to offer a reload, not to show the
+ * sentence and lose the edit. Matching on the message would work until the
+ * message is reworded.
+ */
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'ApiError';
+  }
+
+  get conflict() {
+    return this.status === 409;
+  }
+}
+
 class Api {
   token = localStorage.getItem(TOKEN) ?? '';
   me: Person | null = null;
@@ -89,7 +111,8 @@ class Api {
     if (!res.ok) {
       // The server's own sentence is almost always the useful one — "quote more
       // of it", "the document changed since you read it". Do not replace it.
-      throw new Error(body?.message || res.statusText || `HTTP ${res.status}`);
+      const err = new ApiError(body?.message || res.statusText || `HTTP ${res.status}`, res.status);
+      throw err;
     }
     return body as T;
   }

@@ -2,6 +2,7 @@
   import { api, type ThreadHeat, type Workspace } from './lib/api';
   import SignIn from './components/SignIn.svelte';
   import Board from './components/Board.svelte';
+  import Thread from './components/Thread.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
   import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
   import ThemePage from './components/ThemePage.svelte';
@@ -37,10 +38,16 @@
   }
   boot();
 
-  function openThread(t: ThreadHeat) {
-    // Phase 4b: the thread interior. Until then, say so rather than doing
-    // nothing — a button that silently ignores a click is worse than no button.
-    alert(`#${t.seq} ${t.name}\n\n${t.heat.reason}`);
+  // The thread being read. A view rather than a route for now: the board is
+  // still underneath it, and coming back has to cost nothing.
+  let open = $state<ThreadHeat | null>(null);
+  // Bumped when a thread closes, to remount the board. Writing warms a bubble,
+  // so the board that was true when the thread opened is stale by then — and
+  // heat is the server's answer, never one the browser recomputes.
+  let visit = $state(0);
+  function back() {
+    open = null;
+    visit += 1;
   }
 </script>
 
@@ -58,6 +65,10 @@
     <button class="btn btn-sm preset-tonal-surface" onclick={() => go('/')}>← volver</button>
   </div>
   <ThemePage />
+{:else if open}
+  <!-- Full screen: the thread carries its own bar, and the board behind it is
+       noise while reading. -->
+  <Thread thread={open} onback={back} />
 {:else if !ready}
   <p class="faint p-6 text-sm">…</p>
 {:else if !signedIn}
@@ -116,7 +127,9 @@
     {/if}
 
     {#if current && !creating}
-      <Board workspace={current} onOpen={openThread} />
+      {#key visit}
+        <Board workspace={current} onOpen={(t) => (open = t)} />
+      {/key}
     {/if}
   </div>
 {/if}

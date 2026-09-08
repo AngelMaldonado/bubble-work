@@ -599,10 +599,20 @@ commit as the source that produced it.
 The SPA's catch-all route is registered LAST, after `/api` and `/mcp`, or it
 shadows them.
 
-**Skeleton is not ported.** None of the components worth taking from v0 imported
-it; what carries the visual identity is the token block in `app.css`, and that came
-across whole, with the band accents renamed from v0's levels to the five
-lifecycles.
+**Skeleton IS the component layer** — reversing what this said. The plan was to
+carry only v0's token block, on the grounds that none of the components worth
+taking imported Skeleton. That held right up to the first dialog, tree, combobox
+and date picker: writing those by hand is writing focus traps and typeahead by
+hand, twice. `@skeletonlabs/skeleton-svelte` (Zag.js underneath) supplies the
+behaviour; the identity still comes from the token block in `app.css`, which came
+across whole with the band accents renamed to the four lifecycles.
+
+What that costs, and is worth knowing before reaching for a component: Skeleton
+ships NO CSS for some anatomies (Dialog is styled with utilities in its own docs),
+its class names collide with hand-written ones (`.card`, `.label` — ours were
+renamed), and what a component is called is not what it writes to the DOM
+(SegmentedControl is a Zag `radio-group`). Style against `data-scope`/`data-part`,
+measured, not against what the name suggests.
 
 **4a — the board.** *(built)* Sign-in against PocketBase, the workspace switcher,
 and buoyancy made spatial: bands top to bottom, bubbles inside them, threads inside
@@ -616,9 +626,22 @@ Heat is refetched, never recomputed in the browser: it is a pure function of
 evidence and TIME, the server holds both, and a board that ages client-side drifts
 from the one everybody else is looking at.
 
-**4b — the thread interior.** `Prose.svelte` + `lib/prose.ts` — the ONE renderer,
-because a second copy of that CSS is how two documents start looking different —
-plus `ThreadToc` and an editor over the base-hash write.
+**4b — the thread interior.** *(built)* `Prose.svelte` + `lib/prose.ts` — the ONE
+renderer, because a second copy of that CSS is how two documents start looking
+different — plus `ThreadToc`, a CodeMirror editor with optional vim, and mermaid
+and excalidraw drawn from fenced blocks.
+
+The write is the part with substance. `Thread.svelte` holds the document and the
+hash it was READ at; every write carries that hash as `base`, so two people
+editing cannot silently overwrite each other. A conflict now answers **409** and
+not 400 — the body was fine, somebody else simply wrote first — and the view says
+so and offers a reload instead of losing the paragraph. Reading and writing return
+the SAME shape (`ReadDoc` on both sides), because the browser redraws from what a
+write returned and a field that only one of them sends disappears on reload.
+
+Saving is explicit and cheap: ⌘S, `:w`, Escape, blur, or switching to
+"renderizado". Those were wired to an empty function for a while, which is worse
+than having no shortcut — it looked like it saved.
 
 **4c — the keyboard.** `Omnibar` + `lib/fuzzy.ts`, vim keys, slash commands.
 
@@ -626,12 +649,33 @@ Not ported at all: `GodMode` (PocketBase's dashboard replaces it), `McpConnect`,
 `ProjectCombobox`, and everything that named a Plane instance.
 
 **Done when:** the board looks and moves like v0's and nobody wrote a second
-markdown renderer.
+markdown renderer. — *the board, the thread interior and the wiki do; the omnibar
+(4c) does not exist yet.*
+
+**`/theme` and `/theme/mock`.** Two pages that ship with the app and need no
+account: `/theme` is the tokens and the components, `/theme/mock` is the whole
+product with invented data — board, sidebar of projects, thread, wiki and planner.
+It exists so a screen can be designed and measured before there is a collection
+behind it, and so a change to a token is visible everywhere at once. What is drawn
+there is not evidence that it is wired.
 
 ### Phase 5 — the planner view
 Inbox, calendar over `due_date` with timeline / week / day modes, the high-level
 kanban by objective, and objectives editable in place. The role it is built for
 already exists — see the global lead above.
+
+Its SHAPE is drawn already, in `/theme/mock`: one focused view, three panes
+separated by hairlines (inbox · calendar · kanban) that toggle the way Trello's
+do, objectives and priorities as CRUD dialogs, and the verbs bottom-right where
+the board keeps its own. Drag and drop is `@atlaskit/pragmatic-drag-and-drop`
+(7.2 kB gzip, no peer dependencies) and the calendar is `@event-calendar/core`
+(written in Svelte 5, so no wrapper) — both chosen against measured bundle size.
+
+One decision is deliberately AT ODDS with the model and has to be settled here:
+in the planner a card's priority is CHOSEN from a dropdown, while a thread's
+priority is DERIVED from impact × urgency the way heat is. The planner's surface
+was built the way its user asked for it; the two surfaces disagree, and the
+disagreement is written down rather than smoothed over.
 
 **Done when:** a lead triages an inbox item into a thread without leaving the view.
 

@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"regexp"
@@ -105,16 +106,18 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			if err != nil {
 				return err
 			}
-			content, hash, err := t.Read(repo, th.GetString("doc_path"))
+			ws, err := e.App.FindRecordById("workspaces", th.GetString("workspace"))
+			if err != nil {
+				return e.NotFoundError("", err)
+			}
+			// ReadDoc rather than a map built here: reading and writing have to
+			// answer with the SAME shape, or a client that redraws from what a
+			// write returned redraws something a read never gives it.
+			doc, err := ReadDoc(e.App, t, ws, repo, th.GetString("doc_path"))
 			if err != nil {
 				return e.BadRequestError(err.Error(), err)
 			}
-			return e.JSON(http.StatusOK, map[string]any{
-				"thread":  th.Id,
-				"path":    th.GetString("doc_path"),
-				"hash":    hash,
-				"content": content,
-			})
+			return e.JSON(http.StatusOK, doc)
 		}).Bind(apis.RequireAuth())
 
 		se.Router.PATCH("/api/threads/{id}/document", func(e *core.RequestEvent) error {
@@ -162,18 +165,15 @@ func registerDocuments(app core.App, t *tree.Tree) {
 		}).Bind(apis.RequireAuth())
 
 		se.Router.GET("/api/workspaces/{id}/document", func(e *core.RequestEvent) error {
-			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
+			ws, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
 			if err != nil {
 				return err
 			}
-			doc := e.Request.URL.Query().Get("path")
-			content, hash, err := t.Read(repo, doc)
+			doc, err := ReadDoc(e.App, t, ws, repo, e.Request.URL.Query().Get("path"))
 			if err != nil {
 				return e.BadRequestError(err.Error(), err)
 			}
-			return e.JSON(http.StatusOK, map[string]any{
-				"path": doc, "hash": hash, "content": content,
-			})
+			return e.JSON(http.StatusOK, doc)
 		}).Bind(apis.RequireAuth())
 
 		// Same three shapes as a thread's document, addressed by path. A path that
@@ -265,6 +265,12 @@ func patchDocument(e *core.RequestEvent, t *tree.Tree, ws *core.Record, repo, do
 		Content: body.Content, Edits: body.Edits, Todo: body.Todo,
 	})
 	if err != nil {
+		// A conflict is not a bad request: the body was fine and somebody else
+		// simply wrote first. It gets its own status so a client can offer to
+		// reload instead of guessing from the sentence.
+		if errors.Is(err, ErrConflict) {
+			return e.Error(http.StatusConflict, err.Error(), err)
+		}
 		return e.BadRequestError(err.Error(), err)
 	}
 	return e.JSON(http.StatusOK, out)

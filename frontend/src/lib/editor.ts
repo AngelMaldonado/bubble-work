@@ -32,6 +32,8 @@ export interface CaretPoint {
 export interface MarkdownEditor {
   destroy(): void;
   value(): string;
+  /** Replace the whole document — for when the SERVER's copy changed. */
+  setDoc(text: string): void;
   focus(): void;
   cursor(): number;
   caret(): CaretPoint | null;
@@ -206,6 +208,13 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
   const api: MarkdownEditor = {
     destroy: () => view.destroy(),
     value: () => view.state.doc.toString(),
+    setDoc(text) {
+      if (view.state.doc.toString() === text) return;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: { anchor: Math.min(view.state.selection.main.head, text.length) },
+      });
+    },
     focus: () => view.focus(),
     cursor: () => view.state.selection.main.head,
 

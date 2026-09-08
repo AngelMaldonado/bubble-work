@@ -20,11 +20,14 @@
     "vite": "^8.1.5"
   },
   "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^3.1.0",
+    "@atlaskit/pragmatic-drag-and-drop-hitbox": "^2.2.0",
     "@codemirror/commands": "^6.11.0",
     "@codemirror/lang-markdown": "^6.5.2",
     "@codemirror/language": "^6.12.4",
     "@codemirror/state": "^6.7.4",
     "@codemirror/view": "^6.43.11",
+    "@event-calendar/core": "^5.12.2",
     "@fontsource-variable/dm-sans": "^5.3.0",
     "@fontsource/boogaloo": "^5.3.0",
     "@lezer/highlight": "^1.2.3",

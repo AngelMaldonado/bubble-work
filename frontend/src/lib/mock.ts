@@ -850,43 +850,82 @@ export const priorityMap = {
   ],
 };
 
+// What arrived and has not been shaped yet. An inbox item has no objective, no
+// impact and no urgency — that is exactly what makes it an inbox item.
 export const inbox = [
-  { id: 'i1', text: 'El cliente pide que la factura llegue en PDF y XML juntos', from: 'Ventas', when: 'hace 20 min' },
+  {
+    id: 'i1',
+    text: 'El cliente pide que la factura llegue en PDF y XML juntos',
+    from: 'Ventas',
+    when: 'hace 20 min',
+    body:
+      'Lo pidió *Farmacias del Ahorro*. Hoy mandamos el PDF y el XML por separado y ' +
+      'su contabilidad los junta a mano.\n\n- Un solo correo, dos adjuntos\n' +
+      '- O un zip, les da igual\n\nFalta preguntar si lo quieren también en el portal.',
+  },
   { id: 'i2', text: '¿Podemos ver cuánto cuesta cada instancia al mes?', from: 'Dirección', when: 'hace 2 h' },
   { id: 'i3', text: 'Se cae el portal cuando entran todos a las 9', from: 'Soporte', when: 'ayer' },
   { id: 'i4', text: 'Auditoría pidió el registro de cambios de los últimos 6 meses', from: 'Calidad', when: 'hace 3 d' },
 ];
 
+// The planner's board: high-level cards, one column per stage. Objectives get
+// a column of their own because they are what every other card is FOR.
 export const kanban = [
   {
     col: 'Por decidir',
     cards: [
       { title: 'Costo por instancia', obj: 2, prio: 'P3', due: '' },
-      { title: 'Registro de cambios exportable', obj: 4, prio: 'P3', due: '30 sep' },
+      { title: 'Registro de cambios exportable', obj: 4, prio: 'P3', due: '2026-09-30' },
     ],
   },
   {
     col: 'Planeado',
     cards: [
-      { title: 'Factura PDF + XML', obj: 1, prio: 'P2', due: '12 sep' },
-      { title: 'Presupuesto de infraestructura', obj: 3, prio: 'P3', due: '20 sep' },
+      { title: 'Factura PDF + XML', obj: 1, prio: 'P2', due: '2026-09-12' },
+      { title: 'Presupuesto de infraestructura', obj: 3, prio: 'P3', due: '2026-09-20' },
     ],
   },
   {
     col: 'En curso',
     cards: [
-      { title: 'Rate limiting del portal', obj: 1, prio: 'P1', due: '8 sep' },
-      { title: 'Migración a PocketBase', obj: 5, prio: 'P2', due: '25 sep' },
+      {
+        title: 'Rate limiting del portal',
+        obj: 1,
+        prio: 'P1',
+        due: '2026-09-08',
+        impact: 'alto',
+        urgency: 'alta',
+        notes:
+          '## Por qué existe\n\nA las 9 entra **todo el mundo** y el portal se cae. ' +
+          'No es carga sostenida, es un pico.\n\n## Qué es verdad cuando esté hecho\n\n' +
+          '- [x] Medimos el pico real, no el promedio\n' +
+          '- [ ] El portal responde a las 9:00 sin errores\n' +
+          '- [ ] Y lo dice un panel, no una persona',
+      },
+      { title: 'Migración a PocketBase', obj: 5, prio: 'P2', due: '2026-09-25' },
     ],
   },
   {
     col: 'En revisión',
-    cards: [{ title: 'Reportes de rentabilidad', obj: 2, prio: 'P2', due: '9 sep' }],
+    cards: [{ title: 'Reportes de rentabilidad', obj: 2, prio: 'P2', due: '2026-09-09' }],
   },
   {
     col: 'Hecho',
-    cards: [{ title: 'Auditoría ISO 9001', obj: 4, prio: 'P2', due: '1 sep' }],
+    cards: [{ title: 'Auditoría ISO 9001', obj: 4, prio: 'P2', due: '2026-09-01' }],
   },
+];
+
+// What the calendar shows: the kanban's cards on the days they are due, plus
+// the two meetings a week has. Dates are absolute rather than "in 3 days" —
+// a mock that drifts with the clock is one that looks broken next month.
+export const calEvents = [
+  { id: 'e1', title: 'Rate limiting del portal', start: '2026-09-08', prio: 'P1' },
+  { id: 'e2', title: 'Reportes de rentabilidad', start: '2026-09-09', prio: 'P2' },
+  { id: 'e3', title: 'Revisión con Bea', start: '2026-09-09T11:30', end: '2026-09-09T12:30', allDay: false },
+  { id: 'e4', title: 'Factura PDF + XML', start: '2026-09-12', prio: 'P2' },
+  { id: 'e5', title: 'Presupuesto de infraestructura', start: '2026-09-20', prio: 'P3' },
+  { id: 'e6', title: 'Migración a PocketBase', start: '2026-09-25', prio: 'P2' },
+  { id: 'e7', title: 'Registro de cambios exportable', start: '2026-09-30', prio: 'P3' },
 ];
 
 // A week, with what is due in it. The calendar's whole job is to answer "what

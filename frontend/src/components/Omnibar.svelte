@@ -66,10 +66,16 @@
 </script>
 
 <Dialog {open} onOpenChange={(e: { open: boolean }) => (open = e.open)}>
-  <Dialog.Backdrop class="omni-scrim" />
   <Portal>
-    <Dialog.Positioner class="omni-pos">
-      <Dialog.Content class="omni">
+    <Dialog.Backdrop
+      class="fixed inset-0 bg-surface-50-950/50"
+      style="z-index: var(--z-drawer-scrim)" />
+    <!-- Near the top, not centred: the list grows downward, and a box that
+         grows from the middle of the screen moves the field you are typing in. -->
+    <Dialog.Positioner
+      class="fixed inset-0 flex items-start justify-center p-4 pt-[12vh]"
+      style="z-index: var(--z-drawer)">
+      <Dialog.Content class="omni card bg-surface-100-900 w-full max-w-xl p-0 shadow-xl">
         <label class="field">
           <SearchIcon class="size-4 shrink-0" />
           <!-- svelte-ignore a11y_autofocus -->
@@ -102,35 +108,14 @@
 </Dialog>
 
 <style>
-  :global(.omni-scrim) {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-drawer-scrim);
-    background: color-mix(in oklab, var(--bg) 45%, transparent);
-    backdrop-filter: blur(2px);
-  }
-  :global(.omni-pos) {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-drawer);
-    display: flex;
-    justify-content: center;
-    /* Near the top, not centred: the list grows downward, and a box that grows
-       from the middle of the screen moves the field you are typing in. */
-    align-items: flex-start;
-    padding-top: 12vh;
-    pointer-events: none;
-  }
+  /* Skeleton ships no CSS for Dialog; the surface comes from its own utilities
+     (`card bg-surface-100-900 shadow-xl`) and only the two things it cannot
+     know are ours: the list must be able to scroll inside the panel, and the
+     panel must clip its own rounded corners. */
   :global(.omni) {
-    pointer-events: auto;
-    width: min(560px, 92vw);
-    max-height: 70vh;
     display: flex;
     flex-direction: column;
-    border: 1px solid var(--line);
-    border-radius: 16px;
-    background: var(--surface-solid);
-    box-shadow: 0 30px 80px var(--shadow-strong);
+    max-height: 70vh;
     overflow: hidden;
   }
 

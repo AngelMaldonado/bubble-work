@@ -83,6 +83,10 @@
 </article>
 
 <style>
+  /* `--wip` was v0's name for the accent and does not exist here. Ported
+     unchanged, every rule that used it resolved to nothing: links, quotes,
+     inline code and — the one that mattered — a TICKED checkbox, which was
+     drawn exactly like an empty one. */
   /* ---- prose: matches the mds tool's render (serif body, sans headings) ---- */
   .prose {
     --code-bg: color-mix(in oklab, var(--text) 7%, transparent);
@@ -147,7 +151,7 @@
     margin: 0.3em 0;
   }
   .prose :global(a) {
-    color: var(--wip);
+    color: var(--accent);
     text-decoration: underline;
     text-decoration-thickness: 0.08em;
     text-underline-offset: 0.18em;
@@ -175,9 +179,9 @@
     font-size: 0.82em;
   }
   .prose :global(a.plane-img:hover) {
-    color: var(--wip);
-    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
-    background: color-mix(in oklab, var(--wip) 8%, transparent);
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
   }
   /* Plane @mentions. Invisible until ARTIFACT-EDITING.md Phase 2 — a
      <mention-component> rendered to nothing at all — so this is the first time
@@ -188,15 +192,15 @@
     font-family: var(--sans);
     font-size: 0.88em;
     font-weight: 600;
-    color: var(--wip);
-    background: color-mix(in oklab, var(--wip) 12%, transparent);
+    color: var(--accent);
+    background: color-mix(in oklab, var(--accent) 12%, transparent);
     white-space: nowrap;
   }
   .prose :global(blockquote) {
     margin-left: 0;
     padding: 0.25em 1.15em;
     color: var(--muted);
-    border-left: 4px solid var(--wip);
+    border-left: 4px solid var(--accent);
     background: color-mix(in oklab, var(--text) 4%, transparent);
     border-radius: 0 10px 10px 0;
   }
@@ -271,8 +275,8 @@
     place-content: center;
   }
   .prose :global(input[type='checkbox']:checked) {
-    border-color: var(--wip);
-    background: var(--wip);
+    border-color: var(--accent);
+    background: var(--accent);
   }
   .prose :global(input[type='checkbox']:checked::before) {
     width: 0.5em;
@@ -312,7 +316,7 @@
   /* a rendered todo is a control, not decoration (Phase 6) */
   .prose :global(input[type='checkbox']) {
     cursor: pointer;
-    accent-color: var(--wip);
+    accent-color: var(--accent);
     width: 0.95em;
     height: 0.95em;
     margin-right: 0.35em;
@@ -339,6 +343,17 @@
   .prose.compact :global(p:last-child) {
     margin-bottom: 0;
   }
+  /* Headings come down with the body. Left at page scale a `##` inside a field
+     is larger than the dialog's own title, which reads as the field shouting. */
+  .prose.compact :global(h1) { font-size: 1.15rem; margin: 0.6rem 0 0.3rem; padding: 0; border: none; }
+  .prose.compact :global(h2) { font-size: 1rem; margin: 0.7rem 0 0.3rem; padding: 0; border: none; }
+  .prose.compact :global(h3),
+  .prose.compact :global(h4) { font-size: 0.92rem; margin: 0.6rem 0 0.25rem; }
+  .prose.compact :global(h1:first-child),
+  .prose.compact :global(h2:first-child) { margin-top: 0; }
+  .prose.compact :global(ul),
+  .prose.compact :global(ol) { margin: 0.3rem 0; }
+  .prose.compact :global(li) { margin: 0.15rem 0; }
 
   @media (max-width: 640px) {
     .prose {

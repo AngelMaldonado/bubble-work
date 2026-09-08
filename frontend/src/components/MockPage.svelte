@@ -6,10 +6,9 @@
   // It exists because a design system can be right control by control and still
   // add up to the wrong product. The only way to see that is to look at the
   // whole thing at once, before any of it is wired to real data.
-  import { Navigation, Portal, Progress, Tooltip, Menu } from '@skeletonlabs/skeleton-svelte';
+  import { Navigation, Portal, Tooltip, Menu } from '@skeletonlabs/skeleton-svelte';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import MoreVerticalIcon from '@lucide/svelte/icons/more-vertical';
-  import InboxIcon from '@lucide/svelte/icons/inbox';
   import Orb from './Orb.svelte';
   import BubbleDrawer from './BubbleDrawer.svelte';
   import ThreadView from './ThreadView.svelte';
@@ -17,11 +16,13 @@
   import BrandOrb from './BrandOrb.svelte';
   import Omnibar, { type Hit } from './Omnibar.svelte';
   import WikiView from './WikiView.svelte';
+  import PlannerView from './PlannerView.svelte';
+  import { renderMock } from '../lib/mockmd';
   import { edgeFade } from '../lib/fade.svelte';
   import {
     bubbles, drawerThreads,
     threadDoc, threadHTML, wiki, wikiHTML,
-    objectives, priorityMeaning, priorityMap, inbox, kanban, week, projects, me, online,
+    objectives, priorityMeaning, priorityMap, inbox, kanban, calEvents, projects, me, online,
     type MockBubble,
   } from '../lib/mock';
   import { bandOrder, bandFace, bandName } from '../lib/bands';
@@ -37,6 +38,7 @@
   function toggle(v: View) {
     view = view === v ? 'board' : v;
   }
+
 
   let railed = $state(false);
   let paneEl = $state<HTMLElement | null>(null);
@@ -67,8 +69,28 @@
   let drawerOpen = $state(false);
   let open = $state<MockBubble | null>(null);
   let thread = $state(false);
+  // The board and its chrome are one screen, and a view REPLACES it rather than
+  // covering it. Painting a view over a live board left the orbs and a second
+  // HUD visible underneath — visible and unclickable, which is the worst of
+  // both. The page's gradient stays because it belongs to the body, not here.
+  const onBoard = $derived(view === 'board' && !thread);
 
   let picked = $state('docs/arquitectura/overview.md');
+
+  // The planner's state, wired for real: dragging a card, capturing a note and
+  // editing an objective all have to survive being looked at.
+  let board = $state(
+    kanban.map((c, i) => ({
+      id: 'c' + i,
+      name: c.col,
+      // Spread, not a field list: picking fields by hand is how `notes` and the
+      // two axes were silently dropped on the way to the board.
+      cards: c.cards.map((x, j) => ({ ...x, id: `c${i}k${j}` })),
+    })),
+  );
+  let notes = $state([...inbox]);
+  let goals = $state(objectives.map((o) => ({ ...o })));
+  let prios = $state(priorityMeaning.map((p) => [...p] as [string, string, string, string]));
 
   // Wired for real, like the projects: an action you can only look at tells you
   // nothing about whether it is in the right place.
@@ -139,6 +161,7 @@
 
 <svelte:window onkeydown={hotkey} />
 
+{#if onBoard}
 <div class="mock">
   <!-- The projects live here. A workspace is the boundary for a body of work
        and the thing you switch between all day, so it gets the persistent
@@ -273,165 +296,13 @@
 
         </div>
 
-      {:else if view === 'planner'}
-        <!-- ── the planner: the strategic layer ─────────────────────────── -->
-        <div class="planner">
-          <section class="col-span-full">
-            <h2 class="display text-xl">Planeador</h2>
-            <p class="faint text-sm">
-              La capa que decide. El board dice qué está vivo; esto dice qué debería.
-            </p>
-          </section>
-
-          <!-- Inbox: what arrived and has not been shaped yet. -->
-          <section class="card glass p-4">
-            <header class="mb-3 flex items-center gap-2">
-              <InboxIcon class="size-4" />
-              <h3 class="text-sm font-bold tracking-widest uppercase">Inbox</h3>
-              <span class="faint rounded-full px-2 text-xs" style="background: var(--hover)">{inbox.length}</span>
-            </header>
-            <ul class="space-y-2">
-              {#each inbox as it (it.id)}
-                <li class="rounded-lg p-2 text-sm" style="background: var(--hover)">
-                  <p>{it.text}</p>
-                  <p class="faint mt-1 text-xs">{it.from} · {it.when}</p>
-                </li>
-              {/each}
-            </ul>
-            <p class="faint mt-3 text-xs">
-              Entra vago y sale con objetivo, impacto y urgencia — de ahí sale la
-              prioridad, nunca de teclearla.
-            </p>
-          </section>
-
-          <!-- The week. Its whole job is to answer what lands before Friday. -->
-          <section class="card glass p-4">
-            <header class="mb-3 flex items-center gap-3">
-              <h3 class="text-sm font-bold tracking-widest uppercase">Semana</h3>
-              <div class="faint ml-auto flex gap-1 text-xs">
-                <span class="rounded px-2 py-0.5" style="background: var(--hover)">semana</span>
-                <span>timeline</span><span>día</span>
-              </div>
-            </header>
-            <div class="grid grid-cols-7 gap-1">
-              {#each week as d (d.date)}
-                <div class="min-h-24 rounded-lg p-1.5" style="background: var(--hover)">
-                  <div class="faint text-[0.65rem] uppercase">{d.day} {d.date}</div>
-                  {#each d.items as it (it.t)}
-                    <div class="mt-1 rounded p-1 text-[0.68rem] leading-tight"
-                         style="background: var(--surface-solid)">
-                      <span class={prioTone[it.p]}>{it.p}</span>
-                      <div class="truncate">{it.t}</div>
-                    </div>
-                  {/each}
-                </div>
-              {/each}
-            </div>
-          </section>
-
-          <!-- The high-level kanban: organisation by objective, not by person. -->
-          <section class="card glass col-span-full p-4">
-            <h3 class="mb-3 text-sm font-bold tracking-widest uppercase">Kanban de alto nivel</h3>
-            <div class="grid gap-3" style="grid-template-columns: repeat({kanban.length}, minmax(0, 1fr))">
-              {#each kanban as col (col.col)}
-                <div>
-                  <div class="faint mb-2 flex items-center gap-2 text-xs uppercase">
-                    {col.col}
-                    <span class="rounded-full px-1.5" style="background: var(--hover)">{col.cards.length}</span>
-                  </div>
-                  <div class="space-y-2">
-                    {#each col.cards as c (c.title)}
-                      <article class="rounded-lg border p-2 text-sm"
-                               style="border-color: var(--line); background: var(--surface-solid)">
-                        <div class="leading-snug">{c.title}</div>
-                        <div class="mt-1.5 flex items-center gap-2 text-xs">
-                          <span class={prioTone[c.prio]}>{c.prio}</span>
-                          <Tooltip>
-                            <Tooltip.Trigger>
-                              <span class="faint">O{c.obj}</span>
-                            </Tooltip.Trigger>
-                            <Portal>
-                              <Tooltip.Positioner>
-                                <Tooltip.Content>{objectives[c.obj - 1].name}</Tooltip.Content>
-                              </Tooltip.Positioner>
-                            </Portal>
-                          </Tooltip>
-                          {#if c.due}<span class="faint ml-auto">{c.due}</span>{/if}
-                        </div>
-                      </article>
-                    {/each}
-                  </div>
-                </div>
-              {/each}
-            </div>
-          </section>
-
-          <!-- The objectives, and how the work actually divides between them. -->
-          <section class="card glass p-4">
-            <h3 class="mb-3 text-sm font-bold tracking-widest uppercase">Objetivos</h3>
-            <ul class="space-y-3">
-              {#each objectives as o (o.n)}
-                <li>
-                  <div class="flex items-baseline gap-2 text-sm">
-                    <span class="faint tabular-nums">{o.n}</span>
-                    <span class="font-medium">{o.name}</span>
-                    <span class="faint ml-auto text-xs tabular-nums">{o.share}%</span>
-                  </div>
-                  <p class="faint text-xs">{o.why}</p>
-                  <Progress value={o.share} class="mt-1"><Progress.Track><Progress.Range /></Progress.Track></Progress>
-                </li>
-              {/each}
-            </ul>
-          </section>
-
-          <!-- The map that decides the priority, and what each one means. -->
-          <section class="card glass p-4">
-            <h3 class="mb-3 text-sm font-bold tracking-widest uppercase">Prioridad</h3>
-            <table class="w-full text-center text-sm">
-              <thead class="faint text-xs">
-                <tr>
-                  <th></th>
-                  {#each priorityMap.cols as c (c)}<th class="font-normal">{c}</th>{/each}
-                </tr>
-              </thead>
-              <tbody>
-                {#each priorityMap.rows as row (row[0])}
-                  <tr>
-                    <th class="faint py-1 pr-2 text-right text-xs font-normal">{row[0]}</th>
-                    {#each row.slice(1) as cell, i (i)}
-                      <td class="py-1">
-                        <span class="inline-block rounded px-2 py-0.5 {prioTone[cell]}"
-                              style="background: var(--hover)">{cell}</span>
-                      </td>
-                    {/each}
-                  </tr>
-                {/each}
-              </tbody>
-            </table>
-            <dl class="mt-4 space-y-1.5 text-xs">
-              {#each priorityMeaning as [p, name, means, what] (p)}
-                <div class="flex gap-2">
-                  <dt class="w-16 shrink-0 {prioTone[p]}">{p} {name}</dt>
-                  <dd class="faint"><b class="muted">{means}.</b> {what}.</dd>
-                </div>
-              {/each}
-            </dl>
-            <p class="faint mt-3 text-xs">
-              «Lo necesito urgente» se responde con «¿pasa algo si no se hace hoy?».
-              La prioridad se deriva del mapa, como el heat se deriva de la evidencia.
-            </p>
-          </section>
-        </div>
-
       {/if}
     </main>
   </div>
 </div>
 
-{#if view === 'board'}
-  <!-- The board's table of contents. Only the board has bands to map. -->
-  <Minimap items={mapItems} scroller={paneEl} />
-{/if}
+<!-- The board's table of contents. Only the board has bands to map. -->
+<Minimap items={mapItems} scroller={paneEl} />
 
 <!-- Who is here, top right. Fixed rather than in the pane: presence is about
      now, and it should not scroll away with the board. -->
@@ -500,6 +371,8 @@
   </Portal>
 </Tooltip>
 
+{/if}
+
 <Omnibar bind:open={omni} items={omniItems} prompt={omniPrompt} />
 
 <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
@@ -534,11 +407,32 @@
   onnewthread={() => (threads = [{ seq: nextSeq++, title: 'Thread nuevo', lifecycle: 'hot', state: 'Backlog', age: 'ahora' }, ...threads])}
   ondeletethread={(seq) => (threads = threads.filter((t) => t.seq !== seq))} />
 
+{#if view === 'planner'}
+  <!-- The planner is a view too — the strategic layer gets a screen, not a tab
+       inside the operational one. -->
+  <!-- No background of its own: the page's gradient and its grain are the app's
+       ground, and a view that paints over them is a screen that arrived from
+       somewhere else. -->
+  <div class="fixed inset-0" style="z-index: var(--z-view)">
+    <PlannerView
+      workspace={currentName}
+      bind:columns={board}
+      bind:inbox={notes}
+      events={calEvents}
+      bind:objectives={goals}
+      bind:priorities={prios}
+      {priorityMap}
+      render={renderMock}
+      onback={() => (view = 'board')}
+      onsearch={() => search()} />
+  </div>
+{/if}
+
 {#if view === 'wiki'}
   <!-- The wiki is a VIEW, like a thread: same shell, its own way back. It used
        to be a column inside the board's pane, which made a page feel like a
        panel on the board rather than a place. -->
-  <div class="fixed inset-0" style="background: var(--bg); z-index: var(--z-view)">
+  <div class="fixed inset-0" style="z-index: var(--z-view)">
     <WikiView
       workspace={currentName}
       path={picked}
@@ -553,7 +447,7 @@
 
 {#if thread}
   <!-- A view, not a modal: it covers the board and brings its own chrome. -->
-  <div class="fixed inset-0" style="background: var(--bg); z-index: var(--z-view)">
+  <div class="fixed inset-0" style="z-index: var(--z-view)">
     <ThreadView
       seq={14}
       title="Evidencia observada, no inferida"

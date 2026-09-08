@@ -630,12 +630,15 @@
   }
   .elsewhere .link { border: none; background: none; color: inherit; text-decoration: underline; cursor: pointer; padding: 0; }
 
-  .prose { max-width: 72ch; white-space: pre-wrap; line-height: 1.65; }
+  .prose { max-width: 940px; margin-inline: auto; white-space: pre-wrap; line-height: 1.65; }
   /* The box CodeMirror mounts into. `overflow: hidden` so the rounded corners
      clip its scroller, and the height is fixed so the editor scrolls itself
      rather than growing the page under it. */
   .editors {
-    max-width: 72ch;
+    /* Centred, and the SAME 940px `Prose` uses: switching between reading and
+       writing must not move the text sideways. */
+    max-width: 940px;
+    margin-inline: auto;
     height: calc(100dvh - var(--topbar-h) - 8rem);
     border: 1px solid var(--line);
     border-radius: 12px;

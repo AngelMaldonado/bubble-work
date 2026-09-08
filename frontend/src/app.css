@@ -223,6 +223,52 @@ body::before {
   backdrop-filter: blur(8px);
 }
 
+/* Priority, as four colours.
+ *
+ * A ramp, not four unrelated hues: red → orange → olive → green is the same
+ * gradient a person already reads as "stop / soon / later / whenever", so the
+ * chip is legible before the letters are. Each is a fill plus the ink that
+ * survives on it, because a P1 written in red on red is a P1 nobody reads.
+ *
+ * They are NOT the band accents. A band is about heat and a priority is about
+ * consequence; sharing a palette would make one look like the other. */
+:root {
+  --p1: oklch(0.55 0.19 27);
+  --p2: oklch(0.58 0.15 62);
+  --p3: oklch(0.56 0.11 95);
+  --p4: oklch(0.52 0.11 155);
+  --on-p: oklch(0.99 0 0);
+}
+:root[data-mode='dark'] {
+  --p1: oklch(0.5 0.17 27);
+  --p2: oklch(0.52 0.13 62);
+  --p3: oklch(0.5 0.1 95);
+  --p4: oklch(0.46 0.1 155);
+}
+
+/* The chip itself, so every surface spells a priority the same way. */
+.prio-chip {
+  display: inline-block;
+  padding: 0.05rem 0.5rem;
+  border-radius: 6px;
+  color: var(--on-p);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.prio-P1 { background: var(--p1); }
+.prio-P2 { background: var(--p2); }
+.prio-P3 { background: var(--p3); }
+.prio-P4 { background: var(--p4); }
+
+/* The accent when nothing is speaking for a band.
+ *
+ * `--accent` was only ever set BY a band, so everything outside one — a dialog,
+ * the omnibar, a ticked checkbox in a description — asked for a variable that
+ * did not exist and silently got nothing. The default is the primary, not a
+ * band colour: a screen with no band has no temperature to report. */
+:root { --accent: var(--color-primary-500); }
+
 .band-hot { --accent: var(--hot); }
 .band-dormant { --accent: var(--dormant); }
 .band-rip { --accent: var(--rip); }

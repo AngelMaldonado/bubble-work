@@ -169,6 +169,38 @@ class Api {
     });
   }
 
+  renameWorkspace(id: string, name: string) {
+    return this.call<Workspace>(`/api/collections/workspaces/records/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  // The slug is NOT renamed with it. It is the workspace's address on disk —
+  // the repository's directory — and a name people change on a Tuesday must not
+  // move a git repo.
+  deleteWorkspace(id: string) {
+    return this.call<unknown>(`/api/collections/workspaces/records/${id}`, { method: 'DELETE' });
+  }
+
+  createThread(fields: { workspace: string; bubble?: string; name: string }) {
+    return this.call<{ id: string; seq: number }>('/api/collections/threads/records', {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  deleteThread(id: string) {
+    return this.call<unknown>(`/api/collections/threads/records/${id}`, { method: 'DELETE' });
+  }
+
+  createBubble(fields: { workspace: string; name: string; outcome?: string }) {
+    return this.call<{ id: string }>('/api/collections/bubbles/records', {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    });
+  }
+
   board(workspace: string) {
     return this.call<Board>(`/api/workspaces/${workspace}/board`);
   }

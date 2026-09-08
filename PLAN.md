@@ -626,6 +626,20 @@ Heat is refetched, never recomputed in the browser: it is a pure function of
 evidence and TIME, the server holds both, and a board that ages client-side drifts
 from the one everybody else is looking at.
 
+The real screen and the mock now draw the SAME components: `Shell.svelte` (the
+column of workspaces, the rail, the pinned "Nuevo", the one pane that scrolls)
+and `BubbleBoard.svelte` (bands down the page, orbs centred, an empty band still
+drawn). They were extracted OUT of the mock rather than reimplemented from it —
+the mock is where the shape was worked out, and a second copy of that CSS is how
+the drawing and the thing drift apart. The mock keeps only what has nothing
+behind it yet: presence, and the planner.
+
+What the column does is real: selecting, renaming in place, and creating a
+workspace — whose slug is derived once and never follows a rename, because the
+slug is the repository's directory on disk. Deleting asks first: the relations
+cascade, so a workspace takes its bubbles, threads and evidence with it. The
+markdown survives in its repo, which is the point of keeping it there.
+
 **4b — the thread interior.** *(built)* `Prose.svelte` + `lib/prose.ts` — the ONE
 renderer, because a second copy of that CSS is how two documents start looking
 different — plus `ThreadToc`, a CodeMirror editor with optional vim, and mermaid

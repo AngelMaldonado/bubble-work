@@ -8,7 +8,8 @@
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
-  import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
+  import { Dialog, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
+  import Shell from './components/Shell.svelte';
   import ThemePage from './components/ThemePage.svelte';
   import MockPage from './components/MockPage.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
@@ -27,7 +28,9 @@
   let signedIn = $state(false);
   let workspaces = $state<Workspace[]>([]);
   let current = $state<Workspace | null>(null);
-  let creating = $state(false);
+  // The box that scrolls. The minimap needs it: the shell holds still and the
+  // pane moves, so a spy listening to the window sees a page that never scrolls.
+  let paneEl = $state<HTMLElement | null>(null);
 
   async function boot() {
     const me = await api.refresh();
@@ -37,7 +40,6 @@
       // Keep the one being looked at across a reload of the list.
       current = workspaces.find((w) => w.id === current?.id) ?? workspaces[0] ?? null;
     }
-    creating = false;
     ready = true;
   }
   boot();
@@ -53,6 +55,61 @@
     open = null;
     visit += 1;
   }
+
+  // ---- the workspaces in the column ----------------------------------------
+  //
+  // Founding one takes a name AND a slug: the slug is its address on disk — the
+  // git repository's directory — so it is derived once here and never follows a
+  // rename. A name changes on a Tuesday; a repository must not move with it.
+  async function createWorkspace() {
+    const name = 'Workspace nuevo';
+    const slug = 'ws-' + Math.random().toString(36).slice(2, 8);
+    try {
+      const made = await api.createWorkspace(name, slug);
+      workspaces = [...workspaces, made];
+      current = made;
+      return made.id; // the column names it in place
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  async function renameWorkspace(id: string, name: string) {
+    try {
+      const out = await api.renameWorkspace(id, name);
+      workspaces = workspaces.map((w) => (w.id === id ? out : w));
+      if (current?.id === id) current = out;
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  // Deleting a workspace takes its rows with it — threads, bubbles, evidence —
+  // because the relations cascade. The markdown survives on disk, in its repo,
+  // which is the whole point of keeping it there; the board that indexed it does
+  // not. That is not a click to honour without asking.
+  let doomed = $state<Workspace | null>(null);
+
+  async function deleteWorkspace(id: string) {
+    doomed = workspaces.find((w) => w.id === id) ?? null;
+  }
+
+  async function reallyDelete() {
+    const id = doomed?.id;
+    doomed = null;
+    if (!id) return;
+    try {
+      await api.deleteWorkspace(id);
+      workspaces = workspaces.filter((w) => w.id !== id);
+      if (current?.id === id) current = workspaces[0] ?? null;
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  // What the server refused, said out loud. A rename that silently does nothing
+  // is worse than one that fails.
+  let error = $state('');
 
   // The wiki, by path. `null` is "not looking at it" rather than a separate
   // flag, so there is one place that says which page is on screen.
@@ -200,69 +257,102 @@
   <p class="faint p-6 text-sm">…</p>
 {:else if !signedIn}
   <SignIn onDone={boot} />
+{:else if !workspaces.length}
+  <!-- Anybody signed in may found one, and the founder becomes its lead. Saying
+       "a lead has to invite you" was simply false, and left a fresh install with
+       nothing to do. This is the only screen without the shell: a column of
+       workspaces with no workspaces in it is a frame around nothing. -->
+  <div class="mx-auto max-w-md p-6 sm:pt-16">
+    <p class="muted mb-3 text-sm">Todavía no hay ningún workspace. Crea el primero.</p>
+    <NewWorkspace onDone={boot} />
+  </div>
 {:else}
-  <div class="mx-auto max-w-6xl p-4 sm:p-6">
-    <header class="mb-6 flex flex-wrap items-center gap-3">
-      <h1 class="display text-lg">bubble.work</h1>
-
-      {#if workspaces.length > 1}
-        <!-- A Menu rather than a native <select>: the popup of a <select> is drawn
-             by the operating system, where no stylesheet reaches it, and a
-             switcher is something people look at often enough to notice. -->
-        <Menu onSelect={(e: { value: string }) => (current = workspaces.find((w) => w.id === e.value) ?? current)}>
-          <Menu.Trigger>
-            <span class="btn btn-sm preset-tonal-surface">{current?.name ?? 'workspace'} ▾</span>
-          </Menu.Trigger>
-          <Portal>
-            <Menu.Positioner>
-            <Menu.Content>
-              {#each workspaces as w (w.id)}
-                <Menu.Item value={w.id}><Menu.ItemText>{w.name}</Menu.ItemText></Menu.Item>
-              {/each}
-            </Menu.Content>
-            </Menu.Positioner>
-          </Portal>
-        </Menu>
-      {:else if current}
-        <span class="muted text-sm">{current.name}</span>
-      {/if}
-
-      {#if workspaces.length}
-        <button class="faint text-sm hover:[color:var(--text)]" onclick={() => (creating = !creating)}>
-          {creating ? 'cancelar' : '+ workspace'}
-        </button>
-      {/if}
-
-      <div class="ml-auto flex items-center gap-3 text-sm">
-        <!-- The theme control is the floating one now: it reaches every screen,
-             including the ones without this header. -->
-        <button class="faint hover:[color:var(--text)]" onclick={() => (omni = true)}>buscar · ⌘K</button>
-        <button class="faint hover:[color:var(--text)]" onclick={() => openWiki('README.md')}>wiki</button>
-        <button class="faint hover:[color:var(--text)]" onclick={() => go('/theme')}>tema</button>
-        <button class="faint hover:[color:var(--text)]" onclick={() => { api.signOut(); signedIn = false; }}>
-          salir
-        </button>
-      </div>
-    </header>
-
-    {#if creating || !workspaces.length}
-      {#if !workspaces.length}
-        <!-- Anybody signed in may found one, and the founder becomes its lead.
-             Saying "a lead has to invite you" was simply false, and left a fresh
-             install with nothing to do. -->
-        <p class="muted mb-3 text-sm">Todavía no hay ningún workspace. Crea el primero.</p>
-      {/if}
-      <NewWorkspace onDone={boot} />
-    {/if}
-
-    {#if current && !creating}
+  <Shell
+    items={workspaces.map((w) => ({ id: w.id, name: w.name, hint: w.slug }))}
+    current={current?.id ?? ''}
+    label="Workspaces"
+    newLabel="Nuevo"
+    bind:pane={paneEl}
+    onselect={(id) => (current = workspaces.find((w) => w.id === id) ?? current)}
+    onrename={renameWorkspace}
+    ondelete={deleteWorkspace}
+    oncreate={createWorkspace}>
+    {#if current}
       {#key visit}
         <!-- The board's data is lifted here as it lands: the omnibar searches
              what is on screen, and two fetches of the same board could disagree
              about what is on it. -->
-        <Board workspace={current} onOpen={openThread} onload={(b) => (board = b)} />
+        <Board workspace={current} onOpen={openThread} onload={(b) => (board = b)} scroller={paneEl} />
       {/key}
     {/if}
+  </Shell>
+
+  <!-- The verbs that live over the page rather than in it. The theme button
+       holds the corner and these sit to its left, the same three places they
+       occupy in the mock. -->
+  <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+    <Tooltip.Trigger>
+      {#snippet element(attributes: Record<string, unknown>)}
+        <button class="float-btn search-btn" {...attributes} onclick={() => (omni = true)}>
+          <span aria-hidden="true">🔍</span>
+        </button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Portal>
+      <Tooltip.Positioner><Tooltip.Content>Buscar · ⌘K</Tooltip.Content></Tooltip.Positioner>
+    </Portal>
+  </Tooltip>
+
+  <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+    <Tooltip.Trigger>
+      {#snippet element(attributes: Record<string, unknown>)}
+        <button class="float-btn wiki-btn" {...attributes} onclick={() => openWiki('README.md')}>
+          <span aria-hidden="true">📖</span>
+        </button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Portal>
+      <Tooltip.Positioner>
+        <Tooltip.Content>Wiki de {current?.name ?? ''}</Tooltip.Content>
+      </Tooltip.Positioner>
+    </Portal>
+  </Tooltip>
+
+  <!-- Signing out is not a floating button: it is rare, and a rare verb next to
+       the two you press all day is the one you press by accident. It lives in
+       the omnibar, behind `/`. -->
+{/if}
+
+{#if doomed}
+  <Dialog open onOpenChange={() => (doomed = null)}>
+    <Portal>
+      <Dialog.Backdrop class="fixed inset-0 bg-surface-50-950/50" style="z-index: var(--z-drawer-scrim)" />
+      <Dialog.Positioner
+        class="fixed inset-0 flex items-center justify-center p-4"
+        style="z-index: var(--z-drawer)">
+        <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
+          <Dialog.Title class="text-lg font-bold">¿Eliminar «{doomed.name}»?</Dialog.Title>
+          <Dialog.Description class="muted text-sm">
+            Se van con él sus burbujas, sus threads y su evidencia. Los documentos
+            siguen en el repositorio en disco — para eso están ahí —, pero el
+            tablero que los ordenaba no vuelve.
+          </Dialog.Description>
+          <div class="flex justify-end gap-2">
+            <button class="btn btn-sm preset-tonal-surface" onclick={() => (doomed = null)}>Cancelar</button>
+            <button class="btn btn-sm preset-filled-error-500" onclick={reallyDelete}>Eliminar</button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Portal>
+  </Dialog>
+{/if}
+
+{#if error}
+  <!-- What the server refused. Fixed at the top rather than in the pane: the
+       refusal belongs to the action, and the pane may have scrolled since. -->
+  <div class="err" role="alert">
+    <span>{error}</span>
+    <button onclick={() => (error = '')} aria-label="cerrar">×</button>
   </div>
 {/if}
 
@@ -272,3 +362,25 @@
 {#if signedIn && current}
   <Omnibar bind:open={omni} {items} {found} {commands} {searching} onquery={query} onpick={pick} />
 {/if}
+
+<style>
+  .err {
+    position: fixed;
+    top: 1rem;
+    left: 50%;
+    transform: translateX(-50%);
+    z-index: var(--z-toast);
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    max-width: min(92vw, 520px);
+    padding: 0.6rem 0.8rem;
+    border: 1px solid var(--color-error-500);
+    border-radius: 12px;
+    background: var(--surface-solid);
+    color: var(--text);
+    font-size: 0.85rem;
+    box-shadow: 0 8px 24px rgb(0 0 0 / 0.22);
+  }
+  .err button { color: var(--faint); font-size: 1rem; line-height: 1; }
+</style>

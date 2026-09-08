@@ -302,3 +302,41 @@ body::before {
 .sunk { opacity: 0.62; filter: saturate(0.7); }
 .muted { color: var(--muted); }
 .faint { color: var(--faint); }
+
+/* The floating buttons, along the bottom-right edge, above the theme one.
+   Here rather than in a component because two screens draw them — the real app
+   and the mock — and a control that changes place between screens is a control
+   people stop looking for. Emoji rather than lucide: these are the only
+   controls that live over the page instead of in it, and an emoji reads as a
+   thing you press rather than as chrome.
+
+   A ROW, not a column: three buttons read as a group of three, and a stack
+   reads as a menu you have to climb. The theme button holds the corner and
+   these sit to its left, one row (2.6rem) plus a 0.6rem gap apart, so a fourth
+   is another 3.2rem and nothing else. */
+.float-btn {
+  position: fixed;
+  bottom: 1rem;
+  z-index: var(--z-chrome);
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-content: center;
+  font-size: 1.15rem;
+  line-height: 1;
+  cursor: pointer;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-solid);
+  box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+  transition: transform 0.15s ease, background 0.15s ease;
+}
+.float-btn:hover { background: var(--hover); transform: translateY(-1px); }
+.float-btn:active { transform: translateY(0); }
+.wiki-btn { right: 4.2rem; }
+.planner-btn { right: 7.4rem; }
+.search-btn { right: 10.6rem; }
+
+@media (prefers-reduced-motion: reduce) {
+  .float-btn { transition: none; }
+}

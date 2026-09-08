@@ -22,7 +22,7 @@
     reason = '',
     owner = '',
     cycleLeft = '',
-    cyclePct = 0,
+    cyclePct = null,
     threads = [],
     onopenthread,
     onnewthread,
@@ -36,10 +36,12 @@
     owner?: string;
     /** what is left of the cycle, in words */
     cycleLeft?: string;
-    /** and the same thing as 0..100, for the bar */
-    cyclePct?: number;
+    /** and the same thing as 0..100, for the bar. `null` draws no bar: a bar
+     *  filled with a number nobody computed is worse than no bar. */
+    cyclePct?: number | null;
     onopenthread?: (seq: number) => void;
-    onnewthread?: () => void;
+    /** create one with the name typed here */
+    onnewthread?: (name: string) => void;
     ondeletethread?: (seq: number) => void;
     threads?: {
       seq: number;
@@ -55,6 +57,9 @@
   // The thread list fades at whichever edge still has list behind it, the same
   // as the project column and the board.
   const fade = edgeFade();
+
+  let naming = $state(false);
+  let fresh = $state('');
 
 </script>
 
@@ -85,12 +90,14 @@
            a whole row of height to say what the bar is already showing, and it
            pushed the bar away from the subtitle it belongs to. "ciclo · quedan
            6 d" and the owner are gone for the same reason. -->
-      <div class="mt-3 flex items-center gap-3">
-        <Progress value={cyclePct} class="flex-1">
-          <Progress.Track><Progress.Range /></Progress.Track>
-        </Progress>
-        <span class="faint shrink-0 text-xs tabular-nums">{cyclePct}%</span>
-      </div>
+      {#if cyclePct !== null}
+        <div class="mt-3 flex items-center gap-3">
+          <Progress value={cyclePct} class="flex-1">
+            <Progress.Track><Progress.Range /></Progress.Track>
+          </Progress>
+          <span class="faint shrink-0 text-xs tabular-nums">{cyclePct}%</span>
+        </div>
+      {/if}
 
       <p class="faint mt-4 shrink-0 text-xs">{threads.length} threads · el más reciente primero</p>
       <ul class="threads mt-1 space-y-0.5" style={fade.style} {@attach fade.attach}>
@@ -136,7 +143,30 @@
            panel always offers, so it sits where the panel ends rather than
            drifting down as threads are added. -->
       <div class="new-thread">
-        <button class="btn btn-sm w-full preset-tonal-surface" onclick={onnewthread}>+ thread</button>
+        <!-- A thread needs a NAME, and it is the only thing it needs. Asking
+             for it here — rather than creating "Thread nuevo" and hoping
+             somebody renames it — is the difference between a list of work and
+             a list of placeholders. -->
+        {#if naming}
+          <input
+            class="new-name"
+            placeholder="¿Cómo se llama?"
+            {@attach (el: HTMLInputElement) => el.focus()}
+            bind:value={fresh}
+            onblur={() => (naming = false)}
+            onkeydown={(e) => {
+              if (e.key === 'Enter' && fresh.trim()) {
+                onnewthread?.(fresh.trim());
+                fresh = '';
+                naming = false;
+              }
+              if (e.key === 'Escape') naming = false;
+            }} />
+        {:else}
+          <button class="btn btn-sm w-full preset-tonal-surface" onclick={() => (naming = true)}>
+            + thread
+          </button>
+        {/if}
       </div>
     </Dialog.Content>
     </Dialog.Positioner>
@@ -144,6 +174,16 @@
 </Dialog>
 
 <style>
+  .new-name {
+    width: 100%;
+    padding: 0.4rem 0.6rem;
+    border: 1px solid var(--accent, var(--line));
+    border-radius: 9px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.9rem;
+  }
+
   /* The panel is a column: header and the new-thread button hold still, the
      list is the only part that moves. */
   :global(.drawer) {

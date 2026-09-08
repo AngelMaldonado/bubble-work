@@ -1,8 +1,12 @@
 <script lang="ts">
-  import { api, type ThreadHeat, type Workspace } from './lib/api';
+  import { api, type Board as BoardData, type ThreadHeat, type Workspace } from './lib/api';
   import SignIn from './components/SignIn.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
+  import Wiki from './components/Wiki.svelte';
+  import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
+  import { bandFace } from './lib/bands';
+  import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
   import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
   import ThemePage from './components/ThemePage.svelte';
@@ -49,7 +53,127 @@
     open = null;
     visit += 1;
   }
+
+  // The wiki, by path. `null` is "not looking at it" rather than a separate
+  // flag, so there is one place that says which page is on screen.
+  let wiki = $state<string | null>(null);
+
+  // ---- the omnibar -----------------------------------------------------------
+  //
+  // What the browser already holds answers instantly; what only the repository
+  // knows is asked for after a pause. Both land in one list because "find the
+  // thread called X" and "find where it says X" are the same question asked
+  // with different confidence.
+  let omni = $state(false);
+  let board = $state<BoardData | null>(null);
+  let found = $state<Hit[]>([]);
+  let searching = $state(false);
+
+  const items = $derived<Hit[]>([
+    ...(board?.threads ?? []).map((t) => ({
+      id: 't:' + t.id,
+      kind: 'thread',
+      icon: bandFace(t.heat.lifecycle),
+      title: t.name,
+      hint: '#' + t.seq,
+      group: 'Threads',
+    })),
+    ...(board?.bubbles ?? []).map((b) => ({
+      id: 'b:' + b.id,
+      kind: 'burbuja',
+      icon: bandFace(b.heat.lifecycle),
+      title: b.name,
+      hint: b.outcome,
+      group: 'Burbujas',
+    })),
+  ]);
+
+  const commands = $derived<Command[]>([
+    { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
+    { id: 'board', icon: '🫧', title: 'Volver al board', run: back },
+    // The same three states the floating control cycles, named so they can be
+    // reached directly: from the keyboard, picking is faster than cycling.
+    { id: 'light', icon: '☀️', title: 'Tema claro', run: () => theme.set('light') },
+    { id: 'dark', icon: '🌙', title: 'Tema oscuro', run: () => theme.set('dark') },
+    { id: 'system', icon: '🌗', title: 'Tema automático', hint: 'como el sistema', run: () => theme.set('system') },
+    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: () => { api.signOut(); signedIn = false; } },
+  ]);
+
+  // One request per pause, and the last one wins: an answer that arrives after
+  // the query moved on is an answer to a question nobody is asking any more.
+  let asked = 0;
+  async function query(q: string) {
+    const mine = ++asked;
+    if (!current || q.length < 2) {
+      found = [];
+      searching = false;
+      return;
+    }
+    searching = true;
+    try {
+      const out = await api.search(current.id, q);
+      if (mine !== asked) return;
+      found = out.hits.map((h: { path: string; title: string; line: number; text: string }) => ({
+        id: `p:${h.path}:${h.line}`,
+        kind: h.path.startsWith('threads/') ? 'thread' : 'página',
+        icon: '¶',
+        title: h.text,
+        hint: `${h.path}:${h.line}`,
+      }));
+    } catch {
+      if (mine === asked) found = [];
+    } finally {
+      if (mine === asked) searching = false;
+    }
+  }
+
+  function openWiki(page: string) {
+    open = null;
+    wiki = page;
+  }
+
+  function openThread(t: ThreadHeat) {
+    wiki = null;
+    open = t;
+  }
+
+  function pick(hit: Hit) {
+    const [what, ...rest] = hit.id.split(':');
+    const rest0 = rest.join(':');
+    if (what === 't') {
+      const t = board?.threads.find((x) => x.id === rest0);
+      if (t) openThread(t);
+    } else if (what === 'b') {
+      // A bubble is not a screen: it is a place ON the board, and the board is
+      // what shows whether it is floating or sunk.
+      back();
+      requestAnimationFrame(() =>
+        document.getElementById('bw-' + rest0)?.scrollIntoView({ behavior: 'smooth', block: 'center' }),
+      );
+    } else if (what === 'p') {
+      const file = rest0.slice(0, rest0.lastIndexOf(':'));
+      // A hit inside a thread's document belongs to the thread, not to the wiki.
+      // The path carries the seq the server derived it from, which is how the
+      // one maps back to the other without a second round trip.
+      const seq = Number(file.match(/^threads\/(\d+)-/)?.[1]);
+      const t = seq ? board?.threads.find((x) => x.seq === seq) : undefined;
+      if (t) openThread(t);
+      else openWiki(file);
+    }
+  }
+
+  // ⌘K from anywhere, including inside a thread. Not bound in the editor: there
+  // ⌘K is CodeMirror's, and stealing a key from the thing that has focus is how
+  // a shortcut becomes a surprise.
+  function hotkeys(e: KeyboardEvent) {
+    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      e.preventDefault();
+      omni = true;
+    }
+  }
 </script>
+
+<svelte:window onkeydown={hotkeys} />
 
 <ThemeToggle />
 
@@ -68,7 +192,10 @@
 {:else if open}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. -->
-  <Thread thread={open} onback={back} />
+  <Thread thread={open} onback={back} onsearch={() => (omni = true)} />
+{:else if wiki && current}
+  <!-- The wiki wears the thread's shell: same bar, same way back. -->
+  <Wiki workspace={current} bind:path={wiki} onback={back} onsearch={() => (omni = true)} />
 {:else if !ready}
   <p class="faint p-6 text-sm">…</p>
 {:else if !signedIn}
@@ -109,6 +236,8 @@
       <div class="ml-auto flex items-center gap-3 text-sm">
         <!-- The theme control is the floating one now: it reaches every screen,
              including the ones without this header. -->
+        <button class="faint hover:[color:var(--text)]" onclick={() => (omni = true)}>buscar · ⌘K</button>
+        <button class="faint hover:[color:var(--text)]" onclick={() => openWiki('README.md')}>wiki</button>
         <button class="faint hover:[color:var(--text)]" onclick={() => go('/theme')}>tema</button>
         <button class="faint hover:[color:var(--text)]" onclick={() => { api.signOut(); signedIn = false; }}>
           salir
@@ -128,8 +257,18 @@
 
     {#if current && !creating}
       {#key visit}
-        <Board workspace={current} onOpen={(t) => (open = t)} />
+        <!-- The board's data is lifted here as it lands: the omnibar searches
+             what is on screen, and two fetches of the same board could disagree
+             about what is on it. -->
+        <Board workspace={current} onOpen={openThread} onload={(b) => (board = b)} />
       {/key}
     {/if}
   </div>
+{/if}
+
+<!-- Outside the branches on purpose: ⌘K has to answer on the board, inside a
+     thread and inside the wiki, and a field that only exists on one screen is a
+     field people stop reaching for. -->
+{#if signedIn && current}
+  <Omnibar bind:open={omni} {items} {found} {commands} {searching} onquery={query} onpick={pick} />
 {/if}

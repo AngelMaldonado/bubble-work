@@ -50,11 +50,14 @@ const (
 
 // Tuning is the calibration, which lives in a row rather than in this file.
 type Tuning struct {
-	CycleHours     float64
-	DormantCycles  float64
-	DecayCycles    float64
-	GraceCycles    float64
-	OwnerlessIsRip bool
+	// Tagged because this struct is SERVED: the board hands its calibration to
+	// the browser so a screen can say what it was computed against. Without the
+	// tags the wire carried Go's field names and the footer read "ciclo de h".
+	CycleHours     float64 `json:"cycle_hours"`
+	DormantCycles  float64 `json:"dormant_cycles"`
+	DecayCycles    float64 `json:"decay_cycles"`
+	GraceCycles    float64 `json:"grace_cycles"`
+	OwnerlessIsRip bool    `json:"ownerless_is_rip"`
 }
 
 // Cycle is the resolved window length.

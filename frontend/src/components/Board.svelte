@@ -7,7 +7,13 @@
   let {
     workspace,
     onOpen,
-  }: { workspace: Workspace; onOpen: (t: ThreadHeat) => void } = $props();
+    onload,
+  }: {
+    workspace: Workspace;
+    onOpen: (t: ThreadHeat) => void;
+    /** the board as it arrived, for whoever else needs to read the same one */
+    onload?: (board: Board) => void;
+  } = $props();
 
   let board = $state<Board | null>(null);
   let error = $state('');
@@ -18,6 +24,7 @@
   async function load() {
     try {
       board = await api.board(workspace.id);
+      onload?.(board);
       error = '';
     } catch (e) {
       error = (e as Error).message;

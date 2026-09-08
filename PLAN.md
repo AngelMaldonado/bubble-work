@@ -643,14 +643,38 @@ Saving is explicit and cheap: ⌘S, `:w`, Escape, blur, or switching to
 "renderizado". Those were wired to an empty function for a while, which is worse
 than having no shortcut — it looked like it saved.
 
-**4c — the keyboard.** `Omnibar` + `lib/fuzzy.ts`, vim keys, slash commands.
+**4c — the keyboard.** *(built)* ⌘K from any screen opens the omnibar, and one
+field answers three questions in the order of how sure the answer is:
+
+  · what the browser already holds — threads and bubbles, matched by
+    `lib/fuzzy.ts` (subsequence, accent-folded, scored by word boundaries and by
+    runs of consecutive characters), so the list moves with the keys and
+    "mrkdwn" finds "Portar el motor de markdown";
+  · what only the repository knows — the text INSIDE the documents, over
+    `/api/workspaces/{id}/search`, asked for after a pause and with the last
+    answer winning, because a request per keystroke is a request per keystroke;
+  · commands, which are not found but NAMED, and so live behind `/` — the wiki,
+    the board, the three themes, signing out.
+
+A hit in a thread's document opens the THREAD, not the file: the path carries
+the seq the server derived it from, which maps one back to the other with no
+second round trip. `Wiki.svelte` wires `WikiView` to the real tree and reads a
+page with `readPath`; the tree it draws holds `docs/` and the README and not the
+threads, for the same reason.
+
+The fuzzy matcher is forty lines here rather than a dependency: the libraries
+that do this are 3–12 kB gzip for a list that never exceeds a few hundred rows.
+
+Vim keys inside the document are the editor's (`@replit/codemirror-vim`); ⌘K is
+NOT bound while it has focus, because taking a key from the thing being typed
+into is how a shortcut becomes a surprise.
 
 Not ported at all: `GodMode` (PocketBase's dashboard replaces it), `McpConnect`,
 `ProjectCombobox`, and everything that named a Plane instance.
 
 **Done when:** the board looks and moves like v0's and nobody wrote a second
-markdown renderer. — *the board, the thread interior and the wiki do; the omnibar
-(4c) does not exist yet.*
+markdown renderer. — *the board, the thread interior, the wiki and the omnibar
+do; what is not ported at all is listed above, and stays that way.*
 
 **`/theme` and `/theme/mock`.** Two pages that ship with the app and need no
 account: `/theme` is the tokens and the components, `/theme/mock` is the whole

@@ -507,7 +507,7 @@ d=json.load(sys.stdin)
 t=next(t for t in d["threads"] if t["id"]=="'"$T5"'")
 print("si" if t["priority"]=="P1" and t["heat"]["lifecycle"]=="hot" else t)')" si
 chk "el board dice contra qué calibración clasificó" \
-  "$(echo "$BOARD" | python3 -c 'import sys,json;print(int(json.load(sys.stdin)["tuning"]["CycleHours"]))')" 168
+  "$(echo "$BOARD" | python3 -c 'import sys,json;print(int(json.load(sys.stdin)["tuning"]["cycle_hours"]))')" 168
 chk "erin no ve el board" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $ER")" 404
 

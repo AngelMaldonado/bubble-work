@@ -25,6 +25,7 @@
   // component renders the mock's fixtures and the real thing. Everything that
   // decides WHAT is on it — heat, membership, the cycle — stays on the server.
   import Orb from './Orb.svelte';
+  import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
   import { bandOrder, bandFace, bandName } from '../lib/bands';
 
   let {
@@ -32,19 +33,53 @@
     bubbles = [],
     onopen,
     onaction,
+    onnew,
     children,
   }: {
     title?: string;
     bubbles?: BoardBubble[];
     onopen?: (bubble: BoardBubble) => void;
     onaction?: (what: string, bubble: BoardBubble) => void;
+    /** right-click on the empty part of the board: what to make here */
+    onnew?: (what: 'bubble' | 'thread') => void;
     /** anything that belongs under the bands — the footer saying what heat was
      *  computed against, the threads with no bubble */
     children?: import('svelte').Snippet;
   } = $props();
+
+  let newOpen = $state(false);
+  let boardEl = $state<HTMLElement | null>(null);
+  // True only while the priming event below is in flight, so the open it
+  // provokes is swallowed instead of shown.
+  let priming = false;
+  $effect(() => {
+    const el = boardEl;
+    if (!el || !onnew) return;
+    priming = true;
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: false, clientX: 0, clientY: 0 }));
+    priming = false;
+  });
 </script>
 
-<div class="board">
+<!-- Right-click on the board itself — the empty space between the orbs — is how
+     something new is made. It is where the eye already is when the thought
+     arrives ("this needs a bubble"), and it costs no button in a corner.
+
+     Controlled and primed at mount for the same reason the orb's menu is: Zag
+     repositions a context menu from a watcher over the anchor point, and that
+     watcher cannot see the change that establishes the value — so the first
+     right-click drew the menu in the top-left corner. Fixed once, here as
+     there, rather than explained twice. -->
+<Menu
+  open={newOpen}
+  onSelect={(e: { value: string }) => onnew?.(e.value as 'bubble' | 'thread')}
+  onOpenChange={(e: { open: boolean }) => {
+    if (priming) return;
+    newOpen = e.open;
+  }}>
+  <Menu.ContextTrigger>
+    {#snippet element(attributes: Record<string, unknown>)}
+      <div class="board" bind:this={boardEl} {...attributes}>
   {#if title}
     <header class="board-head">
       <h1 class="display text-2xl">{title}</h1>
@@ -84,8 +119,21 @@
     </section>
   {/each}
 
-  {@render children?.()}
-</div>
+        {@render children?.()}
+      </div>
+    {/snippet}
+  </Menu.ContextTrigger>
+  {#if onnew}
+    <Portal>
+      <Menu.Positioner>
+        <Menu.Content>
+          <Menu.Item value="bubble"><Menu.ItemText>Nueva burbuja</Menu.ItemText></Menu.Item>
+          <Menu.Item value="thread"><Menu.ItemText>Nuevo thread</Menu.ItemText></Menu.Item>
+        </Menu.Content>
+      </Menu.Positioner>
+    </Portal>
+  {/if}
+</Menu>
 
 <style>
   /* The board, from v0: one column, centred, read down. */

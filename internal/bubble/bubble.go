@@ -138,8 +138,48 @@ func foundingMembership(e *core.RecordRequestEvent) error {
 		m.Set("workspace", e.Record.Id)
 		m.Set("user", e.Auth.Id)
 		m.Set("role", "lead")
-		return txApp.Save(m)
+		if err := txApp.Save(m); err != nil {
+			return err
+		}
+		return foundingStates(txApp, e.Record.Id)
 	})
+}
+
+// foundingStates gives a new workspace a workflow to work with.
+//
+// A workspace with no states is a workspace where nothing can be COMPLETED:
+// completion is a thread reaching a state whose group is `completed`, so
+// without one the verb has nowhere to point and "Terminar" answers "this
+// workspace has no state for that" — which is true, and useless as a first
+// experience.
+//
+// Three, because three is the argument every team actually has: not started,
+// doing, done. They are ordinary rows — rename them, add to them, delete them;
+// the only thing that matters to the model is which GROUP each one is in.
+func foundingStates(app core.App, workspace string) error {
+	states, err := app.FindCollectionByNameOrId("states")
+	if err != nil {
+		return err
+	}
+	for i, s := range []struct {
+		name, group string
+		isDefault   bool
+	}{
+		{"Por hacer", "backlog", true},
+		{"En curso", "started", false},
+		{"Hecho", "completed", false},
+	} {
+		r := core.NewRecord(states)
+		r.Set("workspace", workspace)
+		r.Set("name", s.name)
+		r.Set("group", s.group)
+		r.Set("position", i+1)
+		r.Set("is_default", s.isDefault)
+		if err := app.Save(r); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // assignSeq gives a new thread the next number in its workspace.

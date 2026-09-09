@@ -16,6 +16,7 @@
     board,
     onOpen,
     onreload,
+    onnew,
     scroller = null,
   }: {
     workspace: Workspace;
@@ -29,6 +30,8 @@
     onOpen: (t: ThreadHeat) => void;
     /** ask for it again — writing here changes what the server would say */
     onreload?: () => void;
+    /** right-click on the empty board: make a bubble, or a thread */
+    onnew?: (what: 'bubble' | 'thread') => void;
     /** the box that actually scrolls, for the minimap's spy */
     scroller?: HTMLElement | null;
   } = $props();
@@ -99,6 +102,7 @@
   <BubbleBoard
     title={workspace.name}
     bubbles={orbs}
+    {onnew}
     onopen={(b) => {
       open = board?.bubbles.find((x) => x.id === b.id) ?? null;
       drawer = true;

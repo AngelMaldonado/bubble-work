@@ -102,7 +102,23 @@
 <div class="wrap lvl-{lifecycle}" class:held={menuOpen} style="--d: {delay}">
   <Menu.ContextTrigger>
   {#snippet element(attributes: Record<string, unknown>)}
-  <button class="orb" bind:this={orbEl} {...attributes} {onclick} aria-label={name}>
+  <!-- Zag's own handler runs, and then the event stops here.
+       The board behind this orb has a context menu of its own — "nueva burbuja"
+       on the empty space — and a right-click on an orb was reaching both: the
+       orb's menu is on the orb, the board's is on an ancestor, and an event
+       that nobody stops visits every element on the way up. Composed rather
+       than replaced: spreading `attributes` after our own handler would drop
+       Zag's, and the orb's menu would be the one that never opened. -->
+  <button
+    class="orb"
+    bind:this={orbEl}
+    {...attributes}
+    oncontextmenu={(e: MouseEvent) => {
+      (attributes.oncontextmenu as ((e: MouseEvent) => void) | undefined)?.(e);
+      e.stopPropagation();
+    }}
+    {onclick}
+    aria-label={name}>
     <span class="sheen"></span>
     <!-- Counts what is BURNING, not the inventory. A bubble carrying twelve
          finished threads is not a "12": that number reads as workload and

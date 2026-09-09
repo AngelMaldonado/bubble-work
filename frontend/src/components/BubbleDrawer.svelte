@@ -64,8 +64,15 @@
 </script>
 
 <Dialog {open} onOpenChange={(e: { open: boolean }) => (open = e.open)}>
-  <Dialog.Backdrop class="scrim" />
   <Portal>
+    <!-- INSIDE the portal, like the panel it dims.
+         Left outside, the backdrop renders where the drawer was declared —
+         inside the scrolling pane — and that pane carries a `mask-image` for
+         its edge fade. A mask establishes a containing block for fixed
+         positioning, so `position: fixed; inset: 0` stopped meaning "the
+         viewport" and started meaning "the pane": the board went dim and the
+         sidebar beside it stayed lit, above a scrim that could not reach it. -->
+    <Dialog.Backdrop class="scrim" />
     <Dialog.Positioner class="drawer-pos">
     <Dialog.Content class="drawer band-{lifecycle}">
       <header class="flex items-start gap-3">

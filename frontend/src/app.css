@@ -121,6 +121,15 @@
   z-index: var(--z-float);
 }
 
+/* A menu's PANEL takes focus when it opens — that is how the arrow keys work —
+   and the browser draws its focus ring around it, which reads as a selected box
+   rather than as an open menu. The ring belongs to the items, which have their
+   own highlight; the panel is furniture. */
+[data-scope='menu'][data-part='content']:focus,
+[data-scope='menu'][data-part='content']:focus-visible {
+  outline: none;
+}
+
 /* Skeleton ships no CSS for the tooltip, so this is ours. Small, opaque and
  * high-contrast: it is read in the half second before the pointer moves on. */
 [data-scope='tooltip'][data-part='content'] {

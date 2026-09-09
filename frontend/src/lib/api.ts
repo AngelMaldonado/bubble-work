@@ -284,6 +284,10 @@ class Api {
     return out.items;
   }
 
+  bubbles(workspace: string) {
+    return this.list<{ id: string; name: string; closed_at?: string }>('bubbles', workspace, 'name');
+  }
+
   /** The derived priorities, by thread. A VIEW collection: the server computes
    *  it from impact × urgency, and nothing writes to it. */
   priorities(workspace: string) {

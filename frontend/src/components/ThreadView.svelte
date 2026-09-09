@@ -28,6 +28,8 @@
   import ThemeToggle from './ThemeToggle.svelte';
   import { untrack } from 'svelte';
   import type { MarkdownEditor } from '../lib/editor';
+  import SlashMenu from './SlashMenu.svelte';
+  import { SlashMenu as SlashMenuState } from '../lib/slashmenu.svelte';
   import { vimPref } from '../lib/vim.svelte';
   import type { Heading } from '../lib/prose';
 
@@ -111,7 +113,11 @@
   //
   // The caret position survives the round trip: switching to rendered and back
   // should not send you to the top of a long document.
-  let editor: MarkdownEditor | null = null;
+  let editor = $state<MarkdownEditor | null>(null);
+  let editorBox = $state<HTMLElement | null>(null);
+  // Typing `/` on a fresh line offers the blocks — the same catalogue the card
+  // sheet's description offers, from `lib/slashmenu.svelte.ts`.
+  const slash = new SlashMenuState();
   let caretAt = 0;
   let draft = $state('');
   $effect(() => {
@@ -151,7 +157,13 @@
       dark: document.documentElement.getAttribute('data-mode') === 'dark',
       vim: useVim,
       cursor: caretAt,
-      onChange: (doc) => (draft = doc),
+      onChange: (doc) => {
+        draft = doc;
+        slash.detect(made, doc);
+      },
+      // The menu owns these keys while it is open — that is the whole reason
+      // `onKey` exists in the editor.
+      onKey: (key) => slash.key(key, made, untrack(() => draft)),
       // The three ways out of the editor all write. They were wired to nothing,
       // which meant ⌘S looked like it saved and the only real save was
       // switching to "renderizado" — the one nobody presses when they are done.
@@ -443,7 +455,14 @@
              continuation, no undo grouping. `lang-markdown` brings the two
              commands that make markdown editing feel like markdown — Enter
              continues a list or a checkbox, Backspace unwinds the marker. -->
-        <div class="editors" {@attach mountEditor}></div>
+        <!-- The menu is a SIBLING of the editor, in a box that positions it:
+             the editor's own box clips its overflow (that is what keeps
+             CodeMirror inside its rounded corner), and a menu inside it would be
+             cut off the moment the caret was near an edge. -->
+        <div class="editors-wrap">
+          <div class="editors" bind:this={editorBox} {@attach mountEditor}></div>
+          <SlashMenu menu={slash} field={editorBox} onpick={(c) => slash.run(editor, draft, c)} />
+        </div>
       {:else}
         <Prose {html} onheadings={(h) => (headings = h)} />
       {/if}
@@ -668,11 +687,18 @@
   /* The box CodeMirror mounts into. `overflow: hidden` so the rounded corners
      clip its scroller, and the height is fixed so the editor scrolls itself
      rather than growing the page under it. */
-  .editors {
-    /* Centred, and the SAME 940px `Prose` uses: switching between reading and
-       writing must not move the text sideways. */
+  /* The positioning box IS the editor's box.
+     The caret's coordinates come back relative to CodeMirror's own element, so
+     the box they are applied against has to be that same rectangle. Wrapping a
+     full-width div around a centred editor put the menu one margin to the left
+     — which is exactly where it appeared. So the centring lives on the wrapper
+     and the editor fills it. */
+  .editors-wrap {
+    position: relative;
     max-width: 940px;
     margin-inline: auto;
+  }
+  .editors {
     height: calc(100dvh - var(--topbar-h) - 8rem);
     border: 1px solid var(--line);
     border-radius: 12px;

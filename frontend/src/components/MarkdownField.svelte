@@ -14,6 +14,8 @@
   import Prose from './Prose.svelte';
   import { untrack } from 'svelte';
   import type { MarkdownEditor } from '../lib/editor';
+  import SlashMenu from './SlashMenu.svelte';
+  import { SlashMenu as SlashMenuState } from '../lib/slashmenu.svelte';
   import { vimPref } from '../lib/vim.svelte';
 
   let {
@@ -36,6 +38,12 @@
   } = $props();
   let html = $state('');
 
+  // The slash menu, at the caret. Same class and same list as the thread's
+  // editor uses — one catalogue of blocks, not two that drift.
+  const slash = new SlashMenuState();
+  let editor = $state<MarkdownEditor | null>(null);
+  let fieldEl = $state<HTMLElement | null>(null);
+
   $effect(() => {
     const md = value;
     if (editing || !render) return;
@@ -56,7 +64,11 @@
         dark: document.documentElement.getAttribute('data-mode') === 'dark',
         vim: useVim,
         placeholder,
-        onChange: (next) => (value = next),
+        onChange: (next) => {
+          value = next;
+          slash.detect(made, next);
+        },
+        onKey: (key) => slash.key(key, made, untrack(() => value)),
         onSave: () => (editing = false),
         onEscape: () => (editing = false),
         onBlur: () => {},
@@ -64,10 +76,13 @@
     ).then((m) => {
       if (!live) return m.destroy();
       made = m;
+      editor = m;
       m.focus();
     });
     return () => {
       live = false;
+      slash.open = null;
+      if (editor === made) editor = null;
       made?.destroy();
     };
   }
@@ -101,7 +116,13 @@
          listener sitting between the editor and the page is exactly the kind of
          thing that swallows a key nobody meant it to. Whoever HOSTS this field
          turns `closeOnEscape` off while it is being written in. -->
-    <div class="editor" {@attach mount}></div>
+    <!-- The menu is positioned against the EDITOR's rectangle, because that is
+         what the caret's coordinates are relative to. Against the whole field
+         it would be off by the toolbar above it. -->
+    <div class="editor-wrap">
+      <div class="editor" bind:this={fieldEl} {@attach mount}></div>
+      <SlashMenu menu={slash} field={fieldEl} onpick={(c) => slash.run(editor, value, c)} />
+    </div>
   {:else if value.trim()}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
     <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -115,6 +136,10 @@
 
 <style>
   .field { display: flex; flex-direction: column; gap: 0.35rem; }
+  /* Only a positioning box: it takes the editor's place in the column and the
+     editor fills it, so the menu's coordinates and the editor's rectangle are
+     the same rectangle. */
+  .editor-wrap { position: relative; display: flex; flex-direction: column; }
   .bar { display: flex; align-items: center; gap: 0.4rem; }
   .seg {
     display: inline-flex;
@@ -148,11 +173,25 @@
     border-radius: 10px;
     background: var(--surface);
   }
-  .editor { overflow: hidden; }
-  /* CodeMirror sizes itself to its content, so `min-height` on the box around it
-     left a tall box with a short editor inside and a dead strip underneath. The
-     minimum belongs to the editor itself. */
-  .editor :global(.cm-editor) { min-height: var(--min); }
+  /* A DEFINITE height, not a minimum.
+     With a minimum the box is as tall as its content, and CodeMirror's panels —
+     vim's `--INSERT--` among them — sit right after the last line, which put a
+     status bar through the middle of the editor and across the slash menu. A
+     definite height lets the editor fill it and the panel land at the bottom,
+     which is where it is in a thread and where a status bar belongs. */
+  .editor { height: var(--min); overflow: hidden; }
+  .editor :global(.cm-editor) { height: 100%; }
+
+  /* The same status bar the thread's editor has. */
+  .editor :global(.cm-vim-panel) {
+    padding: 0.2rem 0.6rem;
+    border-top: 1px solid var(--line);
+    background: var(--surface);
+    color: var(--muted);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+  }
+  .editor :global(.cm-vim-panel input) { color: var(--text); background: transparent; }
   .preview {
     padding: 0.6rem 0.8rem;
     overflow: auto;

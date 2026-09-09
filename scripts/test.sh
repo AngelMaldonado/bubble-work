@@ -92,6 +92,15 @@ ALPHA=$(post workspaces "$A" '{"name":"Alpha","slug":"alpha"}' | j "['id']")
 BETA=$(post  workspaces "$B" '{"name":"Beta","slug":"beta"}'   | j "['id']")
 if [ -n "$ALPHA" ] && [ -n "$BETA" ]; then ok "alice y bob crean workspace"; else no "crear workspace" "$ALPHA/$BETA"; fi
 
+# Un workspace recién fundado ya puede trabajar: sin estados, ningún thread
+# puede completarse nunca, y "Terminar" no tiene a dónde apuntar.
+WSS=$(curl -s "$API/api/collections/states/records?perPage=50&filter=(workspace='$ALPHA')" -H "Authorization: $A")
+chk ">>> fundar un workspace le da su flujo de trabajo" "$(echo "$WSS" | j "['totalItems']")" 3
+chk "...con uno por defecto" \
+  "$(echo "$WSS" | python3 -c 'import sys,json;print(sum(1 for x in json.load(sys.stdin)["items"] if x["is_default"]))')" 1
+chk "...y uno que SÍ completa" \
+  "$(echo "$WSS" | python3 -c 'import sys,json;print(sum(1 for x in json.load(sys.stdin)["items"] if x["group"]=="completed"))')" 1
+
 MS=$(curl -s "$API/api/collections/memberships/records?filter=(workspace='$ALPHA')" -H "Authorization: $SU")
 if [ "$(echo "$MS"|j "['totalItems']")" = "1" ] && [ "$(echo "$MS"|j "['items'][0]['role']")" = "lead" ] \
    && [ "$(echo "$MS"|j "['items'][0]['user']")" = "$AID" ]; then
@@ -127,7 +136,9 @@ chk "slug con espacios/mayúsculas rechazado" "$(pcode workspaces "$A" '{"name":
 
 # --------------------------------------------------------------- phase 1a ----
 echo
-ST_A=$(post states "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"En curso\",\"group\":\"started\",\"position\":1}" | j "['id']")
+# Nombres propios: fundar el workspace ya dejó "Por hacer / En curso / Hecho",
+# y el índice (workspace, name) es único.
+ST_A=$(post states "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"En revisión\",\"group\":\"started\",\"position\":4}" | j "['id']")
 LB_A=$(post labels "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"bug\",\"color\":\"#f00\"}" | j "['id']")
 BU_A=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Primera burbuja\",\"outcome\":\"algo cambió\"}" | j "['id']")
 BU_B=$(post bubbles "$B" "{\"workspace\":\"$BETA\",\"name\":\"Burbuja de beta\"}" | j "['id']")
@@ -448,7 +459,7 @@ curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization:
 chk "pasar a un estado que no es completed no completa nada" \
   "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 0
 # carol, no alice: alice quedó degradada a member arriba y crear estados es de lead.
-ST_DONE=$(post states "$C" "{\"workspace\":\"$ALPHA\",\"name\":\"Hecho\",\"group\":\"completed\"}" | j "['id']")
+ST_DONE=$(post states "$C" "{\"workspace\":\"$ALPHA\",\"name\":\"Cerrado\",\"group\":\"completed\"}" | j "['id']")
 curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
   -d "{\"state\":\"$ST_DONE\"}" >/dev/null
 chk ">>> llegar a un estado completed sí" \

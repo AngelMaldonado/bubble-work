@@ -757,6 +757,29 @@ The workspace boundary got the same hole checked one collection over: a thread
 may not point at an objective from another workspace, the way it may not be
 filed into another workspace's bubble. Same guard, now written once for both.
 
+**A workspace is born able to work.** Founding one now writes its workflow in
+the same transaction as its founding membership: Por hacer (backlog, default),
+En curso (started), Hecho (completed). Without them nothing could ever be
+completed — completion is a thread reaching a state whose group is `completed`,
+so "Terminar" had nowhere to point and said so. Three, because three is the
+argument every team actually has; they are ordinary rows to rename, extend or
+delete, and only the GROUP matters to the model.
+
+**Making one, from the board.** Right-click on the empty space between the orbs:
+a bubble, or a thread. A thread asks for its bubble too, and REFUSES when there
+is none — work nobody can say the purpose of would not even appear on a board
+that draws bubbles. The same two verbs are the first commands behind `/` in the
+omnibar, because the board they belong to may not be the screen you are on.
+
+**A thread's verbs are wired**: finish (the state whose group is `completed`),
+reopen, move to another bubble, delete — each one asking the server and then
+asking it again for the board, because writing changes what it would say.
+
+**The slash menu came back from v0**, `lib/slash.ts` verbatim: the boundary rule
+is what regresses, and a URL is full of slashes that must never open a menu.
+What is new is that two editors share one catalogue of blocks rather than each
+carrying its own copy.
+
 **The URL is the screen.** `lib/routes.ts`: `/w/{slug}` a board, `/w/{slug}/t/{seq}`
 a thread, `/w/{slug}/wiki/{path}` a page, `/planeador` the planner. Slug and seq
 rather than ids — both are what people already say out loud, and an id in an

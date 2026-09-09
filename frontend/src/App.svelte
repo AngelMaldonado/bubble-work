@@ -158,6 +158,46 @@
   // is worse than one that fails.
   let error = $state('');
 
+  // ---- making one -----------------------------------------------------------
+  //
+  // Right-click on the empty part of the board. Both need a NAME and nothing
+  // else: a bubble needs an outcome too, but that is a sentence somebody writes
+  // once they have opened it, not a second box at the door.
+  let naming = $state<'bubble' | 'thread' | null>(null);
+  let fresh = $state('');
+  /** Which bubble a new thread goes into. A thread is work; a bubble is what
+   *  the work is FOR, and one without the other is the row that later nobody
+   *  can explain. Where a bubble can be missing entirely — nothing has been
+   *  started here yet — the answer is to make that first, not to file work
+   *  under nothing. */
+  let intoBubble = $state('');
+  const openBubbles = $derived((board?.bubbles ?? []).filter((b) => !b.closed));
+  $effect(() => {
+    if (naming === 'thread') intoBubble = openBubbles[0]?.id ?? '';
+  });
+
+  async function make() {
+    const what = naming;
+    const name = fresh.trim();
+    if (!what || !name || !current) return;
+    if (what === 'thread' && !intoBubble) return;
+    naming = null;
+    fresh = '';
+    try {
+      if (what === 'bubble') {
+        await api.createBubble({ workspace: current.id, name });
+        await loadBoard();
+      } else {
+        // Straight into it: what you just made is what you were about to write.
+        const t = await api.createThread({ workspace: current.id, name, bubble: intoBubble });
+        await loadBoard();
+        go(threadUrl(current.slug, t.seq));
+      }
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
   // The planner. A view like the others, and only for a lead: planning is the
   // strategic layer's job, and a screen full of verbs somebody cannot use reads
   // as a broken screen rather than as one that is not theirs.
@@ -197,6 +237,11 @@
   ]);
 
   const commands = $derived<Command[]>([
+    // Making something comes first: it is the reason somebody opens this with
+    // nothing in mind, and the right-click that also makes one is on a board
+    // they may not be looking at.
+    { id: 'new-bubble', icon: '🫧', title: 'Nueva burbuja', hint: 'una agrupación de trabajo', run: () => (naming = 'bubble') },
+    { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
     { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
     ...(isLead
       ? [{ id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }]
@@ -299,8 +344,13 @@
        noise while reading. It is resolved from the address, so this is also
        what a pasted link lands on — and while the board is on its way there is
        nothing to draw but the wait. -->
-  {#if open}
-    <Thread thread={open} onback={back} onsearch={() => (omni = true)} />
+  {#if open && current}
+    <Thread
+      thread={open}
+      workspace={current}
+      onback={back}
+      onchanged={loadBoard}
+      onsearch={() => (omni = true)} />
   {:else if loadingBoard || !board}
     <p class="faint p-6 text-sm">…</p>
   {:else}
@@ -350,6 +400,7 @@
         {board}
         onOpen={openThread}
         onreload={loadBoard}
+        onnew={(what) => (naming = what)}
         scroller={paneEl} />
     {/if}
   </Shell>
@@ -408,6 +459,80 @@
        the omnibar, behind `/`. -->
 {/if}
 
+{#if naming}
+  <Dialog open onOpenChange={() => (naming = null)}>
+    <Portal>
+      <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
+      <Dialog.Positioner
+        class="fixed inset-0 flex items-center justify-center p-4"
+        style="z-index: var(--z-drawer)">
+        <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
+          <Dialog.Title class="text-lg font-bold">
+            {naming === 'bubble' ? 'Nueva burbuja' : 'Nuevo thread'}
+          </Dialog.Title>
+          <Dialog.Description class="muted text-sm">
+            {naming === 'bubble'
+              ? 'Una agrupación durable de trabajo relacionado. Su outcome se escribe dentro.'
+              : 'Una unidad ejecutable de trabajo. Su documento se escribe dentro.'}
+          </Dialog.Description>
+
+          {#if naming === 'thread' && !openBubbles.length}
+            <!-- Refused, and told why. A thread with no bubble is work nobody
+                 can say the purpose of, and it would not even appear on the
+                 board — which draws bubbles, not loose threads. -->
+            <p class="muted text-sm">
+              No hay ninguna burbuja abierta en {current?.name ?? 'este workspace'}, y un thread vive
+              dentro de una. Crea la burbuja primero: es la que dice para qué es el trabajo.
+            </p>
+            <div class="flex justify-end gap-2">
+              <button class="btn btn-sm preset-tonal-surface" onclick={() => (naming = null)}>Cancelar</button>
+              <button class="btn btn-sm preset-filled-primary-500" onclick={() => (naming = 'bubble')}>
+                Nueva burbuja
+              </button>
+            </div>
+          {:else}
+            <form onsubmit={(e) => { e.preventDefault(); make(); }}>
+              <input
+                class="input"
+                placeholder="¿Cómo se llama?"
+                autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                bind:value={fresh}
+                {@attach (el: HTMLInputElement) => el.focus()} />
+
+              {#if naming === 'thread'}
+                <p class="cap mt-4">¿En qué burbuja?</p>
+                <ul class="pick">
+                  {#each openBubbles as b (b.id)}
+                    <li>
+                      <button
+                        type="button"
+                        class="one"
+                        class:on={intoBubble === b.id}
+                        onclick={() => (intoBubble = b.id)}>
+                        <span aria-hidden="true">{bandFace(b.heat.lifecycle)}</span>
+                        {b.name}
+                      </button>
+                    </li>
+                  {/each}
+                </ul>
+              {/if}
+
+              <div class="mt-4 flex justify-end gap-2">
+                <button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (naming = null)}>
+                  Cancelar
+                </button>
+                <button
+                  class="btn btn-sm preset-filled-primary-500"
+                  disabled={!fresh.trim() || (naming === 'thread' && !intoBubble)}>Crear</button>
+              </div>
+            </form>
+          {/if}
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Portal>
+  </Dialog>
+{/if}
+
 {#if doomed}
   <Dialog open onOpenChange={() => (doomed = null)}>
     <Portal>
@@ -449,6 +574,33 @@
 {/if}
 
 <style>
+  .cap { color: var(--faint); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; }
+  .pick {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+    max-height: 40vh;
+    overflow-y: auto;
+    margin: 0.35rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .one {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    padding: 0.45rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    text-align: left;
+    font-size: 0.9rem;
+  }
+  .one:hover { background: var(--hover); color: var(--text); }
+  .one.on { border-color: var(--accent, var(--line)); color: var(--text); font-weight: 600; }
+
   .err {
     position: fixed;
     top: 1rem;

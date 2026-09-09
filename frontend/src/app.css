@@ -333,6 +333,24 @@ body::before {
 }
 .float-btn:hover { background: var(--hover); transform: translateY(-1px); }
 .float-btn:active { transform: translateY(0); }
+
+/* A row that PACKS, for screens that carry a different number of these. Fixed
+   positions per button (right: 4.2rem, 7.4rem, 10.6rem) are fine while every
+   screen has all three; the moment one is missing the row keeps its slot and
+   the gap reads as a button that failed to draw. */
+.floats {
+  position: fixed;
+  bottom: 1rem;
+  /* Clear of the theme button, which holds the corner on every screen. */
+  right: 4.2rem;
+  z-index: var(--z-chrome);
+  display: flex;
+  gap: 0.6rem;
+}
+.floats .float-btn { position: static; }
+
+/* The mock still places its three by hand: it is the only screen with a
+   planner, and its stack is what the row above is measured against. */
 .wiki-btn { right: 4.2rem; }
 .planner-btn { right: 7.4rem; }
 .search-btn { right: 10.6rem; }

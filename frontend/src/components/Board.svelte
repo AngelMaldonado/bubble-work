@@ -130,12 +130,13 @@
       </section>
     {/if}
 
-    <!-- Say what it was measured against. A cold board and a short cycle look
-         identical until somebody can see the calibration. -->
-    <p class="faint mt-8 text-center text-xs">
-      ciclo de {board.tuning.cycle_hours}h · dormido tras {board.tuning.dormant_cycles} ciclos ·
-      calculado {new Date(board.at).toLocaleString()}
-    </p>
+    <!-- The calibration used to be printed here — "ciclo de 168h · dormido tras
+         2 ciclos · calculado <fecha>". It answers a question nobody asks twice:
+         it is the same three numbers every morning, at the bottom of every
+         board, and a constant on screen stops being read and starts being
+         furniture. The board still SAYS it, in `/board`'s `tuning`, and each
+         bubble carries its own reason. It comes back when there is a screen for
+         changing it, next to the control that changes it. -->
   </BubbleBoard>
 
   <BubbleDrawer

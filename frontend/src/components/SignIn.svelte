@@ -7,34 +7,37 @@
   // the one thing the product is about. The bubbles are decoration and are
   // marked as such (`aria-hidden`, and gone under reduced motion): a screen
   // reader gets a form, not a lava lamp.
-  import { api } from '../lib/api';
+  import { ApiError, api } from '../lib/api';
   import BrandOrb from './BrandOrb.svelte';
 
   let { onDone }: { onDone: () => void } = $props();
   let identity = $state('');
-  // Whether anybody can sign in at all. A superuser is not a person: it operates
-  // the box and has no row in `users`.
-  let empty = $state(false);
-  (async () => {
-    try {
-      const res = await fetch('/api/collections/users/records?perPage=1');
-      if (res.ok) empty = (await res.json()).totalItems === 0;
-    } catch {
-      /* the server will say so when the form is submitted */
-    }
-  })();
   let password = $state('');
   let error = $state('');
   let busy = $state(false);
 
-  // The four bands, as four bubbles, in the order the board stacks them. Sizes
-  // and offsets are hand-placed rather than random: a layout that changes on
-  // every reload cannot be judged, and this one is looked at every morning.
+  // The bands, as bubbles that RISE. That is the claim moving: buoyancy is not a
+  // colour, it is what the thing does, and a bubble sitting still is a dot.
+  //
+  // Hand-placed rather than random: a screen that lays itself out differently on
+  // every reload cannot be judged, and this one is looked at every morning. The
+  // delays are NEGATIVE — each bubble starts mid-flight, so the first frame is
+  // the middle of the loop and nobody watches an empty screen fill up.
+  //
+  // `dur` is the climb, `sway` the sideways drift. They are deliberately not
+  // multiples of each other: two periods that divide evenly trace the same line
+  // over and over, and the eye catches the repeat.
   const decor = [
-    { band: 'hot', size: 190, top: '14%', left: '10%', delay: '0s' },
-    { band: 'dormant', size: 110, top: '64%', left: '18%', delay: '1.1s' },
-    { band: 'rip', size: 80, top: '24%', left: '82%', delay: '2.3s' },
-    { band: 'closed', size: 140, top: '70%', left: '78%', delay: '0.6s' },
+    { band: 'hot', size: 190, left: '9%', dur: 34, sway: 11, amp: 26, delay: -4, rest: '58%' },
+    { band: 'dormant', size: 110, left: '20%', dur: 27, sway: 8, amp: 18, delay: -19, rest: '18%' },
+    { band: 'hot', size: 70, left: '34%', dur: 23, sway: 6.5, amp: 14, delay: -11, rest: '74%' },
+    { band: 'closed', size: 140, left: '76%', dur: 38, sway: 13, amp: 30, delay: -25, rest: '26%' },
+    { band: 'rip', size: 80, left: '86%', dur: 29, sway: 9.5, amp: 16, delay: -7, rest: '66%' },
+    { band: 'dormant', size: 55, left: '64%', dur: 21, sway: 7, amp: 12, delay: -14, rest: '38%' },
+    { band: 'hot', size: 120, left: '48%', dur: 31, sway: 10, amp: 22, delay: -28, rest: '10%' },
+    { band: 'closed', size: 60, left: '4%', dur: 25, sway: 8.5, amp: 15, delay: -2, rest: '82%' },
+    { band: 'rip', size: 45, left: '55%', dur: 19, sway: 5.5, amp: 10, delay: -9, rest: '50%' },
+    { band: 'dormant', size: 95, left: '92%', dur: 33, sway: 12, amp: 20, delay: -31, rest: '4%' },
   ];
 
   async function submit(e: Event) {
@@ -45,12 +48,17 @@
       await api.signIn(identity, password);
       onDone();
     } catch (err) {
-      // PocketBase answers "Failed to authenticate." whether the person does not
-      // exist or the password is wrong. When NOBODY exists, that reads as a bug in
-      // your typing rather than an empty database — so say which it is.
+      // What the door says when it does not open: that it did not open.
+      //
+      // It used to guess WHY — "there is nobody on this server yet, create one
+      // with `just person`" — from an unauthenticated count of `users`, which
+      // the collection's own rule hides from anonymous callers. The count came
+      // back empty because it is not allowed to be seen, not because the server
+      // is, and the screen sent people to set up a database that was already
+      // there. A guess dressed as a diagnosis is worse than no diagnosis.
       const msg = (err as Error).message;
-      error = empty
-        ? 'Todavía no hay ninguna persona en este servidor. Créala con `just person <correo> <contraseña> lead` — un superuser opera la caja, pero no trabaja aquí.'
+      error = err instanceof ApiError && err.status === 400
+        ? 'No se pudo iniciar sesión. Revisa el correo y la contraseña.'
         : msg;
     } finally {
       busy = false;
@@ -60,10 +68,17 @@
 
 <div class="door">
   <div class="bubbles" aria-hidden="true">
-    {#each decor as d (d.band)}
+    <!-- Two elements per bubble, not one: the climb and the sway are separate
+         animations with separate periods, and a single element can only carry
+         one `transform` at a time — the second would overwrite the first. -->
+    {#each decor as d, i (i)}
       <span
-        class="blob band-{d.band}"
-        style="--s: {d.size}px; --t: {d.top}; --l: {d.left}; --d: {d.delay}"></span>
+        class="lift"
+        style="--l: {d.left}; --dur: {d.dur}s; --d: {d.delay}s; --rest: {d.rest}">
+        <span
+          class="blob band-{d.band}"
+          style="--s: {d.size}px; --sway: {d.sway}s; --amp: {d.amp}px"></span>
+      </span>
     {/each}
   </div>
 
@@ -118,10 +133,31 @@
     inset: 0;
     pointer-events: none;
   }
-  .blob {
+  /* The climb. It starts below the fold and ends above it, so the loop has no
+     visible seam: nothing pops in or out where anybody is looking. Linear on
+     purpose — a bubble in water rises at a steady rate, and easing here reads as
+     the animation restarting rather than as something floating. */
+  .lift {
     position: absolute;
-    top: var(--t);
+    top: 0;
     left: var(--l);
+    animation: rise var(--dur) linear infinite;
+    animation-delay: var(--d);
+    will-change: transform, opacity;
+  }
+  /* The fade is on the climb, not on the bubble: a bubble that crosses the top
+     edge at full strength reads as a slide leaving, and one that appears at the
+     bottom edge reads as a slide arriving. This way each one surfaces and
+     dissolves, which is what the metaphor claims happens. */
+  @keyframes rise {
+    0% { transform: translate3d(0, 115vh, 0); opacity: 0; }
+    12% { opacity: 1; }
+    82% { opacity: 1; }
+    100% { transform: translate3d(0, -40vh, 0); opacity: 0; }
+  }
+
+  .blob {
+    display: block;
     width: var(--s);
     height: var(--s);
     border-radius: 999px;
@@ -135,12 +171,11 @@
        that competes with the one form on it is a decoration that won. */
     filter: blur(14px);
     opacity: 0.34;
-    animation: float 9s ease-in-out infinite;
-    animation-delay: var(--d);
+    animation: sway var(--sway) ease-in-out infinite alternate;
   }
-  @keyframes float {
-    0%, 100% { transform: translateY(0) scale(1); }
-    50% { transform: translateY(-16px) scale(1.02); }
+  @keyframes sway {
+    from { transform: translate3d(calc(var(--amp) * -1), 0, 0) scale(0.97); }
+    to { transform: translate3d(var(--amp), 0, 0) scale(1.04); }
   }
 
   .sheet {
@@ -177,8 +212,14 @@
   .enter:disabled { opacity: 0.6; }
 
   /* The decoration is the first thing to go: it is motion for its own sake,
-     which is exactly what the setting asks not to see. */
+     which is exactly what the setting asks not to see. Stopped rather than
+     hidden, and stopped SPREAD OUT — freezing the climb at its start would pile
+     every bubble below the fold and leave a blank screen. */
   @media (prefers-reduced-motion: reduce) {
+    .lift,
     .blob { animation: none; }
+    /* `--rest` and not the climb's own start: freezing the animation would pile
+       every bubble below the fold and leave a blank screen. */
+    .lift { top: var(--rest); }
   }
 </style>

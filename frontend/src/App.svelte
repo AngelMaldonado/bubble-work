@@ -288,8 +288,10 @@
   </Shell>
 
   <!-- The verbs that live over the page rather than in it. The theme button
-       holds the corner and these sit to its left, the same three places they
-       occupy in the mock. -->
+       holds the corner and these pack to its left — a row rather than fixed
+       slots, because this screen has no planner and a reserved empty place
+       reads as a button that failed to draw. -->
+  <div class="floats">
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
@@ -317,6 +319,7 @@
       </Tooltip.Positioner>
     </Portal>
   </Tooltip>
+  </div>
 
   <!-- Signing out is not a floating button: it is rare, and a rare verb next to
        the two you press all day is the one you press by accident. It lives in

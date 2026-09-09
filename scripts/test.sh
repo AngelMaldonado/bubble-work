@@ -488,6 +488,66 @@ chk "se puede filtrar por prioridad como cualquier campo" \
   "$(PRI "(priority='P1')" "$A" | j "['totalItems']")" 2
 chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
 
+# ----------------------------------------- el planeador: fase 5 (server) ----
+#
+# Lo que NO hay aquí es una tarjeta. Un planeador con tarjetas propias es un
+# segundo inventario del trabajo al lado de los threads, y dos listas de lo
+# mismo discrepan para el jueves. Las columnas son los `states` que el workspace
+# ya define y lo que se mueve es un THREAD.
+echo
+# OJO con quién es quién aquí: arriba alice promovió a bob y SE DEGRADÓ, así que
+# a esta altura del guion el lead de alpha es bob y alice es un miembro raso.
+OBJ=$(post objectives "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"Cerrar el trimestre en verde\",\"outcome\":\"todo el ingreso facturado\"}" | j "['id']")
+chk ">>> un lead define el objetivo" "$([ -n "$OBJ" ] && echo si || echo no)" si
+chk ">>> un member NO lo define (capa estratégica, como states)" \
+  "$(pcode objectives "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Mio\"}")" 400
+chk "el mismo nombre dos veces se rechaza" \
+  "$(pcode objectives "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"Cerrar el trimestre en verde\"}")" 400
+chk "un member sí lo lee" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $A" | j "['totalItems']")" 1
+chk ">>> erin no ve objetivos de alpha" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $ER" | j "['totalItems']")" 0
+
+T8=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Bajo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
+chk ">>> un thread cuelga de un objetivo" \
+  "$(curl -s "$API/api/collections/threads/records/$T8" -H "Authorization: $A" | j "['objective']")" "$OBJ"
+chk ">>> pero NO de uno de otro workspace  [el mismo agujero que la burbuja]" \
+  "$(pcode threads "$B" "{\"workspace\":\"$BETA\",\"name\":\"Robando objetivo\",\"objective\":\"$OBJ\"}")" 400
+chk "borrar el objetivo NO se lleva el trabajo hecho bajo él" \
+  "$(code -X DELETE "$API/api/collections/objectives/records/$OBJ" -H "Authorization: $B")" 204
+chk "...y el thread sigue ahí, sin objetivo" \
+  "$(curl -s "$API/api/collections/threads/records/$T8" -H "Authorization: $A" | j "['id']")" "$T8"
+
+echo
+IN1=$(post inbox_items "$B" "{\"workspace\":\"$ALPHA\",\"note\":\"revisar el rate limit del portal\"}")
+IN1ID=$(echo "$IN1" | j "['id']")
+chk ">>> cualquiera del workspace captura en el inbox" "$([ -n "$IN1ID" ] && echo si || echo no)" si
+chk ">>> y queda firmado por quien capturó, no por quien dijo" \
+  "$(echo "$IN1" | j "['captured_by']")" "$BID"
+chk ">>> capturar NO es evidencia: no calienta nada" \
+  "$(evcount "(workspace='$ALPHA'%26%26kind='inbox-captured')")" 0
+chk ">>> erin no captura en un workspace que no es suyo" \
+  "$(pcode inbox_items "$ER" "{\"workspace\":\"$ALPHA\",\"note\":\"hola\"}")" 400
+chk "nadie puede firmar una nota como otro" \
+  "$(post inbox_items "$A" "{\"workspace\":\"$ALPHA\",\"note\":\"suplantada\",\"captured_by\":\"$BID\"}" | j "['captured_by']")" "$AID"
+
+# Triar: la nota se convierte en un thread y se queda apuntando a lo que fue.
+T9=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Rate limit del portal\"}" | j "['id']")
+chk ">>> el lead tría la nota a un thread" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -H "$JS" -d "{\"thread\":\"$T9\"}")" 200
+chk "...y la nota conserva a dónde fue" \
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A" | j "['thread']")" "$T9"
+chk ">>> carol (lead global) no es de alpha y aun así llega" \
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $C" | j "['totalItems']")" 1
+
+IN2ID=$(post inbox_items "$A" "{\"workspace\":\"$ALPHA\",\"note\":\"la de alice\"}" | j "['id']")
+chk ">>> quien la escribió la edita, aunque sea un member raso" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $A" -H "$JS" -d '{"note":"la de alice, corregida"}')" 200
+chk ">>> y el lead también, sin haberla escrito (triar es su trabajo)" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $B" -H "$JS" -d '{"note":"triada"}')" 200
+chk ">>> erin no toca ninguna" \
+  "$(code -X DELETE "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $ER")" 404
+
 echo
 BOARD=$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A")
 chk ">>> el board calcula heat sin guardarlo" \

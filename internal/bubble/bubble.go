@@ -20,11 +20,17 @@ func Register(app core.App, t *tree.Tree) {
 	app.OnRecordCreateRequest("workspaces").BindFunc(foundingMembership)
 
 	app.OnRecordCreateRequest("threads").BindFunc(assignSeq)
-	app.OnRecordCreateRequest("threads").BindFunc(bubbleInSameWorkspace)
-	app.OnRecordUpdateRequest("threads").BindFunc(bubbleInSameWorkspace)
+	for _, rel := range []struct{ field, collection string }{
+		{"bubble", "bubbles"},
+		{"objective", "objectives"},
+	} {
+		app.OnRecordCreateRequest("threads").BindFunc(relationInSameWorkspace(rel.field, rel.collection))
+		app.OnRecordUpdateRequest("threads").BindFunc(relationInSameWorkspace(rel.field, rel.collection))
+	}
 
 	app.OnRecordCreateRequest("comments").BindFunc(stampAuthor("author"))
 	app.OnRecordCreateRequest("thread_links").BindFunc(stampAuthor("added_by"))
+	app.OnRecordCreateRequest("inbox_items").BindFunc(stampAuthor("captured_by"))
 
 	app.OnRecordUpdateRequest("memberships").BindFunc(keepALead(false))
 	app.OnRecordDeleteRequest("memberships").BindFunc(keepALead(true))
@@ -165,25 +171,29 @@ func assignSeq(e *core.RecordRequestEvent) error {
 	return e.Next()
 }
 
-// bubbleInSameWorkspace refuses a thread filed into a bubble belonging to some
+// relationInSameWorkspace refuses a thread pointing at a row that belongs to some
 // other workspace.
 //
 // Nothing in a collection rule can compare two rows like this, and without it the
 // workspace boundary has a hole exactly one relation wide: a member of A could
-// file their thread into a bubble in B and it would show up on B's board.
-func bubbleInSameWorkspace(e *core.RecordRequestEvent) error {
-	bubbleID := e.Record.GetString("bubble")
-	if bubbleID == "" {
-		return e.Next() // a thread outside any bubble is allowed
+// file their thread into a bubble in B and it would show up on B's board. The
+// objective is the same hole one collection over — a thread counting towards
+// somebody else's stated outcome.
+func relationInSameWorkspace(field, collection string) func(*core.RecordRequestEvent) error {
+	return func(e *core.RecordRequestEvent) error {
+		id := e.Record.GetString(field)
+		if id == "" {
+			return e.Next() // a thread outside any bubble, or under no objective
+		}
+		r, err := e.App.FindRecordById(collection, id)
+		if err != nil {
+			return fmt.Errorf("%s %q not found", field, id)
+		}
+		if r.GetString("workspace") != e.Record.GetString("workspace") {
+			return fmt.Errorf("%s %q belongs to another workspace", field, id)
+		}
+		return e.Next()
 	}
-	b, err := e.App.FindRecordById("bubbles", bubbleID)
-	if err != nil {
-		return fmt.Errorf("bubble %q not found", bubbleID)
-	}
-	if b.GetString("workspace") != e.Record.GetString("workspace") {
-		return fmt.Errorf("bubble %q belongs to another workspace", bubbleID)
-	}
-	return e.Next()
 }
 
 // stampAuthor overwrites an authorship field with whoever is actually making the

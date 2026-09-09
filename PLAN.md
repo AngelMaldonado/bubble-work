@@ -709,6 +709,30 @@ the board keeps its own. Drag and drop is `@atlaskit/pragmatic-drag-and-drop`
 (7.2 kB gzip, no peer dependencies) and the calendar is `@event-calendar/core`
 (written in Svelte 5, so no wrapper) — both chosen against measured bundle size.
 
+**5a — what the planner needs, and nothing more.** *(built, server side)* Two
+collections, and the decision that matters is what is NOT here: a card. A
+planner with cards of its own is a second inventory of work beside the threads,
+and two lists of the same work disagree by Thursday. So the kanban's columns are
+the `states` a workspace already defines, what moves across them is a THREAD,
+and the calendar reads `threads.due_date`, which has existed since phase 1.
+
+  · `objectives` — the strategic layer, carrying the same word a bubble uses:
+    an `outcome`, what is true when it is done. A thread points at one
+    (optional, and NOT cascading — closing an objective must not delete the work
+    done under it). Shaped by a lead, read by everyone, like `states`.
+  · `inbox_items` — what was CAPTURED and is not yet work. This is the one that
+    earns its place: a note has no outcome and no evidence, and making it a
+    thread on the way in is how a backlog fills with rows nobody committed to.
+    Anybody in the workspace may capture; `captured_by` is stamped server-side
+    like a comment's author; triaging sets `thread` and the item stays, because
+    "we already decided about this" is worth being able to see.
+
+Capturing is NOT evidence and warms nothing. The thread a triage creates is.
+
+The workspace boundary got the same hole checked one collection over: a thread
+may not point at an objective from another workspace, the way it may not be
+filed into another workspace's bubble. Same guard, now written once for both.
+
 One decision is deliberately AT ODDS with the model and has to be settled here:
 in the planner a card's priority is CHOSEN from a dropdown, while a thread's
 priority is DERIVED from impact × urgency the way heat is. The planner's surface

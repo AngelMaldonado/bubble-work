@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/pocketbase/pocketbase/apis"
@@ -166,6 +167,65 @@ func registerDocuments(app core.App, t *tree.Tree) {
 		// `docs/` and `README.md` have no row anywhere: the DIRECTORY is the index,
 		// which is the whole point of the file being the record. So they are reached
 		// by path, and a path is all an agent needs to know.
+		// What moved, in lines.
+		//
+		// Every write here is a commit, so "what changed" is a question git has
+		// already answered — computing it a second time in the browser would be a
+		// second answer to the same question, and the two agree until they do not.
+		//
+		// The window is the CYCLE by default, and that is the whole point of the
+		// number: the same window heat is measured against decides what counts as
+		// "changed", so "+124 −18" reads as how much this document moved inside
+		// the window everything else is judged in.
+		se.Router.GET("/api/workspaces/{id}/changes", func(e *core.RequestEvent) error {
+			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
+			if err != nil {
+				return err
+			}
+			rows, err := t.Changed(repo, sinceOf(e.App, e.Request.URL.Query().Get("since")))
+			if err != nil {
+				return e.BadRequestError(err.Error(), err)
+			}
+			if rows == nil {
+				rows = []tree.Churn{}
+			}
+			return e.JSON(http.StatusOK, map[string]any{"changes": rows})
+		}).Bind(apis.RequireAuth())
+
+		// And the same thing in words: the unified diff git writes, for one file.
+		se.Router.GET("/api/workspaces/{id}/diff", func(e *core.RequestEvent) error {
+			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
+			if err != nil {
+				return err
+			}
+			doc := e.Request.URL.Query().Get("path")
+			since := e.Request.URL.Query().Get("since")
+			var out string
+			if since == "last" {
+				// "Nothing this cycle" is true and useless when what you wanted
+				// was to see the last thing somebody did to this document.
+				out, err = t.LastDiff(repo, doc)
+			} else {
+				out, err = t.Diff(repo, doc, sinceOf(e.App, since))
+			}
+			if err != nil {
+				return e.BadRequestError(err.Error(), err)
+			}
+			// Los dos lados además del parche: un parche es lo que git imprime,
+			// y dos documentos es lo que una vista de diff necesita. Los dos
+			// salen de aquí para que nadie reconstruya un lado en el navegador.
+			window := "last"
+			if since != "last" {
+				window = sinceOf(e.App, since)
+			}
+			before, _ := t.Before(repo, doc, window)
+			now, _, _ := t.Read(repo, doc)
+			return e.JSON(http.StatusOK, map[string]any{
+				"path": doc, "since": since, "diff": out,
+				"before": before, "after": now,
+			})
+		}).Bind(apis.RequireAuth())
+
 		se.Router.GET("/api/workspaces/{id}/tree", func(e *core.RequestEvent) error {
 			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
 			if err != nil {
@@ -495,4 +555,21 @@ func atoiOr(s string, def int) int {
 		return def
 	}
 	return n
+}
+
+// sinceOf turns the window a caller asked for into an instant git understands.
+//
+// Empty or "cycle" means the calibration's own window — the one the bands are
+// computed against — read from `tuning` rather than hard-coded, so recalibrating
+// moves this number with everything else. Anything else is passed through: a
+// caller that knows the instant it wants should get it.
+func sinceOf(app core.App, since string) string {
+	if since != "" && since != "cycle" {
+		return since
+	}
+	tun, err := tuningOf(app)
+	if err != nil {
+		return time.Now().UTC().Add(-168 * time.Hour).Format(time.RFC3339)
+	}
+	return time.Now().UTC().Add(-tun.Cycle()).Format(time.RFC3339)
 }

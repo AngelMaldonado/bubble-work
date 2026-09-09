@@ -124,6 +124,18 @@
   // read from. The others are ordinary documents that happen to belong here.
   let mainPath = $state('');
   let pages = $state<{ path: string; name: string }[]>([]);
+  // Cuánto se escribió en cada archivo dentro del ciclo. Una sola llamada para
+  // todo el repositorio: los números son para una columna, y una columna que
+  // cuesta una petición por fila deja de dibujarse.
+  let churn = $state<Record<string, { added: number; removed: number }>>({});
+  async function loadChurn() {
+    try {
+      const rows = await api.changes(workspace.id);
+      churn = Object.fromEntries(rows.map((c) => [c.path, { added: c.added, removed: c.removed }]));
+    } catch {
+      churn = {};
+    }
+  }
   let openPage = $state('');
 
   const pagesDir = $derived(mainPath.replace(/\.md$/, ''));
@@ -172,6 +184,7 @@
     mainPath;
     workspace.id;
     loadPages();
+    loadChurn();
   });
 
   /** Another document for this thread. Named here for the same reason a thread
@@ -267,7 +280,9 @@
     {onsearch}
     onsave={save}
     onattach={(file) => api.uploadAsset(workspace.id, file)}
-    {pages}
+    ondiff={(since) => api.diff(workspace.id, openPage || mainPath, since)}
+    pages={pages.map((p) => ({ ...p, churn: churn[p.path] }))}
+    mainChurn={churn[mainPath]}
     {openPage}
     onopenpage={(p) => (openPage = p)}
     onnewpage={newPage}

@@ -443,6 +443,28 @@ chk "borrar una página de docs/" \
 chk ">>> pero no el documento de un thread por esa puerta" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$WSDOC?path=threads/1-renombrado.md" -H "Authorization: $A")" 400
 
+# Cuánto cambió, en líneas. No lo calcula nadie dos veces: cada escritura es un
+# commit, así que git ya tiene la respuesta.
+echo
+CH=$(curl -s "$API/api/workspaces/$ALPHA/changes" -H "Authorization: $A")
+chk ">>> el ciclo dice cuánto se escribió en cada archivo" \
+  "$(echo "$CH" | python3 -c 'import sys,json
+d=json.load(sys.stdin)["changes"]
+c=next((x for x in d if x["path"].startswith("threads/")), None)
+print("si" if c and c["added"] > 0 else d)')" si
+chk ">>> ...y el diff de un documento viene del propio git" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/diff?path=docs/onboarding.md" -H "Authorization: $A" | python3 -c 'import sys,json
+print("si" if "+# Onboarding" in json.load(sys.stdin)["diff"] else "no")')" si
+chk ">>> ...y \"último cambio\" contesta aunque el ciclo esté vacío" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/diff?path=docs/onboarding.md&since=last" -H "Authorization: $A" | python3 -c 'import sys,json
+print("si" if json.load(sys.stdin)["diff"] else "no")')" si
+chk ">>> ...y trae los DOS lados, que es lo que una vista de diff necesita" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/diff?path=docs/onboarding.md&since=last" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if "after" in d and "before" in d and d["after"] else d)')" si
+chk ">>> erin no ve lo que cambió en un workspace que no alcanza" \
+  "$(code "$API/api/workspaces/$ALPHA/changes" -H "Authorization: $ER")" 404
+
 chk "el repo del workspace es un git de verdad" "$([ -d "$R/alpha/.git" ] && echo si || echo no)" si
 chk "y el árbol queda limpio tras las escrituras" \
   "$(cd "$R/alpha" && git status --porcelain | wc -l | tr -d ' ')" 0

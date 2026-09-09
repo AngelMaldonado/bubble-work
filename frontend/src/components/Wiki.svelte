@@ -27,6 +27,9 @@
   } = $props();
 
   let entries = $state<Entry[]>([]);
+  // Los mismos números que en el thread, de la misma llamada: cuánto se escribió
+  // en cada página dentro del ciclo.
+  let churn = $state<Record<string, { added: number; removed: number }>>({});
   let html = $state('');
   let error = $state('');
   // The page's markdown and the hash it was READ at. Same contract as a
@@ -65,7 +68,7 @@
         }
         list = node.children!;
       }
-      list.push({ id: e.path, name: e.title || e.name, icon: FileTextIcon });
+      list.push({ id: e.path, name: e.title || e.name, icon: FileTextIcon, churn: churn[e.path] });
     }
     return roots;
   });
@@ -147,6 +150,12 @@
   $effect(() => {
     workspace.id;
     loadTree();
+    api
+      .changes(workspace.id)
+      .then((rows) => {
+        churn = Object.fromEntries(rows.map((c) => [c.path, { added: c.added, removed: c.removed }]));
+      })
+      .catch(() => (churn = {}));
   });
   $effect(() => {
     workspace.id;
@@ -172,6 +181,7 @@
   {onsearch}
   onsave={save}
   onattach={(file) => api.uploadAsset(workspace.id, file)}
+  ondiff={(since) => api.diff(workspace.id, path, since)}
   onnew={() => (naming = true)}
   ondelete={() => (doomed = true)}
   onopen={(id) => {

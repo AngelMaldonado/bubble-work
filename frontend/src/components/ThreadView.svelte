@@ -44,7 +44,9 @@
     onsave,
     onreload,
     onattach,
+    ondiff,
     pages = [],
+    mainChurn,
     openPage = '',
     onopenpage,
     onnewpage,
@@ -81,8 +83,12 @@
     onsave?: (markdown: string) => void;
     /** adjuntar una imagen al workspace, desde el editor */
     onattach?: (file: File) => Promise<{ path: string } | null | void>;
+    /** qué cambió en este documento — lo calcula git, del lado del servidor */
+    ondiff?: (since: string) => Promise<{ before: string; after: string; diff: string }>;
     /** what this thread wrote BESIDE its document, by path */
-    pages?: { path: string; name: string }[];
+    pages?: { path: string; name: string; churn?: { added: number; removed: number } }[];
+    /** cuánto se escribió en el documento propio, en este ciclo */
+    mainChurn?: { added: number; removed: number };
     /** which of them is open; `''` is the thread's own document */
     openPage?: string;
     onopenpage?: (path: string) => void;
@@ -155,8 +161,10 @@
       // repetía el mismo índice con menos información y le robaba el sitio a lo
       // único que esta columna contesta: qué archivos tiene este thread.
       children: [
-        { id: 'doc', name: title, icon: FileTextIcon },
-        ...pages.map((p) => ({ id: `page:${p.path}`, name: p.name, icon: FileTextIcon })),
+        { id: 'doc', name: title, icon: FileTextIcon, churn: mainChurn },
+        ...pages.map((p) => ({
+          id: `page:${p.path}`, name: p.name, icon: FileTextIcon, churn: p.churn,
+        })),
       ],
     },
     ...(revisions.length
@@ -345,6 +353,7 @@
     <main class="content">
       <DocEditor
     {onattach}
+    {ondiff}
         {markdown}
         {html}
         {elsewhere}

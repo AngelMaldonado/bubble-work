@@ -843,6 +843,30 @@ llegaban como dos cadenas vacías — `each_key_duplicate`, actualización abort
 board que no vuelve a dibujarse. Ahora el error se ve en pantalla con su rastro,
 y la clave de ese `{#each}` incluye la posición.
 
+**Cuánto cambió, en líneas.** *(built)* `+124 −18` beside every file in the
+sidebar, and a third view next to *renderizado · markdown* that shows the diff
+itself. Nothing computes it twice: every write here is already a commit, so
+`git log --numstat` answers it for the whole repository in one call — and a
+second implementation in the browser is a second answer to the same question.
+`-M` matters more than it looks: without rename detection, renaming a thread
+moves its file and reads as the biggest piece of work in the workspace.
+
+**The window is the CYCLE**, and that is the point of the number rather than a
+default: the same window heat is measured against decides what counts as
+changed, so "+124 −18" reads as how much this document moved inside the window
+everything else is judged in. The view offers *este ciclo · último cambio*,
+because "nothing this cycle" is a true answer that is useless when what you
+wanted was to see the last thing somebody did.
+
+Drawn with `@codemirror/merge` — the same authors as the editor this app already
+loads, so the diff arrives with the same font, theme and scrolling as the
+markdown beside it, and no second styling system enters to make one screen look
+like a different application. Skeleton has no diff component; `diff2html` would
+have brought its own HTML and CSS. The two sides come from the server too: a
+patch is what git prints, two documents is what a merge view needs, and
+rebuilding one side from the other in the browser would be that second answer
+again.
+
 **Comments, in a drawer.** *(built)* The collection has existed since phase 1,
 with the rule that matters — the author owns what they said, so nobody, not even
 a lead, edits somebody else's words — and no surface. 💬 in the thread's HUD

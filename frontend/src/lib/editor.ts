@@ -155,6 +155,43 @@ async function vimExtensions(opts: EditorOptions) {
   return { exts: [vim({ status: true }), drawSelection()], Vim, getCM };
 }
 
+/** Un diff, montado sobre el mismo editor.
+ *
+ *  `@codemirror/merge` en lugar de una librería de diff aparte: es de los mismos
+ *  autores del editor que esta aplicación ya carga, así que el diff sale con la
+ *  misma fuente, el mismo tema y el mismo desplazamiento que el markdown de al
+ *  lado — y no entra un segundo sistema de estilos para que una pantalla se vea
+ *  como otra aplicación.
+ *
+ *  Los dos lados los da el SERVIDOR: git ya sabe qué cambió, y calcularlo otra
+ *  vez aquí sería una segunda respuesta a la misma pregunta.
+ */
+export async function createDiffView(opts: {
+  parent: HTMLElement;
+  before: string;
+  after: string;
+  dark: boolean;
+}): Promise<{ destroy(): void }> {
+  const { MergeView } = await import('@codemirror/merge');
+  const common = [
+    EditorView.editable.of(false),
+    EditorState.readOnly.of(true),
+    theme(opts.dark),
+    EditorView.lineWrapping,
+  ];
+  const view = new MergeView({
+    a: { doc: opts.before, extensions: common },
+    b: { doc: opts.after, extensions: common },
+    parent: opts.parent,
+    // Unificado y no dos columnas: la columna de un thread es angosta y dos
+    // paneles de 40 caracteres hacen ilegibles los dos.
+    collapseUnchanged: { margin: 3, minSize: 6 },
+    gutter: false,
+    highlightChanges: true,
+  });
+  return { destroy: () => view.destroy() };
+}
+
 export async function createMarkdownEditor(opts: EditorOptions): Promise<MarkdownEditor> {
   const loaded = opts.vim ? await vimExtensions(opts) : null;
   const vimExt = loaded?.exts ?? [];

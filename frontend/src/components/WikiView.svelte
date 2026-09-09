@@ -30,6 +30,7 @@
     onopen,
     onsave,
     onattach,
+    ondiff,
     onsearch,
     onnew,
     ondelete,
@@ -47,6 +48,8 @@
     onsave?: (markdown: string) => void;
     /** adjuntar una imagen al workspace, desde el editor */
     onattach?: (file: File) => Promise<{ path: string } | null | void>;
+    /** qué cambió en este documento — lo calcula git, del lado del servidor */
+    ondiff?: (since: string) => Promise<{ before: string; after: string; diff: string }>;
     onsearch?: () => void;
     onnew?: () => void;
     ondelete?: () => void;
@@ -181,6 +184,7 @@
            two that drift. -->
       <DocEditor
     {onattach}
+    {ondiff}
         {markdown}
         {html}
         bind:editing

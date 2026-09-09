@@ -129,6 +129,11 @@ export type Doc = {
   done: number;
 };
 
+/** Cuánto se escribió en un archivo dentro de una ventana. Sumado y quitado por
+ *  separado: «+120 −4» y «+124 −8» son dos tardes distintas, y un neto las
+ *  esconde. */
+export type Churn = { path: string; added: number; removed: number };
+
 export type Entry = {
   path: string;
   name: string;
@@ -481,6 +486,27 @@ class Api {
 
   board(workspace: string) {
     return this.call<Board>(`/api/workspaces/${workspace}/board`);
+  }
+
+  /** Qué se movió, por archivo. Lo calcula git, que ya tiene la respuesta:
+   *  cada escritura aquí es un commit. `since` vacío es EL CICLO — la misma
+   *  ventana contra la que se mide todo lo demás. */
+  async changes(workspace: string, since = '') {
+    const out = await this.call<{ changes: Churn[] }>(
+      `/api/workspaces/${workspace}/changes${since ? `?since=${encodeURIComponent(since)}` : ''}`,
+    );
+    return out.changes;
+  }
+
+  /** Y lo mismo en palabras: el parche que git escribe, MÁS los dos lados. Un
+   *  parche es lo que git imprime; dos documentos es lo que una vista de diff
+   *  necesita, y reconstruir un lado a partir del otro en el navegador sería una
+   *  segunda implementación de «qué cambió». */
+  diff(workspace: string, path: string, since = '') {
+    return this.call<{ path: string; diff: string; before: string; after: string }>(
+      `/api/workspaces/${workspace}/diff?path=${encodeURIComponent(path)}` +
+        (since ? `&since=${encodeURIComponent(since)}` : ''),
+    );
   }
 
   tree(workspace: string) {

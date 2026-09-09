@@ -5,6 +5,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -164,4 +166,205 @@ func gitCleanEnv() []string {
 		out = append(out, kv)
 	}
 	return out
+}
+
+// Churn is how much a file changed over a window, in lines.
+//
+// Lines and not bytes because a line is what a person wrote; and added and
+// removed apart rather than a net number, because "+120 −4" and "+124 −8" are
+// different afternoons and a single "+116" hides which.
+type Churn struct {
+	Path  string `json:"path"`
+	Added int    `json:"added"`
+	Gone  int    `json:"removed"`
+}
+
+// Changed reports what moved in a repository since an instant, per file.
+//
+// One git call for the whole tree rather than one per document: the numbers are
+// for a sidebar, and a sidebar that costs a process per row is a sidebar that
+// stops being drawn.
+//
+// `-M` is what keeps a rename from reading as "+everything −everything". A
+// thread renamed mid-cycle moves its file, and without rename detection that
+// move would look like the biggest piece of work in the workspace.
+func (t *Tree) Changed(repo, since string) ([]Churn, error) {
+	dir, err := t.repoDir(repo)
+	if err != nil {
+		return nil, err
+	}
+	out, err := run(dir, "log", "-M", "--since="+since, "--numstat", "--format=")
+	if err != nil {
+		return nil, nil // a repository with no history is not an error
+	}
+	by := map[string]*Churn{}
+	for _, line := range strings.Split(out, "\n") {
+		cols := strings.Split(strings.TrimSpace(line), "\t")
+		if len(cols) != 3 {
+			continue
+		}
+		// A binary file's counts are "-", and an image has no lines to speak of.
+		added, err1 := strconv.Atoi(cols[0])
+		gone, err2 := strconv.Atoi(cols[1])
+		if err1 != nil || err2 != nil {
+			continue
+		}
+		// After a rename git writes `old => new`; the file people mean is the
+		// one it is called now.
+		p := cols[2]
+		if i := strings.Index(p, " => "); i >= 0 {
+			p = renamed(p)
+		}
+		c, ok := by[p]
+		if !ok {
+			c = &Churn{Path: p}
+			by[p] = c
+		}
+		c.Added += added
+		c.Gone += gone
+	}
+	list := make([]Churn, 0, len(by))
+	for _, c := range by {
+		list = append(list, *c)
+	}
+	sort.Slice(list, func(i, j int) bool { return list[i].Path < list[j].Path })
+	return list, nil
+}
+
+// renamed reads git's rename notation into the path a file has NOW.
+//
+// Two shapes: `old.md => new.md`, and the compact `dir/{old => new}.md` git
+// writes when only part of the path moved.
+func renamed(p string) string {
+	if i, j := strings.Index(p, "{"), strings.Index(p, "}"); i >= 0 && j > i {
+		inner := p[i+1 : j]
+		if k := strings.Index(inner, " => "); k >= 0 {
+			return p[:i] + inner[k+4:] + p[j+1:]
+		}
+	}
+	if k := strings.Index(p, " => "); k >= 0 {
+		return strings.TrimSpace(p[k+4:])
+	}
+	return p
+}
+
+// Diff returns a unified diff of one document over a window, as git writes it.
+//
+// The text comes from git rather than from a diffing library in the browser for
+// the same reason the markdown is rendered on the server: there is already one
+// answer to "what changed", and a second implementation agrees with it until it
+// does not.
+func (t *Tree) Diff(repo, doc, since string) (string, error) {
+	full, err := t.resolve(repo, doc)
+	if err != nil {
+		return "", err
+	}
+	dir, err := t.repoDir(repo)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(dir, full)
+	if err != nil {
+		return "", err
+	}
+	// The oldest commit inside the window, then everything after it. `git diff
+	// --since` does not exist: `since` selects commits, and a diff needs two
+	// ends.
+	from, err := run(dir, "log", "-M", "--since="+since, "--format=%H", "--", rel)
+	if err != nil || from == "" {
+		return "", nil // nothing changed in this window
+	}
+	lines := strings.Split(from, "\n")
+	oldest := strings.TrimSpace(lines[len(lines)-1])
+	out, err := run(dir, "diff", "-M", "--unified=3", oldest+"^", "HEAD", "--", rel)
+	if err != nil {
+		// The oldest commit in the window may be the file's first: there is no
+		// parent to diff against, so show it whole.
+		out, err = run(dir, "diff", "-M", "--unified=3",
+			"4b825dc642cb6eb9a060e54bf8d69288fbee4904", "HEAD", "--", rel)
+		if err != nil {
+			return "", nil
+		}
+	}
+	return out, nil
+}
+
+// LastDiff is the newest change to one document, whenever it happened.
+//
+// The other half of the pair: `Diff` answers "what moved in this window", which
+// is empty for a document nobody touched this cycle — and "nothing this cycle"
+// is a true answer that is useless when what you wanted was to see the last
+// thing somebody did to it.
+func (t *Tree) LastDiff(repo, doc string) (string, error) {
+	dir, err := t.repoDir(repo)
+	if err != nil {
+		return "", err
+	}
+	full, err := t.resolve(repo, doc)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(dir, full)
+	if err != nil {
+		return "", err
+	}
+	sha, err := run(dir, "log", "-M", "-1", "--format=%H", "--", rel)
+	if err != nil || sha == "" {
+		return "", nil
+	}
+	out, err := run(dir, "diff", "-M", "--unified=3", sha+"^", sha, "--", rel)
+	if err != nil {
+		out, err = run(dir, "diff", "-M", "--unified=3",
+			"4b825dc642cb6eb9a060e54bf8d69288fbee4904", sha, "--", rel)
+		if err != nil {
+			return "", nil
+		}
+	}
+	return out, nil
+}
+
+// Before returns a document as it stood at the START of a window, so a diff has
+// two ends to compare.
+//
+// A unified diff is what git prints; two documents is what a merge view needs.
+// Both come from the same place on purpose — a browser that reconstructs one
+// side from a patch is a second implementation of "what changed".
+//
+// A file that did not exist yet comes back empty, which is exactly right: what
+// changed is that all of it appeared.
+func (t *Tree) Before(repo, doc, since string) (string, error) {
+	dir, err := t.repoDir(repo)
+	if err != nil {
+		return "", err
+	}
+	full, err := t.resolve(repo, doc)
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(dir, full)
+	if err != nil {
+		return "", err
+	}
+	var oldest string
+	if since == "last" {
+		oldest, err = run(dir, "log", "-M", "-1", "--format=%H", "--", rel)
+	} else {
+		var list string
+		list, err = run(dir, "log", "-M", "--since="+since, "--format=%H", "--", rel)
+		if list != "" {
+			lines := strings.Split(list, "\n")
+			oldest = strings.TrimSpace(lines[len(lines)-1])
+		}
+	}
+	if err != nil || oldest == "" {
+		// Nothing changed in the window: the two ends are the same text, and the
+		// caller draws a diff with nothing in it.
+		body, _, rerr := t.Read(repo, doc)
+		return body, rerr
+	}
+	out, err := run(dir, "show", oldest+"^:"+rel)
+	if err != nil {
+		return "", nil // its first commit: before this, there was nothing
+	}
+	return out, nil
 }

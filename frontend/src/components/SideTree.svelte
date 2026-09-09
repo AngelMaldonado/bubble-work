@@ -9,6 +9,9 @@
     icon?: Component<{ class?: string }>;
     /** Shown right-aligned on the row: a relation type, a count, a hint. */
     badge?: string;
+    /** Cuánto se escribió en este archivo dentro de la ventana. Dos números y
+     *  no uno: «+120 −4» y «+124 −8» son dos tardes distintas. */
+    churn?: { added: number; removed: number };
     href?: string;
     external?: boolean;
     /** Overrides the child count on a branch — a section with an add form still
@@ -104,6 +107,12 @@
         <TreeView.Item onclick={() => open(node)} title={node.href ?? node.name}>
           {#if node.icon}{@const Icon = node.icon}<Icon class="size-4 shrink-0" />{/if}
           <span class="node-name">{node.name}</span>
+          {#if node.churn && (node.churn.added || node.churn.removed)}
+            <span class="churn" title="en este ciclo">
+              {#if node.churn.added}<span class="plus">+{node.churn.added}</span>{/if}
+              {#if node.churn.removed}<span class="minus">−{node.churn.removed}</span>{/if}
+            </span>
+          {/if}
           {#if node.badge}<span class="badge">{node.badge}</span>{/if}
         </TreeView.Item>
         {#if itemActions}
@@ -163,6 +172,22 @@
     color: var(--text);
     font-weight: 600;
   }
+
+  /* Los números van pegados al borde, en la misma cinta que el contador — pero
+     sin fondo: dos pastillas en una fila de 200px compiten con el nombre, que
+     es lo que se está leyendo. */
+  .churn {
+    margin-left: auto;
+    flex: none;
+    display: flex;
+    gap: 0.3rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.66rem;
+    font-variant-numeric: tabular-nums;
+  }
+  .plus { color: var(--ok, oklch(0.72 0.15 150)); }
+  .minus { color: color-mix(in oklab, var(--p1, tomato) 80%, var(--muted)); }
+  .churn + .badge { margin-left: 0.3rem; }
 
   .badge, .count {
     margin-left: auto; flex: none;

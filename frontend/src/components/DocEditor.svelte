@@ -24,6 +24,7 @@
     markdown = '',
     html = '',
     editing = $bindable(false),
+    ondiff,
     /** somebody else wrote while this was open */
     elsewhere = false,
     onsave,
@@ -38,11 +39,39 @@
     onsave?: (markdown: string) => void;
     onreload?: () => void;
     onheadings?: (h: Heading[]) => void;
+    /** Los dos lados de un diff, tal como los da el servidor. Sin esto la
+     *  pestaña no se dibuja: un botón que abre una pantalla vacía es peor que
+     *  no tener el botón. */
+    ondiff?: (since: string) => Promise<{ before: string; after: string; diff: string }>;
     /** Attach a file to the workspace and say what the document should call
      *  it. The caller owns the upload because it owns the workspace; this only
      *  puts the reference where the caret is. */
     onattach?: (file: File) => Promise<{ path: string } | null | void>;
   } = $props();
+
+  // Tres modos, no dos: leer, escribir, y ver qué cambió. El tercero no es una
+  // variante del segundo — se mira, no se toca — así que vive en el mismo
+  // interruptor y no dentro del editor.
+  let mode = $state<'read' | 'write' | 'diff'>('read');
+  let since = $state('cycle');
+  let patch = $state<{ before: string; after: string; diff: string } | null>(null);
+  let loadingDiff = $state(false);
+
+  // `editing` sigue siendo la verdad de quién escribe, porque es lo que el
+  // resto de la aplicación mira; el modo es la vista.
+  $effect(() => {
+    editing = mode === 'write';
+  });
+  $effect(() => {
+    if (mode !== 'diff' || !ondiff) return;
+    const window = since;
+    loadingDiff = true;
+    patch = null;
+    ondiff(window)
+      .then((p) => (patch = p))
+      .catch(() => (patch = null))
+      .finally(() => (loadingDiff = false));
+  });
 
   let editor = $state<MarkdownEditor | null>(null);
   let attaching = $state(false);
@@ -109,6 +138,29 @@
     }
   }
 
+  /** El diff, con el mismo editor y el mismo tema que el markdown de al lado. */
+  function mountDiff(el: HTMLElement) {
+    const p = patch;
+    if (!p) return;
+    let live = true;
+    let made: { destroy(): void } | null = null;
+    import('../lib/editor').then(({ createDiffView }) =>
+      createDiffView({
+        parent: el,
+        before: p.before,
+        after: p.after,
+        dark: document.documentElement.getAttribute('data-mode') === 'dark',
+      }).then((v) => {
+        if (!live) return v.destroy();
+        made = v;
+      }),
+    );
+    return () => {
+      live = false;
+      made?.destroy();
+    };
+  }
+
   function mountEditor(el: HTMLElement) {
     // What this attachment depends on, spelled out. `vimPref.on` is READ here,
     // synchronously, because toggling vim has to rebuild the editor — read
@@ -172,13 +224,25 @@
 <div class="edit-bar">
   <div class="seg" role="group" aria-label="modo de vista">
     <button
-      class:on={!editing}
-      aria-pressed={!editing}
+      class:on={mode === 'read'}
+      aria-pressed={mode === 'read'}
       onclick={() => {
         save();
-        editing = false;
+        mode = 'read';
       }}>renderizado</button>
-    <button class:on={editing} aria-pressed={editing} onclick={() => (editing = true)}>markdown</button>
+    <button
+      class:on={mode === 'write'}
+      aria-pressed={mode === 'write'}
+      onclick={() => (mode = 'write')}>markdown</button>
+    {#if ondiff}
+      <button
+        class:on={mode === 'diff'}
+        aria-pressed={mode === 'diff'}
+        onclick={() => {
+          save();
+          mode = 'diff';
+        }}>cambios</button>
+    {/if}
   </div>
   {#if editing && onattach}
     <!-- Adjuntar vive donde se escribe, porque lo que produce es una línea de
@@ -197,6 +261,15 @@
         attach(el.files?.[0]);
         el.value = '';
       }} />
+  {/if}
+  {#if mode === 'diff'}
+    <!-- Contra qué. El ciclo por defecto, porque es la ventana contra la que se
+         mide todo lo demás; "último cambio" está para cuando el ciclo está
+         vacío y lo que querías era ver lo último que alguien hizo. -->
+    <div class="seg since" role="group" aria-label="ventana del diff">
+      <button class:on={since === 'cycle'} onclick={() => (since = 'cycle')}>este ciclo</button>
+      <button class:on={since === 'last'} onclick={() => (since = 'last')}>último cambio</button>
+    </div>
   {/if}
   {#if editing}
     <!-- Only while there is an editor to apply it to. A preference for how to
@@ -220,7 +293,21 @@
   </p>
 {/if}
 
-{#if editing}
+{#if mode === 'diff'}
+  <div class="editors-wrap">
+    {#if loadingDiff}
+      <p class="faint p-4 text-sm">…</p>
+    {:else if patch && patch.diff}
+      <div class="editors" {@attach mountDiff}></div>
+    {:else}
+      <p class="faint p-4 text-sm">
+        {since === 'cycle'
+          ? 'Nada cambió en este ciclo. Prueba «último cambio».'
+          : 'Este documento no tiene historia todavía.'}
+      </p>
+    {/if}
+  </div>
+{:else if editing}
   <!-- The menu is a SIBLING of the editor, in a box that positions it: the
        editor's own box clips its overflow (that is what keeps CodeMirror inside
        its rounded corner), and a menu inside it would be cut off the moment the
@@ -248,6 +335,10 @@
   .seg { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
   .seg button { border: none; border-radius: 0; padding: 0.25rem 0.75rem; }
   .seg button.on { background: var(--hover); color: var(--text); }
+  /* Pegada al interruptor de vista, y los dos al borde derecho. Con un
+     `margin-right: auto` aquí y el `margin-left: auto` del otro, los dos
+     empujaban en direcciones opuestas y el par acababa centrado. */
+  .since { margin-left: 0.4rem; font-size: 0.76rem; }
 
   .vim {
     padding: 0.28rem 0.6rem;

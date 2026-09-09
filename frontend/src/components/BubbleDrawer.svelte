@@ -10,7 +10,8 @@
   // Skeleton's Dialog underneath, so the focus trap, the escape key and the aria
   // wiring are somebody else's problem — the part that is easy to do almost
   // right and hard to do correctly.
-  import { Dialog, Portal, Progress } from '@skeletonlabs/skeleton-svelte';
+  import { Combobox, Dialog, Portal, Progress, useListCollection } from '@skeletonlabs/skeleton-svelte';
+  import { ago } from '../lib/when';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Lifecycle } from '../lib/api';
 
@@ -24,13 +25,20 @@
     outcome = '',
     lifecycle,
     reason = '',
-    owner = '',
+    owners = [],
     cycleLeft = '',
     cyclePct = null,
     threads = [],
+    closed = false,
+    closure = '',
+    people = [],
     onopenthread,
     onnewthread,
     ondeletethread,
+    onoutcome,
+    onowners,
+    onclose,
+    onreopen,
   }: {
     open?: boolean;
     naming?: boolean;
@@ -38,16 +46,31 @@
     outcome?: string;
     lifecycle: Lifecycle;
     reason?: string;
-    owner?: string;
+    /** who is accountable, by id. Plural because the work is. */
+    owners?: string[];
     /** what is left of the cycle, in words */
     cycleLeft?: string;
     /** and the same thing as 0..100, for the bar. `null` draws no bar: a bar
      *  filled with a number nobody computed is worse than no bar. */
     cyclePct?: number | null;
+    /** whether it has already been closed. The band says so too, but the panel
+     *  offers a different verb depending on the answer. */
+    closed?: boolean;
+    /** how it ended, if it did — la frase de quien la cerró */
+    closure?: string;
+    /** who could be accountable for this: the workspace's roster */
+    people?: { id: string; name: string }[];
     onopenthread?: (seq: number) => void;
     /** create one with the name typed here */
     onnewthread?: (name: string) => void;
     ondeletethread?: (seq: number) => void;
+    /** what is true when this is done, rewritten */
+    onoutcome?: (text: string) => void;
+    /** An empty list hands it back to nobody, which is a real answer and has a
+     *  cost: a quiet bubble with nobody accountable is 🪦, not 😴. */
+    onowners?: (ids: string[]) => void;
+    onclose?: () => void;
+    onreopen?: () => void;
     threads?: {
       seq: number;
       title: string;
@@ -64,6 +87,29 @@
   const fade = edgeFade();
 
   let fresh = $state('');
+  // The outcome is read most of the time and written rarely, so it is text
+  // until you click it. An always-on textarea in the header would turn the
+  // first thing you read about a bubble into a form.
+  let saying = $state(false);
+  let said = $state('');
+  const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? id;
+
+  // Skeleton's Combobox, multiple. Not a native `<select multiple>`, which on a
+  // Mac is a scrolling box you ⌘-click into and on every platform is a control
+  // nobody recognises as "add a person". The collection is Zag's, filtered as
+  // you type; who is already on it is drawn as chips underneath, because the
+  // input shows what you are SEARCHING and the chips show what is true.
+  let hunting = $state('');
+  const shortlist = $derived(
+    people.filter((p) => p.name.toLowerCase().includes(hunting.trim().toLowerCase())),
+  );
+  const roster = $derived(
+    useListCollection({
+      items: shortlist,
+      itemToString: (p: { id: string; name: string }) => p.name,
+      itemToValue: (p: { id: string; name: string }) => p.id,
+    }),
+  );
 
 </script>
 
@@ -90,8 +136,89 @@
       <!-- The outcome starts where the EMOJI starts, not where the name does.
            Indenting it under the title made it look like a caption on the name;
            it is a claim about the bubble, and it reads as one from the margin. -->
-      {#if outcome}
+      {#if saying}
+        <!-- ⌘/Ctrl+Enter guarda y Escape cancela; salir del campo también
+             guarda, como en el editor del documento. -->
+        <textarea
+          class="outcome-edit mt-1"
+          rows="2"
+          placeholder="¿Qué es cierto cuando esto termine?"
+          bind:value={said}
+          {@attach (el: HTMLTextAreaElement) => el.focus()}
+          onblur={() => { saying = false; if (said.trim() !== outcome) onoutcome?.(said.trim()); }}
+          onkeydown={(e) => {
+            if (e.key === 'Escape') { said = outcome; saying = false; }
+            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) (e.currentTarget as HTMLTextAreaElement).blur();
+          }}></textarea>
+      {:else if onoutcome}
+        <!-- Editable en su sitio, no en un diálogo aparte: el outcome ES la
+             burbuja — sin él es una carpeta con nombre bonito — y mandarlo a
+             otra pantalla es cómo se queda vacío para siempre. -->
+        <button class="outcome mt-1" onclick={() => { said = outcome; saying = true; }}>
+          {#if outcome}{outcome}{:else}<span class="faint">+ ¿qué es cierto cuando esto termine?</span>{/if}
+        </button>
+      {:else if outcome}
         <Dialog.Description class="faint mt-1 text-sm">{outcome}</Dialog.Description>
+      {/if}
+
+      {#if closed && closure}
+        <p class="closed-note mt-2">🏆 {closure}</p>
+      {/if}
+
+      {#if onowners}
+        <!-- Quién está a cargo no es decoración: sin nadie, una burbuja que se
+             enfría cae a 🪦 en vez de a 😴, porque no hay a quién preguntarle.
+             Por eso se dice aquí lo que cuesta dejarlo vacío. -->
+        <div class="owners mt-2">
+          <span class="faint shrink-0">a cargo</span>
+          <Combobox
+            class="min-w-0 flex-1"
+            multiple
+            placeholder={owners.length ? 'agregar a alguien…' : 'nadie'}
+            collection={roster}
+            value={owners}
+            inputValue={hunting}
+            onInputValueChange={(e: { inputValue: string }) => (hunting = e.inputValue)}
+            onOpenChange={() => (hunting = '')}
+            onValueChange={(e: { value: string[] }) => onowners?.(e.value)}>
+            <Combobox.Control>
+              <Combobox.Input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+              <Combobox.Trigger />
+            </Combobox.Control>
+            <Portal>
+              <Combobox.Positioner>
+                <Combobox.Content class="who-list">
+                  {#each shortlist as p (p.id)}
+                    <Combobox.Item item={p}>
+                      <Combobox.ItemText>{p.name}</Combobox.ItemText>
+                      <Combobox.ItemIndicator />
+                    </Combobox.Item>
+                  {:else}
+                    <p class="faint px-2 py-1 text-xs">nadie más en este proyecto</p>
+                  {/each}
+                </Combobox.Content>
+              </Combobox.Positioner>
+            </Portal>
+          </Combobox>
+        </div>
+        {#if owners.length}
+          <!-- Las fichas dicen lo que ES; el campo de arriba dice lo que estás
+               buscando. Quitar a alguien se hace aquí, en la ficha. -->
+          <ul class="chips">
+            {#each owners as id (id)}
+              <li class="chip">
+                {nameOf(id)}
+                <button
+                  aria-label="quitar a {nameOf(id)}"
+                  onclick={() => onowners?.(owners.filter((x) => x !== id))}>×</button>
+              </li>
+            {/each}
+          </ul>
+        {:else}
+          <p class="faint mt-1 text-xs">nadie a cargo · si se enfría, cae a 🪦</p>
+        {/if}
+      {:else if owners.length}
+        <p class="faint mt-2 text-sm">a cargo: {owners.map(nameOf).join(', ')}</p>
       {/if}
 
       <!-- The cycle, as a bar. It used to be a sentence about the last thing
@@ -102,7 +229,7 @@
            pushed the bar away from the subtitle it belongs to. "ciclo · quedan
            6 d" and the owner are gone for the same reason. -->
       {#if cyclePct !== null}
-        <div class="mt-3 flex items-center gap-3">
+        <div class="mt-3 flex items-center gap-3" title={cycleLeft}>
           <Progress value={cyclePct} class="flex-1">
             <Progress.Track><Progress.Range /></Progress.Track>
           </Progress>
@@ -154,6 +281,13 @@
            panel always offers, so it sits where the panel ends rather than
            drifting down as threads are added. -->
       <div class="new-thread">
+        {#if closed && onreopen}
+          <!-- Una burbuja cerrada se reabre: cerrarla fue una decisión, no un
+               borrado, y el modelo dice que se puede redefinir. -->
+          <button class="verb mb-2" onclick={() => onreopen?.()}>Reabrir la burbuja</button>
+        {:else if onclose}
+          <button class="verb mb-2" onclick={() => onclose?.()}>Cerrar la burbuja</button>
+        {/if}
         <!-- A thread needs a NAME, and it is the only thing it needs. Asking
              for it here — rather than creating "Thread nuevo" and hoping
              somebody renames it — is the difference between a list of work and
@@ -185,6 +319,129 @@
 </Dialog>
 
 <style>
+  /* El outcome se lee como texto y se escribe donde se lee: mismo tamaño y
+     mismo color en los dos estados, para que entrar a editarlo no mueva nada. */
+  .outcome {
+    display: block;
+    width: 100%;
+    padding: 0.15rem 0.3rem;
+    margin-left: -0.3rem;
+    border-radius: 7px;
+    background: transparent;
+    color: var(--muted);
+    text-align: left;
+    font-size: 0.875rem;
+    line-height: 1.4;
+  }
+  .outcome:hover { background: var(--hover); }
+  .outcome-edit {
+    display: block;
+    width: 100%;
+    padding: 0.3rem 0.4rem;
+    border: 1px solid var(--accent, var(--line));
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font: inherit;
+    font-size: 0.875rem;
+    resize: vertical;
+  }
+
+  .closed-note {
+    margin: 0;
+    padding: 0.35rem 0.55rem;
+    border-radius: 9px;
+    background: var(--hover);
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+
+  .owners { display: flex; align-items: center; gap: 0.5rem; font-size: 0.82rem; }
+  /* La misma densidad que los campos del planeador: un solo tipo de caja en
+     todo el producto, para que un combobox aquí no parezca de otra aplicación.
+     El input trae el estilo de campo de Skeleton — su propio radio y padding —
+     que dentro del control se lee como una caja dibujada dentro de otra. */
+  .owners :global([data-scope='combobox'][data-part='root']) { min-width: 0; width: 100%; }
+  .owners :global([data-scope='combobox'][data-part='control']) {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    min-height: 2rem;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .owners :global([data-scope='combobox'][data-part='control']:focus-within) {
+    border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+  }
+  .owners :global(input) {
+    min-width: 0;
+    padding: 0.15rem 0.25rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text);
+    font-size: 0.82rem;
+    outline: none;
+  }
+  .owners :global([data-scope='combobox'][data-part='trigger']) {
+    flex: none;
+    color: var(--faint);
+    font-size: 0.8rem;
+  }
+  /* La lista está portada a <body>, fuera del alcance de un selector con
+     ancestro: se estiliza por su clase, que es lo único que viaja con ella. */
+  :global(.who-list) { min-width: max(var(--reference-width, 0px), 13rem); }
+  :global(.who-list [data-part='item']) {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    padding: 0.3rem 0.6rem;
+    border-radius: 7px;
+    font-size: 0.84rem;
+  }
+
+  /* El margen vive AQUÍ, no en una utilidad: `.chips { margin: 0 }` con el
+     atributo de scope de Svelte le gana en especificidad a `mt-2.5`, así que la
+     clase de Tailwind se aplicaba y no movía nada. */
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    margin: 0.7rem 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.1rem 0.35rem 0.1rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+  .chip button { color: var(--faint); font-size: 0.9rem; line-height: 1; }
+  .chip button:hover { color: var(--text); }
+
+  /* El verbo destructivo del panel, tono bajo: está siempre a la vista y no
+     debe competir con "+ thread", que es lo que se pulsa todos los días. */
+  .verb {
+    width: 100%;
+    padding: 0.35rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  .verb:hover { background: var(--hover); color: var(--text); }
+
   .new-name {
     width: 100%;
     padding: 0.4rem 0.6rem;

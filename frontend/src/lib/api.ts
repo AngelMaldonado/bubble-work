@@ -23,14 +23,23 @@ export type ThreadHeat = {
   priority?: string;
   heat: Heat;
   pulse: boolean;
+  /** who has it */
+  assignees?: string[];
+  /** when anything last happened to it, RFC3339 — the row says it in words */
+  at?: string;
 };
 
 export type BubbleHeat = {
   id: string;
   name: string;
-  owner?: string;
+  /** who is accountable. Plural: the 🪦 band asks whether ANYBODY is. */
+  owners?: string[];
   outcome?: string;
   closed: boolean;
+  /** how it ended, if it did */
+  closure?: string;
+  /** when it last produced anything, RFC3339 — what the cycle bar measures */
+  warm_at?: string;
   heat: Heat;
 };
 
@@ -85,6 +94,15 @@ export type InboxItem = {
   created: string;
 };
 export type Person = { id: string; email: string; display_name?: string; role?: string };
+
+/** One person's place in one workspace. `id` is the MEMBERSHIP's — that is what
+ *  a role change or a removal edits — and `user` is the person's. */
+export type Member = {
+  id: string;
+  user: string;
+  name: string;
+  role: 'lead' | 'member';
+};
 
 export type Doc = {
   workspace: string;
@@ -282,6 +300,80 @@ class Api {
       '/api/collections/objectives/records?perPage=500&sort=position,created',
     );
     return out.items;
+  }
+
+  /** Who works HERE: the workspace's roster, membership row and all.
+   *
+   *  Read from `memberships` rather than from `users` on purpose. Everybody
+   *  signed in can list people — that is what makes inviting possible — but the
+   *  question a workspace asks is not "who exists", it is "who is in this", and
+   *  that is a membership. The row's own id comes back because changing a role
+   *  or removing somebody edits THE MEMBERSHIP, not the person. */
+  async members(workspace: string): Promise<Member[]> {
+    const out = await this.call<{
+      items: {
+        id: string;
+        user: string;
+        role: 'lead' | 'member';
+        expand?: { user?: { display_name?: string; email?: string } };
+      }[];
+    }>(
+      `/api/collections/memberships/records?perPage=200&expand=user` +
+        `&filter=${encodeURIComponent(`workspace='${workspace}'`)}`,
+    );
+    return out.items.map((m) => ({
+      id: m.id,
+      user: m.user,
+      role: m.role,
+      // `display_name` no es obligatorio, y PocketBase OCULTA el correo de otra
+      // persona salvo que ella lo haya hecho visible — así que el correo es un
+      // segundo intento, no el respaldo. Lo último es decirlo, no imprimir un id.
+      name: m.expand?.user?.display_name || m.expand?.user?.email || 'sin nombre',
+    }));
+  }
+
+  /** The same roster, shaped for a field that only needs to name a person. */
+  async roster(workspace: string) {
+    const rows = await this.members(workspace);
+    return rows.map((m) => ({ id: m.user, name: m.name }));
+  }
+
+  /** Everybody with an account. Listing people is open to anybody signed in —
+   *  that is what makes an invitation possible — and it is deliberately NOT the
+   *  same list as a workspace's roster. */
+  async people() {
+    const out = await this.call<{ items: Person[] }>(
+      '/api/collections/users/records?perPage=500&sort=display_name,email',
+    );
+    return out.items;
+  }
+
+  /** "Sigo aquí." The server stamps the time; this only says who asked. */
+  beat() {
+    return this.call<{ at: string }>('/api/presence', { method: 'POST' });
+  }
+
+  /** Who has said it lately. One row per person, so this is small by
+   *  construction; WHAT counts as online is decided by the reader, not stored. */
+  async presence() {
+    const out = await this.call<{
+      items: { user: string; at: string; expand?: { user?: { display_name?: string; email?: string } } }[];
+    }>('/api/collections/presence/records?perPage=200&expand=user');
+    return out.items.map((r) => ({
+      id: r.user,
+      at: r.at,
+      name: r.expand?.user?.display_name || r.expand?.user?.email || 'alguien',
+    }));
+  }
+
+  /** An invitation is a ROW: one person, one workspace, one role. The server
+   *  decides who may write it — this workspace's lead, or the global one. */
+  invite(workspace: string, user: string, role: 'lead' | 'member' = 'member') {
+    return this.create<{ id: string }>('memberships', { workspace, user, role });
+  }
+
+  setRole(membership: string, role: 'lead' | 'member') {
+    return this.update('memberships', membership, { role });
   }
 
   bubbles(workspace: string) {

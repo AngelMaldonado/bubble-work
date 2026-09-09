@@ -585,6 +585,60 @@ chk "el board dice contra qué calibración clasificó" \
 chk "erin no ve el board" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $ER")" 404
 
+# Cerrar una burbuja es una DECISIÓN con fecha, no un borrado: baja a la banda
+# de cerradas, dice cómo terminó, y se puede reabrir. Y quién está a cargo es una
+# LISTA, porque el trabajo compartido es la norma y la banda 🪦 solo pregunta si
+# hay alguien.
+echo
+BU_X=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Se cierra\"}" | j "['id']")
+onbubble(){ curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/bubbles/records/$BU_X" -H "Authorization: $1" -H "$JS" -d "$2"; }
+bubbleon(){ curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json
+d=json.load(sys.stdin); b=next(x for x in d['bubbles'] if x['id']=='$BU_X'); print($1)"; }
+
+chk ">>> una burbuja recién creada no está cerrada" "$(bubbleon "b['closed']")" False
+chk ">>> cerrada, el board la pone en la banda closed" \
+  "$(onbubble "$A" '{"closed_at":"2026-01-02 03:04:05.000Z","closure":"se resolvió por otro lado"}' >/dev/null; bubbleon "b['heat']['lifecycle']")" closed
+chk ">>> ...y carga la frase de quien la cerró" "$(bubbleon "b.get('closure','')")" "se resolvió por otro lado"
+chk ">>> reabrir la devuelve a una banda viva" "$(onbubble "$A" '{"closed_at":"","closure":""}')" 200
+chk "...y el board ya no la da por cerrada" "$(bubbleon "b['closed']")" False
+
+# El cuerpo va en una variable, como el resto del archivo: escrito en línea
+# dentro de "$( ... )" el shell se come el escape de las comillas y el JSON llega
+# roto, que es un 400 genérico y una tarde perdida.
+DOS="{\"owners\":[\"$BID\",\"$AID\"]}"
+chk ">>> a cargo es una LISTA: dos personas caben en la misma burbuja" "$(onbubble "$B" "$DOS")" 200
+chk "...y el board las devuelve las dos" "$(bubbleon "len(b.get('owners',[]))")" 2
+chk ">>> vaciar la lista es una respuesta válida: nadie a cargo" "$(onbubble "$B" '{"owners":[]}')" 200
+chk ">>> el board dice cuándo pasó algo en cada thread, para poder decir la edad" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("si" if all(t.get("at") for t in d["threads"]) else "no")')" si
+# Presencia: un latido, y nada más. No es evidencia, no calienta nada, y no se
+# escribe desde un cliente — el reloj es del servidor.
+echo
+chk ">>> latir crea la fila de quien late" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence" -H "Authorization: $A")" 200
+chk "...y latir otra vez la actualiza en vez de duplicarla" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence" -H "Authorization: $A" >/dev/null
+     curl -s "$API/api/collections/presence/records" -H "Authorization: $A" | j "['totalItems']")" 1
+chk ">>> cualquiera que trabaje aquí ve quién está" \
+  "$(curl -s "$API/api/collections/presence/records" -H "Authorization: $ER" | j "['totalItems']")" 1
+chk ">>> anónimo no late" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence")" 401
+chk ">>> anónimo tampoco ve quién está" \
+  "$(curl -s "$API/api/collections/presence/records" | j "['totalItems']")" 0
+chk ">>> nadie escribe presencia desde un cliente: el reloj es del servidor" \
+  "$(pcode presence "$A" "{\"user\":\"$AID\",\"at\":\"2030-01-01 00:00:00.000Z\"}")" 400
+chk ">>> latir NO es evidencia: no deja evento" \
+  "$(curl -s "$API/api/collections/events/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"kind='presence'\"))")" \
+     -H "Authorization: $SU" | j "['totalItems']")" 0
+
+chk ">>> una persona nueva es nombrable: su correo es visible para sus colegas" \
+  "$(curl -s "$API/api/collections/users/records/$AID" -H "Authorization: $B" | j "['email']")" alice@bubble.test
+chk "...y el roster del workspace se lee expandido, para poder elegir a quién" \
+  "$(curl -s "$API/api/collections/memberships/records?expand=user&filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace='$ALPHA'\"))")" \
+     -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("si" if d["items"] and d["items"][0].get("expand",{}).get("user",{}).get("display_name") else "no")')" si
+
 echo
 chk ">>> recalibrar cambia el veredicto sin migración ni backfill" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/tuning/records/$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")" \

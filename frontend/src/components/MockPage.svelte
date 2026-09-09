@@ -10,6 +10,7 @@
   import Shell from './Shell.svelte';
   import BubbleBoard from './BubbleBoard.svelte';
   import BubbleDrawer from './BubbleDrawer.svelte';
+  import Presence from './Presence.svelte';
   import ThreadView from './ThreadView.svelte';
   import Minimap, { type MapItem } from './Minimap.svelte';
   import Omnibar, { type Hit } from './Omnibar.svelte';
@@ -173,37 +174,9 @@
 <!-- The board's table of contents. Only the board has bands to map. -->
 <Minimap items={mapItems} scroller={paneEl} />
 
-<!-- Who is here, top right. Fixed rather than in the pane: presence is about
-     now, and it should not scroll away with the board. -->
-<div class="presence" aria-label="en línea">
-  {#each here as who, i (who.name)}
-    <!-- A real tooltip rather than `title`: the browser's takes a second to
-         appear, is drawn by the OS where no stylesheet reaches it, and cannot
-         be themed. The trigger is passed as the `element` snippet so it stays
-         OUR span — Skeleton's own trigger is a <button>, and wrapping the
-         avatar in one would put a box around it and break the overlap. -->
-    <Tooltip openDelay={120} closeDelay={60}>
-      <Tooltip.Trigger>
-        {#snippet element(attributes: Record<string, unknown>)}
-          <span
-            class="who"
-            class:me={who.name === me.name}
-            style="--hue: {who.hue}; --i: {i}"
-            {...attributes}>
-            {who.name.slice(0, 1)}
-          </span>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Portal>
-        <Tooltip.Positioner>
-          <Tooltip.Content>
-            {who.name}{who.name === me.name ? ' (tú)' : ''}
-          </Tooltip.Content>
-        </Tooltip.Positioner>
-      </Portal>
-    </Tooltip>
-  {/each}
-</div>
+<!-- Who is here, top right. The same component the real app draws; here it
+     is fed by fixtures instead of by beats. -->
+<Presence people={here.map((o) => ({ id: o.name, name: o.name }))} me={me.name} />
 
 <!-- The floating stack, above the theme button. Emoji rather than lucide: these
      three are the only controls that live over the page instead of in it, and
@@ -268,7 +241,7 @@
   outcome={open?.outcome ?? ''}
   lifecycle={open?.life ?? 'hot'}
   reason={open?.why ?? ''}
-  owner={open?.owner ?? ''}
+  owners={open?.owner ? [open.owner] : []}
   cycleLeft="quedan 6 d"
   cyclePct={57}
   threads={threads}

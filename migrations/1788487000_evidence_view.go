@@ -23,20 +23,8 @@ import (
 // something looked like last Tuesday stays possible.
 func init() {
 	m.Register(func(app core.App) error {
-		warming := []string{"document-changed", "thread-created", "thread-completed", "link-added"}
-		quoted := "'" + strings.Join(warming, "','") + "'"
-
 		ev := core.NewViewCollection("thread_evidence")
-		// One line, and every computed column CAST. PocketBase parses this SELECT
-		// list itself to derive the view's fields: anything it cannot split comes
-		// back as `invalid identifier parts`, and anything uncast is typed `json`,
-		// which quotes the value and pushes filters through JSON_EXTRACT.
-		ev.ViewQuery = "SELECT t.id AS id, t.workspace AS workspace, t.bubble AS bubble," +
-			" t.seq AS seq, t.name AS name, t.state AS state, t.created AS created," +
-			" CAST((SELECT MAX(e.at) FROM events e WHERE e.target = t.id AND e.kind IN (" + quoted + ")) AS TEXT) AS last_warm_at," +
-			" CAST((SELECT MAX(e.at) FROM events e WHERE e.target = t.id) AS TEXT) AS last_any_at," +
-			" CAST((SELECT COUNT(*) FROM events e WHERE e.target = t.id AND e.kind IN (" + quoted + ")) AS INT) AS warm_count" +
-			" FROM threads t"
+		ev.ViewQuery = evidenceSelect(false)
 
 		seen := orLead(`workspace.memberships_via_workspace.user ?= @request.auth.id`)
 		ev.ListRule = types.Pointer(seen)
@@ -49,4 +37,28 @@ func init() {
 		}
 		return app.Delete(c)
 	})
+}
+
+// evidenceSelect is the view's query, in one place because two migrations
+// declare it: this one, and the later pass that adds `assignees`.
+//
+// One line, and every computed column CAST. PocketBase parses this SELECT list
+// itself to derive the view's fields: anything it cannot split comes back as
+// `invalid identifier parts`, and anything uncast is typed `json`, which quotes
+// the value and pushes filters through JSON_EXTRACT. `assignees` is the one
+// column that WANTS to be json — it is a list of ids — so it is the one left
+// uncast on purpose.
+func evidenceSelect(withAssignees bool) string {
+	warming := []string{"document-changed", "thread-created", "thread-completed", "link-added"}
+	quoted := "'" + strings.Join(warming, "','") + "'"
+	who := ""
+	if withAssignees {
+		who = " t.assignees AS assignees,"
+	}
+	return "SELECT t.id AS id, t.workspace AS workspace, t.bubble AS bubble," +
+		" t.seq AS seq, t.name AS name, t.state AS state, t.created AS created," + who +
+		" CAST((SELECT MAX(e.at) FROM events e WHERE e.target = t.id AND e.kind IN (" + quoted + ")) AS TEXT) AS last_warm_at," +
+		" CAST((SELECT MAX(e.at) FROM events e WHERE e.target = t.id) AS TEXT) AS last_any_at," +
+		" CAST((SELECT COUNT(*) FROM events e WHERE e.target = t.id AND e.kind IN (" + quoted + ")) AS INT) AS warm_count" +
+		" FROM threads t"
 }

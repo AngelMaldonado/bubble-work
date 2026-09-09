@@ -686,6 +686,82 @@ into is how a shortcut becomes a surprise.
 Not ported at all: `GodMode` (PocketBase's dashboard replaces it), `McpConnect`,
 `ProjectCombobox`, and everything that named a Plane instance.
 
+**4d — a bubble is edited where it is read.** *(built)* Right-clicking an orb
+does the drawer's four things — open, `+ thread`, rename, close — and the drawer
+itself is now where a bubble's own fields are written: the `outcome`, edited in
+place under the title, and who is accountable, picked from the workspace's roster
+with Skeleton's multi Combobox. Neither had a way in before, which made the model
+unsayable in the product: a bubble without an outcome is a folder with a nice
+name, and a bubble with nobody accountable is what the RIP band is FOR — cold
+with nobody to ask — so a screen that cannot set an owner cannot distinguish 😴
+from 🪦 on purpose.
+
+`owner` became `owners`, plural in the schema because it is plural in the work:
+the bubbles people actually run are shared, and naming one person made the other
+invisible on the board. Nothing about the model resists it — `RollUp` asks
+whether ANYBODY is accountable, and an empty list answers that exactly as a
+missing name did.
+
+The drawer's cycle bar and its two-line thread rows, drawn in the mock since
+phase 4a, finally have data behind them: the board now carries `warm_at` per
+bubble (when it last produced anything, which is what the bar measures against
+the tuning's window), and per thread the `assignees` the evidence view never
+selected plus the instant anything last happened to it. The instants travel raw —
+"hace 2 d" is a sentence in a language, and the API does not have one.
+
+Closing asks for one line, and that is the difference between it and a
+confirmation: `closure` — how it ended, in the words of whoever closed it — has
+existed as a field since phase 1 and nothing ever wrote it. It is optional, the
+board carries it back so a closed bubble says why without a second fetch, and
+reopening clears both it and `closed_at`, because it described an ending that no
+longer holds.
+
+**4e — belonging is a row, and now it can be written.** *(built)* A fresh account
+was met with "crea el primero", because founding a workspace was the only move
+the product offered somebody who belonged to none. That is the opposite of what
+a workspace is — a body of work people are invited INTO — and the rules had
+supported the other path since phase 1: a workspace's lead writes a membership,
+the global lead writes any, and the last lead can neither leave nor demote
+themselves. All of it was reachable only from the PocketBase dashboard.
+
+So the shell now draws with an empty column and says so, both moves on the table,
+and 👥 opens the workspace's roster: who is in it, their role, invite somebody who
+already has an account, change a role, take somebody out. Reading it is every
+member's; writing it is the lead's, and the panel simply stops offering the verbs
+to everybody else — a button that always answers 404 is worse than no button. It
+also refuses locally what the server refuses: the last lead's row is not editable
+and not removable.
+
+Creating the ACCOUNT is deliberately not here. It means passwords, and until
+there is a considered answer for that it stays in the dashboard.
+
+**4f — presence, as a heartbeat.** *(built)* A row of avatars saying who is
+around, department-wide rather than per workspace: the people here work across
+projects, and "who is about" is not a fact about one of them. The browser beats
+while its tab is VISIBLE — a hidden tab reports a laptop, not a person — through
+`POST /api/presence`, which upserts one row per person and stamps the SERVER's
+clock; the collection itself takes no client writes at all, because a client that
+stamps its own time is a client that can be online tomorrow. What "online" means
+is decided when the row is READ (under two minutes is here, under fifteen is a
+tab left open, beyond that not shown), since a stored verdict about time goes
+stale in exactly the way this one does.
+
+Rejected: deriving presence from the last write, which is the model's own error
+run backwards — that says somebody is here because they saved a file three
+minutes ago, which is activity, not attention. Also rejected for now: counting
+live SSE connections, which is truer and lives only in memory, so a restart says
+nobody is here.
+
+**Presence is never evidence.** No event, no heat, nothing that can move a band —
+and a test pins it, because a heartbeat that warmed anything would be the most
+efficient way ever built to manufacture activity.
+
+**Every destructive action asks first**, through one `Confirm.svelte` rather than
+five hand-written dialogs, and the question is asked by whoever performs the
+WRITE — that side knows the name of what is going and what goes with it, and a
+view that confirmed its own deletes would ask again in the mock, where nothing is
+deleted.
+
 **Done when:** the board looks and moves like v0's and nobody wrote a second
 markdown renderer. — *the board, the thread interior, the wiki and the omnibar
 do; what is not ported at all is listed above, and stays that way.*

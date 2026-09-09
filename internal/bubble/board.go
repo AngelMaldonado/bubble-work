@@ -47,16 +47,33 @@ type ThreadHeat struct {
 	Priority string      `json:"priority,omitempty"`
 	Heat     heat.Result `json:"heat"`
 	Pulse    bool        `json:"pulse"`
+	// Who has it, and when anything last happened to it. Both are for the row a
+	// bubble's drawer draws — "🔥 produciendo · ana · hace 2 d" — which is the
+	// half of "should I open this?" the title cannot answer. The timestamp is
+	// sent raw: how long ago that reads in words is a question about a language,
+	// and the server does not have one.
+	Assignees []string `json:"assignees,omitempty"`
+	At        string   `json:"at,omitempty"`
 }
 
 // BubbleHeat is one bubble, banded by its hottest OPEN thread.
 type BubbleHeat struct {
-	ID      string      `json:"id"`
-	Name    string      `json:"name"`
-	Owner   string      `json:"owner,omitempty"`
-	Outcome string      `json:"outcome,omitempty"`
-	Closed  bool        `json:"closed"`
-	Heat    heat.Result `json:"heat"`
+	ID   string `json:"id"`
+	Name string `json:"name"`
+	// Accountability is a list. The 🪦 band asks whether ANYBODY is accountable,
+	// and an empty list answers that exactly as a missing name did.
+	Owners  []string `json:"owners,omitempty"`
+	Outcome string   `json:"outcome,omitempty"`
+	Closed  bool     `json:"closed"`
+	// How it ended, in the words of whoever closed it. Carried on the board so
+	// a closed bubble can say why without a second fetch — and so reopening one
+	// knows what sentence it is clearing.
+	Closure string `json:"closure,omitempty"`
+	// When this bubble last produced anything, across its threads. What the
+	// cycle bar in the drawer is measured against: the window is the tuning's,
+	// and how much of it is spent is this.
+	WarmAt string      `json:"warm_at,omitempty"`
+	Heat   heat.Result `json:"heat"`
 }
 
 // Board is the whole answer, including the calibration it was computed against —
@@ -84,6 +101,9 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 
 	prio := priorityOf(app, ws.Id)
 	byBubble := map[string][]heat.Result{}
+	// The most recent warm evidence per bubble, which is not derivable from the
+	// roll-up: the roll-up keeps a BAND, and the bar needs an instant.
+	warmest := map[string]time.Time{}
 	threads := make([]ThreadHeat, 0, len(rows))
 
 	for _, r := range rows {
@@ -97,10 +117,21 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 		res := heat.Classify(ev, tun, now)
 		b := r.GetString("bubble")
 		byBubble[b] = append(byBubble[b], res)
+		if w := ev.LastWarmAt; !w.IsZero() && w.After(warmest[b]) {
+			warmest[b] = w
+		}
+		// The freshest thing that happened to it, warm or not: a comment is not
+		// evidence and never warms anything, but "hace 2 d" is still true.
+		at := ev.LastAnyAt
+		if at.IsZero() {
+			at = ev.CreatedAt
+		}
 		threads = append(threads, ThreadHeat{
 			ID: r.Id, Seq: r.GetInt("seq"), Name: r.GetString("name"),
 			Bubble: b, Priority: prio[r.Id], Heat: res,
-			Pulse: heat.HasPulse(ev, tun, now),
+			Pulse:     heat.HasPulse(ev, tun, now),
+			Assignees: r.GetStringSlice("assignees"),
+			At:        at.UTC().Format(time.RFC3339),
 		})
 	}
 	// Hottest first, and within a band the buoyancy score orders it — the model's
@@ -113,14 +144,16 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 	out := make([]BubbleHeat, 0, len(bubbles))
 	for _, b := range bubbles {
 		closed := !b.GetDateTime("closed_at").IsZero()
-		res := heat.RollUp(byBubble[b.Id], b.GetString("owner") != "", tun)
+		owners := b.GetStringSlice("owners")
+		res := heat.RollUp(byBubble[b.Id], len(owners) > 0, tun)
 		if closed {
 			res = heat.Result{Lifecycle: heat.Closed, Code: heat.ReasonClosed,
 				Reason: "outcome reached or explicitly abandoned"}
 		}
 		out = append(out, BubbleHeat{
-			ID: b.Id, Name: b.GetString("name"), Owner: b.GetString("owner"),
-			Outcome: b.GetString("outcome"), Closed: closed, Heat: res,
+			ID: b.Id, Name: b.GetString("name"), Owners: owners,
+			Outcome: b.GetString("outcome"), Closed: closed,
+			Closure: b.GetString("closure"), WarmAt: stamp(warmest[b.Id]), Heat: res,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return floats(out[i].Heat) > floats(out[j].Heat) })
@@ -181,4 +214,14 @@ func parseTS(s string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+// stamp formats an instant for the wire, and an instant that never happened as
+// the empty string rather than as year one — the difference between "nothing has
+// happened here" and a date from before the calendar.
+func stamp(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339)
 }

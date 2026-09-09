@@ -10,6 +10,9 @@
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
+  import People from './components/People.svelte';
+  import Presence from './components/Presence.svelte';
+  import { presence } from './lib/presence.svelte';
   import { Dialog, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import Shell from './components/Shell.svelte';
   import ThemePage from './components/ThemePage.svelte';
@@ -53,7 +56,12 @@
   async function boot() {
     const me = await api.refresh();
     signedIn = !!me;
-    if (signedIn) workspaces = await api.workspaces();
+    if (signedIn) {
+      workspaces = await api.workspaces();
+      // Says "here" and starts reading everybody else's. Only once signed in:
+      // presence is about people, and there is nobody yet.
+      presence.start();
+    }
     ready = true;
   }
   boot();
@@ -164,6 +172,7 @@
   // else: a bubble needs an outcome too, but that is a sentence somebody writes
   // once they have opened it, not a second box at the door.
   let naming = $state<'bubble' | 'thread' | null>(null);
+  let crew = $state(false);
   let fresh = $state('');
   /** Which bubble a new thread goes into. A thread is work; a bubble is what
    *  the work is FOR, and one without the other is the row that later nobody
@@ -243,6 +252,7 @@
     { id: 'new-bubble', icon: '🫧', title: 'Nueva burbuja', hint: 'una agrupación de trabajo', run: () => (naming = 'bubble') },
     { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
     { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
+    { id: 'people', icon: '👥', title: 'Personas de este workspace', hint: 'invitar · roles', run: () => (crew = true) },
     ...(isLead
       ? [{ id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }]
       : []),
@@ -252,7 +262,7 @@
     { id: 'light', icon: '☀️', title: 'Tema claro', run: () => theme.set('light') },
     { id: 'dark', icon: '🌙', title: 'Tema oscuro', run: () => theme.set('dark') },
     { id: 'system', icon: '🌗', title: 'Tema automático', hint: 'como el sistema', run: () => theme.set('system') },
-    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: () => { api.signOut(); signedIn = false; } },
+    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: () => { presence.stop(); api.signOut(); signedIn = false; } },
   ]);
 
   // One request per pause, and the last one wins: an answer that arrives after
@@ -335,10 +345,23 @@
     <button class="btn btn-sm preset-tonal-surface" onclick={() => go('/')}>← volver</button>
   </div>
   <ThemePage />
-{:else if route.kind === 'planner'}
+{:else if route.kind === 'planner' && isLead}
   <!-- The strategic layer gets a screen, not a tab inside the operative one —
        and no workspace: the plan is the department's, not this project's. -->
   <Planner onback={back} onsearch={() => (omni = true)} />
+{:else if route.kind === 'planner'}
+  <!-- Guarded at the ADDRESS, not only at the button. Hiding 🗓 kept the screen
+       out of the way; it did not keep anybody out of it, and a link somebody
+       pastes into a chat is exactly how a screen that is not yours gets opened.
+       Said plainly rather than as a 404: whose screen it is is not a secret. -->
+  <div class="mx-auto max-w-md p-6 sm:pt-16">
+    <h1 class="display mb-2 text-2xl">El planeador es del lead</h1>
+    <p class="muted mb-5 text-sm">
+      Es la capa estratégica del departamento — objetivos, inbox y el trabajo de todos los
+      proyectos a la vez. Tu trabajo vive en el board de tus workspaces.
+    </p>
+    <button class="btn btn-sm preset-filled-primary-500" onclick={back}>Ir al board</button>
+  </div>
 {:else if route.kind === 'thread'}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. It is resolved from the address, so this is also
@@ -371,15 +394,6 @@
   <p class="faint p-6 text-sm">…</p>
 {:else if !signedIn}
   <SignIn onDone={boot} />
-{:else if !workspaces.length}
-  <!-- Anybody signed in may found one, and the founder becomes its lead. Saying
-       "a lead has to invite you" was simply false, and left a fresh install with
-       nothing to do. This is the only screen without the shell: a column of
-       workspaces with no workspaces in it is a frame around nothing. -->
-  <div class="mx-auto max-w-md p-6 sm:pt-16">
-    <p class="muted mb-3 text-sm">Todavía no hay ningún workspace. Crea el primero.</p>
-    <NewWorkspace onDone={boot} />
-  </div>
 {:else}
   <Shell
     items={workspaces.map((w) => ({ id: w.id, name: w.name, hint: w.slug }))}
@@ -402,6 +416,21 @@
         onreload={loadBoard}
         onnew={(what) => (naming = what)}
         scroller={paneEl} />
+    {:else}
+      <!-- Belonging to nothing yet is a normal state, not a wizard. Founding a
+           workspace used to be the ONLY way past this screen, which said the
+           opposite of what a workspace is: a body of work people are invited
+           into. So the shell stays, the column is empty, and both moves are on
+           the table — start one, or wait to be let into somebody else's. -->
+      <div class="mx-auto max-w-md p-6 sm:pt-16">
+        <h1 class="display mb-2 text-2xl">Todavía no estás en ningún workspace</h1>
+        <p class="muted mb-5 text-sm">
+          Un workspace es un cuerpo de trabajo: sus burbujas, sus threads y su wiki. Puedes
+          empezar uno — quien lo funda queda como su lead — o pedirle a alguien que ya tenga el
+          suyo que te invite desde 👥.
+        </p>
+        <NewWorkspace onDone={boot} />
+      </div>
     {/if}
   </Shell>
 
@@ -409,7 +438,26 @@
        holds the corner and these pack to its left — a row rather than fixed
        slots, because this screen has no planner and a reserved empty place
        reads as a button that failed to draw. -->
+  <Presence people={presence.around} me={api.me?.id ?? ''} />
+
   <div class="floats">
+  {#if current}
+    <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+      <Tooltip.Trigger>
+        {#snippet element(attributes: Record<string, unknown>)}
+          <button class="float-btn" {...attributes} onclick={() => (crew = true)}>
+            <span aria-hidden="true">👥</span>
+          </button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content>Personas de {current.name}</Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip>
+  {/if}
+
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
@@ -453,6 +501,13 @@
     </Portal>
   </Tooltip>
   </div>
+
+  {#if current}
+    <!-- Reloading the board after a change to the roster: who is a member
+         decides what the server answers, and a bubble's owner is a person from
+         this list. -->
+    <People bind:open={crew} workspace={current} onchanged={loadBoard} />
+  {/if}
 
   <!-- Signing out is not a floating button: it is rare, and a rare verb next to
        the two you press all day is the one you press by accident. It lives in

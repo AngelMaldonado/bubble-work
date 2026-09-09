@@ -19,6 +19,8 @@ import (
 func Register(app core.App, t *tree.Tree) {
 	app.OnRecordCreateRequest("workspaces").BindFunc(foundingMembership)
 
+	app.OnRecordCreateRequest("users").BindFunc(nameable)
+
 	app.OnRecordCreateRequest("threads").BindFunc(assignSeq)
 	// Only the bubble. An objective belongs to the DEPARTMENT and not to any
 	// workspace, so a thread from any project counting towards one is the point
@@ -37,6 +39,7 @@ func Register(app core.App, t *tree.Tree) {
 	registerDocuments(app, t)
 	registerEvidence(app)
 	registerBoard(app)
+	registerPresence(app)
 	registerAssets(app, t)
 }
 
@@ -263,4 +266,21 @@ func swapApp(e *core.RecordRequestEvent, txApp core.App) func() {
 	outer := e.App
 	e.App = txApp
 	return func() { e.App = outer }
+}
+
+// nameable makes a new person's email visible to their colleagues.
+//
+// PocketBase hides `email` from everybody but the record's owner unless
+// `emailVisibility` is set, and that default is written for a public app where
+// the other accounts are strangers. Here they are the department: anybody signed
+// in may already LIST people — that is what makes an invitation possible — so
+// the only thing the default achieved was a roster of rows reading "sin
+// nombre", because `display_name` is optional and an account made from the
+// dashboard rarely has one.
+//
+// The name still wins wherever both exist. This is the fallback that makes a
+// person identifiable at all.
+func nameable(e *core.RecordRequestEvent) error {
+	e.Record.Set("emailVisibility", true)
+	return e.Next()
 }

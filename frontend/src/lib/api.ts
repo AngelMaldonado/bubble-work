@@ -371,6 +371,15 @@ class Api {
     });
   }
 
+  /** Remove a page. Only under `docs/` — a thread's document belongs to the
+   *  thread, and the server refuses it by that door for the same reason. */
+  removePath(workspace: string, path: string) {
+    return this.call<unknown>(
+      `/api/workspaces/${workspace}/document?path=${encodeURIComponent(path)}`,
+      { method: 'DELETE' },
+    );
+  }
+
   patchPath(workspace: string, path: string, patch: Record<string, unknown>) {
     return this.call<Doc>(`/api/workspaces/${workspace}/document`, {
       method: 'PATCH',

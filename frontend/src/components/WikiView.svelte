@@ -14,7 +14,7 @@
   import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
   import FileTextIcon from '@lucide/svelte/icons/file-text';
   import PlusIcon from '@lucide/svelte/icons/plus';
-  import Prose from './Prose.svelte';
+  import DocEditor from './DocEditor.svelte';
   import ThreadToc from './ThreadToc.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import SideTree, { type TreeNode } from './SideTree.svelte';
@@ -24,24 +24,36 @@
     workspace,
     path,
     html = '',
+    markdown = '',
     tree = [],
     onback,
     onopen,
+    onsave,
     onsearch,
     onnew,
+    ondelete,
   }: {
     workspace: string;
     /** the file, as it sits on disk: docs/arquitectura/overview.md */
     path: string;
     html?: string;
+    /** the page's markdown — the record; `html` is the SERVER's render of it */
+    markdown?: string;
     tree?: TreeNode[];
     onback?: () => void;
     onopen?: (id: string) => void;
+    /** hand the edited markdown back; the caller owns the write and its hash */
+    onsave?: (markdown: string) => void;
     onsearch?: () => void;
     onnew?: () => void;
+    ondelete?: () => void;
   } = $props();
 
   let sideCollapsed = $state(false);
+
+  // Reading is the default and writing is a decision — the switch lives in the
+  // document's bar, inside `DocEditor`.
+  let editing = $state(false);
   let headings = $state<Heading[]>([]);
   let contentEl = $state<HTMLElement | null>(null);
 
@@ -61,7 +73,15 @@
 
   // No "+" here: the column already has it, pinned, and one screen offering the
   // same action twice is one of them going stale.
-  const actions = $derived([{ k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch }]);
+  // No "edit" verb here: the document's own bar carries the renderizado /
+  // markdown switch, exactly as a thread's does. A second way in would be a
+  // second thing to look for.
+  const actions = $derived(
+    [
+      { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
+      ondelete ? { k: 'delete', face: '🗑', label: 'Borrar la página', go: ondelete } : null,
+    ].filter(Boolean) as { k: string; face: string; label: string; go?: () => void }[],
+  );
 </script>
 
 <div class="screen" aria-label="wiki">
@@ -152,7 +172,16 @@
     </div>
 
     <main class="content" bind:this={contentEl}>
-      <Prose {html} onheadings={(h) => (headings = h)} />
+      <!-- The SAME pane a thread uses. A page and a thread's document are the
+           same kind of thing — markdown in a repository, rendered by the server
+           — so they are read and written by the same component rather than by
+           two that drift. -->
+      <DocEditor
+        {markdown}
+        {html}
+        bind:editing
+        onsave={(md) => onsave?.(md)}
+        onheadings={(h) => (headings = h)} />
     </main>
   </div>
 </div>

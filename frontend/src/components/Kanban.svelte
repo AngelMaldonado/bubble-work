@@ -35,19 +35,28 @@
     columns = $bindable([]),
     onopen,
     onadd,
+    ondeletecard,
     onaddcolumn,
     onrenamecolumn,
     ondeletecolumn,
+    onmovecard,
   }: {
     columns?: Column[];
     onopen?: (card: Card) => void;
     onadd?: (columnId: string) => void;
+    /** throw one away from the board itself */
+    ondeletecard?: (id: string) => void;
     /** Where a change to the COLUMNS goes, when they are rows on a server. In
      *  the planner they are the department's objectives; without these the
      *  board rearranges its own copy and nobody else ever sees it. */
     onaddcolumn?: () => void;
     onrenamecolumn?: (id: string, name: string) => void;
     ondeletecolumn?: (id: string) => void;
+    /** Where a DRAGGED card lands, when the columns are rows on a server.
+     *  Without it the drop only rearranges this component's copy, which is
+     *  right for the mock and, against a server, a move that looked like it
+     *  happened until the next reload undid it. */
+    onmovecard?: (cardId: string, columnId: string) => void;
   } = $props();
 
   // Columns are the board's own shape, and it belongs to whoever runs the
@@ -109,6 +118,14 @@
   let dragging = $state<string | null>(null);
 
   function move(cardId: string, toCol: string, before: string | null) {
+    if (onmovecard) {
+      // The owner decides — and the order inside a column is not ours to keep:
+      // this board groups by objective, and what orders it is the priority the
+      // server derives, not where somebody dropped a card.
+      const from = columns.find((c) => c.cards.some((x) => x.id === cardId));
+      if (from?.id !== toCol) onmovecard(cardId, toCol);
+      return;
+    }
     let card: Card | undefined;
     const next = columns.map((c) => {
       const keep = c.cards.filter((x) => {
@@ -332,6 +349,10 @@
             class:lifting={dragging === c.id}
             {@attach (el) => card(el, c, col.id)}>
             <button class="open" onclick={() => onopen?.(c)}>
+              <!-- The title keeps 24px clear on the right: that is where the ×
+                   appears, and without the gap it lands on top of the words.
+                   Reserved rather than shifted on hover, so nothing moves under
+                   the pointer. -->
               <span class="ttl">{c.title}</span>
               <span class="meta">
                 {#if c.prio}<span class="prio-chip prio-{c.prio}">{c.prio}</span>{/if}
@@ -340,6 +361,18 @@
                 {#if c.where}<span class="where">{c.where}</span>{/if}
               </span>
             </button>
+            {#if ondeletecard}
+              <!-- OUTSIDE the card's own button: a delete that can be hit while
+                   aiming to open something is a delete nobody trusts. -->
+              <button
+                class="x"
+                aria-label="eliminar «{c.title}»"
+                title="eliminar"
+                onclick={(e) => {
+                  e.stopPropagation();
+                  ondeletecard?.(c.id);
+                }}>×</button>
+            {/if}
           </article>
         {/each}
         {#if over?.col === col.id && over.before === null}
@@ -472,11 +505,32 @@
   }
 
   .card {
+    position: relative;
     border: 1px solid var(--line);
     border-radius: 10px;
     background: var(--surface-solid);
     box-shadow: 0 1px 2px var(--shadow);
   }
+  /* Shown when the card is being used — hovered or focused. One × per card,
+     always visible, is a column of invitations to throw work away. */
+  .x {
+    position: absolute;
+    top: 0.25rem;
+    right: 0.25rem;
+    display: grid;
+    place-content: center;
+    width: 20px;
+    height: 20px;
+    border-radius: 6px;
+    color: var(--faint);
+    font-size: 0.95rem;
+    line-height: 1;
+    opacity: 0;
+    transition: opacity 0.12s ease;
+  }
+  .card:hover .x,
+  .card:focus-within .x { opacity: 1; }
+  .x:hover { background: var(--hover); color: var(--color-error-500); }
   .card.lifting { opacity: 0.4; }
   .open {
     display: block;
@@ -486,7 +540,7 @@
     background: transparent;
   }
   .card:hover { border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
-  .ttl { display: block; font-size: 0.86rem; line-height: 1.3; color: var(--text); }
+  .ttl { display: block; padding-right: 1.4rem; font-size: 0.86rem; line-height: 1.3; color: var(--text); }
   .meta { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.35rem; font-size: 0.7rem; }
   .obj, .due, .where { color: var(--faint); }
   .due { margin-left: auto; }

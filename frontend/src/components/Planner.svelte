@@ -49,6 +49,12 @@
   // to decide it for you.
   let born = $state<{ title: string; objective: string; note?: Note } | null>(null);
   let bornIn = $state('');
+  // No bubble is asked for here, and that is the difference between the two
+  // screens rather than an oversight. The board is the OPERATIVE surface: work
+  // on it lives in a bubble because the board draws bubbles. The planner is the
+  // strategic one, where the sentence is "this is the work and it belongs to
+  // this project" — which bubble carries it is a decision for the board, later,
+  // by whoever runs it.
 
   let threads = $state<ThreadRecord[]>([]);
   let objectiveRows = $state<ObjectiveRecord[]>([]);
@@ -179,13 +185,14 @@
     const only = Object.keys(places);
     bornIn = only.length === 1 ? only[0] : bornIn || only[0] || '';
     born = { title, objective, note };
+    // With a single project there is nothing to choose, so nothing is asked.
     if (only.length === 1) create();
   }
 
   async function create() {
     const b = born;
-    born = null;
     if (!b || !bornIn) return;
+    born = null;
     await write(async () => {
       const thread = await api.create<ThreadRecord>('threads', {
         workspace: bornIn,
@@ -321,11 +328,13 @@
               </li>
             {/each}
           </ul>
+
           <div class="flex justify-end gap-2">
             <button class="btn btn-sm preset-tonal-surface" onclick={() => (born = null)}>Cancelar</button>
-            <button class="btn btn-sm preset-filled-primary-500" onclick={create} disabled={!bornIn}>
-              Crear
-            </button>
+            <button
+              class="btn btn-sm preset-filled-primary-500"
+              onclick={create}
+              disabled={!bornIn}>Crear</button>
           </div>
         </Dialog.Content>
       </Dialog.Positioner>
@@ -346,12 +355,17 @@
   {onsearch}
   onopencard={openCard}
   onpatchcard={patchCard}
+  onmoveevent={(id, day) => patchCard(id, { due: day })}
   onmovecard={moveCard}
   onaddcard={addCard}
   ondeletecard={deleteCard}
   oncapture={capture}
   onpromote={promote}
   ondeletenote={deleteNote}
+  onpatchobjective={(n, fields) => {
+    const row = objectiveAt(n);
+    if (row) write(() => api.update('objectives', row.id, fields));
+  }}
   onaddobjective={addObjective}
   ondeleteobjective={deleteObjective}
   onaddcolumn={() => addObjective('Objetivo nuevo')}

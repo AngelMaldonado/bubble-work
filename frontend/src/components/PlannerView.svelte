@@ -41,6 +41,7 @@
     onsearch,
     onopencard,
     onmovecard,
+    onmoveevent,
     onaddcard,
     ondeletecard,
     oncapture,
@@ -48,6 +49,7 @@
     ondeletenote,
     onaddobjective,
     ondeleteobjective,
+    onpatchobjective,
     onpatchcard,
     onaddcolumn,
     onrenamecolumn,
@@ -79,6 +81,8 @@
      *  avoids: the mock keeps its local behaviour precisely because it passes
      *  none of these. */
     onmovecard?: (cardId: string, columnId: string) => void;
+    /** an event dragged to another day — the thread's due date */
+    onmoveevent?: (id: string, day: string) => void;
     onaddcard?: (columnId: string, title: string) => void;
     ondeletecard?: (cardId: string) => void;
     oncapture?: (text: string) => void;
@@ -86,6 +90,8 @@
     ondeletenote?: (id: string) => void;
     onaddobjective?: (name: string) => void;
     ondeleteobjective?: (n: number) => void;
+    /** an objective edited in place — its name, or the outcome it claims */
+    onpatchobjective?: (n: number, fields: { name?: string; outcome?: string }) => void;
     onpatchcard?: (id: string, fields: Record<string, unknown>) => void;
     /** the columns, when they are rows somebody owns — see Kanban */
     onaddcolumn?: () => void;
@@ -157,6 +163,20 @@
     if (open.title !== fresh.title) open.title = fresh.title;
     if (fresh.notes !== undefined && open.notes !== fresh.notes) open.notes = fresh.notes;
   });
+
+  /** Open a card by id — what a click on a calendar event means.
+   *
+   *  The sheet is opened HERE because this is where it lives: the owner of the
+   *  data can fetch a document but it cannot open a dialog that belongs to this
+   *  component, which is why the click did nothing at all. */
+  function openById(id: string) {
+    const card = columns.flatMap((c) => c.cards).find((c) => c.id === id);
+    if (!card) return;
+    open = card;
+    openIn = columns.find((c) => c.cards.includes(card))?.id ?? '';
+    cardOpen = true;
+    onopencard?.(card);
+  }
 
   function moveCard(cardId: string, to: string) {
     if (onmovecard) {
@@ -299,7 +319,7 @@
 
     {#if showCal}
       <section class="pane cal">
-        <PlannerCalendar {events} />
+        <PlannerCalendar {events} onmove={onmoveevent} onpick={openById} />
       </section>
     {/if}
 
@@ -314,6 +334,8 @@
             onopencard?.(c);
           }}
           onadd={addCard}
+          ondeletecard={dropCard}
+          {onmovecard}
           {onaddcolumn}
           {onrenamecolumn}
           {ondeletecolumn} />
@@ -413,9 +435,22 @@
           {#each objectives as o (o.n)}
             <li>
               <span class="n">{o.n}</span>
+              <!-- Edited in place, and saved when the field is left rather than
+                   on every keystroke: an objective is a sentence somebody
+                   composes, and a write per character is a write per character.
+                   `onchange` is the browser saying "they moved on". -->
               <span class="fields">
-                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={o.name} placeholder="nombre" />
-                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="why" bind:value={o.why} placeholder="por qué existe" />
+                <input
+                  autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                  bind:value={o.name}
+                  onchange={() => onpatchobjective?.(o.n, { name: o.name })}
+                  placeholder="nombre" />
+                <input
+                  autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                  class="why"
+                  bind:value={o.why}
+                  onchange={() => onpatchobjective?.(o.n, { outcome: o.why })}
+                  placeholder="qué es verdad cuando esté cumplido" />
               </span>
               <button class="x" onclick={() => dropObjective(o.n)} aria-label="eliminar">×</button>
             </li>

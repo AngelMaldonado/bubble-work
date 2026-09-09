@@ -22,15 +22,10 @@
   import HistoryIcon from '@lucide/svelte/icons/history';
   import HashIcon from '@lucide/svelte/icons/hash';
   import type { Lifecycle } from '../lib/api';
-  import Prose from './Prose.svelte';
+  import DocEditor from './DocEditor.svelte';
   import SideTree, { type TreeNode } from './SideTree.svelte';
   import ThreadToc from './ThreadToc.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
-  import { untrack } from 'svelte';
-  import type { MarkdownEditor } from '../lib/editor';
-  import SlashMenu from './SlashMenu.svelte';
-  import { SlashMenu as SlashMenuState } from '../lib/slashmenu.svelte';
-  import { vimPref } from '../lib/vim.svelte';
   import type { Heading } from '../lib/prose';
 
   let {
@@ -113,81 +108,8 @@
   //
   // The caret position survives the round trip: switching to rendered and back
   // should not send you to the top of a long document.
-  let editor = $state<MarkdownEditor | null>(null);
-  let editorBox = $state<HTMLElement | null>(null);
-  // Typing `/` on a fresh line offers the blocks — the same catalogue the card
-  // sheet's description offers, from `lib/slashmenu.svelte.ts`.
-  const slash = new SlashMenuState();
-  let caretAt = 0;
-  let draft = $state('');
-  $effect(() => {
-    draft = markdown;
-    // And into the editor, if one is open. The editor is built ONCE (it reads
-    // `draft` untracked, or every keystroke would rebuild it), so without this
-    // a reload after a conflict changed the document underneath and left the
-    // old text on screen — the reload appeared to do nothing.
-    editor?.setDoc(markdown);
-  });
 
-  /** Saving is explicit and cheap to trigger: ⌘S, `:w`, and leaving the editor.
-   *  A document that only saves on a button is a document somebody loses. */
-  function save() {
-    if (draft !== markdown) onsave?.(draft);
-  }
 
-  function mountEditor(el: HTMLElement) {
-    // What this attachment depends on, spelled out. `vimPref.on` is READ here,
-    // synchronously, because toggling vim has to rebuild the editor — read
-    // inside the dynamic import's callback it is outside the reactive context
-    // and the toggle does nothing. `draft` is read UNTRACKED for the opposite
-    // reason: it changes on every keystroke, and tracking it would tear the
-    // editor down and build a new one per character.
-    const useVim = vimPref.on;
-    const doc = untrack(() => draft);
-
-    let live = true;
-    let made: MarkdownEditor | null = null;
-    // Imported HERE, not at the top of the file. A static import puts
-    // CodeMirror and its markdown grammar in the main bundle, which everyone
-    // downloads to look at a board they may never edit — measured at +240 kB
-    // gzip before this line was a function call.
-    import('../lib/editor').then(({ createMarkdownEditor }) => createMarkdownEditor({
-      parent: el,
-      doc,
-      dark: document.documentElement.getAttribute('data-mode') === 'dark',
-      vim: useVim,
-      cursor: caretAt,
-      onChange: (doc) => {
-        draft = doc;
-        slash.detect(made, doc);
-      },
-      // The menu owns these keys while it is open — that is the whole reason
-      // `onKey` exists in the editor.
-      onKey: (key) => slash.key(key, made, untrack(() => draft)),
-      // The three ways out of the editor all write. They were wired to nothing,
-      // which meant ⌘S looked like it saved and the only real save was
-      // switching to "renderizado" — the one nobody presses when they are done.
-      onSave: save,
-      onEscape: () => {
-        save();
-        editing = false;
-      },
-      onBlur: save,
-    })).then((made_) => {
-      // The mode can change while the dynamic import is in flight; without this
-      // the editor lands in a box that is no longer on the page.
-      if (!live) return made_.destroy();
-      made = made_;
-      editor = made_;
-      made_.focus();
-    });
-    return () => {
-      live = false;
-      caretAt = made?.cursor() ?? caretAt;
-      made?.destroy();
-      if (editor === made) editor = null;
-    };
-  }
 
   // The HUD's verbs, in reading order. Finishing first because it is what the
   // thread is for; deleting last and tinted, because it is the one that cannot
@@ -412,60 +334,14 @@
     </div>
 
     <main class="content">
-      <!-- Only the view switch stays in the document's own bar: it changes how
-           you READ this page, so it belongs to the page. What you can DO to the
-           thread moved to the HUD, where the board keeps its verbs. -->
-      <div class="edit-bar">
-        <div class="seg" role="group" aria-label="modo de vista">
-          <button
-            class:on={!editing}
-            aria-pressed={!editing}
-            onclick={() => {
-              save();
-              editing = false;
-            }}>renderizado</button>
-          <button class:on={editing} aria-pressed={editing} onclick={() => (editing = true)}>markdown</button>
-        </div>
-        {#if editing}
-          <!-- Only while there is an editor to apply it to. A preference for how
-               to type, shown where you chose to type. -->
-          <button
-            class="vim"
-            class:on={vimPref.on}
-            aria-pressed={vimPref.on}
-            title="teclas de vim ({vimPref.on ? 'activadas' : 'desactivadas'})"
-            onclick={() => vimPref.toggle()}>vim</button>
-        {/if}
-      </div>
-
-      <!-- Somebody else wrote while this was open. Not an error and not a
-           refusal: the base hash says so, and reloading is a choice offered
-           rather than a save silently lost. -->
-      {#if elsewhere}
-        <p class="elsewhere">
-          Este documento cambió en otro lado, así que tu escritura no se guardó.
-          Lo que escribiste sigue en el editor.
-          <button type="button" class="link" onclick={onreload}>recargar</button>
-        </p>
-      {/if}
-
-      {#if editing}
-        <!-- CodeMirror mounts into this box. It was a bare <textarea>, which is
-             the honest first cut and a poor one: no highlighting, no list
-             continuation, no undo grouping. `lang-markdown` brings the two
-             commands that make markdown editing feel like markdown — Enter
-             continues a list or a checkbox, Backspace unwinds the marker. -->
-        <!-- The menu is a SIBLING of the editor, in a box that positions it:
-             the editor's own box clips its overflow (that is what keeps
-             CodeMirror inside its rounded corner), and a menu inside it would be
-             cut off the moment the caret was near an edge. -->
-        <div class="editors-wrap">
-          <div class="editors" bind:this={editorBox} {@attach mountEditor}></div>
-          <SlashMenu menu={slash} field={editorBox} onpick={(c) => slash.run(editor, draft, c)} />
-        </div>
-      {:else}
-        <Prose {html} onheadings={(h) => (headings = h)} />
-      {/if}
+      <DocEditor
+        {markdown}
+        {html}
+        {elsewhere}
+        bind:editing
+        {onsave}
+        {onreload}
+        onheadings={(h) => (headings = h)} />
     </main>
   </div>
 </div>
@@ -659,7 +535,6 @@
     background: color-mix(in oklab, var(--color-error-500) 16%, transparent);
     border-color: color-mix(in oklab, var(--color-error-500) 45%, transparent);
   }
-  .edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 1rem; }
   .edit-bar button {
     border: 1px solid var(--line); border-radius: 999px;
     background: var(--surface-solid); color: var(--muted);
@@ -668,19 +543,7 @@
   .edit-bar button:hover { color: var(--text); background: var(--hover); }
   .edit-bar .finish { color: var(--warm); border-color: color-mix(in oklab, var(--warm) 45%, transparent); }
   .edit-bar .danger:hover { color: var(--hot); border-color: color-mix(in oklab, var(--hot) 45%, transparent); }
-  .seg { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
-  .seg button { border: none; border-radius: 0; padding: 0.25rem 0.75rem; }
-  .seg button.on { background: var(--hover); color: var(--text); }
 
-  .elsewhere {
-    margin: 0 0 1rem;
-    padding: 0.5rem 0.75rem;
-    border-radius: 10px;
-    font-size: 0.82rem;
-    color: var(--text);
-    background: color-mix(in oklab, var(--warm) 16%, transparent);
-    border: 1px solid color-mix(in oklab, var(--warm) 40%, transparent);
-  }
   .elsewhere .link { border: none; background: none; color: inherit; text-decoration: underline; cursor: pointer; padding: 0; }
 
   .prose { max-width: 940px; margin-inline: auto; white-space: pre-wrap; line-height: 1.65; }
@@ -693,38 +556,6 @@
      full-width div around a centred editor put the menu one margin to the left
      — which is exactly where it appeared. So the centring lives on the wrapper
      and the editor fills it. */
-  .editors-wrap {
-    position: relative;
-    max-width: 940px;
-    margin-inline: auto;
-  }
-  .editors {
-    height: calc(100dvh - var(--topbar-h) - 8rem);
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--surface-solid);
-    overflow: hidden;
-  }
   /* vim's own status line, themed to match the rest. */
-  .editors :global(.cm-vim-panel) {
-    padding: 0.2rem 0.6rem;
-    border-top: 1px solid var(--line);
-    background: var(--surface);
-    color: var(--muted);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.78rem;
-  }
-  .editors :global(.cm-vim-panel input) { color: var(--text); background: transparent; }
 
-  .vim {
-    padding: 0.28rem 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: transparent;
-    color: var(--faint);
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.76rem;
-  }
-  .vim:hover { color: var(--text); background: var(--hover); }
-  .vim.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
 </style>

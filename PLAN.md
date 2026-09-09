@@ -757,6 +757,24 @@ The workspace boundary got the same hole checked one collection over: a thread
 may not point at an objective from another workspace, the way it may not be
 filed into another workspace's bubble. Same guard, now written once for both.
 
+**One document pane, two screens.** `DocEditor.svelte` — the renderizado /
+markdown switch, the vim preference, CodeMirror, the slash menu, saving — was
+the thread's, and the wiki now uses THAT rather than something like it. A page
+and a thread's document are the same kind of thing (markdown in a repository,
+rendered by the server); two panes would be two renderers and two sets of keys
+to learn, and they would drift the week after somebody improved one.
+
+The wiki writes now: edit, save with its base hash, create a page (a write to a
+path that does not exist yet — the hash of nothing is what says "I know it is
+not there"), and delete one under `docs/`. A thread's document is not reachable
+by that door, which the server already refused.
+
+**The planner does NOT ask for a bubble, and the board does.** That is the
+difference between the two surfaces rather than an inconsistency: the board is
+operative and draws bubbles, so work on it lives in one; the planner is
+strategic, where the sentence is "this is the work and it belongs to this
+project" and which bubble carries it is the board's decision, later.
+
 **A workspace is born able to work.** Founding one now writes its workflow in
 the same transaction as its founding membership: Por hacer (backlog, default),
 En curso (started), Hecho (completed). Without them nothing could ever be

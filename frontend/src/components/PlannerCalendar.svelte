@@ -30,10 +30,15 @@
     events = [],
     view = $bindable('dayGridMonth'),
     onpick,
+    onmove,
   }: {
     events?: CalEvent[];
     view?: string;
     onpick?: (id: string) => void;
+    /** Dragging an event is RESCHEDULING it, which is the whole reason a
+     *  calendar beats a list of dates — so somebody has to write the new date
+     *  down. Without this the event moved on screen and nowhere else. */
+    onmove?: (id: string, day: string) => void;
   } = $props();
 
   const VIEWS = [
@@ -41,6 +46,13 @@
     { k: 'timeGridWeek', label: 'semana' },
     { k: 'listWeek', label: 'agenda' },
   ];
+
+  /** A local calendar day as `2026-09-15`. NOT `toISOString`, which converts to
+   *  UTC first and moves the date by one across most of the world's evenings. */
+  function day(d: Date) {
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+  }
 
   const shape = (list: CalEvent[]) =>
     list.map((e) => ({
@@ -71,6 +83,10 @@
     // Its ids are `string | number`; ours are strings, so it is coerced at the
     // boundary rather than everywhere downstream.
     eventClick: (info: { event: { id: string | number } }) => onpick?.(String(info.event.id)),
+    eventDrop: (info: { event: { id: string | number; start: Date } }) =>
+      onmove?.(String(info.event.id), day(info.event.start)),
+    eventResize: (info: { event: { id: string | number; start: Date } }) =>
+      onmove?.(String(info.event.id), day(info.event.start)),
   });
 
   // …and kept in step afterwards.

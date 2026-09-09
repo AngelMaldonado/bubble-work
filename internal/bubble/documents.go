@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
@@ -208,6 +209,23 @@ func registerDocuments(app core.App, t *tree.Tree) {
 				hits = []tree.Hit{}
 			}
 			return e.JSON(http.StatusOK, map[string]any{"hits": hits})
+		}).Bind(apis.RequireAuth())
+
+		// Markdown → HTML, by the SAME renderer every document goes through.
+		//
+		// The web needs this for text that is being written and has not been
+		// saved yet — a card's description in the planner, a preview beside an
+		// editor. The alternative is a markdown renderer in the browser, which is
+		// a second renderer: they agree until they do not, and then two screens
+		// show the same document differently and nobody can say which is right.
+		se.Router.POST("/api/markdown", func(e *core.RequestEvent) error {
+			var body struct {
+				Content string `json:"content"`
+			}
+			if err := e.BindBody(&body); err != nil {
+				return e.BadRequestError("could not read the body", err)
+			}
+			return e.JSON(http.StatusOK, map[string]any{"html": md.RenderHTML(body.Content)})
 		}).Bind(apis.RequireAuth())
 
 		// The one document this server ships, served as markdown so a browser, a

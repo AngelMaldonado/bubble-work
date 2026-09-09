@@ -832,23 +832,11 @@ export const objectives = [
   { n: 5, name: 'Mantenimiento', why: 'Evitar deuda técnica para después', share: 10 },
 ];
 
-export const priorityMeaning = [
-  ['P1', 'Crítica', 'Operación detenida', 'Interrumpe cualquier trabajo'],
-  ['P2', 'Alta', 'Impacto fuerte, pero hay workaround', 'Se atiende rápidamente'],
-  ['P3', 'Normal', 'Trabajo necesario normal', 'Entra en planeación'],
-  ['P4', 'Baja', 'Mejora, nice-to-have', 'Backlog'],
-];
-
-// Impact × urgency, exactly the map that decides the priority. Consulted and
-// edited here; never typed in by hand on a thread.
-export const priorityMap = {
-  cols: ['Urgencia alta', 'Media', 'Baja'],
-  rows: [
-    ['Impacto alto', 'P1', 'P2', 'P3'],
-    ['Impacto medio', 'P2', 'P2', 'P3'],
-    ['Impacto bajo', 'P3', 'P3', 'P4'],
-  ],
-};
+// The priority legend and its map moved to `lib/priority.ts`: they are not
+// invented data — the server derives a thread's priority from that same square,
+// and a legend that lives with the fixtures is a legend that drifts from the
+// rule it explains. Re-exported so the mock's imports keep reading as one list.
+export { priorityMeaning, priorityMap } from './priority';
 
 // What arrived and has not been shaped yet. An inbox item has no objective, no
 // impact and no urgency — that is exactly what makes it an inbox item.

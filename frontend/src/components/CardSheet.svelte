@@ -46,6 +46,8 @@
     columnId = '',
     onmove,
     ondelete,
+    onpatch,
+    choosePriority = true,
   }: {
     open?: boolean;
     card?: Card | null;
@@ -58,6 +60,15 @@
     columnId?: string;
     onmove?: (cardId: string, columnId: string) => void;
     ondelete?: (id: string) => void;
+    /** Where an edited field GOES, when the card is a row on a server. Without
+     *  it the sheet only edits the object it was handed, which is exactly right
+     *  for the mock and quietly loses the edit anywhere else. */
+    onpatch?: (id: string, fields: Record<string, unknown>) => void;
+    /** Whether priority is TYPED IN here. It is, in the mock — that is what was
+     *  asked for and what the map beside it is for. Against the real server it
+     *  is not: there a thread's priority is derived from impact × urgency, and
+     *  a dropdown that writes nowhere is a control that lies. */
+    choosePriority?: boolean;
   } = $props();
 
   // Priority is CHOSEN here, and the map is what you consult before choosing —
@@ -70,17 +81,37 @@
   // Seeded when a different card opens, not on every render: typing here must
   // not be undone by the parent re-rendering.
   let seeded = $state<string | null>(null);
+  // Whether anybody has started writing in this description. It is what stops
+  // an arriving document from overwriting what is being typed.
+  let touched = $state(false);
   $effect(() => {
-    if (card && card.id !== seeded) {
+    if (!card) return;
+    if (card.id !== seeded) {
       seeded = card.id;
       notes = card.notes ?? '';
+      touched = false;
+      return;
     }
+    // The description can arrive AFTER the sheet opened: in the real planner it
+    // is the thread's DOCUMENT, fetched when the card is opened. Take it when
+    // it lands, unless somebody is already writing over it.
+    if (!touched && !editingNotes && (card.notes ?? '') !== notes) notes = card.notes ?? '';
   });
 
-  // Written back so the board shows what the sheet decided.
+  // Written back so the board shows what the sheet decided — only when nobody
+  // else owns the write. With `onpatch` the owner holds the copy that counts,
+  // and mirroring into this one would immediately look like an arrived
+  // document and stop the real one from ever seeding.
   $effect(() => {
-    if (card) card.notes = notes;
+    if (card && !onpatch) card.notes = notes;
   });
+
+  /** Set a field on the card AND, if somebody owns the data, on the server. */
+  function set(fields: Partial<Card>) {
+    if (!card) return;
+    Object.assign(card, fields);
+    onpatch?.(card.id, fields as Record<string, unknown>);
+  }
 
 
   // The description edits in place, driven from its section header the way
@@ -173,7 +204,12 @@
 
           <header class="head">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">
-              <input class="ttl" bind:value={card.title} aria-label="título" />
+              <input
+                class="ttl"
+                value={card.title}
+                oninput={(e) => (card.title = e.currentTarget.value)}
+                onchange={(e) => set({ title: e.currentTarget.value })}
+                aria-label="título" />
             </Dialog.Title>
             <Dialog.CloseTrigger class="btn-icon hover:preset-tonal">
               <XIcon class="size-4" />
@@ -189,7 +225,7 @@
                 collection={objCollection}
                 value={card.obj ? [String(card.obj)] : []}
                 onValueChange={(e: { value: string[] }) =>
-                  (card.obj = e.value[0] ? Number(e.value[0]) : undefined)}
+                  set({ obj: e.value[0] ? Number(e.value[0]) : undefined })}
                 onOpenChange={() => (objItems = objectives.map(asItem))}
                 onInputValueChange={onObjInput}
                 placeholder="sin objetivo">
@@ -213,11 +249,25 @@
               </Combobox>
             </div>
             <div class="fact prio-field">
+              {#if !choosePriority}
+                <!-- Read-only, and it says where it comes from: the map below is
+                     no longer something to consult before choosing, it is the
+                     rule that produced this. -->
+                <span class="cap">Prioridad</span>
+                <p class="prio-read">
+                  {#if card.prio}
+                    <span class="prio-chip prio-{card.prio}">{card.prio}</span>
+                    <span class="faint">{meaning[card.prio] ?? ''}</span>
+                  {:else}
+                    <span class="faint">sin impacto ni urgencia</span>
+                  {/if}
+                </p>
+              {:else}
               <Combobox
                 positioning={{ sameWidth: false }}
                 collection={prioCollection}
                 value={card.prio ? [card.prio] : []}
-                onValueChange={(e: { value: string[] }) => (card.prio = e.value[0] ?? '')}
+                onValueChange={(e: { value: string[] }) => set({ prio: e.value[0] ?? '' })}
                 placeholder="sin prioridad">
                 <Combobox.Label class="cap">Prioridad</Combobox.Label>
                 <Combobox.Control class="prio-{card.prio ?? ''}">
@@ -240,11 +290,12 @@
                   </Combobox.Positioner>
                 </Portal>
               </Combobox>
+              {/if}
             </div>
             <div class="fact">
               <DatePicker
                 value={due}
-                onValueChange={(e: { valueAsString: string[] }) => (card.due = e.valueAsString[0] ?? '')}
+                onValueChange={(e: { valueAsString: string[] }) => set({ due: e.valueAsString[0] ?? '' })}
                 locale="es-MX"
                 startOfWeek={1}>
                 <DatePicker.Label class="cap">Entrega</DatePicker.Label>
@@ -299,7 +350,16 @@
             <div class="sec">
               <AlignLeftIcon class="size-4" />
               <h3>Descripción</h3>
-              <button class="edit" onclick={() => (editingNotes = !editingNotes)}>
+              <!-- "Listo" is the save. The description is a document on a server
+                   in the real planner, and a field that writes on every
+                   keystroke writes a commit per keystroke. -->
+              <button
+                class="edit"
+                onclick={() => {
+                  if (editingNotes) set({ notes });
+                  else touched = true;
+                  editingNotes = !editingNotes;
+                }}>
                 {editingNotes ? 'Listo' : 'Editar'}
               </button>
             </div>
@@ -337,7 +397,7 @@
                           <button
                             class="prio-chip prio-{cell}"
                             title="poner {cell}"
-                            onclick={() => (card.prio = cell)}>{cell}</button>
+                            onclick={() => set({ prio: cell })}>{cell}</button>
                         </td>
                       {/each}
                     </tr>
@@ -359,6 +419,14 @@
 </Dialog>
 
 <style>
+  .prio-read {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    margin: 0.35rem 0 0;
+    font-size: 0.8rem;
+  }
+
   /* Skeleton draws combobox, date-picker and segmented-control by [data-part];
      what is set here is only the density and the two things it cannot know:
      these live in a row of facts, so they must not stretch, and the calendar is

@@ -733,11 +733,28 @@ The workspace boundary got the same hole checked one collection over: a thread
 may not point at an objective from another workspace, the way it may not be
 filed into another workspace's bubble. Same guard, now written once for both.
 
-One decision is deliberately AT ODDS with the model and has to be settled here:
-in the planner a card's priority is CHOSEN from a dropdown, while a thread's
-priority is DERIVED from impact × urgency the way heat is. The planner's surface
-was built the way its user asked for it; the two surfaces disagree, and the
-disagreement is written down rather than smoothed over.
+**5b — the planner, wired.** *(built)* `Planner.svelte` owns the data and every
+write; `PlannerView` still draws, and still draws the mock. The translation is
+the whole of it — column → `state`, card → THREAD, due → `due_date`, inbox →
+`inbox_items` — and a card's DESCRIPTION is the thread's document, fetched when
+the card opens and written with its base hash like every other write to that
+file. Markdown is rendered by `POST /api/markdown`, the same goldmark the
+documents go through: the browser has no renderer, and a second one is how two
+screens show the same text differently.
+
+Every write reloads instead of patching the local copy: the server decides the
+seq, the default state and what a rule refuses, and guessing all three in the
+browser is how two views of one board start disagreeing.
+
+The mock keeps its local behaviour precisely because it passes none of the write
+callbacks — one component, two owners of the data, no second copy of the screen.
+
+**The disagreement about priority is settled.** In the planner's mock a card's
+priority is CHOSEN, because that is what was asked for there. Against the real
+server it is DERIVED from impact × urgency like everywhere else, and the sheet
+says so: the chooser becomes a read-only chip and the map beside it stops being
+"consult before choosing" and becomes the rule that produced the answer. A
+dropdown that writes nowhere is a control that lies.
 
 **Done when:** a lead triages an inbox item into a thread without leaving the view.
 

@@ -4,6 +4,7 @@
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
   import Wiki from './components/Wiki.svelte';
+  import Planner from './components/Planner.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
@@ -53,6 +54,8 @@
   let visit = $state(0);
   function back() {
     open = null;
+    wiki = null;
+    planner = false;
     visit += 1;
   }
 
@@ -111,6 +114,17 @@
   // is worse than one that fails.
   let error = $state('');
 
+  // The planner. A view like the others, and only for a lead: planning is the
+  // strategic layer's job, and a screen full of verbs somebody cannot use reads
+  // as a broken screen rather than as one that is not theirs.
+  let planner = $state(false);
+  const isLead = $derived(api.me?.role === 'lead');
+  function openPlanner() {
+    open = null;
+    wiki = null;
+    planner = true;
+  }
+
   // The wiki, by path. `null` is "not looking at it" rather than a separate
   // flag, so there is one place that says which page is on screen.
   let wiki = $state<string | null>(null);
@@ -147,6 +161,9 @@
 
   const commands = $derived<Command[]>([
     { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
+    ...(isLead
+      ? [{ id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }]
+      : []),
     { id: 'board', icon: '🫧', title: 'Volver al board', run: back },
     // The same three states the floating control cycles, named so they can be
     // reached directly: from the keyboard, picking is faster than cycling.
@@ -186,11 +203,13 @@
 
   function openWiki(page: string) {
     open = null;
+    planner = false;
     wiki = page;
   }
 
   function openThread(t: ThreadHeat) {
     wiki = null;
+    planner = false;
     open = t;
   }
 
@@ -250,6 +269,9 @@
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. -->
   <Thread thread={open} onback={back} onsearch={() => (omni = true)} />
+{:else if planner && current}
+  <!-- The strategic layer gets a screen, not a tab inside the operative one. -->
+  <Planner workspace={current} onback={back} onsearch={() => (omni = true)} />
 {:else if wiki && current}
   <!-- The wiki wears the thread's shell: same bar, same way back. -->
   <Wiki workspace={current} bind:path={wiki} onback={back} onsearch={() => (omni = true)} />
@@ -304,6 +326,21 @@
       <Tooltip.Positioner><Tooltip.Content>Buscar · ⌘K</Tooltip.Content></Tooltip.Positioner>
     </Portal>
   </Tooltip>
+
+  {#if isLead}
+    <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+      <Tooltip.Trigger>
+        {#snippet element(attributes: Record<string, unknown>)}
+          <button class="float-btn" {...attributes} onclick={openPlanner}>
+            <span aria-hidden="true">🗓</span>
+          </button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner><Tooltip.Content>Planeador</Tooltip.Content></Tooltip.Positioner>
+      </Portal>
+    </Tooltip>
+  {/if}
 
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>

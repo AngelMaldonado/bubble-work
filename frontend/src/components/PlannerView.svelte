@@ -40,6 +40,16 @@
     onback,
     onsearch,
     onopencard,
+    onmovecard,
+    onaddcard,
+    ondeletecard,
+    oncapture,
+    onpromote,
+    ondeletenote,
+    onaddobjective,
+    ondeleteobjective,
+    onpatchcard,
+    choosePriority = true,
   }: {
     workspace: string;
     /** One board, whose columns are yours to define. More than one board is a
@@ -55,6 +65,24 @@
     onback?: () => void;
     onsearch?: () => void;
     onopencard?: (card: Card) => void;
+    /** Where a change GOES, when there is a server behind this screen.
+     *
+     *  Given one, this view stops moving its own arrays and lets whoever owns
+     *  the data do the write and hand the result back. Two copies of the same
+     *  list —one optimistic here, one authoritative there— is the bug this
+     *  avoids: the mock keeps its local behaviour precisely because it passes
+     *  none of these. */
+    onmovecard?: (cardId: string, columnId: string) => void;
+    onaddcard?: (columnId: string, title: string) => void;
+    ondeletecard?: (cardId: string) => void;
+    oncapture?: (text: string) => void;
+    onpromote?: (note: Note) => void;
+    ondeletenote?: (id: string) => void;
+    onaddobjective?: (name: string) => void;
+    ondeleteobjective?: (n: number) => void;
+    onpatchcard?: (id: string, fields: Record<string, unknown>) => void;
+    /** passed through to the card sheet — see there */
+    choosePriority?: boolean;
   } = $props();
 
   // The kanban is on by default and cannot be the only thing turned off: it is
@@ -71,7 +99,26 @@
   let openIn = $state('');
   let cardOpen = $state(false);
 
+  // Fill in what the open card did not have yet.
+  //
+  // With a server behind this screen the description arrives AFTER the sheet
+  // opened — it is the thread's document, fetched on the click. So take it when
+  // it lands, and take nothing else: replacing the whole card with the freshly
+  // loaded one put the SERVER's title back into the field mid-word, and the
+  // rename that followed saved the old name. Measured in a browser, not
+  // reasoned about. In the mock the object is already the one being edited, so
+  // this finds nothing to fill and does nothing.
+  $effect(() => {
+    if (!open) return;
+    const fresh = columns.flatMap((c) => c.cards).find((c) => c.id === open!.id);
+    if (fresh && fresh.notes !== undefined && open.notes === undefined) open.notes = fresh.notes;
+  });
+
   function moveCard(cardId: string, to: string) {
+    if (onmovecard) {
+      openIn = to;
+      return onmovecard(cardId, to);
+    }
     let card: Card | undefined;
     const next = columns.map((c) => ({
       ...c,
@@ -88,6 +135,10 @@
   }
 
   function addCard(columnId: string) {
+    // A thread needs a name and nothing else; asking for it here rather than
+    // creating "Tarjeta nueva" is the difference between a board of work and a
+    // board of placeholders.
+    if (onaddcard) return onaddcard(columnId, 'Trabajo nuevo');
     const c: Card = { id: 'k' + Date.now(), title: 'Tarjeta nueva' };
     openIn = columnId;
     columns = columns.map((x) => (x.id === columnId ? { ...x, cards: [...x.cards, c] } : x));
@@ -95,6 +146,7 @@
     cardOpen = true;
   }
   function dropCard(id: string) {
+    if (ondeletecard) return ondeletecard(id);
     columns = columns.map((x) => ({ ...x, cards: x.cards.filter((c) => c.id !== id) }));
   }
 
@@ -103,6 +155,10 @@
   let noteOpen = $state(false);
 
   function promote(n: Note) {
+    if (onpromote) {
+      noteOpen = false;
+      return onpromote(n);
+    }
     // An inbox item becomes a card in the FIRST column — the one where things
     // are still undecided — carrying whatever was written about it.
     const c: Card = { id: 'k' + Date.now(), title: n.text, notes: n.body };
@@ -123,6 +179,10 @@
     e.preventDefault();
     const text = draft.trim();
     if (!text) return;
+    if (oncapture) {
+      draft = '';
+      return oncapture(text);
+    }
     // Straight to the top: what you just typed is what you are still thinking
     // about, and burying it under a week of older notes is how an inbox stops
     // being used.
@@ -142,12 +202,14 @@
   ]);
 
   function addObjective() {
+    if (onaddobjective) return onaddobjective('Objetivo nuevo');
     objectives = [
       ...objectives,
       { n: objectives.length + 1, name: 'Objetivo nuevo', why: '', share: 0 },
     ];
   }
   function dropObjective(n: number) {
+    if (ondeleteobjective) return ondeleteobjective(n);
     // Renumbered on removal: the number IS the priority order, so a gap in it
     // would be a claim nobody made.
     objectives = objectives.filter((o) => o.n !== n).map((o, i) => ({ ...o, n: i + 1 }));
@@ -267,14 +329,16 @@
   columns={columns.map((c) => ({ id: c.id, name: c.name }))}
   columnId={openIn}
   onmove={moveCard}
-  ondelete={dropCard} />
+  ondelete={dropCard}
+  onpatch={onpatchcard}
+  {choosePriority} />
 
 <InboxSheet
   bind:open={noteOpen}
   bind:note
   {render}
   onpromote={promote}
-  ondelete={(id) => (inbox = inbox.filter((x) => x.id !== id))} />
+  ondelete={(id) => (ondeletenote ? ondeletenote(id) : (inbox = inbox.filter((x) => x.id !== id)))} />
 
 <!-- ── objectives ──────────────────────────────────────────────────────── -->
 <Dialog open={objOpen} onOpenChange={(e: { open: boolean }) => (objOpen = e.open)}>

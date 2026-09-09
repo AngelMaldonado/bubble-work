@@ -43,6 +43,49 @@ export type Board = {
 };
 
 export type Workspace = { id: string; name: string; slug: string };
+
+/** A column of the planner's board: the workflow the workspace defined. */
+export type State = {
+  id: string;
+  name: string;
+  group: 'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled';
+  position: number;
+  is_default: boolean;
+};
+
+/** A thread as the planner reads it — the record, not the board's heat view. */
+export type ThreadRecord = {
+  id: string;
+  seq: number;
+  name: string;
+  workspace: string;
+  bubble?: string;
+  state?: string;
+  objective?: string;
+  due_date?: string;
+  impact?: string;
+  urgency?: string;
+  completed_at?: string;
+};
+
+export type Objective = {
+  id: string;
+  workspace: string;
+  name: string;
+  outcome?: string;
+  due_date?: string;
+  position?: number;
+  closed_at?: string;
+};
+
+export type InboxItem = {
+  id: string;
+  workspace: string;
+  note: string;
+  captured_by: string;
+  thread?: string;
+  created: string;
+};
 export type Person = { id: string; email: string; display_name?: string; role?: string };
 
 export type Doc = {
@@ -201,6 +244,60 @@ class Api {
     });
   }
 
+  // ---- the planner ---------------------------------------------------------
+  //
+  // Plain record calls: the planner reads and writes the same collections the
+  // board does, and every rule that guards them is the server's. What is NOT
+  // here is a card: the kanban's columns are `states` and what moves across
+  // them is a thread.
+  states(workspace: string) {
+    return this.list<State>('states', workspace, 'position,name');
+  }
+
+  threads(workspace: string) {
+    return this.list<ThreadRecord>('threads', workspace, '-created');
+  }
+
+  objectives(workspace: string) {
+    return this.list<Objective>('objectives', workspace, 'position,created');
+  }
+
+  /** The derived priorities, by thread. A VIEW collection: the server computes
+   *  it from impact × urgency, and nothing writes to it. */
+  priorities(workspace: string) {
+    return this.list<{ id: string; priority: string }>('thread_priority', workspace, 'id');
+  }
+
+  inbox(workspace: string) {
+    return this.list<InboxItem>('inbox_items', workspace, '-created');
+  }
+
+  private async list<T>(collection: string, workspace: string, sort: string) {
+    const out = await this.call<{ items: T[] }>(
+      `/api/collections/${collection}/records?perPage=500&sort=${sort}` +
+        `&filter=${encodeURIComponent(`workspace='${workspace}'`)}`,
+    );
+    return out.items;
+  }
+
+  create<T>(collection: string, fields: Record<string, unknown>) {
+    return this.call<T>(`/api/collections/${collection}/records`, {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  update<T>(collection: string, id: string, fields: Record<string, unknown>) {
+    return this.call<T>(`/api/collections/${collection}/records/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  remove(collection: string, id: string) {
+    return this.call<unknown>(`/api/collections/${collection}/records/${id}`, { method: 'DELETE' });
+  }
+
   board(workspace: string) {
     return this.call<Board>(`/api/workspaces/${workspace}/board`);
   }
@@ -213,6 +310,16 @@ class Api {
     return this.call<{ hits: any[] }>(
       `/api/workspaces/${workspace}/search?q=${encodeURIComponent(q)}`,
     );
+  }
+
+  /** Markdown → HTML by the server's renderer. The browser has none, and a
+   *  second one is how two screens show the same document differently. */
+  async renderMarkdown(content: string) {
+    const out = await this.call<{ html: string }>('/api/markdown', {
+      method: 'POST',
+      body: JSON.stringify({ content }),
+    });
+    return out.html;
   }
 
   readThread(thread: string) {

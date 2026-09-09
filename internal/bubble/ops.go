@@ -3,8 +3,10 @@ package bubble
 import (
 	"errors"
 	"fmt"
+	"path"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
@@ -397,4 +399,361 @@ func withAssets(html, workspace string) string {
 	return assetRef.ReplaceAllString(
 		html, `$1="/api/workspaces/`+workspace+`/file?path=assets/$2"`,
 	)
+}
+
+// ---- the rest of the surface, for the other door -------------------------
+//
+// Everything below exists because the MCP grew a hole: an agent could write a
+// thread's document and nothing else. It could not say what the work is FOR,
+// when it is due, who is accountable for the bubble around it, or read what has
+// already happened to it — so it worked blind and asked a person for everything
+// that was not text.
+//
+// These are plain functions like the ones above, and the rule is the same one:
+// the caller's own permissions, checked here, because `app.Save` does not know
+// about collection rules. Each one states which rule it is mirroring.
+
+// isGlobalLead is the department head — the role that sees every workspace and
+// owns the strategic layer.
+func isGlobalLead(auth *core.Record) bool {
+	return isPersonAuth(auth) && auth.GetString("role") == "lead"
+}
+
+// CreateBubble makes one. Mirrors `bubbles.CreateRule` — any member.
+func CreateBubble(app core.App, auth *core.Record, ws *core.Record, name, outcome string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("a bubble needs a name")
+	}
+	col, err := app.FindCollectionByNameOrId("bubbles")
+	if err != nil {
+		return nil, err
+	}
+	r := core.NewRecord(col)
+	r.Set("workspace", ws.Id)
+	r.Set("name", name)
+	r.Set("outcome", strings.TrimSpace(outcome))
+	if err := app.Save(r); err != nil {
+		return nil, err
+	}
+	// Creating a bubble is not evidence: an empty grouping has produced
+	// nothing. The threads inside it are what warm it.
+	return r, nil
+}
+
+// BubbleEdit is what may be said about a bubble from outside.
+//
+// Pointers, so "not mentioned" and "set to empty" are different requests:
+// clearing an outcome and leaving it alone are not the same statement.
+type BubbleEdit struct {
+	Name    *string   `json:"name,omitempty"`
+	Outcome *string   `json:"outcome,omitempty"`
+	Owners  *[]string `json:"owners,omitempty" jsonschema:"user ids; empty means nobody is accountable"`
+	Closure *string   `json:"closure,omitempty" jsonschema:"how it ended, in your words"`
+	Closed  *bool     `json:"closed,omitempty" jsonschema:"true closes it, false reopens it"`
+}
+
+// SetBubble edits one. Mirrors `bubbles.UpdateRule` — any member.
+func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
+	b, err := app.FindRecordById("bubbles", id)
+	if err != nil {
+		return nil, ErrDenied
+	}
+	if _, _, err := WorkspaceFor(app, auth, b.GetString("workspace")); err != nil {
+		return nil, err
+	}
+	if in.Name != nil {
+		if strings.TrimSpace(*in.Name) == "" {
+			return nil, fmt.Errorf("a bubble needs a name")
+		}
+		b.Set("name", strings.TrimSpace(*in.Name))
+	}
+	if in.Outcome != nil {
+		b.Set("outcome", *in.Outcome)
+	}
+	if in.Owners != nil {
+		b.Set("owners", *in.Owners)
+	}
+	if in.Closure != nil {
+		b.Set("closure", *in.Closure)
+	}
+	if in.Closed != nil {
+		if *in.Closed {
+			b.Set("closed_at", time.Now().UTC())
+		} else {
+			// Reopening clears the sentence too: it described an ending that no
+			// longer holds.
+			b.Set("closed_at", "")
+			b.Set("closure", "")
+		}
+	}
+	if err := app.Save(b); err != nil {
+		return nil, err
+	}
+	return b, nil
+}
+
+// ThreadEdit is what may be said about a thread that is not its document.
+type ThreadEdit struct {
+	Name      *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
+	Bubble    *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+	Objective *string `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
+	Due       *string `json:"due,omitempty" jsonschema:"a day, 2026-09-15; empty clears it"`
+	Impact    *string `json:"impact,omitempty" jsonschema:"high, mid or low"`
+	Urgency   *string `json:"urgency,omitempty" jsonschema:"high, mid or low"`
+}
+
+var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+// SetThread edits the record around the document. Mirrors `threads.UpdateRule`
+// — any member of its workspace.
+//
+// Priority is NOT here, and cannot be: it is derived from impact × urgency by
+// the server, and a second way to write it would be a second answer.
+func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
+	th, ws, _, err := ThreadFor(app, auth, id)
+	if err != nil {
+		return nil, err
+	}
+	if in.Name != nil {
+		if strings.TrimSpace(*in.Name) == "" {
+			return nil, fmt.Errorf("a thread needs a name")
+		}
+		th.Set("name", strings.TrimSpace(*in.Name))
+	}
+	if in.Bubble != nil {
+		if *in.Bubble != "" {
+			b, err := app.FindRecordById("bubbles", *in.Bubble)
+			if err != nil || b.GetString("workspace") != ws.Id {
+				return nil, fmt.Errorf("bubble %q is not in this workspace", *in.Bubble)
+			}
+		}
+		th.Set("bubble", *in.Bubble)
+	}
+	if in.Objective != nil {
+		if *in.Objective != "" {
+			if _, err := app.FindRecordById("objectives", *in.Objective); err != nil {
+				return nil, fmt.Errorf("no objective %q", *in.Objective)
+			}
+		}
+		// An objective belongs to the DEPARTMENT, so a thread from any project
+		// may hang from any of them. That is the point of the strategic layer,
+		// not a leak.
+		th.Set("objective", *in.Objective)
+	}
+	if in.Due != nil {
+		day := strings.TrimSpace(*in.Due)
+		if day != "" && !dayOnly.MatchString(day) {
+			return nil, fmt.Errorf("a due date is a day: 2026-09-15, not %q", day)
+		}
+		if day == "" {
+			th.Set("due_date", "")
+		} else {
+			th.Set("due_date", day+" 00:00:00.000Z")
+		}
+	}
+	for field, v := range map[string]*string{"impact": in.Impact, "urgency": in.Urgency} {
+		if v == nil {
+			continue
+		}
+		if *v != "" && *v != "high" && *v != "mid" && *v != "low" {
+			return nil, fmt.Errorf("%s is high, mid or low — not %q", field, *v)
+		}
+		th.Set(field, *v)
+	}
+	// Renaming moves the file: the hook on the record request does it for the
+	// web, and this door goes through the same app, so it happens here too.
+	if err := app.Save(th); err != nil {
+		return nil, err
+	}
+	return th, nil
+}
+
+// Plan is the department's strategic layer, as one answer: what the work is for,
+// and what has been captured and not yet decided about.
+type Plan struct {
+	Objectives []PlanObjective `json:"objectives"`
+	Inbox      []PlanNote      `json:"inbox"`
+}
+
+type PlanObjective struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Outcome string `json:"outcome,omitempty"`
+	Due     string `json:"due_date,omitempty"`
+	Threads int    `json:"threads"`
+}
+
+type PlanNote struct {
+	ID     string `json:"id"`
+	Note   string `json:"note"`
+	Thread string `json:"thread,omitempty"`
+	When   string `json:"captured_at"`
+}
+
+// ReadPlan mirrors the rules the collections carry: the objectives are the
+// global lead's to read, and a note is read by whoever captured it or by the
+// person whose job triaging is.
+func ReadPlan(app core.App, auth *core.Record) (Plan, error) {
+	if auth == nil {
+		return Plan{}, ErrDenied
+	}
+	out := Plan{Objectives: []PlanObjective{}, Inbox: []PlanNote{}}
+	lead := isGlobalLead(auth) || IsSuperuser(auth)
+	if lead {
+		rows, err := app.FindAllRecords("objectives")
+		if err != nil {
+			return Plan{}, err
+		}
+		for _, o := range rows {
+			var n int
+			_ = app.DB().NewQuery("SELECT COUNT(*) FROM threads WHERE objective = {:o}").
+				Bind(dbx.Params{"o": o.Id}).Row(&n)
+			out.Objectives = append(out.Objectives, PlanObjective{
+				ID: o.Id, Name: o.GetString("name"), Outcome: o.GetString("outcome"),
+				Due: o.GetDateTime("due_date").String(), Threads: n,
+			})
+		}
+	}
+	notes, err := app.FindAllRecords("inbox_items")
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, n := range notes {
+		if !lead && n.GetString("captured_by") != auth.Id {
+			continue
+		}
+		out.Inbox = append(out.Inbox, PlanNote{
+			ID: n.Id, Note: n.GetString("note"), Thread: n.GetString("thread"),
+			When: n.GetDateTime("created").String(),
+		})
+	}
+	return out, nil
+}
+
+// Capture puts a note in the department's inbox. Mirrors
+// `inbox_items.CreateRule` — anybody signed in — and stamps the author like a
+// comment: nobody captures as somebody else.
+//
+// Capturing is NOT evidence. A note has no outcome and no output; the thread it
+// becomes is what warms anything.
+func Capture(app core.App, auth *core.Record, note string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
+	note = strings.TrimSpace(note)
+	if note == "" {
+		return nil, fmt.Errorf("a note needs something in it")
+	}
+	col, err := app.FindCollectionByNameOrId("inbox_items")
+	if err != nil {
+		return nil, err
+	}
+	r := core.NewRecord(col)
+	r.Set("note", note)
+	r.Set("captured_by", auth.Id)
+	if err := app.Save(r); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// SetObjective creates or edits one. Mirrors `objectives` — the global lead
+// shapes the strategic layer, and only they.
+func SetObjective(app core.App, auth *core.Record, id, name, outcome, due string) (*core.Record, error) {
+	if !isGlobalLead(auth) {
+		return nil, ErrDenied
+	}
+	var r *core.Record
+	if id != "" {
+		found, err := app.FindRecordById("objectives", id)
+		if err != nil {
+			return nil, fmt.Errorf("no objective %q", id)
+		}
+		r = found
+	} else {
+		col, err := app.FindCollectionByNameOrId("objectives")
+		if err != nil {
+			return nil, err
+		}
+		r = core.NewRecord(col)
+	}
+	if name != "" {
+		r.Set("name", strings.TrimSpace(name))
+	}
+	if r.GetString("name") == "" {
+		return nil, fmt.Errorf("an objective needs a name")
+	}
+	if outcome != "" {
+		r.Set("outcome", outcome)
+	}
+	if due != "" {
+		if !dayOnly.MatchString(due) {
+			return nil, fmt.Errorf("a date is a day: 2026-09-15, not %q", due)
+		}
+		r.Set("due_date", due+" 00:00:00.000Z")
+	}
+	if err := app.Save(r); err != nil {
+		return nil, err
+	}
+	return r, nil
+}
+
+// Moment is one thing that happened to a thread.
+type Moment struct {
+	Kind  string `json:"kind"`
+	At    string `json:"at"`
+	Actor string `json:"actor,omitempty"`
+	Meta  string `json:"meta,omitempty"`
+}
+
+// Timeline is what a thread's log adds up to, newest first.
+//
+// This is the read that keeps an agent from repeating work: heat says a thread
+// is warm, and the timeline says WHAT made it warm and when.
+func Timeline(app core.App, auth *core.Record, threadID string, limit int) ([]Moment, error) {
+	th, _, _, err := ThreadFor(app, auth, threadID)
+	if err != nil {
+		return nil, err
+	}
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	rows, err := app.FindRecordsByFilter("events", "target = {:t}", "-at", limit, 0,
+		dbx.Params{"t": th.Id})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Moment, 0, len(rows))
+	for _, e := range rows {
+		out = append(out, Moment{
+			Kind: e.GetString("kind"), At: e.GetDateTime("at").String(),
+			Actor: e.GetString("actor"), Meta: e.GetString("meta"),
+		})
+	}
+	return out, nil
+}
+
+// RemovePath deletes a document, with the one distinction the web route makes:
+// a thread's OWN document goes when the thread does — letting it go from here
+// would leave a row pointing at nothing — while everything else, a wiki page or
+// a file a thread wrote beside its document, goes like any other file.
+func RemovePath(app core.App, auth *core.Record, t *tree.Tree, ws *core.Record, repo, doc string) error {
+	if !isPersonAuth(auth) {
+		return ErrNotAPerson
+	}
+	area, err := tree.Classify(doc)
+	if err != nil || (area == tree.AreaThread && path.Dir(doc) == tree.DirThreads) {
+		return fmt.Errorf("a thread's own document goes when the thread does")
+	}
+	return t.Remove(repo, doc, actorLabel(auth), "delete: "+doc)
 }

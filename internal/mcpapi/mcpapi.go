@@ -326,6 +326,220 @@ func build() *mcp.Server {
 		return jsonOut(map[string]any{"id": th.Id, "state": th.GetString("state")}), nil, nil
 	})
 
+	// ---- the bubble, the plan, and what already happened -------------------
+	//
+	// The first ten tools let an agent write a document and nothing else: it
+	// could not say what the work is FOR, when it is due, who is accountable
+	// for the bubble around it, or read what had already been done to it. So it
+	// worked blind and asked a person for everything that was not text.
+
+	type newBubbleArg struct {
+		Workspace string `json:"workspace"`
+		Name      string `json:"name"`
+		Outcome   string `json:"outcome,omitempty" jsonschema:"what is TRUE when this is done"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "create_bubble",
+		Description: "Create a bubble — a durable grouping of related work, and the " +
+			"unit of attention. Give it an outcome: a bubble without one is a folder " +
+			"with a nice name.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newBubbleArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		ws, _, err := bubble.WorkspaceFor(c.app, c.auth, in.Workspace)
+		if err != nil {
+			return nil, nil, err
+		}
+		b, err := bubble.CreateBubble(c.app, c.auth, ws, in.Name, in.Outcome)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{"id": b.Id, "name": b.GetString("name")}), nil, nil
+	})
+
+	// Flat, not embedded: the schema this SDK infers does not flatten an
+	// anonymous struct, so half the fields never reached the tool — they were
+	// accepted, ignored, and answered with an unchanged record. One shape here,
+	// mapped explicitly below.
+	type setBubbleArg struct {
+		Bubble  string    `json:"bubble" jsonschema:"the bubble id"`
+		Name    *string   `json:"name,omitempty"`
+		Outcome *string   `json:"outcome,omitempty" jsonschema:"what is TRUE when this is done"`
+		Owners  *[]string `json:"owners,omitempty" jsonschema:"user ids; empty means nobody is accountable"`
+		Closure *string   `json:"closure,omitempty" jsonschema:"how it ended, in your words"`
+		Closed  *bool     `json:"closed,omitempty" jsonschema:"true closes it, false reopens it"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "set_bubble",
+		Description: "Say something about a bubble: its outcome, who is accountable, " +
+			"or that it is closed. Closing is a decision with a date, not a delete — " +
+			"say how it ended in `closure`, and `closed: false` reopens it. Nobody " +
+			"accountable is a real answer, and it has a cost: a quiet bubble with no " +
+			"owner is a grave, not a nap.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setBubbleArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		b, err := bubble.SetBubble(c.app, c.auth, in.Bubble, bubble.BubbleEdit{
+			Name: in.Name, Outcome: in.Outcome, Owners: in.Owners,
+			Closure: in.Closure, Closed: in.Closed,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{
+			"id": b.Id, "name": b.GetString("name"), "outcome": b.GetString("outcome"),
+			"owners": b.GetStringSlice("owners"),
+			"closed": !b.GetDateTime("closed_at").IsZero(),
+		}), nil, nil
+	})
+
+	type setThreadArg struct {
+		Thread    string  `json:"thread"`
+		Name      *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
+		Bubble    *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+		Objective *string `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
+		Due       *string `json:"due,omitempty" jsonschema:"a day, 2026-09-15; empty clears it"`
+		Impact    *string `json:"impact,omitempty" jsonschema:"high, mid or low"`
+		Urgency   *string `json:"urgency,omitempty" jsonschema:"high, mid or low"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "set_thread",
+		Description: "Everything about a thread that is not its document: its name, " +
+			"which bubble carries it, which objective it is FOR, when it is due, and " +
+			"its impact and urgency. Priority is NOT here — the server derives it from " +
+			"impact × urgency, and a second way to write it would be a second answer.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setThreadArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		th, err := bubble.SetThread(c.app, c.auth, in.Thread, bubble.ThreadEdit{
+			Name: in.Name, Bubble: in.Bubble, Objective: in.Objective,
+			Due: in.Due, Impact: in.Impact, Urgency: in.Urgency,
+		})
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{
+			"id": th.Id, "seq": th.GetInt("seq"), "name": th.GetString("name"),
+			"doc_path": th.GetString("doc_path"), "bubble": th.GetString("bubble"),
+			"objective": th.GetString("objective"),
+			"due_date":  th.GetDateTime("due_date").String(),
+		}), nil, nil
+	})
+
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "plan",
+		Description: "The department's strategic layer: its objectives — what the work " +
+			"is FOR — and the inbox, what has been captured and not yet decided about. " +
+			"The objectives are the global lead's to read; a note is read by whoever " +
+			"captured it.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		p, err := bubble.ReadPlan(c.app, c.auth)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(p), nil, nil
+	})
+
+	type captureArg struct {
+		Note string `json:"note"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "capture",
+		Description: "Put a note in the department's inbox — something raised and not " +
+			"yet work. It has no outcome and no evidence, and making it a thread on the " +
+			"way in is how a backlog fills with rows nobody committed to. Capturing " +
+			"warms nothing.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in captureArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		n, err := bubble.Capture(c.app, c.auth, in.Note)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{"id": n.Id, "note": n.GetString("note")}), nil, nil
+	})
+
+	type objectiveArg struct {
+		Objective string `json:"objective,omitempty" jsonschema:"an id to edit; leave it out to create"`
+		Name      string `json:"name,omitempty"`
+		Outcome   string `json:"outcome,omitempty" jsonschema:"what is TRUE when this is met"`
+		Due       string `json:"due_date,omitempty" jsonschema:"a day: 2026-12-31"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "set_objective",
+		Description: "Create or edit an objective. It belongs to the DEPARTMENT, not to " +
+			"a workspace: threads from any project hang from the same one, which is what " +
+			"makes it worth stating. Only the global lead shapes this layer.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in objectiveArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		o, err := bubble.SetObjective(c.app, c.auth, in.Objective, in.Name, in.Outcome, in.Due)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{
+			"id": o.Id, "name": o.GetString("name"), "outcome": o.GetString("outcome"),
+		}), nil, nil
+	})
+
+	type timelineArg struct {
+		Thread string `json:"thread"`
+		Limit  int    `json:"limit,omitempty" jsonschema:"how many, newest first (default 50)"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "timeline",
+		Description: "What has already happened to a thread, newest first. Heat says a " +
+			"thread is warm; this says WHAT made it warm and when — read it before you " +
+			"start, or you will do something that was done on Tuesday.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in timelineArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := bubble.Timeline(c.app, c.auth, in.Thread, in.Limit)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(out), nil, nil
+	})
+
+	type dropPageArg struct {
+		Workspace string `json:"workspace"`
+		Path      string `json:"path" jsonschema:"a page under docs/, or a thread's other file"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "delete_page",
+		Description: "Remove a document. A thread's OWN document is not removed this " +
+			"way — it goes when the thread does, or the row would point at nothing.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in dropPageArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		ws, repo, err := bubble.WorkspaceFor(c.app, c.auth, in.Workspace)
+		if err != nil {
+			return nil, nil, err
+		}
+		if err := bubble.RemovePath(c.app, c.auth, c.tree, ws, repo, in.Path); err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{"path": in.Path, "deleted": true}), nil, nil
+	})
+
 	return s
 }
 

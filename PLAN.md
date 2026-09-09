@@ -543,7 +543,7 @@ ordering rules and the decay curve are the same, and `now` is still a parameter.
 neither is stored anywhere.
 
 ### Phase 3 — MCP
-Ten tools on `/mcp`: `guide` · `workspaces` · `board` · `tree` · `search` · `read` ·
+Eighteen tools on `/mcp`. The first ten: `guide` · `workspaces` · `board` · `tree` · `search` · `read` ·
 `edit` · `create_thread` · `link` · `complete_thread`. Authentication is
 PocketBase's own — an agent presents a person's token and IS that person for every
 rule, so there is no agent identity to manage and nothing an agent can reach that
@@ -584,6 +584,23 @@ loopback request whose Host header is not loopback — correct against DNS rebin
 and wrong behind a reverse proxy, where every legitimate request looks exactly like
 that. v0 met it as `Forbidden: invalid Host header`, with the web UI fine and only
 agents locked out.
+
+**Eight more, later, because the first ten left an agent blind.** *(built)* It
+could write a document and nothing else: it could not say what the work is FOR,
+when it is due, who is accountable for the bubble around it, or read what had
+already happened to it — so it worked without context and asked a person for
+everything that was not text. Added: `create_bubble` · `set_bubble` (outcome,
+who is accountable, closed with its sentence, reopened) · `set_thread` (bubble,
+objective, due date, impact and urgency — never priority, which is derived) ·
+`plan` (the department's objectives and inbox) · `capture` · `set_objective` ·
+`timeline` (what already happened, so the work is not done twice) ·
+`delete_page`.
+
+Every one is a plain function in `ops.go` that mirrors the collection rule it
+stands in for — `app.Save` does not know about rules, so each states which rule
+it is enforcing and why. The guide was updated in the same pass: it said
+`threads/` was FLAT, which stopped being true, and a guide that describes an API
+it no longer matches is worse than no guide.
 
 **Done when:** an agent does a real piece of work end to end and the bubble warms
 because of it. — *it does: create by slug, write, tick, search, link, and the

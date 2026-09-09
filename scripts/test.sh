@@ -701,7 +701,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "board,complete_thread,create_thread,edit,guide,link,read,search,tree,workspaces"
+  "board,capture,complete_thread,create_bubble,create_thread,delete_page,edit,guide,link,plan,read,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
 chk ">>> la guía es prompt Y tool (no todo cliente lista prompts)" \
   "$(mcp "$A" "prompts/list" "{}" | python3 -c 'import sys,json
 print(",".join(p["name"] for p in json.load(sys.stdin)["result"]["prompts"]))')" bubble-work
@@ -757,6 +757,70 @@ print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'")
 
 chk ">>> erin no alcanza el thread por MCP" \
   "$(mcptext "$ER" read "{\"thread\":\"$NTID\"}" | grep -c "not found")" 1
+
+# La otra mitad de la superficie: un agente que sólo escribe el documento
+# trabaja a ciegas — no puede decir para qué es el trabajo, cuándo vence, quién
+# responde por la burbuja que lo contiene, ni leer lo que ya se hizo.
+#
+# Cada cuerpo va en una VARIABLE. Escrito en línea dentro de "$( ... )" el shell
+# se come el escape de las comillas y el JSON llega roto; el servidor contesta
+# "malformed payload" y la prueba parece pasar contra la nada.
+echo
+ARG="{\"workspace\":\"alpha\",\"name\":\"Portal\",\"outcome\":\"la gente entra sin pedir ayuda\"}"
+NBUB=$(mcptext "$A" create_bubble "$ARG" | j "['id']")
+chk ">>> un agente crea una burbuja con su outcome" "$([ -n "$NBUB" ] && echo si || echo no)" si
+
+ARG="{\"bubble\":\"$NBUB\",\"owners\":[\"$AID\"]}"
+chk ">>> ...y dice quién responde por ella" \
+  "$(mcptext "$A" set_bubble "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["owners"]))')" 1
+
+ARG="{\"bubble\":\"$NBUB\",\"closed\":true,\"closure\":\"se resolvió en soporte\"}"
+chk ">>> cerrar es una decisión con frase, no un borrado" \
+  "$(mcptext "$A" set_bubble "$ARG" | j "['closed']")" True
+ARG="{\"bubble\":\"$NBUB\",\"closed\":false}"
+chk ">>> ...y se reabre" "$(mcptext "$A" set_bubble "$ARG" | j "['closed']")" False
+
+ARG="{\"thread\":\"$NTID\",\"bubble\":\"$NBUB\",\"due\":\"2026-12-31\",\"impact\":\"high\",\"urgency\":\"mid\"}"
+chk ">>> el thread se mueve a esa burbuja" "$(mcptext "$A" set_thread "$ARG" | j "['bubble']")" "$NBUB"
+chk ">>> ...y la prioridad la deriva el servidor de impacto x urgencia" \
+  "$(curl -s "$API/api/collections/thread_priority/records/$NTID" -H "Authorization: $A" | j "['priority']")" P2
+ARG="{\"thread\":\"$NTID\",\"due\":\"31/12/2026\"}"
+chk ">>> una fecha mal formada se rechaza en vez de guardarse rara" \
+  "$(mcptext "$A" set_thread "$ARG" | grep -c "a due date is a day")" 1
+
+ARG="{\"note\":\"el portal tarda en cargar\"}"
+chk ">>> capturar en el inbox por MCP" \
+  "$(mcptext "$B" capture "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+
+ARG="{\"name\":\"Soporte sin fricción\",\"outcome\":\"nadie escribe dos veces\"}"
+chk ">>> el lead global crea un objetivo" \
+  "$(mcptext "$C" set_objective "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+ARG="{\"name\":\"Mío\"}"
+chk ">>> y un lead de workspace NO: la capa estratégica es del departamento" \
+  "$(mcptext "$A" set_objective "$ARG" | grep -c "not found")" 1
+
+chk ">>> el plan: los objetivos son del lead global" \
+  "$(mcptext "$C" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]) >= 1)')" True
+chk ">>> ...quien no lo es ve el plan sin objetivos" \
+  "$(mcptext "$A" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]))')" 0
+chk ">>> ...pero sí la nota que capturó" \
+  "$(mcptext "$B" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["inbox"]) >= 1)')" True
+
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> timeline: qué le pasó al thread y cuándo" \
+  "$(mcptext "$A" timeline "$ARG" | python3 -c 'import sys,json
+ks=[m["kind"] for m in json.load(sys.stdin)]
+print("si" if "thread-created" in ks and "document-changed" in ks else ks)')" si
+chk ">>> erin no ve el timeline de un thread que no alcanza" \
+  "$(mcptext "$ER" timeline "$ARG" | grep -c "not found")" 1
+
+ARG="{\"workspace\":\"alpha\",\"path\":\"docs/agente.md\",\"base\":\"$E0\",\"content\":\"# Del agente\\n\"}"
+chk ">>> un agente escribe una página de wiki" "$(mcptext "$A" edit "$ARG" | j "['path']")" docs/agente.md
+ARG="{\"workspace\":\"alpha\",\"path\":\"docs/agente.md\"}"
+chk "...y la borra" "$(mcptext "$A" delete_page "$ARG" | j "['deleted']")" True
+ARG="{\"workspace\":\"alpha\",\"path\":\"threads/1-renombrado.md\"}"
+chk ">>> pero el documento propio de un thread no se borra por esa puerta" \
+  "$(mcptext "$A" delete_page "$ARG" | grep -c "goes when the thread does")" 1
 
 
 # ------------------------------------------------------------ imágenes ----

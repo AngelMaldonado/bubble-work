@@ -31,15 +31,25 @@ failure. Revive it with real work, redefine it, or close it.
 
 ```
 <workspace>/
-  README.md          the workspace's front page
-  threads/           one file per thread, FLAT — no subdirectories
-  docs/              the wiki: guides, references, notes. Nests freely.
+  README.md              the workspace's front page
+  threads/               one file per thread
+    14-portar-motor.md     THE thread's document
+    14-portar-motor/       anything else that thread writes, beside it
+      notas.md
+  docs/                  the wiki: guides, references, notes. Nests freely.
+  assets/                images, flat, referenced from anywhere as assets/<name>
 ```
 
-Only `.md` and `.excalidraw` are writable. Anything outside this shape is refused.
+`threads/` nests exactly one level: a thread's own document is the file, and
+whatever else that thread needs — a research note, a design, a log that does not
+belong on the main page — lives in the folder beside it. Writing there is the
+THREAD's writing: it warms that thread, not the workspace.
 
-A thread's file is named by the server and moves when the thread is renamed. Do not
-depend on a path staying still; a thread id does.
+Only `.md` and `.excalidraw` are writable, and only images live in `assets/`.
+Anything outside this shape is refused.
+
+A thread's file is named by the server and moves when the thread is renamed — its
+folder moves with it. Do not depend on a path staying still; a thread id does.
 
 ## Writing
 
@@ -72,6 +82,33 @@ Two errors you will meet, and both are telling you something useful:
 
 Checkboxes are counted anywhere in the document. Only real `- [ ]` boxes count; a
 plain bullet is a sentence.
+
+## Before you start, and what else you can say
+
+**Read the timeline.** Heat tells you a thread is warm; `timeline` tells you WHAT
+made it warm and when. Starting without it is how you redo something that was
+finished on Tuesday.
+
+Everything about a thread that is not its document goes through `set_thread`: the
+bubble that carries it, the objective it is FOR, when it is due, its impact and
+urgency. **Priority is not among them** — the server derives it from impact ×
+urgency, and there is no second way to write it.
+
+A bubble is created with an outcome and can be closed with a sentence
+(`set_bubble`). Closing is a decision with a date, not a delete: it says the work
+no longer competes for attention, and reopening is one call. Say who is
+accountable when you know — a bubble that has gone quiet with nobody accountable
+is a grave, not a nap, and that is the band it will be shown in.
+
+**When something is raised and is not yet work, `capture` it.** A note has no
+outcome and no evidence; turning every remark into a thread is how a backlog
+fills with rows nobody committed to. Capturing warms nothing, and that is
+correct.
+
+`plan` shows the department's objectives and its inbox. The objectives belong to
+the whole department rather than to a workspace — threads from any project hang
+from the same one, which is what makes stating it worth anything — and shaping
+them is the global lead's.
 
 ## What this server does not do
 

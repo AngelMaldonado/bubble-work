@@ -33,6 +33,7 @@
     pane = $bindable<HTMLElement | null>(null),
     onselect,
     onpin,
+    onsignout,
     onrename,
     ondelete,
     /** create one and say which it is, so it can be named straight away */
@@ -50,6 +51,10 @@
     pane?: HTMLElement | null;
     onselect?: (id: string) => void;
     onpin?: (id: string) => void;
+    /** salir de la sesión. Un verbo raro, al pie y separado de los de todos los
+     *  días — pero VISIBLE: escondido en el omnibar, sólo lo encontraba quien
+     *  ya sabía que estaba ahí. */
+    onsignout?: () => void;
     onrename?: (id: string, name: string) => void;
     ondelete?: (id: string) => void;
     oncreate?: () => Promise<string | void> | string | void;
@@ -154,7 +159,7 @@
            item of the list — it is the one action the column always offers, so
            it sits where the column ends rather than drifting down as the list
            grows. -->
-      {#if oncreate || pins.length}
+      {#if oncreate || pins.length || onsignout}
         <Navigation.Footer class="new-foot">
           <Navigation.Menu>
             {#if oncreate}
@@ -163,10 +168,9 @@
                 <Navigation.TriggerText>{newLabel}</Navigation.TriggerText>
               </Navigation.Trigger>
             {/if}
-            <!-- Debajo de "Nuevo", al pie de la columna. No es un proyecto —por
-                 eso no está en la lista— pero sí es un LUGAR, y llegar a un
-                 lugar es para lo que sirve esta columna; era un botón flotante
-                 en la esquina, que es donde va un verbo. -->
+            <!-- Debajo de "Nuevo": no es un proyecto —por eso no está en la
+                 lista— pero sí es un LUGAR, y llegar a un lugar es para lo que
+                 sirve esta columna. -->
             {#each pins as p (p.id)}
               <div class="proj" class:on={pinned === p.id}>
                 <!-- Un ancla nuestra, no un `Navigation.Trigger`: es un LUGAR y
@@ -196,6 +200,18 @@
                 </a>
               </div>
             {/each}
+
+            <!-- Y al final, salir. Es un verbo raro y no debería estar junto a
+                 lo que se pulsa todos los días, pero VISIBLE: escondido en el
+                 omnibar sólo lo encontraba quien ya sabía que estaba ahí.
+                 Conectar un agente vive con los otros verbos, abajo a la
+                 derecha; irse es de la SESIÓN, y la sesión es esta columna. -->
+            {#if onsignout}
+              <Navigation.Trigger onclick={onsignout} title="salir de la sesión">
+                <span class="pin" aria-hidden="true">🚪</span>
+                <Navigation.TriggerText>Salir</Navigation.TriggerText>
+              </Navigation.Trigger>
+            {/if}
           </Navigation.Menu>
         </Navigation.Footer>
       {/if}

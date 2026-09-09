@@ -13,6 +13,7 @@
   import NewWorkspace from './components/NewWorkspace.svelte';
   import People from './components/People.svelte';
   import Presence from './components/Presence.svelte';
+  import { setupPrompt } from './lib/connect';
   import { presence } from './lib/presence.svelte';
   import { Dialog, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import Shell from './components/Shell.svelte';
@@ -190,6 +191,18 @@
   // once they have opened it, not a second box at the door.
   let naming = $state<'bubble' | 'thread' | null>(null);
   let crew = $state(false);
+  // Copiado hace un momento: un ✓ que se apaga solo. Sin ventana — lo único
+  // que hacía falta de la de v0 era este botón.
+  let copied = $state(false);
+  async function copyPrompt() {
+    try {
+      await navigator.clipboard.writeText(setupPrompt(`${location.origin}/mcp`, api.token));
+      copied = true;
+      setTimeout(() => (copied = false), 1800);
+    } catch {
+      error = 'El navegador no dejó copiar al portapapeles.';
+    }
+  }
   let fresh = $state('');
   /** Which bubble a new thread goes into. A thread is work; a bubble is what
    *  the work is FOR, and one without the other is the row that later nobody
@@ -229,6 +242,15 @@
   // as a broken screen rather than as one that is not theirs.
   const isLead = $derived(me?.role === 'lead');
   const openPlanner = () => go(plannerUrl);
+
+  /** Salir: se deja de latir ANTES de tirar el token, o el latido siguiente
+   *  llega sin credencial y se contesta con un 401 a nadie. */
+  function signOut() {
+    presence.stop();
+    api.signOut();
+    signedIn = false;
+    me = null;
+  }
 
   const openWiki = (page: string) => current && go(wikiUrl(current.slug, page));
   const openThread = (t: ThreadHeat) => current && go(threadUrl(current.slug, t.seq));
@@ -279,7 +301,8 @@
     { id: 'light', icon: '☀️', title: 'Tema claro', run: () => theme.set('light') },
     { id: 'dark', icon: '🌙', title: 'Tema oscuro', run: () => theme.set('dark') },
     { id: 'system', icon: '🌗', title: 'Tema automático', hint: 'como el sistema', run: () => theme.set('system') },
-    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: () => { presence.stop(); api.signOut(); signedIn = false; me = null; } },
+    { id: 'connect', icon: '🤖', title: 'Copiar el prompt que conecta tu IA', hint: 'MCP · lleva tu token', run: copyPrompt },
+    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: signOut },
   ]);
 
   // One request per pause, and the last one wins: an answer that arrives after
@@ -424,6 +447,7 @@
     ]}
     pinned={route.kind === 'planner' ? 'planner' : ''}
     onpin={openPlanner}
+    onsignout={signOut}
     current={current?.id ?? ''}
     label="Workspaces"
     newLabel="Nuevo"
@@ -484,6 +508,26 @@
       </Portal>
     </Tooltip>
   {/if}
+
+  <!-- Conectar un agente es un VERBO, y los verbos viven aquí. Junto a
+       personas: las dos contestan "quién más entra a esto" — una con nombre y
+       otra con un token. -->
+  <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+    <Tooltip.Trigger>
+      {#snippet element(attributes: Record<string, unknown>)}
+        <button class="float-btn" {...attributes} onclick={copyPrompt}>
+          <span aria-hidden="true">{copied ? '✓' : '🤖'}</span>
+        </button>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Portal>
+      <Tooltip.Positioner>
+        <Tooltip.Content>
+          {copied ? 'Copiado — pégalo en tu asistente' : 'Copiar el prompt que conecta tu IA'}
+        </Tooltip.Content>
+      </Tooltip.Positioner>
+    </Portal>
+  </Tooltip>
 
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>

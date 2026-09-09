@@ -16,6 +16,10 @@
 
   let {
     open = $bindable(false),
+    // Bindable, because "+ thread" is reachable from OUTSIDE the drawer — the
+    // orb's right-click opens the panel already asking for the name. One field,
+    // two ways in, rather than a second place to name a thread.
+    naming = $bindable(false),
     name,
     outcome = '',
     lifecycle,
@@ -29,6 +33,7 @@
     ondeletethread,
   }: {
     open?: boolean;
+    naming?: boolean;
     name: string;
     outcome?: string;
     lifecycle: Lifecycle;
@@ -58,7 +63,6 @@
   // as the project column and the board.
   const fade = edgeFade();
 
-  let naming = $state(false);
   let fresh = $state('');
 
 </script>

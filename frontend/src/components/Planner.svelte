@@ -25,6 +25,7 @@
     type ThreadRecord,
   } from '../lib/api';
   import PlannerView, { type Objective } from './PlannerView.svelte';
+  import Confirm, { type Doom } from './Confirm.svelte';
   import type { Card, Column } from './Kanban.svelte';
   import type { CalEvent } from './PlannerCalendar.svelte';
   import type { Note } from './InboxSheet.svelte';
@@ -73,6 +74,10 @@
   // every other write to that file.
   let docs = $state<Record<string, { content: string; hash: string }>>({});
   let error = $state('');
+  // Nothing is destroyed without being asked first, and the question is asked
+  // HERE — the writer knows the name of what is about to go and what goes with
+  // it. See `Confirm.svelte`.
+  let doom = $state<Doom>(null);
 
   async function load() {
     try {
@@ -208,11 +213,27 @@
 
   const addCard = (column: string, title: string) => ask(title, column);
 
-  const deleteCard = (id: string) => write(() => api.deleteThread(id));
+  const deleteCard = (id: string) => {
+    const t = threads.find((x) => x.id === id);
+    doom = {
+      title: `¿Borrar «${t?.name ?? 'este thread'}»?`,
+      body: 'El thread sale del planeador y del board de su proyecto. Su documento sigue en la historia de git, que es de donde se recupera si hacía falta.',
+      go: () => write(() => api.deleteThread(id)),
+    };
+  };
 
   const capture = (text: string) => write(() => api.create('inbox_items', { note: text }));
 
-  const deleteNote = (id: string) => write(() => api.remove('inbox_items', id));
+  const deleteNote = (id: string) => {
+    const n = notes.find((x) => x.id === id);
+    doom = {
+      title: '¿Borrar esta nota?',
+      body: n?.note
+        ? `«${n.note}» deja de existir: una nota no es trabajo y no queda en ningún otro lado.`
+        : 'Una nota no es trabajo y no queda en ningún otro lado.',
+      go: () => write(() => api.remove('inbox_items', id)),
+    };
+  };
 
   /** Triage: the note becomes a thread, and that is where its project is
    *  decided — which is the question an inbox exists to defer. */
@@ -277,8 +298,13 @@
   };
 
   const deleteObjectiveById = (id: string) => {
-    if (!id) return;
-    write(() => api.remove('objectives', id));
+    if (!id) return; // "Sin objetivo" is not a row and cannot be deleted
+    const o = objectiveRows.find((x) => x.id === id);
+    doom = {
+      title: `¿Borrar el objetivo «${o?.name ?? id}»?`,
+      body: 'Los threads que colgaban de él no se borran: quedan en «Sin objetivo», que es exactamente lo que pasó.',
+      go: () => write(() => api.remove('objectives', id)),
+    };
   };
 
   const addObjective = (name: string) =>
@@ -289,10 +315,9 @@
       }),
     );
 
-  const deleteObjective = (n: number) => {
-    const row = objectiveAt(n);
-    if (row) write(() => api.remove('objectives', row.id));
-  };
+  // The 🎯 dialog numbers its objectives; the kanban knows their ids. Both end
+  // in the same place, so both ask the same question.
+  const deleteObjective = (n: number) => deleteObjectiveById(objectiveAt(n)?.id ?? '');
 </script>
 
 {#if error}
@@ -341,6 +366,8 @@
     </Portal>
   </Dialog>
 {/if}
+
+<Confirm bind:ask={doom} />
 
 <PlannerView
   {columns}

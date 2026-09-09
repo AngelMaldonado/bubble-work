@@ -719,13 +719,30 @@ and the calendar reads `threads.due_date`, which has existed since phase 1.
   · `objectives` — the strategic layer, carrying the same word a bubble uses:
     an `outcome`, what is true when it is done. A thread points at one
     (optional, and NOT cascading — closing an objective must not delete the work
-    done under it). Shaped by a lead, read by everyone, like `states`.
+    done under it).
   · `inbox_items` — what was CAPTURED and is not yet work. This is the one that
     earns its place: a note has no outcome and no evidence, and making it a
     thread on the way in is how a backlog fills with rows nobody committed to.
-    Anybody in the workspace may capture; `captured_by` is stamped server-side
-    like a comment's author; triaging sets `thread` and the item stays, because
-    "we already decided about this" is worth being able to see.
+    `captured_by` is stamped server-side like a comment's author; triaging sets
+    `thread` and the item stays, because "we already decided about this" is
+    worth being able to see.
+
+**Both belong to the DEPARTMENT, not to a workspace** — corrected one migration
+later, and worth recording because the first cut got it wrong. Objectives were
+filed under a workspace, which contradicts what the strategic layer IS: the
+department head, who sees every workspace without being a member of any. The
+objectives people actually say out loud — clients, profitability, ISO 9001,
+technical debt — are not a project's; the projects are what hangs from them, and
+an objective living inside one of them cannot be what the others are measured
+against. The inbox loses its workspace for a different reason: a note arrives
+before anybody knows what it belongs to, and asking at the door is asking the
+question triaging exists to answer.
+
+So the rules split the way the rest of the model does: everybody signed in READS
+the plan (including somebody who is in no workspace at all), the global lead
+shapes it, and a note is edited by whoever wrote it or by the person whose job
+triaging is. A thread from ANY workspace may hang from ANY objective — which is
+what makes the objective worth stating.
 
 Capturing is NOT evidence and warms nothing. The thread a triage creates is.
 
@@ -745,6 +762,10 @@ screens show the same text differently.
 Every write reloads instead of patching the local copy: the server decides the
 seq, the default state and what a rule refuses, and guessing all three in the
 browser is how two views of one board start disagreeing.
+
+The screen reads as the department's plan with one project's work under it: the
+objectives and the inbox come from the department, the board below them is this
+workspace's.
 
 The mock keeps its local behaviour precisely because it passes none of the write
 callbacks — one component, two owners of the data, no second copy of the screen.

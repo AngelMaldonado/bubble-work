@@ -10,6 +10,11 @@
   //     due     →  threads.due_date, which the calendar reads
   //     inbox   →  inbox_items, what is captured and not yet work
   //
+  // Two of those are the DEPARTMENT's and not this workspace's: the objectives
+  // and the inbox. The board below them is this workspace's, so the screen is
+  // the department's plan with one project's work under it — which is what a
+  // department head is looking at when they open it.
+  //
   // There is no card collection, and that is the point: a planner with cards of
   // its own is a second inventory of the work, and two lists of the same work
   // disagree by Thursday.
@@ -57,8 +62,8 @@
       const [st, th, ob, inb, pr] = await Promise.all([
         api.states(workspace.id),
         api.threads(workspace.id),
-        api.objectives(workspace.id),
-        api.inbox(workspace.id),
+        api.objectives(),
+        api.inbox(),
         api.priorities(workspace.id),
       ]);
       states = st;
@@ -164,8 +169,7 @@
 
   const deleteCard = (id: string) => write(() => api.deleteThread(id));
 
-  const capture = (text: string) =>
-    write(() => api.create('inbox_items', { workspace: workspace.id, note: text }));
+  const capture = (text: string) => write(() => api.create('inbox_items', { note: text }));
 
   const deleteNote = (id: string) => write(() => api.remove('inbox_items', id));
 
@@ -226,7 +230,6 @@
   const addObjective = (name: string) =>
     write(() =>
       api.create('objectives', {
-        workspace: workspace.id,
         name: `${name} ${objectiveRows.length + 1}`,
         position: objectiveRows.length,
       }),

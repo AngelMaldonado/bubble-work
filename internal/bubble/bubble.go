@@ -20,13 +20,12 @@ func Register(app core.App, t *tree.Tree) {
 	app.OnRecordCreateRequest("workspaces").BindFunc(foundingMembership)
 
 	app.OnRecordCreateRequest("threads").BindFunc(assignSeq)
-	for _, rel := range []struct{ field, collection string }{
-		{"bubble", "bubbles"},
-		{"objective", "objectives"},
-	} {
-		app.OnRecordCreateRequest("threads").BindFunc(relationInSameWorkspace(rel.field, rel.collection))
-		app.OnRecordUpdateRequest("threads").BindFunc(relationInSameWorkspace(rel.field, rel.collection))
-	}
+	// Only the bubble. An objective belongs to the DEPARTMENT and not to any
+	// workspace, so a thread from any project counting towards one is the point
+	// rather than a leak — which is why this guard, briefly written for both,
+	// covers one again.
+	app.OnRecordCreateRequest("threads").BindFunc(relationInSameWorkspace("bubble", "bubbles"))
+	app.OnRecordUpdateRequest("threads").BindFunc(relationInSameWorkspace("bubble", "bubbles"))
 
 	app.OnRecordCreateRequest("comments").BindFunc(stampAuthor("author"))
 	app.OnRecordCreateRequest("thread_links").BindFunc(stampAuthor("added_by"))
@@ -176,9 +175,10 @@ func assignSeq(e *core.RecordRequestEvent) error {
 //
 // Nothing in a collection rule can compare two rows like this, and without it the
 // workspace boundary has a hole exactly one relation wide: a member of A could
-// file their thread into a bubble in B and it would show up on B's board. The
-// objective is the same hole one collection over — a thread counting towards
-// somebody else's stated outcome.
+// file their thread into a bubble in B and it would show up on B's board.
+//
+// Written as a factory because it was, for one migration, also applied to the
+// objective — until the objective stopped belonging to a workspace at all.
 func relationInSameWorkspace(field, collection string) func(*core.RecordRequestEvent) error {
 	return func(e *core.RecordRequestEvent) error {
 		id := e.Record.GetString(field)

@@ -70,7 +70,6 @@ export type ThreadRecord = {
 
 export type Objective = {
   id: string;
-  workspace: string;
   name: string;
   outcome?: string;
   due_date?: string;
@@ -80,7 +79,6 @@ export type Objective = {
 
 export type InboxItem = {
   id: string;
-  workspace: string;
   note: string;
   captured_by: string;
   thread?: string;
@@ -258,8 +256,14 @@ class Api {
     return this.list<ThreadRecord>('threads', workspace, '-created');
   }
 
-  objectives(workspace: string) {
-    return this.list<Objective>('objectives', workspace, 'position,created');
+  // No workspace: the plan belongs to the DEPARTMENT. Everybody signed in reads
+  // it, the global lead shapes it, and a thread from any project can hang from
+  // any objective — which is what makes the objective worth stating.
+  async objectives() {
+    const out = await this.call<{ items: Objective[] }>(
+      '/api/collections/objectives/records?perPage=500&sort=position,created',
+    );
+    return out.items;
   }
 
   /** The derived priorities, by thread. A VIEW collection: the server computes
@@ -268,8 +272,12 @@ class Api {
     return this.list<{ id: string; priority: string }>('thread_priority', workspace, 'id');
   }
 
-  inbox(workspace: string) {
-    return this.list<InboxItem>('inbox_items', workspace, '-created');
+  /** The department's inbox: captured before anybody knows whose it is. */
+  async inbox() {
+    const out = await this.call<{ items: InboxItem[] }>(
+      '/api/collections/inbox_items/records?perPage=500&sort=-created',
+    );
+    return out.items;
   }
 
   private async list<T>(collection: string, workspace: string, sort: string) {

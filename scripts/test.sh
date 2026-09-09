@@ -490,63 +490,66 @@ chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "[
 
 # ----------------------------------------- el planeador: fase 5 (server) ----
 #
+# El planeador es del DEPARTAMENTO, no de un workspace. Los objetivos que
+# aparecen cuando alguien los dice en voz alta —clientes, rentabilidad, ISO
+# 9001— no son de un proyecto: los proyectos son lo que cuelga de ellos. Y una
+# nota entra al inbox antes de que nadie sepa de qué proyecto es; decidirlo es
+# justo lo que hace triar.
+#
 # Lo que NO hay aquí es una tarjeta. Un planeador con tarjetas propias es un
-# segundo inventario del trabajo al lado de los threads, y dos listas de lo
-# mismo discrepan para el jueves. Las columnas son los `states` que el workspace
-# ya define y lo que se mueve es un THREAD.
+# segundo inventario del trabajo al lado de los threads. Las columnas son los
+# `states` que el workspace ya define y lo que se mueve es un THREAD.
 echo
-# OJO con quién es quién aquí: arriba alice promovió a bob y SE DEGRADÓ, así que
-# a esta altura del guion el lead de alpha es bob y alice es un miembro raso.
-OBJ=$(post objectives "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"Cerrar el trimestre en verde\",\"outcome\":\"todo el ingreso facturado\"}" | j "['id']")
-chk ">>> un lead define el objetivo" "$([ -n "$OBJ" ] && echo si || echo no)" si
-chk ">>> un member NO lo define (capa estratégica, como states)" \
-  "$(pcode objectives "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Mio\"}")" 400
+OBJ=$(post objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\",\"outcome\":\"todo el ingreso facturado\"}" | j "['id']")
+chk ">>> el lead GLOBAL define el objetivo" "$([ -n "$OBJ" ] && echo si || echo no)" si
+chk ">>> el lead de un workspace NO lo define: la capa estratégica es del departamento" \
+  "$(pcode objectives "$B" "{\"name\":\"Mio\"}")" 400
 chk "el mismo nombre dos veces se rechaza" \
-  "$(pcode objectives "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"Cerrar el trimestre en verde\"}")" 400
-chk "un member sí lo lee" \
+  "$(pcode objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\"}")" 400
+chk ">>> cualquiera que trabaje aquí LEE el plan del departamento" \
   "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $A" | j "['totalItems']")" 1
-chk ">>> erin no ve objetivos de alpha" \
-  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $ER" | j "['totalItems']")" 0
+chk "...incluso erin, que no es de ningún workspace" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $ER" | j "['totalItems']")" 1
+chk "anónimo no" \
+  "$(curl -s "$API/api/collections/objectives/records" | j "['totalItems']")" 0
 
 T8=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Bajo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
-chk ">>> un thread cuelga de un objetivo" \
-  "$(curl -s "$API/api/collections/threads/records/$T8" -H "Authorization: $A" | j "['objective']")" "$OBJ"
-chk ">>> pero NO de uno de otro workspace  [el mismo agujero que la burbuja]" \
-  "$(pcode threads "$B" "{\"workspace\":\"$BETA\",\"name\":\"Robando objetivo\",\"objective\":\"$OBJ\"}")" 400
+T8B=$(post threads "$B" "{\"workspace\":\"$BETA\",\"name\":\"Beta bajo el mismo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
+chk ">>> threads de DOS workspaces cuelgan del mismo objetivo" \
+  "$([ -n "$T8" ] && [ -n "$T8B" ] && echo si || echo no)" si
 chk "borrar el objetivo NO se lleva el trabajo hecho bajo él" \
-  "$(code -X DELETE "$API/api/collections/objectives/records/$OBJ" -H "Authorization: $B")" 204
+  "$(code -X DELETE "$API/api/collections/objectives/records/$OBJ" -H "Authorization: $C")" 204
 chk "...y el thread sigue ahí, sin objetivo" \
   "$(curl -s "$API/api/collections/threads/records/$T8" -H "Authorization: $A" | j "['id']")" "$T8"
 
 echo
-IN1=$(post inbox_items "$B" "{\"workspace\":\"$ALPHA\",\"note\":\"revisar el rate limit del portal\"}")
+IN1=$(post inbox_items "$B" "{\"note\":\"revisar el rate limit del portal\"}")
 IN1ID=$(echo "$IN1" | j "['id']")
-chk ">>> cualquiera del workspace captura en el inbox" "$([ -n "$IN1ID" ] && echo si || echo no)" si
+chk ">>> cualquiera captura en el inbox" "$([ -n "$IN1ID" ] && echo si || echo no)" si
 chk ">>> y queda firmado por quien capturó, no por quien dijo" \
   "$(echo "$IN1" | j "['captured_by']")" "$BID"
 chk ">>> capturar NO es evidencia: no calienta nada" \
-  "$(evcount "(workspace='$ALPHA'%26%26kind='inbox-captured')")" 0
-chk ">>> erin no captura en un workspace que no es suyo" \
-  "$(pcode inbox_items "$ER" "{\"workspace\":\"$ALPHA\",\"note\":\"hola\"}")" 400
+  "$(evcount "(kind='inbox-captured')")" 0
+chk ">>> anónimo no captura" \
+  "$(code -X POST "$API/api/collections/inbox_items/records" -H "$JS" -d '{"note":"hola"}')" 400
 chk "nadie puede firmar una nota como otro" \
-  "$(post inbox_items "$A" "{\"workspace\":\"$ALPHA\",\"note\":\"suplantada\",\"captured_by\":\"$BID\"}" | j "['captured_by']")" "$AID"
+  "$(post inbox_items "$A" "{\"note\":\"suplantada\",\"captured_by\":\"$BID\"}" | j "['captured_by']")" "$AID"
 
-# Triar: la nota se convierte en un thread y se queda apuntando a lo que fue.
+# Triar: la nota se convierte en un thread —y ahí se decide de qué workspace es—
+# y se queda apuntando a lo que fue.
 T9=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Rate limit del portal\"}" | j "['id']")
-chk ">>> el lead tría la nota a un thread" \
-  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -H "$JS" -d "{\"thread\":\"$T9\"}")" 200
+chk ">>> el lead global tría la nota a un thread" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" -H "$JS" -d "{\"thread\":\"$T9\"}")" 200
 chk "...y la nota conserva a dónde fue" \
   "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A" | j "['thread']")" "$T9"
-chk ">>> carol (lead global) no es de alpha y aun así llega" \
-  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $C" | j "['totalItems']")" 1
 
-IN2ID=$(post inbox_items "$A" "{\"workspace\":\"$ALPHA\",\"note\":\"la de alice\"}" | j "['id']")
-chk ">>> quien la escribió la edita, aunque sea un member raso" \
+IN2ID=$(post inbox_items "$A" "{\"note\":\"la de alice\"}" | j "['id']")
+chk ">>> quien la escribió la edita" \
   "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $A" -H "$JS" -d '{"note":"la de alice, corregida"}')" 200
-chk ">>> y el lead también, sin haberla escrito (triar es su trabajo)" \
-  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $B" -H "$JS" -d '{"note":"triada"}')" 200
-chk ">>> erin no toca ninguna" \
-  "$(code -X DELETE "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $ER")" 404
+chk ">>> otra persona NO la edita, aunque sea lead de su workspace" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $B" -H "$JS" -d '{"note":"secuestrada"}')" 404
+chk ">>> el lead global sí (triar es su trabajo)" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $C" -H "$JS" -d '{"note":"triada"}')" 200
 
 echo
 BOARD=$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A")

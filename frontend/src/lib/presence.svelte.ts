@@ -16,6 +16,7 @@
 // (re)connect, and a slow read underneath covers the case where it never comes
 // back at all — a row of avatars is not worth a reconnection state machine.
 import { api } from './api';
+import { live } from './live.svelte';
 import { when } from './when';
 
 /** How fresh a beat has to be to count. Two bands, because a tab left open in
@@ -40,7 +41,7 @@ class Presence {
 
   private rows: Row[] = [];
   private timers: ReturnType<typeof setInterval>[] = [];
-  private stream: EventSource | null = null;
+  private unwatch: (() => void) | null = null;
   private soon: ReturnType<typeof setTimeout> | null = null;
 
   /** Called once, after signing in. Idempotent: starting twice would double
@@ -64,8 +65,8 @@ class Presence {
   stop() {
     this.timers.forEach(clearInterval);
     this.timers = [];
-    this.stream?.close();
-    this.stream = null;
+    this.unwatch?.();
+    this.unwatch = null;
     this.rows = [];
     this.around = [];
     document.removeEventListener('visibilitychange', this.awake);
@@ -110,32 +111,18 @@ class Presence {
     this.around = [...live.filter((p) => p.id === me), ...live.filter((p) => p.id !== me)];
   }
 
-  /** PocketBase's realtime stream.
+  /** Los latidos de todos los demás, por el stream compartido.
    *
-   *  Two steps, and the second is the one that is easy to miss: the EventSource
-   *  is anonymous — it cannot carry an Authorization header — so it earns
-   *  nothing until the client id it is handed is POSTed BACK with the token and
-   *  the topics. The id changes on every reconnect, so that POST belongs to the
-   *  connect message rather than to `start`. */
+   *  Antes esto abría su propio `EventSource` y devolvía el `clientId` por su
+   *  cuenta; ahora eso vive en `lib/live`, porque la segunda pantalla que quiso
+   *  enterarse de algo —los comentarios— habría abierto una segunda conexión con
+   *  su propio manejo de reconexión.
+   *
+   *  El mensaje trae el registro pero no el NOMBRE de la persona, así que esto
+   *  sólo dice "algo se movió" y la lectura que sigue es una petición pequeña. */
   private listen() {
-    if (this.stream) return;
-    const es = new EventSource('/api/realtime');
-    this.stream = es;
-    es.addEventListener('PB_CONNECT', (e) => {
-      const { clientId } = JSON.parse((e as MessageEvent).data ?? '{}');
-      if (!clientId) return;
-      api
-        .subscribe(clientId, ['presence'])
-        // Whatever happened while we were away is in the collection, not in the
-        // stream: a subscription starts at now.
-        .then(() => this.read())
-        .catch(() => {});
-    });
-    // Every beat by anybody lands here. The message carries the record, but not
-    // the person's name — an expand costs a subscription option and a shape to
-    // parse — so this only says "something moved", and the read that follows is
-    // one small request.
-    es.addEventListener('presence', () => this.nudge());
+    if (this.unwatch) return;
+    this.unwatch = live.watch('presence', () => this.nudge());
   }
 
   /** Coalesce: five people beating in the same second are one read. */

@@ -333,6 +333,30 @@ func build() *mcp.Server {
 	// for the bubble around it, or read what had already been done to it. So it
 	// worked blind and asked a person for everything that was not text.
 
+	type newWorkspaceArg struct {
+		Name string `json:"name"`
+		Slug string `json:"slug,omitempty" jsonschema:"its address: letters, digits and dashes. Derived from the name if you leave it out"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "create_workspace",
+		Description: "Found a workspace — the boundary for a body of work, with its own " +
+			"git repository. You become its lead, and it starts with a workflow so a " +
+			"thread has somewhere to be. The slug is its address on disk and in every " +
+			"link, and it never changes afterwards.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newWorkspaceArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		ws, err := bubble.CreateWorkspace(c.app, c.auth, in.Name, in.Slug)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{
+			"id": ws.Id, "name": ws.GetString("name"), "slug": ws.GetString("slug"),
+		}), nil, nil
+	})
+
 	type newBubbleArg struct {
 		Workspace string `json:"workspace"`
 		Name      string `json:"name"`
@@ -515,6 +539,47 @@ func build() *mcp.Server {
 			return nil, nil, err
 		}
 		return jsonOut(out), nil, nil
+	})
+
+	type talkArg struct {
+		Thread string `json:"thread"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "comments",
+		Description: "What has been said on a thread, oldest first. Read it before you " +
+			"answer a question that was already answered.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in talkArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := bubble.Comments(c.app, c.auth, in.Thread)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(out), nil, nil
+	})
+
+	type sayArg struct {
+		Thread string `json:"thread"`
+		Body   string `json:"body" jsonschema:"markdown"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "comment",
+		Description: "Say something on a thread. A comment is PULSE, never heat: it keeps " +
+			"the thread out of the grave and does NOT wake it. That is why you can say " +
+			"what you found, or that you found nothing, without pretending you produced " +
+			"evidence — the writing and the links are what warm anything.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in sayArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		r, err := bubble.Comment(c.app, c.auth, in.Thread, in.Body)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(map[string]any{"id": r.Id}), nil, nil
 	})
 
 	type dropPageArg struct {

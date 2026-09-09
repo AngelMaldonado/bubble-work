@@ -19,7 +19,6 @@
   import FileTextIcon from '@lucide/svelte/icons/file-text';
   import HistoryIcon from '@lucide/svelte/icons/history';
   import PlusIcon from '@lucide/svelte/icons/plus';
-  import HashIcon from '@lucide/svelte/icons/hash';
   import type { Lifecycle } from '../lib/api';
   import DocEditor from './DocEditor.svelte';
   import SideTree, { type TreeNode } from './SideTree.svelte';
@@ -55,6 +54,8 @@
     onreopen,
     onmove,
     ondelete,
+    ontalk,
+    talk = 0,
   }: {
     seq: number;
     title: string;
@@ -95,6 +96,10 @@
     onreopen?: () => void;
     onmove?: () => void;
     ondelete?: () => void;
+    /** abrir los comentarios */
+    ontalk?: () => void;
+    /** cuántos hay, para no tener que abrirlos para saberlo */
+    talk?: number;
   } = $props();
 
 
@@ -130,6 +135,7 @@
       ? { k: 'reopen', face: '↩', label: 'Reabrir', go: onreopen }
       : { k: 'finish', face: '🏆', label: 'Terminar', go: onfinish },
     { k: 'move', face: '↔', label: 'Mover de burbuja', go: onmove },
+    { k: 'talk', face: '💬', label: talk ? `Comentarios (${talk})` : 'Comentarios', go: ontalk },
     { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
     { k: 'delete', face: '🗑', label: 'Borrar el thread', tone: 'danger', go: ondelete },
     // A verb nobody gave a handler is not drawn. The alternative is a button
@@ -137,42 +143,20 @@
     // and the real view wires these one at a time.
   ].filter((a) => a.go));
 
-  // The headings nest by depth, so the table of contents is a real tree rather
-  // than a flat list wearing indentation.
-  function nestHeadings(hs: Heading[]): TreeNode[] {
-    const roots: TreeNode[] = [];
-    const stack: { depth: number; node: TreeNode }[] = [];
-    for (const h of hs) {
-      const node: TreeNode = { id: `h:${h.id}`, name: h.title, icon: HashIcon, href: `#${h.id}` };
-      while (stack.length && stack[stack.length - 1].depth >= h.depth) stack.pop();
-      if (stack.length) (stack[stack.length - 1].node.children ??= []).push(node);
-      else roots.push(node);
-      stack.push({ depth: h.depth, node });
-    }
-    return roots;
-  }
 
   const tree = $derived<TreeNode[]>([
     {
       id: 'work',
       name: 'Trabajo',
       count: 1 + pages.length,
-      // The thread's own document first, then anything it wrote beside it. The
-      // headings hang off whichever one is OPEN — a table of contents for a
-      // document you are not looking at is a table of contents for nothing.
+      // Los DOCUMENTOS del thread, y nada más. Los encabezados estuvieron aquí
+      // un rato y sobraban: el riel de la derecha ya es la tabla de contenidos
+      // —y además dice dónde vas leyendo, que un árbol no hace—, así que esto
+      // repetía el mismo índice con menos información y le robaba el sitio a lo
+      // único que esta columna contesta: qué archivos tiene este thread.
       children: [
-        {
-          id: 'doc',
-          name: title,
-          icon: FileTextIcon,
-          children: openPage ? undefined : nestHeadings(headings),
-        },
-        ...pages.map((p) => ({
-          id: `page:${p.path}`,
-          name: p.name,
-          icon: FileTextIcon,
-          children: openPage === p.path ? nestHeadings(headings) : undefined,
-        })),
+        { id: 'doc', name: title, icon: FileTextIcon },
+        ...pages.map((p) => ({ id: `page:${p.path}`, name: p.name, icon: FileTextIcon })),
       ],
     },
     ...(revisions.length

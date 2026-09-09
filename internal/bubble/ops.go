@@ -757,3 +757,131 @@ func RemovePath(app core.App, auth *core.Record, t *tree.Tree, ws *core.Record, 
 	}
 	return t.Remove(repo, doc, actorLabel(auth), "delete: "+doc)
 }
+
+// CreateWorkspace founds one, with everything founding means.
+//
+// This is the operation that most obviously cannot be "save a record": the web
+// door does three more things in hooks — stamp `repo_path` from the slug, write
+// the founding membership so the creator is its lead, and seed the workflow so
+// a thread has somewhere to be. Those hooks are on the REQUEST, and this door
+// does not go through one, so it would have produced a workspace with no
+// repository, no members and no states: visible to nobody, and unable to hold
+// work. All of it in one transaction, because a half-founded workspace is worse
+// than a refused one.
+func CreateWorkspace(app core.App, auth *core.Record, name, slug string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
+	name = strings.TrimSpace(name)
+	if name == "" {
+		return nil, fmt.Errorf("a workspace needs a name")
+	}
+	// The slug is its address on disk and in every URL, so it is derived from
+	// the name when one is not given — and never derived again afterwards.
+	slug = slugify(strings.TrimSpace(slug))
+	if slug == "" {
+		slug = slugify(name)
+	}
+	if slug == "" {
+		return nil, fmt.Errorf("that name leaves no slug — give one: letters, digits and dashes")
+	}
+
+	col, err := app.FindCollectionByNameOrId("workspaces")
+	if err != nil {
+		return nil, err
+	}
+	ws := core.NewRecord(col)
+	ws.Set("name", name)
+	ws.Set("slug", slug)
+	ws.Set("repo_path", slug)
+
+	err = app.RunInTransaction(func(tx core.App) error {
+		if err := tx.Save(ws); err != nil {
+			return err
+		}
+		memberships, err := tx.FindCollectionByNameOrId("memberships")
+		if err != nil {
+			return err
+		}
+		m := core.NewRecord(memberships)
+		m.Set("workspace", ws.Id)
+		m.Set("user", auth.Id)
+		m.Set("role", "lead")
+		if err := tx.Save(m); err != nil {
+			return err
+		}
+		return foundingStates(tx, ws.Id)
+	})
+	if err != nil {
+		return nil, err
+	}
+	return ws, nil
+}
+
+// Said is one comment, as anybody reads it.
+type Said struct {
+	ID     string `json:"id"`
+	Author string `json:"author,omitempty"`
+	Body   string `json:"body"`
+	At     string `json:"at"`
+}
+
+// Comments returns what has been said on a thread, oldest first: a conversation
+// is read downwards, and the last line is the one you were waiting for.
+func Comments(app core.App, auth *core.Record, threadID string) ([]Said, error) {
+	th, _, _, err := ThreadFor(app, auth, threadID)
+	if err != nil {
+		return nil, err
+	}
+	rows, err := app.FindRecordsByFilter("comments", "thread = {:t}", "created", 500, 0,
+		dbx.Params{"t": th.Id})
+	if err != nil {
+		return nil, err
+	}
+	out := make([]Said, 0, len(rows))
+	for _, c := range rows {
+		out = append(out, Said{
+			ID: c.Id, Author: c.GetString("author"), Body: c.GetString("body"),
+			At: c.GetDateTime("created").String(),
+		})
+	}
+	return out, nil
+}
+
+// Comment says something on a thread. Mirrors `comments.CreateRule` — any
+// member of its workspace — and stamps the author, so nobody signs as somebody
+// else.
+//
+// A comment is PULSE, never heat: the event it records keeps a thread out of the
+// grave and never wakes it. That distinction is the whole reason an agent may
+// comment freely: saying "I looked and found nothing" costs the model nothing,
+// while pretending it produced evidence would corrupt the one number this system
+// has.
+func Comment(app core.App, auth *core.Record, threadID, body string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
+	}
+	th, _, _, err := ThreadFor(app, auth, threadID)
+	if err != nil {
+		return nil, err
+	}
+	body = strings.TrimSpace(body)
+	if body == "" {
+		return nil, fmt.Errorf("a comment needs something in it")
+	}
+	col, err := app.FindCollectionByNameOrId("comments")
+	if err != nil {
+		return nil, err
+	}
+	r := core.NewRecord(col)
+	r.Set("thread", th.Id)
+	r.Set("author", auth.Id)
+	r.Set("body", body)
+	if err := app.Save(r); err != nil {
+		return nil, err
+	}
+	// The web door records this from a hook on the create; this door does not go
+	// through one, and a comment nobody recorded is a pulse the board cannot see.
+	record(app, th.GetString("workspace"), "thread", th.Id, EvComment, auth.Id, nil)
+	return r, nil
+}

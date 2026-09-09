@@ -38,15 +38,40 @@ func personCommand(app *pocketbase.PocketBase) *cobra.Command {
 				return err
 			}
 			r, err := app.FindAuthRecordByEmail("users", email)
-			if err != nil {
+			fresh := err != nil
+			if fresh {
 				r = core.NewRecord(col)
 				r.Set("email", email)
 			}
-			r.SetPassword(password)
-			r.Set("role", role)
+
+			// The password is written ONLY when it is actually different.
+			//
+			// `SetPassword` rotates the record's `tokenKey`, and that key is part
+			// of what signs its auth tokens — so re-applying the same password
+			// invalidates every token that person holds. `just dev` runs this on
+			// every start so a fresh clone can sign in, which meant every restart
+			// silently signed the operator out of the browser AND killed the token
+			// their agent was using. Nothing had changed; the write itself was the
+			// damage.
+			changed := fresh
+			if fresh || !r.ValidatePassword(password) {
+				r.SetPassword(password)
+				changed = true
+			}
+			if r.GetString("role") != role {
+				r.Set("role", role)
+				changed = true
+			}
 			// Verified, because this is somebody an operator is vouching for from
 			// the command line; an unverified account cannot sign in.
-			r.SetVerified(true)
+			if !r.Verified() {
+				r.SetVerified(true)
+				changed = true
+			}
+			if !changed {
+				fmt.Printf("person %q already as asked (role: %s)\n", email, role)
+				return nil
+			}
 			if err := app.Save(r); err != nil {
 				return err
 			}

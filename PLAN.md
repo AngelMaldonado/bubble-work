@@ -585,7 +585,7 @@ and wrong behind a reverse proxy, where every legitimate request looks exactly l
 that. v0 met it as `Forbidden: invalid Host header`, with the web UI fine and only
 agents locked out.
 
-**Eight more, later, because the first ten left an agent blind.** *(built)* It
+**Eleven more, later, because the first ten left an agent blind.** *(built)* It
 could write a document and nothing else: it could not say what the work is FOR,
 when it is due, who is accountable for the bubble around it, or read what had
 already happened to it — so it worked without context and asked a person for
@@ -594,7 +594,21 @@ who is accountable, closed with its sentence, reopened) · `set_thread` (bubble,
 objective, due date, impact and urgency — never priority, which is derived) ·
 `plan` (the department's objectives and inbox) · `capture` · `set_objective` ·
 `timeline` (what already happened, so the work is not done twice) ·
-`delete_page`.
+`delete_page` · `create_workspace` · `comments` and `comment`.
+
+Commenting is the one an agent should reach for often, and the reason is the
+model: a comment is PULSE, never heat. It keeps a thread out of the grave and
+does not wake it — so an agent can say what it found, or that it found nothing,
+without pretending it produced evidence. The alternative is an agent that either
+stays silent or inflates the one number this system has.
+
+`create_workspace` is the one that could not be "save a record": founding also
+stamps `repo_path`, writes the founding membership so the creator is its lead,
+and seeds the workflow — and all three live in hooks on the REQUEST, which this
+door does not go through. Written straight, it would have produced a workspace
+with no repository, no members and no states: visible to nobody and unable to
+hold work. One transaction, because a half-founded workspace is worse than a
+refused one.
 
 Every one is a plain function in `ops.go` that mirrors the collection rule it
 stands in for — `app.Save` does not know about rules, so each states which rule
@@ -769,6 +783,21 @@ minutes ago, which is activity, not attention. Also rejected for now: counting
 live SSE connections, which is truer and lives only in memory, so a restart says
 nobody is here.
 
+**One connection, many topics.** `lib/live.svelte.ts` owns the single
+`EventSource` and hands out `watch(topic, fn)`; presence was its first caller and
+comments its second. A stream per screen would mean two reconnection handlers,
+two "what did I miss" windows, and the browser counting connections against one
+origin. Two things it does that are easy to forget: the subscription carries the
+TOKEN while the EventSource is anonymous — so the client id is POSTed back, and
+since that id changes on every reconnect the send hangs off the connect message
+rather than off start-up — and a subscription begins at NOW, so every reconnect
+tells its watchers to re-read.
+
+Comments arrive live while the drawer is open, and the 💬 count moves while it is
+closed — knowing there is something new to read is half of what a count is for.
+Only while open: a stream held by a screen nobody is looking at is a connection
+the server keeps for nothing.
+
 Presence arrives over PocketBase's realtime stream, so somebody appears the
 moment they open the app. Three parts, and the third is the one a subscription
 cannot do: this tab beats, the stream brings everybody else's beats, and a local
@@ -813,6 +842,35 @@ NOMBRE de la persona, y dos personas a cargo cuyos nombres aún no habían carga
 llegaban como dos cadenas vacías — `each_key_duplicate`, actualización abortada,
 board que no vuelve a dibujarse. Ahora el error se ve en pantalla con su rastro,
 y la clave de ese `{#each}` incluye la posición.
+
+**Comments, in a drawer.** *(built)* The collection has existed since phase 1,
+with the rule that matters — the author owns what they said, so nobody, not even
+a lead, edits somebody else's words — and no surface. 💬 in the thread's HUD
+carries the count and opens the same drawer shape the bubble uses: reading a
+document and reading a conversation are different modes, and a panel that steals
+width from the text makes both worse.
+
+Skeleton's chat cookbook gave half of it — the stream and the composer pinned to
+the bottom — and the other half was dropped on purpose: its contacts column is
+our board, and its left/right bubbles encode "two parties talking", which a
+thread is not. Everyone is on the same side; what matters is who said it and
+when. Bodies are markdown rendered by the SERVER, like every other document here.
+
+**Lo dicho, dicho.** Comments are append-only: `update` and `delete` are nil for
+everyone, the author included. A thread's hilo is not a chat — it is the record
+of a conversation about work, and its whole value is being readable later to
+understand why something was decided. A thread where sentences change or vanish
+stops answering that, and the worst part is not the deleted line: it is that the
+replies left behind now answer something that is not there. Nil rather than
+"only the lead", because handing it to the lead makes the record something that
+can be tidied from above, which is the same problem wearing a badge. Correcting
+what was said is saying another thing, underneath — which is also how it works
+away from a screen.
+
+The drawer says the thing the model is most often misread on: **commenting does
+not warm the thread — it keeps its pulse.** Without that sentence the first
+instinct is to comment so something "stays alive", which is exactly what the
+model refuses to reward.
 
 **Attaching, from where the writing happens.** *(built)* `POST …/asset` has
 existed since phase 1 and nothing in the product called it: a thread could hold a

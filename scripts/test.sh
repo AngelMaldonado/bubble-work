@@ -88,6 +88,16 @@ if [ -n "$AID" ] && [ -n "$BID" ] && [ -n "$CID" ]; then ok "users acepta displa
 A=$(login alice@bubble.test); B=$(login bob@bubble.test); C=$(login carol@bubble.test)
 if [ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ]; then ok "alice, bob y carol autentican"; else no "login" "vacío"; fi
 
+# Reaplicar la MISMA contraseña no debe tocar nada: `SetPassword` rota el
+# `tokenKey`, que es parte de lo que firma los tokens de esa persona, y
+# `just dev` corre esto en cada arranque. Sin este cuidado, cada reinicio sacaba
+# al operador de su navegador y mataba el token que estuviera usando su agente,
+# sin que nada hubiera cambiado.
+# `$B` ya no es el binario a esta altura del archivo — es el token de bob.
+./dist/bubble person alice@bubble.test passwordpass member --dir "$D" >/dev/null 2>&1
+chk ">>> reaplicar la misma contraseña NO invalida los tokens vivos" \
+  "$(code "$API/api/collections/workspaces/records" -H "Authorization: $A")" 200
+
 ALPHA=$(post workspaces "$A" '{"name":"Alpha","slug":"alpha"}' | j "['id']")
 BETA=$(post  workspaces "$B" '{"name":"Beta","slug":"beta"}'   | j "['id']")
 if [ -n "$ALPHA" ] && [ -n "$BETA" ]; then ok "alice y bob crean workspace"; else no "crear workspace" "$ALPHA/$BETA"; fi
@@ -179,10 +189,18 @@ chk "anónimo no ve threads" "$(curl -s "$API/api/collections/threads/records" |
 C1=$(post comments "$B" "{\"thread\":\"$T1ID\",\"author\":\"$AID\",\"body\":\"firmado como alice\"}")
 chk ">>> el comentario de bob queda firmado por BOB aunque pidió alice" "$(echo "$C1"|j "['author']")" "$BID"
 C1ID=$(echo "$C1"|j "['id']")
+# Lo dicho, dicho: el hilo es un registro al que se AGREGA. Ni el autor lo
+# reescribe — un hilo donde las frases cambian deja de servir para entender por
+# qué se decidió algo, y las respuestas quedan contestando a lo que ya no está.
+# 403 y no 404, y la diferencia dice algo: un 404 es "no hay regla que te
+# incluya" y esconde si la fila existe; un 403 es "esta puerta está cerrada para
+# todos", que es exactamente lo que pasa aquí.
 chk ">>> alice no puede editar el comentario de bob" \
-  "$(code -X PATCH "$API/api/collections/comments/records/$C1ID" -H "Authorization: $A" -H "$JS" -d '{"body":"editado"}')" 404
-chk "bob sí puede editar el suyo" \
-  "$(code -X PATCH "$API/api/collections/comments/records/$C1ID" -H "Authorization: $B" -H "$JS" -d '{"body":"editado"}')" 200
+  "$(code -X PATCH "$API/api/collections/comments/records/$C1ID" -H "Authorization: $A" -H "$JS" -d '{"body":"editado"}')" 403
+chk ">>> ni bob el suyo: los comentarios se escriben, no se reescriben" \
+  "$(code -X PATCH "$API/api/collections/comments/records/$C1ID" -H "Authorization: $B" -H "$JS" -d '{"body":"editado"}')" 403
+chk ">>> y nadie los borra" \
+  "$(code -X DELETE "$API/api/collections/comments/records/$C1ID" -H "Authorization: $B")" 403
 
 L1=$(post thread_links "$B" "{\"thread\":\"$T1ID\",\"url\":\"https://example.com/pr/1\",\"title\":\"PR\",\"added_by\":\"$AID\"}")
 chk "el link queda a nombre de quien lo puso, no de quien dijo" "$(echo "$L1"|j "['added_by']")" "$BID"
@@ -701,7 +719,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "board,capture,complete_thread,create_bubble,create_thread,delete_page,edit,guide,link,plan,read,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,link,plan,read,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
 chk ">>> la guía es prompt Y tool (no todo cliente lista prompts)" \
   "$(mcp "$A" "prompts/list" "{}" | python3 -c 'import sys,json
 print(",".join(p["name"] for p in json.load(sys.stdin)["result"]["prompts"]))')" bubble-work
@@ -766,6 +784,21 @@ chk ">>> erin no alcanza el thread por MCP" \
 # se come el escape de las comillas y el JSON llega roto; el servidor contesta
 # "malformed payload" y la prueba parece pasar contra la nada.
 echo
+# Fundar por MCP tiene que hacer TODO lo que fundar significa: repositorio,
+# membresía de quien funda, y el flujo de trabajo. Los ganchos que hacen eso en
+# la web cuelgan de la PETICIÓN, y esta puerta no pasa por una.
+ARG="{\"name\":\"Laboratorio\"}"
+NWS=$(mcptext "$B" create_workspace "$ARG" | j "['slug']")
+chk ">>> un agente funda un workspace" "$NWS" laboratorio
+chk ">>> ...y queda como su lead" \
+  "$(curl -s "$API/api/collections/memberships/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace.slug='laboratorio'\"))")" \
+     -H "Authorization: $B" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["items"][0]["role"] if d["items"] else "sin membresía")')" lead
+chk ">>> ...con su flujo de trabajo, o un thread no tendría dónde estar" \
+  "$(curl -s "$API/api/collections/states/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace.slug='laboratorio'\"))")" \
+     -H "Authorization: $B" | j "['totalItems']")" 3
+chk ">>> ...y alice no lo ve: fundar no lo hace de todos" \
+  "$(mcptext "$A" tree "{\"workspace\":\"laboratorio\"}" | grep -c "not found")" 1
+
 ARG="{\"workspace\":\"alpha\",\"name\":\"Portal\",\"outcome\":\"la gente entra sin pedir ayuda\"}"
 NBUB=$(mcptext "$A" create_bubble "$ARG" | j "['id']")
 chk ">>> un agente crea una burbuja con su outcome" "$([ -n "$NBUB" ] && echo si || echo no)" si
@@ -805,6 +838,24 @@ chk ">>> ...quien no lo es ve el plan sin objetivos" \
   "$(mcptext "$A" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]))')" 0
 chk ">>> ...pero sí la nota que capturó" \
   "$(mcptext "$B" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["inbox"]) >= 1)')" True
+
+# Comentar es PULSO: mantiene al thread fuera de la tumba y NO lo calienta. Es
+# justo lo que permite que un agente diga "busqué y no había nada" sin fingir
+# que produjo evidencia.
+ARG="{\"thread\":\"$NTID\",\"body\":\"Revisé el log y no encontré el error\"}"
+chk ">>> un agente comenta" \
+  "$(mcptext "$A" comment "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> ...y lee el hilo" \
+  "$(mcptext "$A" comments "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)) >= 1)')" True
+chk ">>> comentar NO calienta: queda como pulso" \
+  "$(mcptext "$A" board "{\"workspace\":\"alpha\"}" | python3 -c 'import sys,json
+t=next(x for x in json.load(sys.stdin)["threads"] if x["id"]=="'"$NTID"'")
+print("si" if t["pulse"] else t)')" si
+chk ">>> el stream filtra por la regla: erin no recibe lo que no puede leer" \
+  "$(curl -s "$API/api/collections/comments/records?perPage=1" -H "Authorization: $ER" | j "['totalItems']")" 0
+chk ">>> erin no comenta en un thread que no alcanza" \
+  "$(mcptext "$ER" comment "{\"thread\":\"$NTID\",\"body\":\"hola\"}" | grep -c "not found")" 1
 
 ARG="{\"thread\":\"$NTID\"}"
 chk ">>> timeline: qué le pasó al thread y cuándo" \

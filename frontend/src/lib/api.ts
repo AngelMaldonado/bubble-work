@@ -104,6 +104,19 @@ export type Member = {
   role: 'lead' | 'member';
 };
 
+/** Lo que alguien dijo en un thread. El cuerpo es markdown: lo renderiza el
+ *  mismo servidor que el documento, porque dos renderers coinciden hasta que
+ *  dejan de hacerlo. */
+export type Comment = {
+  id: string;
+  thread: string;
+  author: string;
+  name: string;
+  body: string;
+  created: string;
+  mine: boolean;
+};
+
 export type Doc = {
   workspace: string;
   path: string;
@@ -349,6 +362,35 @@ class Api {
       '/api/collections/users/records?perPage=500&sort=display_name,email',
     );
     return out.items;
+  }
+
+  /** Lo dicho en un thread, del más viejo al más nuevo: una conversación se lee
+   *  hacia abajo, y la última línea es la que estabas esperando. */
+  async comments(thread: string): Promise<Comment[]> {
+    const out = await this.call<{
+      items: {
+        id: string; thread: string; author: string; body: string; created: string;
+        expand?: { author?: { display_name?: string; email?: string } };
+      }[];
+    }>(
+      `/api/collections/comments/records?perPage=500&sort=created&expand=author` +
+        `&filter=${encodeURIComponent(`thread='${thread}'`)}`,
+    );
+    return out.items.map((c) => ({
+      id: c.id,
+      thread: c.thread,
+      author: c.author,
+      name: c.expand?.author?.display_name || c.expand?.author?.email || 'alguien',
+      body: c.body,
+      created: c.created,
+      mine: c.author === this.me?.id,
+    }));
+  }
+
+  /** El autor NO se manda: lo estampa el servidor, y por eso nadie firma como
+   *  otro. Mandarlo desde aquí sería pedir permiso para algo ya decidido. */
+  comment(thread: string, body: string) {
+    return this.create<{ id: string }>('comments', { thread, body });
   }
 
   /** "Sigo aquí." The server stamps the time; this only says who asked. */

@@ -13,6 +13,8 @@
   import { bandName } from '../lib/bands';
   import ThreadView from './ThreadView.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
+  import Comments from './Comments.svelte';
+  import { live } from '../lib/live.svelte';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
 
   let {
@@ -40,6 +42,30 @@
     workspace.id;
     api.states(workspace.id).then((x) => (states = x)).catch(() => {});
     api.bubbles(workspace.id).then((x) => (bubbles = x)).catch(() => {});
+  });
+
+  // Los comentarios. El conteo se lee al abrir el thread para poder ponerlo en
+  // el verbo: obligar a abrir el cajón para saber si hay algo que leer es
+  // exactamente lo que un contador evita.
+  let talking = $state(false);
+  let talk = $state(0);
+  async function countTalk() {
+    try {
+      talk = (await api.comments(thread.id)).length;
+    } catch {
+      talk = 0;
+    }
+  }
+  $effect(() => {
+    thread.id;
+    countTalk();
+    // El contador se mueve aunque el cajón esté cerrado: saber que hay algo
+    // nuevo que leer es la mitad del valor de un contador.
+    return live.watch('comments', (data) => {
+      const rec = (data as { record?: { thread?: string } } | null)?.record;
+      if (rec?.thread && rec.thread !== thread.id) return;
+      countTalk();
+    });
   });
 
   let moving = $state(false);
@@ -250,7 +276,18 @@
     onfinish={thread.heat.lifecycle === 'closed' ? undefined : () => setState(completedState)}
     onreopen={thread.heat.lifecycle === 'closed' ? () => setState(openState) : undefined}
     onmove={() => (moving = true)}
-    ondelete={() => (doomed = true)} />
+    ondelete={() => (doomed = true)}
+    {talk}
+    ontalk={() => (talking = true)} />
+
+  <!-- Comentar es PULSO, no calor: mantiene al thread fuera de la tumba y no lo
+       despierta. Por eso al decir algo se vuelve a pedir el board —el pulso
+       cambió— y el documento no se toca. -->
+  <Comments
+    bind:open={talking}
+    thread={thread.id}
+    title="#{thread.seq} · {thread.name}"
+    onposted={() => { countTalk(); onchanged?.(); }} />
 
   {#if moving}
     <Dialog open onOpenChange={() => (moving = false)}>

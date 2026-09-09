@@ -12,13 +12,16 @@
 
   let {
     workspace,
-    path = $bindable('README.md'),
+    path = 'README.md',
     onback,
+    onopen,
     onsearch,
   }: {
     workspace: Workspace;
     path?: string;
     onback?: () => void;
+    /** which page to go to. The caller owns it, because the page is in the URL */
+    onopen?: (page: string) => void;
     onsearch?: () => void;
   } = $props();
 
@@ -99,6 +102,6 @@
     onopen={(id) => {
       // A folder's row is not a page. Zag reports the selection either way, so
       // the filter lives here rather than in the tree.
-      if (!id.startsWith('d:')) path = id;
+      if (!id.startsWith('d:')) onopen?.(id);
     }} />
 {/if}

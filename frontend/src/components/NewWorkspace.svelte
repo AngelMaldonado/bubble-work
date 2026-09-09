@@ -44,13 +44,13 @@
   <div class="flex flex-wrap gap-3">
     <label class="min-w-48 flex-1 text-sm">
       <span class="muted">Nombre</span>
-      <input
+      <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
         class="input mt-1"
         bind:value={name} required />
     </label>
     <label class="min-w-48 flex-1 text-sm">
       <span class="muted">Slug</span>
-      <input
+      <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
         class="input mt-1 font-mono text-sm"
         bind:value={slug} oninput={() => (touched = true)}
         pattern="[a-z0-9]+(-[a-z0-9]+)*" required />

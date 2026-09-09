@@ -42,18 +42,18 @@
     { k: 'listWeek', label: 'agenda' },
   ];
 
-  // `events` is read once, on purpose: the calendar owns its copy from then on,
-  // because dragging an event edits it in place and a re-derive would undo the
-  // move the moment the parent re-rendered.
+  const shape = (list: CalEvent[]) =>
+    list.map((e) => ({
+      id: e.id,
+      title: e.title,
+      start: e.start,
+      end: e.end ?? e.start,
+      allDay: e.allDay ?? true,
+      extendedProps: { prio: e.prio },
+    }));
+
   // svelte-ignore state_referenced_locally
-  const seeded = events.map((e) => ({
-    id: e.id,
-    title: e.title,
-    start: e.start,
-    end: e.end ?? e.start,
-    allDay: e.allDay ?? true,
-    extendedProps: { prio: e.prio },
-  }));
+  const seeded = shape(events);
 
   let options = $state({
     view,
@@ -71,6 +71,25 @@
     // Its ids are `string | number`; ours are strings, so it is coerced at the
     // boundary rather than everywhere downstream.
     eventClick: (info: { event: { id: string | number } }) => onpick?.(String(info.event.id)),
+  });
+
+  // …and kept in step afterwards.
+  //
+  // This used to read `events` once and never again, which was right for a mock
+  // whose only source of change was dragging inside the calendar. Against a
+  // server it is wrong in the plainest way: a date set in a card was written,
+  // reloaded, and never reached the calendar that exists to show it.
+  //
+  // Compared as text rather than by identity: the parent rebuilds this list on
+  // every reload, so identity always differs and assigning on identity would
+  // reset the calendar under the pointer.
+  let last = JSON.stringify(seeded);
+  $effect(() => {
+    const next = shape(events);
+    const text = JSON.stringify(next);
+    if (text === last) return;
+    last = text;
+    options.events = next;
   });
 
   function go(next: string) {

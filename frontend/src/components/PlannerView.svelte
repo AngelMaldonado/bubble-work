@@ -29,7 +29,7 @@
   export type Priority = [string, string, string, string];
 
   let {
-    workspace,
+    workspace = '',
     columns = $bindable([]),
     inbox = $bindable([]),
     events = [],
@@ -49,9 +49,15 @@
     onaddobjective,
     ondeleteobjective,
     onpatchcard,
+    onaddcolumn,
+    onrenamecolumn,
+    ondeletecolumn,
     choosePriority = true,
   }: {
-    workspace: string;
+    /** Whose plan this is, shown top right. Empty in the real planner: the plan
+     *  is the department's, and a project's name up there says it is that
+     *  project's — which is exactly what it is not. */
+    workspace?: string;
     /** One board, whose columns are yours to define. More than one board is a
      *  question for when a single one is actually in the way. */
     columns?: Column[];
@@ -81,15 +87,44 @@
     onaddobjective?: (name: string) => void;
     ondeleteobjective?: (n: number) => void;
     onpatchcard?: (id: string, fields: Record<string, unknown>) => void;
+    /** the columns, when they are rows somebody owns — see Kanban */
+    onaddcolumn?: () => void;
+    onrenamecolumn?: (id: string, name: string) => void;
+    ondeletecolumn?: (id: string) => void;
     /** passed through to the card sheet — see there */
     choosePriority?: boolean;
   } = $props();
 
   // The kanban is on by default and cannot be the only thing turned off: it is
   // the view, not a panel of it.
-  let showInbox = $state(false);
-  let showCal = $state(false);
-  let showBoard = $state(true);
+  //
+  // Remembered per browser, because which panes you keep open is a working
+  // habit rather than a setting: somebody who plans with the inbox beside the
+  // board should not turn it on every morning. Local, not on the server — it is
+  // about this screen on this machine, and it is not worth a round trip.
+  const PANES = 'bubble.planner.panes';
+  const kept = (() => {
+    try {
+      return JSON.parse(localStorage.getItem(PANES) ?? 'null') as
+        | { inbox: boolean; cal: boolean; board: boolean }
+        | null;
+    } catch {
+      return null; // private mode, or something else wrote nonsense there
+    }
+  })();
+  let showInbox = $state(kept?.inbox ?? false);
+  let showCal = $state(kept?.cal ?? false);
+  let showBoard = $state(kept?.board ?? true);
+  $effect(() => {
+    try {
+      localStorage.setItem(
+        PANES,
+        JSON.stringify({ inbox: showInbox, cal: showCal, board: showBoard }),
+      );
+    } catch {
+      // not being able to remember it is not a reason to refuse the change
+    }
+  });
 
   // The card being read. It is the SAME object the board holds, not a copy, so
   // editing the sheet moves the board underneath it — which is the point.
@@ -99,19 +134,28 @@
   let openIn = $state('');
   let cardOpen = $state(false);
 
-  // Fill in what the open card did not have yet.
+  // Keep the open card in step with the server.
   //
-  // With a server behind this screen the description arrives AFTER the sheet
-  // opened — it is the thread's document, fetched on the click. So take it when
-  // it lands, and take nothing else: replacing the whole card with the freshly
-  // loaded one put the SERVER's title back into the field mid-word, and the
-  // rename that followed saved the old name. Measured in a browser, not
-  // reasoned about. In the mock the object is already the one being edited, so
-  // this finds nothing to fill and does nothing.
+  // Every edit here goes out and comes back: the write lands, the board is
+  // asked again, and `columns` is rebuilt from the answer. The sheet is holding
+  // the OLD object, so without this a priority you just set showed up on the
+  // board behind and not in the card in front of you.
+  //
+  // What is not refreshed is text being typed. Replacing the whole card mid-word
+  // put the server's title back into the field and the rename that followed
+  // saved the old name — measured, and the reason this is a merge rather than an
+  // assignment. `writing` is the sheet saying so.
+  let writing = $state(false);
   $effect(() => {
     if (!open) return;
     const fresh = columns.flatMap((c) => c.cards).find((c) => c.id === open!.id);
-    if (fresh && fresh.notes !== undefined && open.notes === undefined) open.notes = fresh.notes;
+    if (!fresh) return;
+    for (const k of ['obj', 'prio', 'due', 'impact', 'urgency'] as const) {
+      if (open[k] !== fresh[k]) (open as Card)[k] = fresh[k] as never;
+    }
+    if (writing) return;
+    if (open.title !== fresh.title) open.title = fresh.title;
+    if (fresh.notes !== undefined && open.notes !== fresh.notes) open.notes = fresh.notes;
   });
 
   function moveCard(cardId: string, to: string) {
@@ -226,7 +270,7 @@
     </button>
     <h2 class="ttl">Planeador</h2>
 
-    <span class="ws">{workspace}</span>
+    {#if workspace}<span class="ws">{workspace}</span>{/if}
   </div>
 
   <div class="panes">
@@ -237,7 +281,7 @@
              into; asking somebody to press "+" before they can type is asking
              them to decide they are capturing something. -->
         <form onsubmit={capture}>
-          <input bind:value={draft} placeholder="Escribe y Enter…" />
+          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={draft} placeholder="Escribe y Enter…" />
         </form>
         <ul class="items" style={inboxFade.style} {@attach inboxFade.attach}>
           {#each inbox as it (it.id)}
@@ -269,7 +313,10 @@
             cardOpen = true;
             onopencard?.(c);
           }}
-          onadd={addCard} />
+          onadd={addCard}
+          {onaddcolumn}
+          {onrenamecolumn}
+          {ondeletecolumn} />
       </section>
     {/if}
 
@@ -331,6 +378,7 @@
   onmove={moveCard}
   ondelete={dropCard}
   onpatch={onpatchcard}
+  bind:writing
   {choosePriority} />
 
 <InboxSheet
@@ -344,7 +392,7 @@
 <Dialog open={objOpen} onOpenChange={(e: { open: boolean }) => (objOpen = e.open)}>
   <Portal>
     <Dialog.Backdrop
-      class="fixed inset-0 bg-surface-50-950/50"
+      class="scrim"
       style="z-index: var(--z-drawer-scrim)" />
     <Dialog.Positioner
       class="fixed inset-0 flex items-start justify-center overflow-y-auto p-4 pt-[8vh]"
@@ -366,8 +414,8 @@
             <li>
               <span class="n">{o.n}</span>
               <span class="fields">
-                <input bind:value={o.name} placeholder="nombre" />
-                <input class="why" bind:value={o.why} placeholder="por qué existe" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={o.name} placeholder="nombre" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="why" bind:value={o.why} placeholder="por qué existe" />
               </span>
               <button class="x" onclick={() => dropObjective(o.n)} aria-label="eliminar">×</button>
             </li>
@@ -383,7 +431,7 @@
 <Dialog open={prioOpen} onOpenChange={(e: { open: boolean }) => (prioOpen = e.open)}>
   <Portal>
     <Dialog.Backdrop
-      class="fixed inset-0 bg-surface-50-950/50"
+      class="scrim"
       style="z-index: var(--z-drawer-scrim)" />
     <Dialog.Positioner
       class="fixed inset-0 flex items-start justify-center overflow-y-auto p-4 pt-[8vh]"
@@ -405,9 +453,9 @@
             <li>
               <span class="prio-chip prio-{p[0]}">{p[0]}</span>
               <span class="fields">
-                <input bind:value={priorities[i][1]} placeholder="nombre" />
-                <input class="why" bind:value={priorities[i][2]} placeholder="qué significa" />
-                <input class="why" bind:value={priorities[i][3]} placeholder="qué sucede" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={priorities[i][1]} placeholder="nombre" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="why" bind:value={priorities[i][2]} placeholder="qué significa" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="why" bind:value={priorities[i][3]} placeholder="qué sucede" />
               </span>
               <button
                 class="x"

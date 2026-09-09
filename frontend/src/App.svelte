@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type Board as BoardData, type ThreadHeat, type Workspace } from './lib/api';
+  import { boardUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
@@ -15,20 +16,36 @@
   import MockPage from './components/MockPage.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
 
-  // Routing, such as it is. One extra page does not need a router, and the
-  // server already serves index.html for any unknown path. When there are three
-  // of these, replace this with something that deserves the name.
+  // The address IS the screen. `lib/routes.ts` says what each one looks like;
+  // here it is only read, and every navigation goes through `go`.
   let path = $state(location.pathname);
   addEventListener('popstate', () => (path = location.pathname));
-  function go(to: string) {
-    history.pushState({}, '', to);
+  function go(to: string, replace = false) {
+    if (to === location.pathname) return;
+    history[replace ? 'replaceState' : 'pushState']({}, '', to);
     path = to;
   }
+  const route = $derived(parse(path));
 
   let ready = $state(false);
   let signedIn = $state(false);
   let workspaces = $state<Workspace[]>([]);
-  let current = $state<Workspace | null>(null);
+
+  // Which workspace is on screen is a question the address answers. Landing on
+  // `/` with no slug picks the first one and REPLACES the entry, so the back
+  // button does not walk through a redirect nobody typed.
+  const current = $derived(
+    ('slug' in route ? workspaces.find((w) => w.slug === route.slug) : null) ?? workspaces[0] ?? null,
+  );
+  // Only a BOARD with no slug gets filled in. Asking "does this route carry a
+  // slug?" caught `/planeador` and `/theme` too, and sent them straight back to
+  // the board — the planner button looked like it did nothing, because the
+  // address it set was rewritten before the screen could draw.
+  $effect(() => {
+    if (ready && signedIn && current && route.kind === 'board' && !route.slug) {
+      go(boardUrl(current.slug), true);
+    }
+  });
   // The box that scrolls. The minimap needs it: the shell holds still and the
   // pane moves, so a spy listening to the window sees a page that never scrolls.
   let paneEl = $state<HTMLElement | null>(null);
@@ -36,27 +53,51 @@
   async function boot() {
     const me = await api.refresh();
     signedIn = !!me;
-    if (signedIn) {
-      workspaces = await api.workspaces();
-      // Keep the one being looked at across a reload of the list.
-      current = workspaces.find((w) => w.id === current?.id) ?? workspaces[0] ?? null;
-    }
+    if (signedIn) workspaces = await api.workspaces();
     ready = true;
   }
   boot();
 
-  // The thread being read. A view rather than a route for now: the board is
-  // still underneath it, and coming back has to cost nothing.
-  let open = $state<ThreadHeat | null>(null);
-  // Bumped when a thread closes, to remount the board. Writing warms a bubble,
-  // so the board that was true when the thread opened is stale by then — and
-  // heat is the server's answer, never one the browser recomputes.
-  let visit = $state(0);
+  // ---- the board, fetched HERE ---------------------------------------------
+  //
+  // One copy, above every screen that needs it: the board draws it, the omnibar
+  // searches it, and a link straight to `/w/alpha/t/14` has to resolve `#14`
+  // into a thread before the board component is even on the page. Refetched
+  // rather than recomputed — heat is a pure function of evidence and TIME, and
+  // the server holds both.
+  let board = $state<BoardData | null>(null);
+  let loadingBoard = $state(false);
+  async function loadBoard() {
+    const ws = current;
+    if (!ws) return;
+    loadingBoard = true;
+    try {
+      board = await api.board(ws.id);
+      error = '';
+    } catch (e) {
+      error = (e as Error).message;
+    } finally {
+      loadingBoard = false;
+    }
+  }
+  $effect(() => {
+    current?.id;
+    board = null;
+    loadBoard();
+  });
+
+  // The thread being read, resolved from the seq in the address. Null while the
+  // board is still on its way — which is what makes a pasted link work.
+  const open = $derived(
+    route.kind === 'thread' ? (board?.threads.find((t) => t.seq === route.seq) ?? null) : null,
+  );
+
+  /** Back to the board, and ask the server what it says now: writing in a
+   *  thread warms its bubble, so the board that was true when it opened is not
+   *  any more. */
   function back() {
-    open = null;
-    wiki = null;
-    planner = false;
-    visit += 1;
+    if (current) go(boardUrl(current.slug));
+    loadBoard();
   }
 
   // ---- the workspaces in the column ----------------------------------------
@@ -70,7 +111,9 @@
     try {
       const made = await api.createWorkspace(name, slug);
       workspaces = [...workspaces, made];
-      current = made;
+      // Go to it. Which workspace is on screen is the address's answer now, so
+      // a new one is somewhere you navigate rather than a variable you set.
+      go(boardUrl(made.slug));
       return made.id; // the column names it in place
     } catch (e) {
       error = (e as Error).message;
@@ -80,8 +123,8 @@
   async function renameWorkspace(id: string, name: string) {
     try {
       const out = await api.renameWorkspace(id, name);
+      // The slug does not change with the name, so the address stays valid.
       workspaces = workspaces.map((w) => (w.id === id ? out : w));
-      if (current?.id === id) current = out;
     } catch (e) {
       error = (e as Error).message;
     }
@@ -103,8 +146,9 @@
     if (!id) return;
     try {
       await api.deleteWorkspace(id);
+      const gone = current?.id === id;
       workspaces = workspaces.filter((w) => w.id !== id);
-      if (current?.id === id) current = workspaces[0] ?? null;
+      if (gone && workspaces[0]) go(boardUrl(workspaces[0].slug), true);
     } catch (e) {
       error = (e as Error).message;
     }
@@ -117,17 +161,11 @@
   // The planner. A view like the others, and only for a lead: planning is the
   // strategic layer's job, and a screen full of verbs somebody cannot use reads
   // as a broken screen rather than as one that is not theirs.
-  let planner = $state(false);
   const isLead = $derived(api.me?.role === 'lead');
-  function openPlanner() {
-    open = null;
-    wiki = null;
-    planner = true;
-  }
+  const openPlanner = () => go(plannerUrl);
 
-  // The wiki, by path. `null` is "not looking at it" rather than a separate
-  // flag, so there is one place that says which page is on screen.
-  let wiki = $state<string | null>(null);
+  const openWiki = (page: string) => current && go(wikiUrl(current.slug, page));
+  const openThread = (t: ThreadHeat) => current && go(threadUrl(current.slug, t.seq));
 
   // ---- the omnibar -----------------------------------------------------------
   //
@@ -136,7 +174,6 @@
   // thread called X" and "find where it says X" are the same question asked
   // with different confidence.
   let omni = $state(false);
-  let board = $state<BoardData | null>(null);
   let found = $state<Hit[]>([]);
   let searching = $state(false);
 
@@ -201,18 +238,6 @@
     }
   }
 
-  function openWiki(page: string) {
-    open = null;
-    planner = false;
-    wiki = page;
-  }
-
-  function openThread(t: ThreadHeat) {
-    wiki = null;
-    planner = false;
-    open = t;
-  }
-
   function pick(hit: Hit) {
     const [what, ...rest] = hit.id.split(':');
     const rest0 = rest.join(':');
@@ -265,16 +290,33 @@
     <button class="btn btn-sm preset-tonal-surface" onclick={() => go('/')}>← volver</button>
   </div>
   <ThemePage />
-{:else if open}
+{:else if route.kind === 'planner'}
+  <!-- The strategic layer gets a screen, not a tab inside the operative one —
+       and no workspace: the plan is the department's, not this project's. -->
+  <Planner onback={back} onsearch={() => (omni = true)} />
+{:else if route.kind === 'thread'}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
-       noise while reading. -->
-  <Thread thread={open} onback={back} onsearch={() => (omni = true)} />
-{:else if planner && current}
-  <!-- The strategic layer gets a screen, not a tab inside the operative one. -->
-  <Planner workspace={current} onback={back} onsearch={() => (omni = true)} />
-{:else if wiki && current}
+       noise while reading. It is resolved from the address, so this is also
+       what a pasted link lands on — and while the board is on its way there is
+       nothing to draw but the wait. -->
+  {#if open}
+    <Thread thread={open} onback={back} onsearch={() => (omni = true)} />
+  {:else if loadingBoard || !board}
+    <p class="faint p-6 text-sm">…</p>
+  {:else}
+    <p class="card glass m-6 p-4 text-sm">
+      No hay un thread #{route.seq} en {current?.name ?? 'este workspace'}.
+      <button class="link" onclick={back}>volver al board</button>
+    </p>
+  {/if}
+{:else if route.kind === 'wiki' && current}
   <!-- The wiki wears the thread's shell: same bar, same way back. -->
-  <Wiki workspace={current} bind:path={wiki} onback={back} onsearch={() => (omni = true)} />
+  <Wiki
+    workspace={current}
+    path={route.page}
+    onback={back}
+    onopen={(page) => openWiki(page)}
+    onsearch={() => (omni = true)} />
 {:else if !ready}
   <p class="faint p-6 text-sm">…</p>
 {:else if !signedIn}
@@ -295,17 +337,20 @@
     label="Workspaces"
     newLabel="Nuevo"
     bind:pane={paneEl}
-    onselect={(id) => (current = workspaces.find((w) => w.id === id) ?? current)}
+    onselect={(id) => {
+      const w = workspaces.find((x) => x.id === id);
+      if (w) go(boardUrl(w.slug));
+    }}
     onrename={renameWorkspace}
     ondelete={deleteWorkspace}
     oncreate={createWorkspace}>
     {#if current}
-      {#key visit}
-        <!-- The board's data is lifted here as it lands: the omnibar searches
-             what is on screen, and two fetches of the same board could disagree
-             about what is on it. -->
-        <Board workspace={current} onOpen={openThread} onload={(b) => (board = b)} scroller={paneEl} />
-      {/key}
+      <Board
+        workspace={current}
+        {board}
+        onOpen={openThread}
+        onreload={loadBoard}
+        scroller={paneEl} />
     {/if}
   </Shell>
 
@@ -366,7 +411,7 @@
 {#if doomed}
   <Dialog open onOpenChange={() => (doomed = null)}>
     <Portal>
-      <Dialog.Backdrop class="fixed inset-0 bg-surface-50-950/50" style="z-index: var(--z-drawer-scrim)" />
+      <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
       <Dialog.Positioner
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">

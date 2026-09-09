@@ -712,9 +712,16 @@ the board keeps its own. Drag and drop is `@atlaskit/pragmatic-drag-and-drop`
 **5a — what the planner needs, and nothing more.** *(built, server side)* Two
 collections, and the decision that matters is what is NOT here: a card. A
 planner with cards of its own is a second inventory of work beside the threads,
-and two lists of the same work disagree by Thursday. So the kanban's columns are
-the `states` a workspace already defines, what moves across them is a THREAD,
-and the calendar reads `threads.due_date`, which has existed since phase 1.
+and two lists of the same work disagree by Thursday. What moves across the kanban
+is a THREAD, its columns are the OBJECTIVES — which is what this plan asked for
+from the start, "the high-level kanban by objective" — and the calendar reads
+`threads.due_date`, which has existed since phase 1.
+
+A first cut made the columns the workspace's `states`, and that quietly turned
+the strategic screen into a second operative board: moving a card there answered
+"how is it going", which the buoyancy board already answers. By objective it
+answers "what is this FOR", and the first column is the work nobody answered
+for — which is the sentence the objectives dialog was already making.
 
   · `objectives` — the strategic layer, carrying the same word a bubble uses:
     an `outcome`, what is true when it is done. A thread points at one
@@ -750,6 +757,14 @@ The workspace boundary got the same hole checked one collection over: a thread
 may not point at an objective from another workspace, the way it may not be
 filed into another workspace's bubble. Same guard, now written once for both.
 
+**The URL is the screen.** `lib/routes.ts`: `/w/{slug}` a board, `/w/{slug}/t/{seq}`
+a thread, `/w/{slug}/wiki/{path}` a page, `/planeador` the planner. Slug and seq
+rather than ids — both are what people already say out loud, and an id in an
+address is a string nobody can check against what they are looking at. Reloading
+lands where you were and a pasted link opens what it says, which is why the board
+is fetched ABOVE the screens: `/w/alpha/t/14` has to resolve `#14` before the
+board component exists.
+
 **5b — the planner, wired.** *(built)* `Planner.svelte` owns the data and every
 write; `PlannerView` still draws, and still draws the mock. The translation is
 the whole of it — column → `state`, card → THREAD, due → `due_date`, inbox →
@@ -763,9 +778,13 @@ Every write reloads instead of patching the local copy: the server decides the
 seq, the default state and what a rule refuses, and guessing all three in the
 browser is how two views of one board start disagreeing.
 
-The screen reads as the department's plan with one project's work under it: the
-objectives and the inbox come from the department, the board below them is this
-workspace's.
+Nothing on the screen is scoped to a workspace: the objectives, the inbox and the
+threads under them are the department's. A card carries the name of the project
+it lives in, because on a board that spans the department two cards called
+"Facturación" are two different pieces of work. What still needs a workspace is
+CREATING one — a thread has to live somewhere, and the department is not a place
+— so a new card is born in the workspace whose board the planner was opened
+from.
 
 The mock keeps its local behaviour precisely because it passes none of the write
 callbacks — one component, two owners of the data, no second copy of the screen.

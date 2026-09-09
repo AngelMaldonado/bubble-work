@@ -148,7 +148,7 @@
              somebody renames it — is the difference between a list of work and
              a list of placeholders. -->
         {#if naming}
-          <input
+          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
             class="new-name"
             placeholder="¿Cómo se llama?"
             {@attach (el: HTMLInputElement) => el.focus()}
@@ -254,13 +254,9 @@
 
   /* Skeleton positions a dialog centred. A drawer is the same component pinned
      to one edge, which is a placement decision rather than a different widget. */
-  :global(.scrim) {
-    position: fixed;
-    inset: 0;
-    z-index: var(--z-drawer-scrim);
-    background: color-mix(in oklab, var(--bg) 40%, transparent);
-    backdrop-filter: blur(2px);
-  }
+  /* `.scrim` itself lives in app.css now — one dimming for every modal. What is
+     left here is only where this one sits in the stack. */
+  :global(.scrim) { z-index: var(--z-drawer-scrim); }
   :global(.drawer-pos) {
     position: fixed;
     inset: 0;

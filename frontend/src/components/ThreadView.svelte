@@ -358,8 +358,8 @@
 
             {#if addingLink}
               <form class="linkform" onsubmit={(e) => e.preventDefault()}>
-                <input placeholder="https://…" />
-                <input placeholder="título" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" placeholder="https://…" />
+                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" placeholder="título" />
                 <button type="submit">añadir</button>
               </form>
             {/if}

@@ -206,13 +206,13 @@
     <h2 class="display text-base tracking-widest uppercase">Formularios</h2>
     <div class="grid gap-3 sm:grid-cols-2">
       <label class="text-sm"><span class="muted">Texto</span>
-        <input class="input mt-1" placeholder="nombre del thread" /></label>
+        <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="input mt-1" placeholder="nombre del thread" /></label>
       <div class="text-sm">
         <Combobox collection={prioCollection} value={prio}
           onValueChange={(e: { value: string[] }) => (prio = e.value)}>
           <Combobox.Label class="muted">Selección — <b>Combobox</b></Combobox.Label>
           <Combobox.Control>
-            <Combobox.Input placeholder="prioridad…" />
+            <Combobox.Input placeholder="prioridad…" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
             <Combobox.Trigger>▾</Combobox.Trigger>
           </Combobox.Control>
           <Portal>

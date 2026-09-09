@@ -15,6 +15,11 @@
 
   export type Note = { id: string; text: string; from: string; when: string; body?: string };
 
+  // Whether the description is being written in. The dialog stops listening for
+  // Escape while it is: in vim that key leaves insert mode, and a modal that
+  // closes on it throws away what was being typed.
+  let editingBody = $state(false);
+
   let {
     open = $bindable(false),
     note = $bindable(null),
@@ -48,19 +53,24 @@
   });
 </script>
 
-<Dialog {open} onOpenChange={(e: { open: boolean }) => (open = e.open)}>
+<!-- Escape never closes this one either — same editor, same reason as the card
+     sheet. -->
+<Dialog
+  {open}
+  closeOnEscape={false}
+  onOpenChange={(e: { open: boolean }) => (open = e.open)}>
   <Portal>
     <Dialog.Backdrop
-      class="fixed inset-0 bg-surface-50-950/50"
+      class="scrim"
       style="z-index: var(--z-drawer-scrim)" />
     <Dialog.Positioner
       class="fixed inset-0 flex items-center justify-center p-4"
       style="z-index: var(--z-drawer)">
-      <Dialog.Content class="card bg-surface-100-900 w-full max-w-xl space-y-4 p-4 shadow-xl {anim}">
+      <Dialog.Content class="card bg-surface-100-900 w-full max-w-3xl space-y-4 p-4 shadow-xl {anim}">
         {#if note}
           <header class="flex items-center justify-between gap-3">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">
-              <input class="ttl" bind:value={note.text} aria-label="qué llegó" />
+              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} aria-label="qué llegó" />
             </Dialog.Title>
             <Dialog.CloseTrigger class="btn-icon hover:preset-tonal">
               <XIcon class="size-4" />
@@ -71,8 +81,9 @@
 
           <MarkdownField
             bind:value={body}
+            bind:editing={editingBody}
             {render}
-            minHeight="10rem"
+            minHeight="22rem"
             placeholder="¿qué pidió exactamente? ¿a quién afecta? lo que sepas, aunque esté a medias…" />
 
           <footer>

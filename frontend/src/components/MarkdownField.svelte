@@ -96,6 +96,11 @@
   {/if}
 
   {#if editing}
+    <!-- No key handling here. Stopping Escape on the way up never kept it from
+         the dialog — Zag listens on the DOCUMENT, which runs first — and a
+         listener sitting between the editor and the page is exactly the kind of
+         thing that swallows a key nobody meant it to. Whoever HOSTS this field
+         turns `closeOnEscape` off while it is being written in. -->
     <div class="editor" {@attach mount}></div>
   {:else if value.trim()}
     <!-- svelte-ignore a11y_click_events_have_key_events -->
@@ -144,7 +149,18 @@
     background: var(--surface);
   }
   .editor { overflow: hidden; }
-  .preview { padding: 0.6rem 0.8rem; overflow: auto; max-height: 40vh; }
+  /* CodeMirror sizes itself to its content, so `min-height` on the box around it
+     left a tall box with a short editor inside and a dead strip underneath. The
+     minimum belongs to the editor itself. */
+  .editor :global(.cm-editor) { min-height: var(--min); }
+  .preview {
+    padding: 0.6rem 0.8rem;
+    overflow: auto;
+    /* Reading room. The cap is what stops a long document from pushing the rest
+       of a dialog off the screen; it was 40vh, which on a laptop is about eight
+       lines. */
+    max-height: 60vh;
+  }
   .empty {
     display: flex;
     align-items: flex-start;

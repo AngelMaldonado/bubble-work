@@ -63,6 +63,12 @@
   --dormant: oklch(0.64 0.11 275);
   --rip: oklch(0.6 0.02 265);
   --closed: oklch(0.76 0.16 90);
+
+  /* What a modal puts between itself and the page. In light mode the page is
+     already pale, so a scrim mixed from it barely registered and the dialog
+     read as floating over a live screen rather than over a paused one. Dark
+     mode has the opposite problem and takes a lighter hand. */
+  --scrim: oklch(0.22 0.03 265 / 0.4);
 }
 
 [data-mode='dark'] {
@@ -84,6 +90,8 @@
   --dormant: oklch(0.7 0.1 275);
   --rip: oklch(0.6 0.02 265);
   --closed: oklch(0.82 0.16 95);
+
+  --scrim: oklch(0.08 0.02 265 / 0.55);
 }
 
 /* ── The board ────────────────────────────────────────────────────────────
@@ -357,4 +365,15 @@ body::before {
 
 @media (prefers-reduced-motion: reduce) {
   .float-btn { transition: none; }
+}
+
+/* The one scrim, for every modal. It was four copies of a Tailwind utility
+   (`bg-surface-50-950/50`) plus a hand-rolled one in the drawer, which is how
+   two dialogs on the same screen ended up dimming the page by different
+   amounts. */
+.scrim {
+  position: fixed;
+  inset: 0;
+  background: var(--scrim);
+  backdrop-filter: blur(2px);
 }

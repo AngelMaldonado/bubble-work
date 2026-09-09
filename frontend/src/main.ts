@@ -12,6 +12,12 @@ import './app.css';
 import './lib/theme.svelte';
 import { mount } from 'svelte';
 import App from './App.svelte';
+import { letEditorsKeepEscape } from './lib/escape';
+
+// Escape inside a text editor is the editor's — see `lib/escape.ts` for the
+// capture-phase reason this has to be installed here, at the window, rather
+// than by whichever component happens to be hosting the editor.
+letEditorsKeepEscape();
 
 // No right-click we did not ask for.
 //

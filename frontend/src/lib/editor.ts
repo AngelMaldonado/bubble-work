@@ -21,6 +21,9 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { drawSelection, EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+// What to do with an Escape that was taken away from this editor, keyed by the
+// editor's element. See `lib/escape.ts` for why the key is caught at the window.
+import { escapeHandlers } from './escape';
 
 export interface CaretPoint {
   /** Relative to the editor's own box, so a menu can be positioned inside it. */
@@ -132,7 +135,7 @@ const vimHooks = new WeakMap<EditorView, { save: () => void; done: () => void }>
 let vimExDefined = false;
 
 async function vimExtensions(opts: EditorOptions) {
-  const { vim, Vim } = await import('@replit/codemirror-vim');
+  const { vim, Vim, getCM } = await import('@replit/codemirror-vim');
   if (!vimExDefined) {
     vimExDefined = true;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -149,11 +152,12 @@ async function vimExtensions(opts: EditorOptions) {
   }
   // vim() must come before every other keymap, and drawSelection is what makes
   // visual mode render correctly when you are not using basicSetup.
-  return [vim({ status: true }), drawSelection()];
+  return { exts: [vim({ status: true }), drawSelection()], Vim, getCM };
 }
 
 export async function createMarkdownEditor(opts: EditorOptions): Promise<MarkdownEditor> {
-  const vimExt = opts.vim ? await vimExtensions(opts) : [];
+  const loaded = opts.vim ? await vimExtensions(opts) : null;
+  const vimExt = loaded?.exts ?? [];
   // The slash menu owns these keys while it is open, so they bind ABOVE the
   // default keymap — otherwise Enter would insert a newline before the menu
   // ever saw it.
@@ -201,12 +205,40 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
     }),
   });
 
+  // The Escape this editor never receives, handed to it by name.
+  //
+  // A dialog swallows the key before it can arrive (`lib/escape.ts`), so the
+  // interceptor calls this instead of trying to fake a keypress. In vim it is
+  // vim's own `<Esc>` — leave insert mode, cancel a pending command. Without
+  // vim it is what Escape has always meant here: stop editing.
+  escapeHandlers.set(view.dom, () => {
+    const cm = loaded?.getCM(view);
+    if (cm) return void loaded!.Vim.handleKey(cm, '<Esc>', 'user');
+    opts.onEscape();
+  });
+
   if (opts.vim) {
     vimHooks.set(view, { save: opts.onSave, done: opts.onEscape });
   }
 
+  // Password managers attach to anything that looks like a field, and
+  // CodeMirror's editing surface is a `contenteditable` — which 1Password reads
+  // as one, and then offers to save what is being typed as a login. These
+  // attributes are how each of them is told to leave an element alone; the only
+  // credential fields in this product are the two on the sign-in screen.
+  view.contentDOM.setAttribute('data-1p-ignore', '');
+  view.contentDOM.setAttribute('data-lpignore', 'true');
+  view.contentDOM.setAttribute('data-bwignore', '');
+  view.contentDOM.setAttribute('data-form-type', 'other');
+  view.contentDOM.setAttribute('autocomplete', 'off');
+  view.contentDOM.setAttribute('autocorrect', 'off');
+  view.contentDOM.setAttribute('spellcheck', 'false');
+
   const api: MarkdownEditor = {
-    destroy: () => view.destroy(),
+    destroy: () => {
+      escapeHandlers.delete(view.dom);
+      view.destroy();
+    },
     value: () => view.state.doc.toString(),
     setDoc(text) {
       if (view.state.doc.toString() === text) return;

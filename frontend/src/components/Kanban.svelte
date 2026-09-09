@@ -10,6 +10,8 @@
     impact?: string;
     urgency?: string;
     notes?: string;
+    /** where this work lives — the project, when the board spans several */
+    where?: string;
   };
   export type Column = { id: string; name: string; cards: Card[] };
 </script>
@@ -33,10 +35,19 @@
     columns = $bindable([]),
     onopen,
     onadd,
+    onaddcolumn,
+    onrenamecolumn,
+    ondeletecolumn,
   }: {
     columns?: Column[];
     onopen?: (card: Card) => void;
     onadd?: (columnId: string) => void;
+    /** Where a change to the COLUMNS goes, when they are rows on a server. In
+     *  the planner they are the department's objectives; without these the
+     *  board rearranges its own copy and nobody else ever sees it. */
+    onaddcolumn?: () => void;
+    onrenamecolumn?: (id: string, name: string) => void;
+    ondeletecolumn?: (id: string) => void;
   } = $props();
 
   // Columns are the board's own shape, and it belongs to whoever runs the
@@ -52,16 +63,21 @@
   function commitRename() {
     const col = columns.find((c) => c.id === renaming);
     // An empty name is not a rename; it is a deletion nobody asked for.
-    if (col && draft.trim()) col.name = draft.trim();
+    if (col && draft.trim()) {
+      if (onrenamecolumn) onrenamecolumn(col.id, draft.trim());
+      else col.name = draft.trim();
+    }
     renaming = null;
   }
   function addColumn() {
+    if (onaddcolumn) return onaddcolumn();
     const id = 'col' + Date.now();
     columns = [...columns, { id, name: 'Columna nueva', cards: [] }];
     renaming = id;
     draft = 'Columna nueva';
   }
   function dropColumn(id: string) {
+    if (ondeletecolumn) return ondeletecolumn(id);
     columns = columns.filter((c) => c.id !== id);
   }
   function moveColumn(id: string, before: string | null) {
@@ -272,7 +288,7 @@
       {#if overCol === col.id}<div class="col-gap" aria-hidden="true"></div>{/if}
       <header {@attach (el) => head(el, col)} class:lifting={liftingCol === col.id}>
         {#if renaming === col.id}
-          <input
+          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
             class="rename"
             bind:value={draft}
             onblur={commitRename}
@@ -321,6 +337,7 @@
                 {#if c.prio}<span class="prio-chip prio-{c.prio}">{c.prio}</span>{/if}
                 {#if c.obj}<span class="obj">O{c.obj}</span>{/if}
                 {#if c.due}<span class="due">{shortDate(c.due)}</span>{/if}
+                {#if c.where}<span class="where">{c.where}</span>{/if}
               </span>
             </button>
           </article>
@@ -471,8 +488,17 @@
   .card:hover { border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
   .ttl { display: block; font-size: 0.86rem; line-height: 1.3; color: var(--text); }
   .meta { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.35rem; font-size: 0.7rem; }
-  .obj, .due { color: var(--faint); }
+  .obj, .due, .where { color: var(--faint); }
   .due { margin-left: auto; }
+  /* Which project it is from. Last, and quiet: on a board that spans the
+     department it is what tells two identically named cards apart, and on one
+     that does not it never appears at all. */
+  .where {
+    max-width: 9rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   .add {
     display: flex;

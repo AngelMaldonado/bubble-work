@@ -256,6 +256,24 @@ class Api {
     return this.list<ThreadRecord>('threads', workspace, '-created');
   }
 
+  /** Every thread this person can see, across every workspace. What the
+   *  department's planner is looking at; the rules decide what "can see" means
+   *  and the global lead's includes everything. */
+  async allThreads() {
+    const out = await this.call<{ items: ThreadRecord[] }>(
+      '/api/collections/threads/records?perPage=500&sort=-created',
+    );
+    return out.items;
+  }
+
+  /** …and their derived priorities, same scope. */
+  async allPriorities() {
+    const out = await this.call<{ items: { id: string; priority: string }[] }>(
+      '/api/collections/thread_priority/records?perPage=500',
+    );
+    return out.items;
+  }
+
   // No workspace: the plan belongs to the DEPARTMENT. Everybody signed in reads
   // it, the global lead shapes it, and a thread from any project can hang from
   // any objective — which is what makes the objective worth stating.

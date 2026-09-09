@@ -96,7 +96,7 @@
                    Focused explicitly, not with `autofocus`: the attribute only
                    acts on a page's first parse, so an input that appears later
                    never gets it — the typing went to the page instead. -->
-              <input
+              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                 class="rename"
                 {@attach (el: HTMLInputElement) => { el.focus(); el.select(); }}
                 bind:value={draft}

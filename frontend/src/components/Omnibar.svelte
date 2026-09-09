@@ -165,7 +165,7 @@
 <Dialog {open} onOpenChange={(e: { open: boolean }) => (open = e.open)}>
   <Portal>
     <Dialog.Backdrop
-      class="fixed inset-0 bg-surface-50-950/50"
+      class="scrim"
       style="z-index: var(--z-drawer-scrim)" />
     <!-- Near the top, not centred: the list grows downward, and a box that
          grows from the middle of the screen moves the field you are typing in. -->
@@ -176,7 +176,7 @@
         <label class="field">
           <SearchIcon class="size-4 shrink-0" />
           <!-- svelte-ignore a11y_autofocus -->
-          <input
+          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
             bind:value={q}
             onkeydown={keys}
             placeholder={prompt || 'Buscar, o «/» para un comando…'}

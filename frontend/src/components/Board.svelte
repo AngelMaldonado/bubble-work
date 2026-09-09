@@ -13,37 +13,28 @@
 
   let {
     workspace,
+    board,
     onOpen,
-    onload,
+    onreload,
     scroller = null,
   }: {
     workspace: Workspace;
+    /** The board, fetched by whoever owns the screen.
+     *
+     *  Not fetched here any more: a link straight to a thread has to resolve
+     *  `#14` before this component is on the page at all, so the one copy of
+     *  the board lives above and everybody reads THAT one. Two fetches of the
+     *  same board are two answers that can disagree. */
+    board: Board | null;
     onOpen: (t: ThreadHeat) => void;
-    /** the board as it arrived, for whoever else needs to read the same one */
-    onload?: (board: Board) => void;
+    /** ask for it again — writing here changes what the server would say */
+    onreload?: () => void;
     /** the box that actually scrolls, for the minimap's spy */
     scroller?: HTMLElement | null;
   } = $props();
 
-  let board = $state<Board | null>(null);
   let error = $state('');
-
-  // Refetched rather than recomputed on the client: heat is a pure function of
-  // evidence and TIME, and the server is the one holding both. A board that
-  // ages in the browser would drift from the one everyone else sees.
-  async function load() {
-    try {
-      board = await api.board(workspace.id);
-      onload?.(board);
-      error = '';
-    } catch (e) {
-      error = (e as Error).message;
-    }
-  }
-  $effect(() => {
-    workspace.id;
-    load();
-  });
+  const load = () => onreload?.();
 
   const threadsOf = (bubble: string) => (board?.threads ?? []).filter((t) => t.bubble === bubble);
 
@@ -58,9 +49,11 @@
     })),
   );
 
-  // Threads with no bubble. They are work too, and a board that only draws what
-  // is filed is a board that hides the backlog it should be embarrassed by.
-  const unfiled = $derived((board?.threads ?? []).filter((t) => !t.bubble && t.heat.lifecycle !== 'closed'));
+  // A thread with no bubble does NOT appear here. The board is bubbles — the
+  // unit of attention — and a bubble is what floats or sinks; loose threads
+  // under a "Sin burbuja" heading turned it into a list of everything, which is
+  // the thing the board exists instead of. They are not lost: the planner shows
+  // every thread by objective, and ⌘K finds any of them by name.
 
   // The minimap reads the same list the board draws, so the two cannot disagree
   // about what is on the page.
@@ -109,35 +102,7 @@
     onopen={(b) => {
       open = board?.bubbles.find((x) => x.id === b.id) ?? null;
       drawer = true;
-    }}>
-    {#if unfiled.length}
-      <section class="unfiled">
-        <h2 class="faint display mb-3 text-center text-sm tracking-widest uppercase">Sin burbuja</h2>
-        <ul class="card glass divide-y-[1px] divide-[var(--line)] p-2">
-          {#each unfiled as t (t.id)}
-            <li>
-              <button
-                class="band-{t.heat.lifecycle} flex w-full items-center gap-2 rounded-lg px-2 py-1.5 text-left text-sm hover:[background:var(--hover)]"
-                onclick={() => onOpen(t)}>
-                <span class="dot"></span>
-                <span class="faint tabular-nums">#{t.seq}</span>
-                <span class="min-w-0 flex-1 truncate">{t.name}</span>
-                {#if t.priority}<span class="faint text-xs">{t.priority}</span>{/if}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      </section>
-    {/if}
-
-    <!-- The calibration used to be printed here — "ciclo de 168h · dormido tras
-         2 ciclos · calculado <fecha>". It answers a question nobody asks twice:
-         it is the same three numbers every morning, at the bottom of every
-         board, and a constant on screen stops being read and starts being
-         furniture. The board still SAYS it, in `/board`'s `tuning`, and each
-         bubble carries its own reason. It comes back when there is a screen for
-         changing it, next to the control that changes it. -->
-  </BubbleBoard>
+    }} />
 
   <BubbleDrawer
     bind:open={drawer}
@@ -161,7 +126,3 @@
     onnewthread={newThread}
     ondeletethread={removeThread} />
 {/if}
-
-<style>
-  .unfiled { padding-top: 2rem; max-width: 620px; margin: 0 auto; }
-</style>

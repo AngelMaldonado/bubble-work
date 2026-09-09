@@ -62,8 +62,10 @@
       // The orb carries the initials of whoever is accountable. A band tells
       // you a bubble went quiet; the initials tell you who to ask, which is the
       // other half of what 😴 means.
+      // Sólo los que ya tienen nombre: el roster llega por su cuenta, y un
+      // avatar sin nombre no dice nada que valga la pena dibujar.
       owner: nameOf((b.owners ?? [])[0] ?? ''),
-      people: (b.owners ?? []).map(nameOf),
+      people: (b.owners ?? []).map(nameOf).filter(Boolean),
       // The flame counts what is PRODUCING inside it, which is the one number
       // an orb can carry without becoming a card.
       burning: threadsOf(b.id).filter((t) => t.heat.lifecycle === 'hot').length,

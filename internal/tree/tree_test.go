@@ -53,6 +53,10 @@ func TestInvariant_Tree_LayoutIsEnforced(t *testing.T) {
 		{"README.md", AreaDoc},
 		{"threads/1-uno.md", AreaThread},
 		{"threads/12-con-nombre-largo.md", AreaThread},
+		// Un thread puede escribir más de un archivo: viven en SU carpeta,
+		// beside su documento, y siguen siendo del thread.
+		{"threads/1-uno/notas.md", AreaThread},
+		{"threads/1-uno/diagrama.excalidraw", AreaThread},
 		{"docs/onboarding.md", AreaDoc},
 		{"docs/arquitectura/decisiones.md", AreaDoc}, // docs/ anida
 		{"docs/a/b/c/d/hondo.md", AreaDoc},
@@ -71,12 +75,12 @@ func TestInvariant_Tree_LayoutIsEnforced(t *testing.T) {
 	}
 
 	bad := []string{
-		"notes.txt",              // no es una extensión que vivamos
-		"suelto.md",              // en la raíz solo va README
-		"otro/sitio.md",          // un directorio que no es del layout
-		"threads/sub/anidado.md", // threads/ NO anida
-		"docs/foto.png",          // los binarios quieren otra puerta
-		"threads",                // un directorio no es un documento
+		"notes.txt",               // no es una extensión que vivamos
+		"suelto.md",               // en la raíz solo va README
+		"otro/sitio.md",           // un directorio que no es del layout
+		"threads/uno/dos/tres.md", // threads/ anida UN nivel, no dos
+		"docs/foto.png",           // los binarios quieren otra puerta
+		"threads",                 // un directorio no es un documento
 		"../fuera.md",
 	}
 	for _, doc := range bad {

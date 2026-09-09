@@ -156,7 +156,10 @@ class Api {
   private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
     const headers = new Headers(init.headers);
     if (this.token) headers.set('Authorization', this.token);
-    if (init.body && !headers.has('Content-Type')) {
+    // FormData carries its own multipart boundary in the Content-Type. Setting
+    // JSON over it produces a body the server cannot parse and an error that
+    // blames the upload.
+    if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
       headers.set('Content-Type', 'application/json');
     }
     const res = await fetch(path, { ...init, headers });
@@ -353,6 +356,20 @@ class Api {
     return this.call<{ at: string }>('/api/presence', { method: 'POST' });
   }
 
+  /** Claim a realtime stream as this person, and say what to hear about.
+   *
+   *  The EventSource that opened the stream is ANONYMOUS — it cannot carry a
+   *  header — so this is where the token arrives and where the connection stops
+   *  being a stranger's. Sending it again with a different list replaces the
+   *  subscriptions rather than adding to them, which is PocketBase's contract
+   *  and not ours. */
+  subscribe(clientId: string, subscriptions: string[]) {
+    return this.call<unknown>('/api/realtime', {
+      method: 'POST',
+      body: JSON.stringify({ clientId, subscriptions }),
+    });
+  }
+
   /** Who has said it lately. One row per person, so this is small by
    *  construction; WHAT counts as online is decided by the reader, not stored. */
   async presence() {
@@ -436,12 +453,25 @@ class Api {
 
   /** Markdown → HTML by the server's renderer. The browser has none, and a
    *  second one is how two screens show the same document differently. */
-  async renderMarkdown(content: string) {
+  async renderMarkdown(content: string, workspace = '') {
     const out = await this.call<{ html: string }>('/api/markdown', {
       method: 'POST',
-      body: JSON.stringify({ content }),
+      body: JSON.stringify({ content, workspace }),
     });
     return out.html;
+  }
+
+  /** Attach an image. It lands in `assets/`, is committed like every other
+   *  write, and comes back as the path a document refers to it by — the SHORT
+   *  one, because that is what the layout says and what survives a move. */
+  async uploadAsset(workspace: string, file: File, name = '') {
+    const form = new FormData();
+    form.append('file', file);
+    if (name) form.append('name', name);
+    return this.call<{ path: string; url: string; bytes: number }>(
+      `/api/workspaces/${workspace}/asset`,
+      { method: 'POST', body: form },
+    );
   }
 
   readThread(thread: string) {

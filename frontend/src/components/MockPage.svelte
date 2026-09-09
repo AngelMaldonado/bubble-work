@@ -301,14 +301,6 @@
       labels={['backend', 'migración']}
       markdown={threadDoc}
       html={threadHTML}
-      links={[
-        { id: '1', url: 'https://github.com/x/y/pull/412', title: 'PR #412' },
-        { id: '2', url: 'https://example.com/adr-7', title: 'ADR 0007' },
-      ]}
-      related={[
-        { id: 'a', title: 'El árbol de markdown y sus commits', type: 'blocked_by' },
-        { id: 'b', title: 'Portar el motor de markdown', type: 'relates_to' },
-      ]}
       revisions={[{ id: 'r1', title: 'Revisión de Bea · 2 sep' }]}
       onback={() => (thread = false)}
       onsearch={() => search('Buscar el thread a relacionar…')}

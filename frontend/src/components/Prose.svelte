@@ -15,8 +15,10 @@
     extractHeadings,
     renderExcalidraw,
     renderMermaid,
+    showImages,
     type Heading,
   } from '../lib/prose';
+  import { api } from '../lib/api';
 
   let {
     html = '',
@@ -63,6 +65,7 @@
     requestAnimationFrame(() => {
       enableCheckboxes(node);
       void (async () => {
+        await showImages(node, api.token);
         await renderMermaid(node);
         await renderExcalidraw(node);
         onheadings?.(extractHeadings(node));

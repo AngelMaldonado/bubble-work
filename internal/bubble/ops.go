@@ -3,6 +3,7 @@ package bubble
 import (
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/pocketbase/dbx"
@@ -124,7 +125,7 @@ func ReadDoc(app core.App, t *tree.Tree, ws *core.Record, repo, path string) (Do
 	threadID, _ := ownerOf(app, ws, path)
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: content, HTML: md.RenderHTML(content),
+		Hash: hash, Content: content, HTML: withAssets(md.RenderHTML(content), ws.Id),
 		Done: md.CountDone(content),
 	}, nil
 }
@@ -243,7 +244,7 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: next, HTML: md.RenderHTML(next),
+		Hash: hash, Content: next, HTML: withAssets(md.RenderHTML(next), ws.Id),
 		Done: md.CountDone(next),
 	}, nil
 }
@@ -373,4 +374,27 @@ func CompleteThread(app core.App, auth *core.Record, threadID string) (*core.Rec
 			map[string]any{"name": th.GetString("name")})
 	}
 	return th, nil
+}
+
+// assetRef matches an image or a link pointing INTO `assets/`, which is how the
+// on-disk layout says a picture is referenced from anywhere.
+var assetRef = regexp.MustCompile(`(src|href)="assets/([^"]+)"`)
+
+// withAssets turns `assets/x.png` into the route that actually serves it.
+//
+// The markdown keeps the short form on purpose: a document that spells out
+// `/api/workspaces/<id>/file?path=…` is a document that cannot be moved, read
+// from a git clone, or written by hand — and the on-disk layout is explicit that
+// a picture is `assets/<name>` from anywhere. But a relative path in a
+// single-page app resolves against the ADDRESS, so the same string in a thread
+// at `/w/alpha/t/14` asks for `/w/alpha/t/14/assets/x.png` and gets the
+// application shell back.
+//
+// So the short form is what is stored and the route is what is rendered. Done
+// here rather than in `internal/md` because the workspace is what makes it
+// resolvable, and the renderer does not know about workspaces.
+func withAssets(html, workspace string) string {
+	return assetRef.ReplaceAllString(
+		html, `$1="/api/workspaces/`+workspace+`/file?path=assets/$2"`,
+	)
 }

@@ -29,6 +29,7 @@
     onsave,
     onreload,
     onheadings,
+    onattach,
   }: {
     markdown?: string;
     html?: string;
@@ -37,9 +38,15 @@
     onsave?: (markdown: string) => void;
     onreload?: () => void;
     onheadings?: (h: Heading[]) => void;
+    /** Attach a file to the workspace and say what the document should call
+     *  it. The caller owns the upload because it owns the workspace; this only
+     *  puts the reference where the caret is. */
+    onattach?: (file: File) => Promise<{ path: string } | null | void>;
   } = $props();
 
   let editor = $state<MarkdownEditor | null>(null);
+  let attaching = $state(false);
+  let picker = $state<HTMLInputElement | null>(null);
   let editorBox = $state<HTMLElement | null>(null);
   let caretAt = 0;
   let draft = $state('');
@@ -58,6 +65,48 @@
    *  A document that only saves on a button is a document somebody loses. */
   export function save() {
     if (draft !== markdown) onsave?.(draft);
+  }
+
+  /** Upload, then write `![nombre](assets/x.png)` where the caret is.
+   *
+   *  The SHORT path goes in the document — `assets/x.png`, what the layout says
+   *  a picture is called from anywhere — and the server rewrites it to the route
+   *  that serves it when it renders. A document that spells out the route is one
+   *  that cannot be moved or read from a git clone. */
+  async function attach(file: File | null | undefined) {
+    if (!file || !onattach || attaching) return;
+    attaching = true;
+    try {
+      const out = await onattach(file);
+      const path = out?.path;
+      if (!path || !editor) return;
+      const label = file.name.replace(/\.[^.]+$/, '');
+      const at = editor.cursor();
+      const text = `![${label}](${path})`;
+      editor.replace(at, at, text, text.length);
+      draft = editor.value();
+    } finally {
+      attaching = false;
+    }
+  }
+
+  /** Pasting a screenshot is the fastest path there is, and the one people try
+   *  first. The clipboard carries the image as a file with no name worth using;
+   *  the caller's slug decides what it is called on disk. */
+  function pasted(e: ClipboardEvent) {
+    const file = [...(e.clipboardData?.files ?? [])][0];
+    if (file && file.type.startsWith('image/')) {
+      e.preventDefault();
+      attach(file);
+    }
+  }
+
+  function dropped(e: DragEvent) {
+    const file = [...(e.dataTransfer?.files ?? [])][0];
+    if (file) {
+      e.preventDefault();
+      attach(file);
+    }
   }
 
   function mountEditor(el: HTMLElement) {
@@ -131,6 +180,24 @@
       }}>renderizado</button>
     <button class:on={editing} aria-pressed={editing} onclick={() => (editing = true)}>markdown</button>
   </div>
+  {#if editing && onattach}
+    <!-- Adjuntar vive donde se escribe, porque lo que produce es una línea de
+         markdown en el documento. Arrastrar y pegar hacen lo mismo; el botón
+         está para quien no sabe que puede. -->
+    <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar una imagen">
+      {attaching ? '…' : '📎'}
+    </button>
+    <input
+      class="hidden-file"
+      type="file"
+      accept="image/*"
+      bind:this={picker}
+      onchange={(e) => {
+        const el = e.currentTarget as HTMLInputElement;
+        attach(el.files?.[0]);
+        el.value = '';
+      }} />
+  {/if}
   {#if editing}
     <!-- Only while there is an editor to apply it to. A preference for how to
          type, shown where you chose to type. -->
@@ -159,7 +226,17 @@
        its rounded corner), and a menu inside it would be cut off the moment the
        caret was near an edge. -->
   <div class="editors-wrap">
-    <div class="editors" bind:this={editorBox} {@attach mountEditor}></div>
+    <!-- `role="group"`: la caja recibe drops y CodeMirror pone dentro su propio
+         textbox, así que el rol que describe la caja es el del grupo, no el del
+         campo — que ya lo trae el editor. -->
+    <div
+      class="editors"
+      role="group"
+      bind:this={editorBox}
+      onpaste={pasted}
+      ondrop={dropped}
+      ondragover={(e) => onattach && e.preventDefault()}
+      {@attach mountEditor}></div>
     <SlashMenu menu={slash} field={editorBox} onpick={(c) => slash.run(editor, draft, c)} />
   </div>
 {:else}
@@ -182,6 +259,8 @@
     font-size: 0.76rem;
   }
   .vim:hover { color: var(--text); background: var(--hover); }
+  .vim:disabled { opacity: 0.5; }
+  .hidden-file { display: none; }
   .vim.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
 
   .elsewhere {

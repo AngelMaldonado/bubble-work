@@ -1,11 +1,12 @@
 <script lang="ts">
-  import { api, type Board as BoardData, type ThreadHeat, type Workspace } from './lib/api';
+  import { api, type Board as BoardData, type Person, type ThreadHeat, type Workspace } from './lib/api';
   import { boardUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
   import Wiki from './components/Wiki.svelte';
   import Planner from './components/Planner.svelte';
+  import Agenda from './components/Agenda.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
@@ -32,6 +33,12 @@
 
   let ready = $state(false);
   let signedIn = $state(false);
+  // WHO is signed in, as state. `api.me` is a plain property on the client, so
+  // a `$derived` that reads it has no reactive dependency at all: it is computed
+  // once — while the session is still being refreshed and `api.me` is null — and
+  // never again. That is how "eres lead" stayed false after the answer arrived,
+  // and why a screen gated on it looked like a button that did nothing.
+  let me = $state<Person | null>(null);
   let workspaces = $state<Workspace[]>([]);
 
   // Which workspace is on screen is a question the address answers. Landing on
@@ -52,9 +59,15 @@
   // The box that scrolls. The minimap needs it: the shell holds still and the
   // pane moves, so a spy listening to the window sees a page that never scrolls.
   let paneEl = $state<HTMLElement | null>(null);
+  /** lo último que reventó al dibujar, si algo reventó */
+  let crash = $state<unknown>(null);
+  $effect(() => {
+    if (crash) console.error('bubble: la pantalla se cayó', crash);
+  });
+
 
   async function boot() {
-    const me = await api.refresh();
+    me = await api.refresh();
     signedIn = !!me;
     if (signedIn) {
       workspaces = await api.workspaces();
@@ -104,7 +117,11 @@
    *  thread warms its bubble, so the board that was true when it opened is not
    *  any more. */
   function back() {
-    if (current) go(boardUrl(current.slug));
+    // Always somewhere. It used to navigate only when there WAS a workspace, so
+    // on an account that belongs to none — a fresh install, or the moment after
+    // wiping one — every "← board" was a button that did nothing, and the
+    // planner became a screen with no way out of it.
+    go(current ? boardUrl(current.slug) : '/');
     loadBoard();
   }
 
@@ -210,7 +227,7 @@
   // The planner. A view like the others, and only for a lead: planning is the
   // strategic layer's job, and a screen full of verbs somebody cannot use reads
   // as a broken screen rather than as one that is not theirs.
-  const isLead = $derived(api.me?.role === 'lead');
+  const isLead = $derived(me?.role === 'lead');
   const openPlanner = () => go(plannerUrl);
 
   const openWiki = (page: string) => current && go(wikiUrl(current.slug, page));
@@ -253,16 +270,16 @@
     { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
     { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
     { id: 'people', icon: '👥', title: 'Personas de este workspace', hint: 'invitar · roles', run: () => (crew = true) },
-    ...(isLead
-      ? [{ id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }]
-      : []),
+    isLead
+      ? { id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }
+      : { id: 'planner', icon: '🗓', title: 'Abrir el calendario', hint: 'lo que tiene fecha', run: openPlanner },
     { id: 'board', icon: '🫧', title: 'Volver al board', run: back },
     // The same three states the floating control cycles, named so they can be
     // reached directly: from the keyboard, picking is faster than cycling.
     { id: 'light', icon: '☀️', title: 'Tema claro', run: () => theme.set('light') },
     { id: 'dark', icon: '🌙', title: 'Tema oscuro', run: () => theme.set('dark') },
     { id: 'system', icon: '🌗', title: 'Tema automático', hint: 'como el sistema', run: () => theme.set('system') },
-    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: () => { presence.stop(); api.signOut(); signedIn = false; } },
+    { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: () => { presence.stop(); api.signOut(); signedIn = false; me = null; } },
   ]);
 
   // One request per pause, and the last one wins: an answer that arrives after
@@ -331,8 +348,16 @@
 
 <svelte:window onkeydown={hotkeys} />
 
+
 <ThemeToggle />
 
+<!-- Una pantalla que se cae, lo dice.
+     Hasta ahora un error al montar o desmontar una vista abortaba la
+     actualización EN SILENCIO: el estado ya había cambiado —la dirección, por
+     ejemplo— y el DOM se quedaba como estaba, así que el botón que provocó el
+     cambio parecía no hacer nada. Un error que congela la interfaz sin decir
+     nada cuesta una tarde; dicho en pantalla, cuesta un minuto. -->
+<svelte:boundary onerror={(e: unknown) => (crash = e)}>
 {#if path === '/theme/mock'}
   <!-- The interface as a whole, with invented data. No sign-in for the same
        reason as /theme: there is nothing real behind it. The way back is the
@@ -349,19 +374,16 @@
   <!-- The strategic layer gets a screen, not a tab inside the operative one —
        and no workspace: the plan is the department's, not this project's. -->
   <Planner onback={back} onsearch={() => (omni = true)} />
-{:else if route.kind === 'planner'}
-  <!-- Guarded at the ADDRESS, not only at the button. Hiding 🗓 kept the screen
-       out of the way; it did not keep anybody out of it, and a link somebody
-       pastes into a chat is exactly how a screen that is not yours gets opened.
-       Said plainly rather than as a 404: whose screen it is is not a secret. -->
-  <div class="mx-auto max-w-md p-6 sm:pt-16">
-    <h1 class="display mb-2 text-2xl">El planeador es del lead</h1>
-    <p class="muted mb-5 text-sm">
-      Es la capa estratégica del departamento — objetivos, inbox y el trabajo de todos los
-      proyectos a la vez. Tu trabajo vive en el board de tus workspaces.
-    </p>
-    <button class="btn btn-sm preset-filled-primary-500" onclick={back}>Ir al board</button>
-  </div>
+{:else if route.kind === 'planner' && signedIn}
+  <!-- Guarded at the ADDRESS, not only at the sidebar — but what a member gets
+       is not a refusal. The objectives, the inbox and the kanban of the whole
+       department are the lead's; the DATES are not strategy, they are somebody's
+       week, and the person whose week it is should be able to look at it. Same
+       screen, same calendar, read-only. -->
+  <Agenda
+    onback={back}
+    onsearch={() => (omni = true)}
+    onopen={(slug, seq) => go(threadUrl(slug, seq))} />
 {:else if route.kind === 'thread'}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. It is resolved from the address, so this is also
@@ -397,6 +419,11 @@
 {:else}
   <Shell
     items={workspaces.map((w) => ({ id: w.id, name: w.name, hint: w.slug }))}
+    pins={[
+      { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
+    ]}
+    pinned={route.kind === 'planner' ? 'planner' : ''}
+    onpin={openPlanner}
     current={current?.id ?? ''}
     label="Workspaces"
     newLabel="Nuevo"
@@ -471,21 +498,6 @@
     </Portal>
   </Tooltip>
 
-  {#if isLead}
-    <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
-      <Tooltip.Trigger>
-        {#snippet element(attributes: Record<string, unknown>)}
-          <button class="float-btn" {...attributes} onclick={openPlanner}>
-            <span aria-hidden="true">🗓</span>
-          </button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Portal>
-        <Tooltip.Positioner><Tooltip.Content>Planeador</Tooltip.Content></Tooltip.Positioner>
-      </Portal>
-    </Tooltip>
-  {/if}
-
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
@@ -513,6 +525,20 @@
        the two you press all day is the one you press by accident. It lives in
        the omnibar, behind `/`. -->
 {/if}
+
+  {#snippet failed(error: unknown, reset: () => void)}
+    <div class="crash" role="alert">
+      <h1 class="display text-xl">Algo se rompió al dibujar esta pantalla</h1>
+      <pre>{String((error as Error)?.stack ?? error)}</pre>
+      <div class="flex gap-2">
+        <button class="btn btn-sm preset-tonal-surface" onclick={reset}>Reintentar</button>
+        <button class="btn btn-sm preset-filled-primary-500" onclick={() => location.reload()}>
+          Recargar
+        </button>
+      </div>
+    </div>
+  {/snippet}
+</svelte:boundary>
 
 {#if naming}
   <Dialog open onOpenChange={() => (naming = null)}>
@@ -629,6 +655,31 @@
 {/if}
 
 <style>
+  /* El accidente, legible: encima de todo, con el rastro completo. */
+  .crash {
+    position: fixed;
+    inset: 0;
+    z-index: 9999;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    padding: 2rem;
+    overflow: auto;
+    background: var(--surface-solid);
+    color: var(--text);
+  }
+  .crash pre {
+    margin: 0;
+    padding: 0.8rem;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.78rem;
+    white-space: pre-wrap;
+  }
+
+
   .cap { color: var(--faint); font-size: 0.7rem; font-weight: 700; letter-spacing: 0.03em; }
   .pick {
     display: flex;

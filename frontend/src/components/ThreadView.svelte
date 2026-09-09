@@ -17,9 +17,8 @@
   import { Portal, Menu, Navigation, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
   import FileTextIcon from '@lucide/svelte/icons/file-text';
-  import LinkIcon from '@lucide/svelte/icons/link';
-  import ShuffleIcon from '@lucide/svelte/icons/shuffle';
   import HistoryIcon from '@lucide/svelte/icons/history';
+  import PlusIcon from '@lucide/svelte/icons/plus';
   import HashIcon from '@lucide/svelte/icons/hash';
   import type { Lifecycle } from '../lib/api';
   import DocEditor from './DocEditor.svelte';
@@ -39,14 +38,18 @@
     labels = [],
     markdown = '',
     html = '',
-    links = [],
-    related = [],
     revisions = [],
     pinned = false,
     elsewhere = false,
     onback,
     onsave,
     onreload,
+    onattach,
+    pages = [],
+    openPage = '',
+    onopenpage,
+    onnewpage,
+    ondeletepage,
     onsearch,
     onfinish,
     onreopen,
@@ -68,8 +71,6 @@
     markdown?: string;
     /** the SERVER's render of that same markdown */
     html?: string;
-    links?: { id: string; url: string; title?: string }[];
-    related?: { id: string; title: string; type: string }[];
     revisions?: { id: string; title: string }[];
     pinned?: boolean;
     elsewhere?: boolean;
@@ -77,6 +78,15 @@
     /** hand the edited markdown back. The caller owns the write, the hash and
      *  what to do when somebody else got there first. */
     onsave?: (markdown: string) => void;
+    /** adjuntar una imagen al workspace, desde el editor */
+    onattach?: (file: File) => Promise<{ path: string } | null | void>;
+    /** what this thread wrote BESIDE its document, by path */
+    pages?: { path: string; name: string }[];
+    /** which of them is open; `''` is the thread's own document */
+    openPage?: string;
+    onopenpage?: (path: string) => void;
+    onnewpage?: (name: string) => void;
+    ondeletepage?: (path: string) => void;
     /** re-read the document, discarding what is in the editor */
     onreload?: () => void;
     /** open the omnibar — the one field that finds a thread, a bubble or a page */
@@ -89,6 +99,8 @@
 
 
   let sideCollapsed = $state(false);
+  let addingPage = $state(false);
+  let freshPage = $state('');
   let editing = $state(false);
   // Seeded from the prop and owned locally afterwards: pinning is the reader's
   // decision, and it should not blink back when the parent re-renders.
@@ -96,7 +108,6 @@
   $effect(() => {
     isPinned = pinned;
   });
-  let addingLink = $state(false);
   // The table of contents comes from the RENDERED document, not from parsing the
   // markdown a second time: the ids it links to are the ones goldmark produced,
   // and re-deriving them here is how a link ends up pointing at nothing.
@@ -145,32 +156,24 @@
     {
       id: 'work',
       name: 'Trabajo',
-      count: headings.length,
-      children: [{ id: 'doc', name: title, icon: FileTextIcon }, ...nestHeadings(headings)],
-    },
-    {
-      id: 'links',
-      name: 'Enlaces',
-      count: links.length,
-      children: links.length
-        ? links.map((l) => ({
-            id: `link:${l.id}`, name: l.title || l.url, icon: LinkIcon,
-            href: l.url, external: true,
-          }))
-        // A section with nothing in it still has to render as a section — the
-        // "+" that fills it lives on the branch row.
-        : [{ id: 'links:empty', name: 'sin enlaces' }],
-    },
-    {
-      id: 'related',
-      name: 'Relacionados',
-      count: related.length,
-      children: related.length
-        ? related.map((r) => ({
-            id: `rel:${r.id}:${r.type}`, name: r.title, icon: ShuffleIcon,
-            badge: r.type.replace('_', ' '),
-          }))
-        : [{ id: 'related:empty', name: 'sin relaciones' }],
+      count: 1 + pages.length,
+      // The thread's own document first, then anything it wrote beside it. The
+      // headings hang off whichever one is OPEN — a table of contents for a
+      // document you are not looking at is a table of contents for nothing.
+      children: [
+        {
+          id: 'doc',
+          name: title,
+          icon: FileTextIcon,
+          children: openPage ? undefined : nestHeadings(headings),
+        },
+        ...pages.map((p) => ({
+          id: `page:${p.path}`,
+          name: p.name,
+          icon: FileTextIcon,
+          children: openPage === p.path ? nestHeadings(headings) : undefined,
+        })),
+      ],
     },
     ...(revisions.length
       ? [{
@@ -185,8 +188,6 @@
   // furniture makes the one signal that matters harder to pick out.
   const rail = $derived([
     { icon: FileTextIcon, label: 'secciones', n: headings.length },
-    { icon: LinkIcon, label: 'enlaces', n: links.length },
-    { icon: ShuffleIcon, label: 'relaciones', n: related.length },
     { icon: HistoryIcon, label: 'revisiones', n: revisions.length },
   ]);
 </script>
@@ -257,7 +258,7 @@
           <!-- What is in the thread is exactly what you lose by closing the
                sidebar, so it is the one thing the rail keeps: an icon per kind
                of artifact, and how many. -->
-          <Navigation.Menu>
+          <Navigation.Menu class="thread-tree">
             {#each rail as r (r.label)}
               {@const Icon = r.icon}
               <Navigation.Trigger title="{r.n} {r.label}" onclick={() => (sideCollapsed = false)}>
@@ -267,37 +268,61 @@
             {/each}
           </Navigation.Menu>
         {:else}
-          <Navigation.Group>
-            <SideTree nodes={tree}>
-              {#snippet branchActions(node)}
-                {#if node.id === 'links'}
-                  <button class="sect-add" onclick={() => (addingLink = !addingLink)} title="añadir enlace">+</button>
-                {:else if node.id === 'related'}
-                  <!-- Relating is a SEARCH: you have to find the other thread
-                       before you can say how it relates. A picker and a text
-                       field nailed to the bottom of the column were answering
-                       the second half first, so this opens the omnibar and the
-                       kind of relation is asked once you have picked one. -->
-                  <button class="sect-add" onclick={onsearch} title="relacionar (buscar)">+</button>
-                {/if}
-              {/snippet}
+          <Navigation.Group class="thread-tree">
+            <SideTree
+              nodes={tree}
+              onselect={(node) => {
+                if (node.id === 'doc') onopenpage?.('');
+                else if (node.id.startsWith('page:')) onopenpage?.(node.id.slice(5));
+              }}>
               {#snippet itemActions(node)}
-                {#if node.id.startsWith('link:')}
-                  <button class="pin-x" aria-label="quitar enlace">×</button>
-                {:else if node.id.startsWith('rel:')}
-                  <button class="pin-x" aria-label="quitar relación">×</button>
+                {#if node.id.startsWith('page:') && ondeletepage}
+                  <button
+                    class="pin-x"
+                    aria-label="borrar {node.name}"
+                    onclick={() => ondeletepage?.(node.id.slice(5))}>×</button>
                 {/if}
               {/snippet}
             </SideTree>
 
-            {#if addingLink}
-              <form class="linkform" onsubmit={(e) => e.preventDefault()}>
-                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" placeholder="https://…" />
-                <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" placeholder="título" />
-                <button type="submit">añadir</button>
-              </form>
-            {/if}
           </Navigation.Group>
+        {/if}
+        <!-- Pinned to the bottom, like the wiki's: escribir otro documento no es
+             el último elemento del árbol, es la acción que la columna siempre
+             ofrece — así que vive donde la columna termina y no se va hacia
+             abajo conforme se agregan páginas. -->
+        {#if onnewpage}
+          <Navigation.Footer>
+            {#if addingPage && !sideCollapsed}
+              <!-- Un thread tiene su documento y, si el trabajo lo pide, otros
+                   al lado: una nota de investigación, un diseño, un registro
+                   que no cabe en la página principal. -->
+              <input
+                class="new-page"
+                placeholder="¿Cómo se llama?"
+                autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                {@attach (el: HTMLInputElement) => el.focus()}
+                bind:value={freshPage}
+                onblur={() => (addingPage = false)}
+                onkeydown={(e) => {
+                  if (e.key === 'Escape') addingPage = false;
+                  if (e.key === 'Enter' && freshPage.trim()) {
+                    onnewpage?.(freshPage.trim());
+                    freshPage = '';
+                    addingPage = false;
+                  }
+                }} />
+            {:else}
+              <Navigation.Menu>
+                <Navigation.Trigger
+                  onclick={() => { sideCollapsed = false; addingPage = true; }}
+                  title="otro documento">
+                  <PlusIcon class={sideCollapsed ? 'size-5' : 'size-4'} />
+                  <Navigation.TriggerText>Nuevo</Navigation.TriggerText>
+                </Navigation.Trigger>
+              </Navigation.Menu>
+            {/if}
+          </Navigation.Footer>
         {/if}
       </Navigation.Content>
     </Navigation>
@@ -335,6 +360,7 @@
 
     <main class="content">
       <DocEditor
+    {onattach}
         {markdown}
         {html}
         {elsewhere}
@@ -473,6 +499,41 @@
      prop handed to a component, so Svelte never stamps its scope hash on the
      element. `.side { … }` compiled to `.side.svelte-xxx` and matched nothing —
      which is why the column kept ending where its contents did. */
+  /* La misma cadena flex que la wiki: la columna es una columna, el ÁRBOL es lo
+     que scrollea, y el pie se queda donde termina la columna. Sin esto el
+     contenido crecía y el botón se iba con él. */
+  .body :global(.side) { display: flex; flex-direction: column; overflow: hidden; }
+  .body :global([data-part='content'][data-layout='sidebar']) {
+    flex: 1 1 auto;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0.5rem;
+  }
+  .body :global(.thread-tree) {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    /* La barra va sobre el borde de la columna, no flotando en el padding. */
+    width: auto;
+    margin-inline: -1rem;
+    padding-inline: 1rem 1.5rem;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted) 35%, transparent) transparent;
+  }
+  /* Colapsada, el pulgar es una segunda línea vertical en 100px de columna. */
+  .body :global(.side[data-layout='rail'] .thread-tree) { scrollbar-width: none; }
+  .body :global(.side[data-layout='rail'] .thread-tree::-webkit-scrollbar) { display: none; }
+  /* El separador: el pie es lo único que no se mueve, y la línea lo dice. */
+  .body :global([data-part='footer']) {
+    margin-top: auto;
+    align-self: stretch;
+    width: 100%;
+    padding-top: 0.4rem;
+    border-top: 1px solid var(--line);
+  }
+
   .body :global(.side) {
     flex: none;
     /* The row already gives it the full height; `100dvh` here would add the top
@@ -486,20 +547,18 @@
     text-transform: uppercase; color: var(--faint);
   }
 
-  .sect-add { border: none; background: none; color: var(--faint); cursor: pointer; }
+  .new-page {
+    width: 100%;
+    margin-top: 0.3rem;
+    padding: 0.3rem 0.45rem;
+    border: 1px solid var(--accent, var(--line));
+    border-radius: 8px;
+    background: var(--surface);
+    color: var(--text);
+    font-size: 0.82rem;
+  }
   .pin-x { flex: none; border: none; background: none; color: var(--faint); cursor: pointer; padding: 0 0.4rem; }
   .pin-x:hover { color: var(--text); }
-  .linkform { display: flex; flex-direction: column; gap: 0.3rem; padding: 0.25rem 0.4rem 0.5rem; }
-  .linkform input {
-    border: 1px solid var(--line); border-radius: 8px;
-    background: var(--surface-solid); color: var(--text);
-    padding: 0.3rem 0.45rem; font-size: 0.8rem;
-  }
-  .linkform button {
-    border: 1px solid var(--line); border-radius: 8px;
-    background: var(--surface); color: var(--text);
-    padding: 0.3rem; font-size: 0.8rem; cursor: pointer;
-  }
 
   .content { flex: 1; min-width: 0; overflow-y: auto; padding: 1rem 1.5rem 4rem; }
 

@@ -97,3 +97,44 @@ export function enableCheckboxes(el: HTMLElement): void {
     box.disabled = false;
   }
 }
+
+/** Pictures that need a token, drawn anyway.
+ *
+ *  A workspace's images are as private as its writing, so the route that serves
+ *  them requires the Authorization header — and an `<img>` cannot send one. It
+ *  is not a bug in the route: dropping the guard would make every picture public
+ *  to anybody with the URL, and putting the token in the URL would leave it in
+ *  the history and in every copied link.
+ *
+ *  So the fetch happens here, with the header, and the bytes become a blob URL
+ *  the browser can draw. Cached by path for the life of the tab: the same
+ *  diagram appears in a document that re-renders on every keystroke of a
+ *  preview, and one request per keystroke is one request per keystroke.
+ */
+const drawn = new Map<string, Promise<string>>();
+
+export async function showImages(el: HTMLElement, token: string): Promise<void> {
+  const imgs = [...el.querySelectorAll<HTMLImageElement>('img[src^="/api/workspaces/"]')];
+  await Promise.all(
+    imgs.map(async (img) => {
+      const src = img.getAttribute('src');
+      if (!src) return;
+      let job = drawn.get(src);
+      if (!job) {
+        job = fetch(src, { headers: token ? { Authorization: token } : {} })
+          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+          .then((b) => URL.createObjectURL(b));
+        drawn.set(src, job);
+        // A failure must not be cached: the next render should ask again rather
+        // than remember a broken picture for the rest of the session.
+        job.catch(() => drawn.delete(src));
+      }
+      try {
+        img.src = await job;
+      } catch {
+        // Leave the original src. The browser draws its own broken-image mark,
+        // which is the truth: that file is not there.
+      }
+    }),
+  );
+}

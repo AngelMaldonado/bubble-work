@@ -12,6 +12,7 @@
   import { ApiError, api, type Doc, type State, type ThreadHeat, type Workspace } from '../lib/api';
   import { bandName } from '../lib/bands';
   import ThreadView from './ThreadView.svelte';
+  import Confirm, { type Doom } from './Confirm.svelte';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
 
   let {
@@ -43,6 +44,7 @@
 
   let moving = $state(false);
   let doomed = $state(false);
+  let doom = $state<Doom>(null);
 
   /** Completing is a STATE reaching the completed group, never a field somebody
    *  writes: that is how the server decides it too (`internal/bubble/events.go`),
@@ -90,19 +92,103 @@
   let elsewhere = $state(false);
   let saving = $state(false);
 
+  // A thread has ITS document, and — when the work asks for it — others beside
+  // it, in `threads/<seq>-<slug>/`. `openPage` says which one is on screen; `''`
+  // is the thread's own, the one heat, the todos and the Definition of Done are
+  // read from. The others are ordinary documents that happen to belong here.
+  let mainPath = $state('');
+  let pages = $state<{ path: string; name: string }[]>([]);
+  let openPage = $state('');
+
+  const pagesDir = $derived(mainPath.replace(/\.md$/, ''));
+
+  async function loadPages() {
+    if (!mainPath) return;
+    try {
+      const { entries } = await api.tree(workspace.id);
+      const dir = mainPath.replace(/\.md$/, '') + '/';
+      pages = entries
+        .filter((e) => !e.dir && e.path.startsWith(dir))
+        .map((e) => ({ path: e.path, name: e.title || e.name }));
+    } catch {
+      pages = [];
+    }
+  }
+
   async function load() {
     try {
-      doc = await api.readThread(thread.id);
+      const next = openPage
+        ? await api.readPath(workspace.id, openPage)
+        : await api.readThread(thread.id);
+      doc = next;
+      // The thread's own path is what names its folder, so it is remembered
+      // even while another page is open.
+      if (!openPage) mainPath = next.path;
       error = '';
       elsewhere = false;
     } catch (e) {
       error = (e as Error).message;
     }
   }
+
+  // Opening another thread starts on ITS document, not on the page that was
+  // open in the last one.
   $effect(() => {
     thread.id;
+    openPage = '';
+  });
+  $effect(() => {
+    thread.id;
+    openPage;
     load();
   });
+  $effect(() => {
+    mainPath;
+    workspace.id;
+    loadPages();
+  });
+
+  /** Another document for this thread. Named here for the same reason a thread
+   *  is: a file's name IS its title, so asking is the whole of creating it. */
+  async function newPage(name: string) {
+    const slug =
+      name
+        .toLowerCase()
+        .normalize('NFD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-z0-9]+/g, '-')
+        .replace(/^-+|-+$/g, '') || 'documento';
+    const at = `${pagesDir}/${slug}.md`;
+    try {
+      const empty = await api.readPath(workspace.id, at);
+      await api.patchPath(workspace.id, at, {
+        base: empty.hash,
+        content: `# ${name}\n\n`,
+        message: `born: ${at}`,
+      });
+      await loadPages();
+      openPage = at;
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  function askRemovePage(at: string) {
+    doom = {
+      title: `¿Borrar «${pages.find((p) => p.path === at)?.name ?? at}»?`,
+      body: 'Sale del thread y del repositorio. Lo escrito sigue en la historia de git, que es de donde se recupera si hacía falta.',
+      go: async () => {
+        try {
+          await api.removePath(workspace.id, at);
+          if (openPage === at) openPage = '';
+          await loadPages();
+          await load();
+        } catch (e) {
+          error = (e as Error).message;
+        }
+      },
+    };
+  }
 
   async function save(markdown: string) {
     if (!doc || saving) return;
@@ -114,7 +200,9 @@
     try {
       // The base is the hash we READ, not the one we hold: they differ exactly
       // when somebody else wrote, which is the case this exists for.
-      doc = await api.patchThread(thread.id, { base: doc.hash, content: markdown });
+      doc = openPage
+        ? await api.patchPath(workspace.id, openPage, { base: doc.hash, content: markdown })
+        : await api.patchThread(thread.id, { base: doc.hash, content: markdown });
       elsewhere = false;
       error = '';
     } catch (e) {
@@ -131,6 +219,8 @@
     }
   }
 </script>
+
+<Confirm bind:ask={doom} />
 
 {#if error}
   <p class="card glass m-6 p-4 text-sm text-error-500">{error}</p>
@@ -150,6 +240,12 @@
     {onback}
     {onsearch}
     onsave={save}
+    onattach={(file) => api.uploadAsset(workspace.id, file)}
+    {pages}
+    {openPage}
+    onopenpage={(p) => (openPage = p)}
+    onnewpage={newPage}
+    ondeletepage={askRemovePage}
     onreload={load}
     onfinish={thread.heat.lifecycle === 'closed' ? undefined : () => setState(completedState)}
     onreopen={thread.heat.lifecycle === 'closed' ? () => setState(openState) : undefined}

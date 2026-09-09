@@ -387,9 +387,9 @@ BODY="{\"path\":\"docs/diagrama.excalidraw\",\"base\":\"$E0\",\"content\":\"{}\"
 CODE=$(wpatch "$A" "$BODY")
 chk "excalidraw se acepta" "$CODE" 200
 
-BODY="{\"path\":\"threads/sub/anidado.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+BODY="{\"path\":\"threads/uno/dos/tres.md\",\"base\":\"$E0\",\"content\":\"x\"}"
 CODE=$(wpatch "$A" "$BODY")
-chk ">>> threads/ NO anida" "$CODE" 400
+chk ">>> threads/ anida UN nivel, no dos" "$CODE" 400
 BODY="{\"path\":\"suelto.md\",\"base\":\"$E0\",\"content\":\"x\"}"
 CODE=$(wpatch "$A" "$BODY")
 chk ">>> en la raíz solo va README" "$CODE" 400
@@ -452,6 +452,19 @@ chk ">>> ...y NUNCA a grano de thread" \
 
 chk "la evidencia queda firmada por quien la produjo" \
   "$(EV "(target='$T1ID'%26%26kind='thread-created')" "$SU" | j "['items'][0]['actor']")" "$AID"
+
+# Un thread escribe más de un archivo cuando el trabajo lo pide: viven en SU
+# carpeta, son suyos (la evidencia va al thread, no al workspace) y se borran
+# como cualquier documento.
+PG="threads/1-renombrado/notas.md"
+BODY="{\"path\":\"$PG\",\"base\":\"$E0\",\"content\":\"# Notas\\n\"}"
+chk ">>> un thread puede tener otro documento al lado" "$(wpatch "$A" "$BODY")" 200
+chk ">>> ...y esa escritura calienta al THREAD, no al workspace" \
+  "$(curl -s "$API/api/collections/events/records?perPage=1&sort=-at&filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"kind='document-changed'\"))")" \
+     -H "Authorization: $SU" | j "['items'][0]['target_type']")" thread
+chk ">>> ...y se borra como cualquier otro documento" \
+  "$(code -X DELETE "$API/api/workspaces/$ALPHA/document?path=$PG" -H "Authorization: $A")" 200
+
 
 # completar un thread es una TRANSICIÓN de estado, no un campo
 curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
@@ -517,11 +530,13 @@ chk ">>> el lead de un workspace NO lo define: la capa estratégica es del depar
   "$(pcode objectives "$B" "{\"name\":\"Mio\"}")" 400
 chk "el mismo nombre dos veces se rechaza" \
   "$(pcode objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\"}")" 400
-chk ">>> cualquiera que trabaje aquí LEE el plan del departamento" \
-  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $A" | j "['totalItems']")" 1
-chk "...incluso erin, que no es de ningún workspace" \
-  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $ER" | j "['totalItems']")" 1
-chk "anónimo no" \
+chk ">>> el plan lo LEE el lead global, y nadie más" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $C" | j "['totalItems']")" 1
+chk "...ni siquiera un lead de workspace" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $A" | j "['totalItems']")" 0
+chk "...ni erin, que no es de ningún workspace" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $ER" | j "['totalItems']")" 0
+chk "anónimo tampoco" \
   "$(curl -s "$API/api/collections/objectives/records" | j "['totalItems']")" 0
 
 T8=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Bajo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
@@ -552,7 +567,7 @@ T9=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Rate limit del port
 chk ">>> el lead global tría la nota a un thread" \
   "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" -H "$JS" -d "{\"thread\":\"$T9\"}")" 200
 chk "...y la nota conserva a dónde fue" \
-  "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A" | j "['thread']")" "$T9"
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" | j "['thread']")" "$T9"
 
 IN2ID=$(post inbox_items "$A" "{\"note\":\"la de alice\"}" | j "['id']")
 chk ">>> quien la escribió la edita" \
@@ -561,6 +576,18 @@ chk ">>> otra persona NO la edita, aunque sea lead de su workspace" \
   "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $B" -H "$JS" -d '{"note":"secuestrada"}')" 404
 chk ">>> el lead global sí (triar es su trabajo)" \
   "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $C" -H "$JS" -d '{"note":"triada"}')" 200
+
+# El inbox se LEE como se edita: quien capturó, y quien tría. Capturar sigue
+# abierto a todo el mundo — una nota que escribes y no vuelves a ver es una nota
+# que se deja de escribir.
+chk ">>> quien capturó lee su propia nota" \
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $A" | j "['id']")" "$IN2ID"
+chk ">>> pero no la de otro" \
+  "$(code "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A")" 404
+chk ">>> el lead global ve el inbox entero" \
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $C" | j "['totalItems']")" 2
+chk "...y alice sólo lo suyo" \
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $A" | j "['totalItems']")" 1
 
 echo
 BOARD=$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A")
@@ -763,6 +790,17 @@ BIG=/tmp/bubble-big.png; head -c 200000 /dev/urandom > "$BIG"
 chk "una imagen dentro del límite pasa" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
      -H "Authorization: $A" -F "file=@$BIG" -F "name=grande.png")" 200
+# El documento guarda la ruta CORTA y el servidor la resuelve al renderizar: un
+# markdown con `/api/workspaces/<id>/file?path=…` dentro es un markdown que no
+# sobrevive una mudanza ni se lee desde un clon de git.
+IMGDOC="{\"path\":\"docs/con-imagen.md\",\"base\":\"$E0\",\"content\":\"# Con imagen\\n\\n![d](assets/mi-diagrama.png)\\n\"}"
+wpatch "$A" "$IMGDOC" >/dev/null
+PAGE=$(curl -s "$WSDOC?path=docs/con-imagen.md" -H "Authorization: $A")
+chk ">>> el markdown conserva assets/… tal cual" \
+  "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "(assets/mi-diagrama.png)" in json.load(sys.stdin)["content"] else "no")')" si
+chk ">>> ...y el html sale apuntando a la ruta que sí la sirve" \
+  "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "/api/workspaces/'"$ALPHA"'/file?path=assets/mi-diagrama.png" in json.load(sys.stdin)["html"] else "no")')" si
+
 chk ">>> el árbol lista la imagen" \
   "$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A" | python3 -c 'import sys,json
 e=json.load(sys.stdin)["entries"]

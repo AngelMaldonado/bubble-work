@@ -29,6 +29,7 @@
     onback,
     onopen,
     onsave,
+    onattach,
     onsearch,
     onnew,
     ondelete,
@@ -44,6 +45,8 @@
     onopen?: (id: string) => void;
     /** hand the edited markdown back; the caller owns the write and its hash */
     onsave?: (markdown: string) => void;
+    /** adjuntar una imagen al workspace, desde el editor */
+    onattach?: (file: File) => Promise<{ path: string } | null | void>;
     onsearch?: () => void;
     onnew?: () => void;
     ondelete?: () => void;
@@ -177,6 +180,7 @@
            — so they are read and written by the same component rather than by
            two that drift. -->
       <DocEditor
+    {onattach}
         {markdown}
         {html}
         bind:editing

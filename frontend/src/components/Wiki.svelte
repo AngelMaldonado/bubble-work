@@ -171,6 +171,7 @@
   {onback}
   {onsearch}
   onsave={save}
+  onattach={(file) => api.uploadAsset(workspace.id, file)}
   onnew={() => (naming = true)}
   ondelete={() => (doomed = true)}
   onopen={(id) => {

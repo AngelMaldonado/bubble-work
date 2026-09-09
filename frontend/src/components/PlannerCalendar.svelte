@@ -29,11 +29,17 @@
   let {
     events = [],
     view = $bindable('dayGridMonth'),
+    readonly = false,
     onpick,
     onmove,
   }: {
     events?: CalEvent[];
     view?: string;
+    /** Nobody may reschedule from here. Not a permission check — the server
+     *  makes those — but the honest shape of a calendar somebody can only
+     *  read: an event that moves under the pointer and springs back is worse
+     *  than one that does not move. */
+    readonly?: boolean;
     onpick?: (id: string) => void;
     /** Dragging an event is RESCHEDULING it, which is the whole reason a
      *  calendar beats a list of dates — so somebody has to write the new date
@@ -77,7 +83,8 @@
     height: '100%',
     // Dragging an event is rescheduling it, which is the whole reason a
     // calendar beats a list of dates.
-    editable: true,
+    // svelte-ignore state_referenced_locally
+    editable: !readonly,
     date: new Date(),
     events: seeded,
     // Its ids are `string | number`; ours are strings, so it is coerced at the

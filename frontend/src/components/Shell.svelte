@@ -19,13 +19,20 @@
 
   export type ShellItem = { id: string; name: string; hint?: string };
 
+  /** Something in the column that is NOT a workspace: a screen the whole app
+   *  has, reached the same way you reach a project. */
+  export type ShellPin = { id: string; name: string; face: string; href?: string };
+
   let {
     items = [],
+    pins = [],
+    pinned = '',
     current = '',
     label = 'Proyectos',
     newLabel = 'Nuevo',
     pane = $bindable<HTMLElement | null>(null),
     onselect,
+    onpin,
     onrename,
     ondelete,
     /** create one and say which it is, so it can be named straight away */
@@ -33,11 +40,16 @@
     children,
   }: {
     items?: ShellItem[];
+    /** screens pinned above the list — the planner, and whatever joins it */
+    pins?: ShellPin[];
+    /** which pin is on screen, if any */
+    pinned?: string;
     current?: string;
     label?: string;
     newLabel?: string;
     pane?: HTMLElement | null;
     onselect?: (id: string) => void;
+    onpin?: (id: string) => void;
     onrename?: (id: string, name: string) => void;
     ondelete?: (id: string) => void;
     oncreate?: () => Promise<string | void> | string | void;
@@ -142,13 +154,48 @@
            item of the list — it is the one action the column always offers, so
            it sits where the column ends rather than drifting down as the list
            grows. -->
-      {#if oncreate}
+      {#if oncreate || pins.length}
         <Navigation.Footer class="new-foot">
           <Navigation.Menu>
-            <Navigation.Trigger onclick={create} title={newLabel}>
-              <PlusIcon class={railed ? 'size-5' : 'size-4'} />
-              <Navigation.TriggerText>{newLabel}</Navigation.TriggerText>
-            </Navigation.Trigger>
+            {#if oncreate}
+              <Navigation.Trigger onclick={create} title={newLabel}>
+                <PlusIcon class={railed ? 'size-5' : 'size-4'} />
+                <Navigation.TriggerText>{newLabel}</Navigation.TriggerText>
+              </Navigation.Trigger>
+            {/if}
+            <!-- Debajo de "Nuevo", al pie de la columna. No es un proyecto —por
+                 eso no está en la lista— pero sí es un LUGAR, y llegar a un
+                 lugar es para lo que sirve esta columna; era un botón flotante
+                 en la esquina, que es donde va un verbo. -->
+            {#each pins as p (p.id)}
+              <div class="proj" class:on={pinned === p.id}>
+                <!-- Un ancla nuestra, no un `Navigation.Trigger`: es un LUGAR y
+                     tiene dirección — se abre en otra pestaña, se copia, y si el
+                     manejador de la aplicación no corriera, el navegador navega
+                     igual. Lleva a mano los `data-part` de Skeleton para que la
+                     fila se vea exactamente como la de un proyecto, que es lo
+                     único que se estaba pidiendo prestado del componente. -->
+                <a
+                  class="pin-row"
+                  data-scope="navigation"
+                  data-part="trigger"
+                  data-layout={railed ? 'rail' : 'sidebar'}
+                  href={p.href ?? '#'}
+                  title={p.name}
+                  onclick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+                    // Sin manejador no se cancela: anular el enlace y no navegar
+                    // en su lugar es cómo se construye un control que no hace
+                    // nada.
+                    if (!onpin) return;
+                    e.preventDefault();
+                    onpin(p.id);
+                  }}>
+                  <span class="pin" aria-hidden="true">{p.face}</span>
+                  <span data-scope="navigation" data-part="trigger-text">{p.name}</span>
+                </a>
+              </div>
+            {/each}
           </Navigation.Menu>
         </Navigation.Footer>
       {/if}
@@ -245,6 +292,10 @@
      purpose: the ⋮ is a `Menu.Trigger`, which carries `data-part='trigger'`
      too, so an unscoped rule painted the menu button with the row's highlight
      and gave it a block of its own. Same part name, different component. */
+  /* Los fijados usan la misma fila que un proyecto — misma altura, mismo
+     resaltado — y se separan del listado con una línea, no con espacio: son
+     otra clase de cosa, y el espacio solo dice "hay un hueco". */
+
   .proj {
     display: flex;
     align-items: center;
@@ -277,6 +328,11 @@
     background: var(--hover);
     font-weight: 600;
   }
+  /* El ancla es la fila: sin subrayado y con el color de la columna, porque el
+     estilo de la aplicación manda sobre el del navegador. */
+  .pin-row,
+  .pin-row:visited { text-decoration: none; color: inherit; }
+
   .proj-more {
     flex: none;
     display: grid;

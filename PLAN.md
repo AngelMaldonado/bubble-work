@@ -752,9 +752,106 @@ minutes ago, which is activity, not attention. Also rejected for now: counting
 live SSE connections, which is truer and lives only in memory, so a restart says
 nobody is here.
 
+Presence arrives over PocketBase's realtime stream, so somebody appears the
+moment they open the app. Three parts, and the third is the one a subscription
+cannot do: this tab beats, the stream brings everybody else's beats, and a local
+ticker re-derives who is still fresh — nobody emits an event when a person STOPS
+beating, and going quiet is precisely what presence has to notice. The stream is
+best-effort: it reconnects on its own, a full read follows every connect (a
+subscription starts at now), and a slow read underneath covers it never coming
+back.
+
 **Presence is never evidence.** No event, no heat, nothing that can move a band —
 and a test pins it, because a heartbeat that warmed anything would be the most
 efficient way ever built to manufacture activity.
+
+**4g — the thread's sidebar stopped promising two things it never did.**
+*(built)* "Enlaces" and "Relacionados" drew a section, a count and a `+` that
+opened nothing, and they were not one afternoon away from working: relating is a
+search, and links are an evidence channel with a heat weight behind them. What
+they were competing with is the document, which holds as many links as somebody
+writes and is where a person puts them anyway — those warm the thread as
+`document-changed` rather than as `link-added`, which is a real difference and
+not one the sidebar was earning.
+
+`thread_links` and `thread_relations` stay in the schema and in the MCP: an agent
+that lands a PR reports it with `link`, and that event is the strongest single
+piece of evidence the model recognises. What is gone is a UI that said a person
+could do it and could not.
+
+**Pictures need a token, and an `<img>` cannot send one.** The route that serves
+a workspace's images requires the Authorization header — dropping that guard
+would make every picture public to anybody with the URL, and putting a token in
+the URL would leave it in the history and in every copied link. So `Prose` fetches
+them with the header and swaps in blob URLs, cached by path for the life of the
+tab; the markdown and the HTML stay clean.
+
+**Una pantalla que se cae, lo dice.** `<svelte:boundary>` envuelve la
+aplicación entera. Hasta ahora un error al montar o desmontar una vista abortaba
+la actualización EN SILENCIO: el estado ya había cambiado —la dirección, por
+ejemplo— y el DOM se quedaba como estaba, así que el botón que lo provocó
+parecía no hacer nada. Eso costó una tarde de diagnóstico por eliminación para
+lo que resultó ser una línea: los avatares de un orbe estaban tecleados por el
+NOMBRE de la persona, y dos personas a cargo cuyos nombres aún no habían cargado
+llegaban como dos cadenas vacías — `each_key_duplicate`, actualización abortada,
+board que no vuelve a dibujarse. Ahora el error se ve en pantalla con su rastro,
+y la clave de ese `{#each}` incluye la posición.
+
+**Attaching, from where the writing happens.** *(built)* `POST …/asset` has
+existed since phase 1 and nothing in the product called it: a thread could hold a
+picture only if somebody uploaded it with curl. The document pane now takes a
+file three ways — paste (which is how a screenshot arrives), drag, and a 📎 —
+uploads it and writes `![nombre](assets/x.png)` at the caret. Both screens get it
+at once, because it lives in `DocEditor`.
+
+The document keeps the SHORT path. `assets/<name>` is what the layout says a
+picture is called from anywhere, and it is what survives a rename, a move and a
+git clone; the route that actually serves it is substituted when the server
+renders — a single-page app resolves a relative path against the ADDRESS, so the
+same string inside a thread asked for `/w/alpha/t/14/assets/x.png` and got the
+application shell. Stored short, rendered resolvable.
+
+**A thread may write more than one file.** `threads/` now nests EXACTLY one
+level: a thread's own document stays `threads/<seq>-<slug>.md`, and anything else
+it needs — a research note, a design, a log that does not belong on the main
+page — lives beside it in `threads/<seq>-<slug>/`. One level because the thread
+is what owns that directory; two would be a directory owned by nobody, and the
+rename that already moves a thread's file would stop being decidable.
+
+The main document stays a FILE beside its folder rather than becoming an index
+inside it. Rejected on purpose: `doc_path` is one pointer to one file, the rename
+moves it, `git log --follow` sees across the move, and turning every existing
+thread into a directory would have been a migration of live repositories for no
+gain.
+
+Belonging follows the folder, and that is the part that matters: a write to
+`threads/14-x/notas.md` is attributed to thread 14 and warms IT, not the
+workspace — a thread's writing is a thread's writing wherever it put it. The
+delete route learned the same distinction: a thread's own document goes when the
+thread does, and its other pages go like any other file.
+
+**The planner is a PLACE, so it lives in the column.** *(built)* It was a
+floating 🗓 in the corner, which is where a verb goes — save, search, delete —
+not where a place goes; reaching a place is what the left column is for. It sits
+above the workspaces and separated by a hairline, because it is not one of them.
+
+And what a member finds there is not a refusal. The objectives, the inbox and the
+kanban of the whole department are the lead's, and stay that way — but the DATES
+are not strategy: a thread with a due date is somebody's week, and the person
+whose week it is should be able to look at it. So a member gets the same calendar
+over the same `threads.due_date`, read-only, inside the shell (it was reached
+from the column and the column should still be there), and clicking a day opens
+the thread — which is where the work actually is. No filter is written for it:
+`allThreads` returns what the rules allow, so a member's calendar is their
+projects by construction.
+
+**The plan is read by the person whose plan it is.** *(built)* 5a opened
+`objectives` and `inbox_items` to everybody signed in, and the screen was later
+made the global lead's — which left a screen that is one person's and an API that
+is everybody's. That is a gap, not a decision, so the read now follows the
+screen. The inbox keeps one opening, and it is not a compromise: whoever captured
+a note reads it back, because a note you write and can never see again is a note
+that stops being written.
 
 **Every destructive action asks first**, through one `Confirm.svelte` rather than
 five hand-written dialogs, and the question is asked by whoever performs the

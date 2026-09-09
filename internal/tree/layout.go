@@ -27,8 +27,17 @@ import (
 // files can appear anywhere is a tree nobody can reason about — and attribution
 // would have nowhere to come from.
 //
-// `threads/` is flat on purpose. Threads are enumerated by `seq`, nesting adds
-// nothing, and it would make the rename that already moves files ambiguous.
+// `threads/` nests EXACTLY ONE level, and no more. A thread's own document is
+// `threads/<seq>-<slug>.md`; anything else that thread needs to write lives
+// beside it in `threads/<seq>-<slug>/`. One level because the thread is what
+// owns the directory — two would be a directory owned by nobody, and the rename
+// that already moves a thread's file would stop being decidable.
+//
+// The main document stays a FILE beside its folder rather than moving inside it
+// as an index: `doc_path` is one pointer to one file, the rename moves it, and
+// `git log --follow` sees across the move. Turning it into a directory would
+// have made every existing thread a migration for no gain.
+//
 // `docs/` nests freely, because a wiki wants folders.
 const (
 	DirThreads = "threads"
@@ -107,9 +116,9 @@ func Classify(doc string) (Area, error) {
 		return AreaDoc, nil
 
 	case strings.HasPrefix(rel, DirThreads+"/"):
-		// Flat: exactly one segment after the directory.
-		if strings.Contains(rel[len(DirThreads)+1:], "/") {
-			return "", fmt.Errorf("%w: %q — %s/ does not nest", ErrOutside, doc, DirThreads)
+		// One level: `threads/<file>` or `threads/<thread>/<file>`.
+		if strings.Count(rel[len(DirThreads)+1:], "/") > 1 {
+			return "", fmt.Errorf("%w: %q — %s/ nests one level, no more", ErrOutside, doc, DirThreads)
 		}
 		return AreaThread, nil
 

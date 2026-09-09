@@ -38,7 +38,16 @@
   const delay = $derived(`${(index % 7) * 0.45}s`);
 
   const MAX = 3;
-  const ordered = $derived(owner ? [owner, ...people.filter((p) => p !== owner)] : people);
+  // Sin vacíos y sin repetidos, y en ese orden: el dueño primero.
+  //
+  // Esta lista es la CLAVE del `{#each}` de abajo, y una clave repetida no es un
+  // dibujo feo — Svelte lanza `each_key_duplicate` y ABORTA la actualización, lo
+  // que deja la pantalla anterior en su sitio con el estado ya cambiado. Pasó:
+  // dos personas a cargo cuyos nombres aún no habían cargado llegaban como dos
+  // cadenas vacías, y el board no volvía a dibujarse nunca.
+  const ordered = $derived(
+    [...new Set([owner, ...people].filter(Boolean))],
+  );
   const shown = $derived(ordered.slice(0, MAX));
   const extra = $derived(Math.max(0, ordered.length - shown.length));
   const initial = (s: string) => (s[0] ?? '?').toUpperCase();
@@ -128,7 +137,9 @@
     {/if}
     {#if ordered.length}
       <span class="people">
-        {#each shown as p, i (p)}
+        <!-- La posición forma parte de la clave: si dos personas comparten
+             nombre visible, se dibujan dos avatares, no se cae la aplicación. -->
+        {#each shown as p, i (p + ':' + i)}
           <span class="person" class:owner={p === owner} style="--i: {i}" title={p}>{initial(p)}</span>
         {/each}
         {#if extra}

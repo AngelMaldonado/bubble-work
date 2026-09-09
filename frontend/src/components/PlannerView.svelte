@@ -55,6 +55,9 @@
     onrenamecolumn,
     ondeletecolumn,
     choosePriority = true,
+    readonly = false,
+    title = 'Planeador',
+    onpickevent,
   }: {
     /** Whose plan this is, shown top right. Empty in the real planner: the plan
      *  is the department's, and a project's name up there says it is that
@@ -99,6 +102,15 @@
     ondeletecolumn?: (id: string) => void;
     /** passed through to the card sheet — see there */
     choosePriority?: boolean;
+    /** The same screen for somebody who does not run the plan: only the
+     *  calendar, nothing draggable, and no verbs that write. The objectives,
+     *  the inbox and the kanban of the whole department are the lead's; the
+     *  DATES are somebody's week, and the person whose week it is should be
+     *  able to look at it in the same place. */
+    readonly?: boolean;
+    title?: string;
+    /** where a click on an event goes when nothing here may be edited */
+    onpickevent?: (id: string) => void;
   } = $props();
 
   // The kanban is on by default and cannot be the only thing turned off: it is
@@ -118,10 +130,17 @@
       return null; // private mode, or something else wrote nonsense there
     }
   })();
-  let showInbox = $state(kept?.inbox ?? false);
-  let showCal = $state(kept?.cal ?? false);
-  let showBoard = $state(kept?.board ?? true);
+  // Read-only, the panes are not a choice: there is one thing to show. Leído
+  // una sola vez a propósito — el modo no cambia mientras la pantalla vive, y
+  // un `$derived` aquí impediría encender y apagar paneles después.
+  // svelte-ignore state_referenced_locally
+  let showInbox = $state(readonly ? false : (kept?.inbox ?? false));
+  // svelte-ignore state_referenced_locally
+  let showCal = $state(readonly ? true : (kept?.cal ?? false));
+  // svelte-ignore state_referenced_locally
+  let showBoard = $state(readonly ? false : (kept?.board ?? true));
   $effect(() => {
+    if (readonly) return; // no es una preferencia, es la única vista
     try {
       localStorage.setItem(
         PANES,
@@ -254,16 +273,24 @@
     draft = '';
   }
 
-  const panes = $derived([
-    { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => (showInbox = !showInbox) },
-    { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => (showCal = !showCal) },
-    { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => (showBoard = !showBoard) },
-  ]);
-  const opens = $derived([
-    { k: 'obj', face: '🎯', label: 'Objetivos', go: () => (objOpen = true) },
-    { k: 'prio', face: '🔢', label: 'Prioridades', go: () => (prioOpen = true) },
-    { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
-  ]);
+  const panes = $derived(
+    readonly
+      ? []
+      : [
+          { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => (showInbox = !showInbox) },
+          { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => (showCal = !showCal) },
+          { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => (showBoard = !showBoard) },
+        ],
+  );
+  const opens = $derived(
+    readonly
+      ? [{ k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch }]
+      : [
+          { k: 'obj', face: '🎯', label: 'Objetivos', go: () => (objOpen = true) },
+          { k: 'prio', face: '🔢', label: 'Prioridades', go: () => (prioOpen = true) },
+          { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
+        ],
+  );
 
   function addObjective() {
     if (onaddobjective) return onaddobjective('Objetivo nuevo');
@@ -285,10 +312,13 @@
 
 <div class="screen" aria-label="planeador">
   <div class="topbar">
+    <!-- Un enlace de verdad, interceptado: el clic normal lo maneja la
+         aplicación, ⌘/ctrl/medio lo deja al navegador, y si el manejador no
+         corriera, el `href` navega igual. -->
     <button class="back" onclick={onback} aria-label="volver al board">
       <span aria-hidden="true">←</span> board
     </button>
-    <h2 class="ttl">Planeador</h2>
+    <h2 class="ttl">{title}</h2>
 
     {#if workspace}<span class="ws">{workspace}</span>{/if}
   </div>
@@ -319,7 +349,11 @@
 
     {#if showCal}
       <section class="pane cal">
-        <PlannerCalendar {events} onmove={onmoveevent} onpick={openById} />
+        <PlannerCalendar
+          {events}
+          {readonly}
+          onmove={readonly ? undefined : onmoveevent}
+          onpick={readonly ? onpickevent : openById} />
       </section>
     {/if}
 
@@ -367,7 +401,7 @@
     </Tooltip>
   {/each}
 
-  <span class="sep" aria-hidden="true"></span>
+  {#if panes.length}<span class="sep" aria-hidden="true"></span>{/if}
 
   {#each opens as a (a.k)}
     <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
@@ -389,6 +423,10 @@
   <ThemeToggle floating={false} />
 </div>
 
+<!-- Montados sólo cuando se usan, como en el resto de la aplicación.
+     Permanentes eran cuatro máquinas de Zag vivas en una pantalla que casi
+     siempre usa cero, y cuatro desmontajes simultáneos al salir de ella. -->
+{#if cardOpen && open}
 <CardSheet
   bind:open={cardOpen}
   bind:card={open}
@@ -402,15 +440,19 @@
   onpatch={onpatchcard}
   bind:writing
   {choosePriority} />
+{/if}
 
+{#if noteOpen && note}
 <InboxSheet
   bind:open={noteOpen}
   bind:note
   {render}
   onpromote={promote}
   ondelete={(id) => (ondeletenote ? ondeletenote(id) : (inbox = inbox.filter((x) => x.id !== id)))} />
+{/if}
 
 <!-- ── objectives ──────────────────────────────────────────────────────── -->
+{#if objOpen}
 <Dialog open={objOpen} onOpenChange={(e: { open: boolean }) => (objOpen = e.open)}>
   <Portal>
     <Dialog.Backdrop
@@ -461,8 +503,10 @@
     </Dialog.Positioner>
   </Portal>
 </Dialog>
+{/if}
 
 <!-- ── priorities ──────────────────────────────────────────────────────── -->
+{#if prioOpen}
 <Dialog open={prioOpen} onOpenChange={(e: { open: boolean }) => (prioOpen = e.open)}>
   <Portal>
     <Dialog.Backdrop
@@ -525,6 +569,7 @@
     </Dialog.Positioner>
   </Portal>
 </Dialog>
+{/if}
 
 <style>
   .screen {

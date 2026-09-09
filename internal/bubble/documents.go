@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"path"
 	"regexp"
 	"strconv"
 	"strings"
@@ -87,6 +88,15 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			e.App.Logger().Error("could not move the document", "thread", e.Record.Id, "err", err)
 			return nil
 		}
+		// And everything the thread wrote beside it. One move per file rather
+		// than one of the directory: every path that moves is a path the layout
+		// has already checked, and each move stays a commit git can follow.
+		for _, p := range pagesOf(t, repo, oldPath) {
+			to := pagesDir(newPath) + "/" + path.Base(p)
+			if err := t.Move(repo, p, to, actorLabel(e.Auth), "rename: "+to); err != nil {
+				e.App.Logger().Error("could not move a page", "path", p, "err", err)
+			}
+		}
 		e.Record.Set("doc_path", newPath)
 		return e.App.Save(e.Record)
 	})
@@ -94,7 +104,13 @@ func registerDocuments(app core.App, t *tree.Tree) {
 	app.OnRecordAfterDeleteSuccess("threads").BindFunc(func(e *core.RecordEvent) error {
 		repo, err := repoOf(app, e.Record)
 		if err == nil {
-			if err := t.Remove(repo, e.Record.GetString("doc_path"), "bubble", "deleted: "+e.Record.GetString("name")); err != nil {
+			doc := e.Record.GetString("doc_path")
+			for _, p := range pagesOf(t, repo, doc) {
+				if err := t.Remove(repo, p, "bubble", "deleted: "+p); err != nil {
+					app.Logger().Error("could not remove a page", "path", p, "err", err)
+				}
+			}
+			if err := t.Remove(repo, doc, "bubble", "deleted: "+e.Record.GetString("name")); err != nil {
 				app.Logger().Error("could not remove the document", "thread", e.Record.Id, "err", err)
 			}
 		}
@@ -221,11 +237,25 @@ func registerDocuments(app core.App, t *tree.Tree) {
 		se.Router.POST("/api/markdown", func(e *core.RequestEvent) error {
 			var body struct {
 				Content string `json:"content"`
+				// Optional, and only for one thing: `assets/x.png` is resolvable
+				// against a workspace and nowhere else. Without it the preview
+				// still renders — with a picture that does not load, which is
+				// the honest outcome of asking to render a document outside the
+				// place its files live.
+				Workspace string `json:"workspace"`
 			}
 			if err := e.BindBody(&body); err != nil {
 				return e.BadRequestError("could not read the body", err)
 			}
-			return e.JSON(http.StatusOK, map[string]any{"html": md.RenderHTML(body.Content)})
+			html := md.RenderHTML(body.Content)
+			if body.Workspace != "" {
+				ws, _, err := reachWorkspace(e, body.Workspace)
+				if err != nil {
+					return err
+				}
+				html = withAssets(html, ws.Id)
+			}
+			return e.JSON(http.StatusOK, map[string]any{"html": html})
 		}).Bind(apis.RequireAuth())
 
 		// The one document this server ships, served as markdown so a browser, a
@@ -242,10 +272,14 @@ func registerDocuments(app core.App, t *tree.Tree) {
 				return err
 			}
 			doc := e.Request.URL.Query().Get("path")
-			// A thread's document is the thread's to remove, by deleting the thread.
-			// Letting it go from here would leave a row pointing at nothing.
-			if area, err := tree.Classify(doc); err != nil || area == tree.AreaThread {
-				return e.BadRequestError("only documents under docs/ are removed this way", err)
+			area, err := tree.Classify(doc)
+			// A thread's own DOCUMENT is the thread's to remove, by deleting the
+			// thread: letting it go from here would leave a row pointing at
+			// nothing. What a thread wrote BESIDE it — `threads/14-x/notas.md` —
+			// is an ordinary file and goes like any other.
+			if err != nil || (area == tree.AreaThread && path.Dir(doc) == tree.DirThreads) {
+				return e.BadRequestError(
+					"a thread's own document goes when the thread does", err)
 			}
 			if err := t.Remove(repo, doc, actorLabel(e.Auth), "delete: "+doc); err != nil {
 				return e.BadRequestError(err.Error(), err)
@@ -327,14 +361,41 @@ func reachWorkspace(e *core.RequestEvent, id string) (*core.Record, string, erro
 // attributed.
 func ownerOf(app core.App, ws *core.Record, doc string) (threadID, subject string) {
 	if area, err := tree.Classify(doc); err == nil && area == tree.AreaThread {
+		// A thread's own document, or anything it wrote beside it: `notas.md`
+		// inside `threads/14-portar/` is the thread's writing as much as its
+		// document is, so it warms the thread rather than the workspace.
+		main := doc
+		if dir := path.Dir(doc); dir != tree.DirThreads {
+			main = dir + ".md"
+		}
 		th, err := app.FindFirstRecordByFilter("threads",
 			"workspace = {:ws} && doc_path = {:p}",
-			map[string]any{"ws": ws.Id, "p": doc})
+			map[string]any{"ws": ws.Id, "p": main})
 		if err == nil {
 			return th.Id, th.GetString("name")
 		}
 	}
 	return "", doc
+}
+
+// pagesDir is the folder a thread keeps its other files in:
+// `threads/14-x.md` → `threads/14-x`.
+func pagesDir(docPath string) string { return strings.TrimSuffix(docPath, ".md") }
+
+// pagesOf lists what a thread wrote BESIDE its document.
+func pagesOf(t *tree.Tree, repo, docPath string) []string {
+	entries, err := t.Tree(repo)
+	if err != nil {
+		return nil
+	}
+	dir := pagesDir(docPath) + "/"
+	var out []string
+	for _, e := range entries {
+		if !e.Dir && strings.HasPrefix(e.Path, dir) {
+			out = append(out, e.Path)
+		}
+	}
+	return out
 }
 
 func isPersonAuth(auth *core.Record) bool {

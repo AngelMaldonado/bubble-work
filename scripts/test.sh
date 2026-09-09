@@ -652,6 +652,41 @@ chk "el board dice contra qué calibración clasificó" \
 chk "erin no ve el board" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $ER")" 404
 
+# Todos: las burbujas de cada workspace que alguien alcanza, en un solo board.
+# Lo agrega el SERVIDOR — un reloj y una calibración — porque el calor es función
+# del tiempo y dos filas medidas contra dos "ahora" no son comparables, que es
+# justo lo único que esta pantalla existe para hacer.
+echo
+ALL_B=$(curl -s "$API/api/board" -H "Authorization: $B")
+chk ">>> el board de TODOS junta los workspaces de quien mira" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+print(len(json.load(sys.stdin)["workspaces"]))')" 2
+chk ">>> ...y cada fila dice de qué workspace es" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if d["bubbles"] and all(b.get("workspace") for b in d["bubbles"]) else "no")')" si
+chk ">>> ...con el slug, que es de lo que se hace la dirección" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+print("si" if all(w.get("slug") for w in json.load(sys.stdin)["workspaces"]) else "no")')" si
+chk ">>> ...ordenado por banda a través de proyectos, no agrupado por proyecto" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+band={"hot":3,"dormant":2,"rip":1,"closed":0}
+v=[band[b["heat"]["lifecycle"]] for b in json.load(sys.stdin)["bubbles"]]
+print("si" if v==sorted(v,reverse=True) else v)')" si
+chk ">>> alice sólo ve el suyo: el board de todos NO cruza la frontera" \
+  "$(curl -s "$API/api/board" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if [w["slug"] for w in d["workspaces"]]==["alpha"] else d["workspaces"])')" si
+chk ">>> carol (lead global) los ve todos sin ser miembro" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json
+print(len(json.load(sys.stdin)["workspaces"]))')" 2
+chk ">>> erin, que no es de ninguno, recibe un board vacío y no un error" \
+  "$(curl -s "$API/api/board" -H "Authorization: $ER" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if d["workspaces"]==[] and d["bubbles"]==[] else d)')" si
+chk ">>> anónimo no ve el board de todos" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/board")" 401
+
 # Cerrar una burbuja es una DECISIÓN con fecha, no un borrado: baja a la banda
 # de cerradas, dice cómo terminó, y se puede reabrir. Y quién está a cargo es una
 # LISTA, porque el trabajo compartido es la norma y la banda 🪦 solo pregunta si

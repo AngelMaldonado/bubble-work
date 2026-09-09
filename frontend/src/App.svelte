@@ -1,6 +1,6 @@
 <script lang="ts">
   import { api, type Board as BoardData, type Person, type ThreadHeat, type Workspace } from './lib/api';
-  import { boardUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { allUrl, boardUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
@@ -17,6 +17,7 @@
   import { presence } from './lib/presence.svelte';
   import { Dialog, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import Shell from './components/Shell.svelte';
+  import WorkspaceSwitcher from './components/WorkspaceSwitcher.svelte';
   import ThemePage from './components/ThemePage.svelte';
   import MockPage from './components/MockPage.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
@@ -45,8 +46,17 @@
   // Which workspace is on screen is a question the address answers. Landing on
   // `/` with no slug picks the first one and REPLACES the entry, so the back
   // button does not walk through a redirect nobody typed.
+  //
+  // Todos es la excepción, y a propósito: ahí NO hay workspace en pantalla, y
+  // rellenarlo con el primero haría que los verbos —crear, renombrar, la wiki—
+  // escribieran en un proyecto que nadie eligió.
+  const isAll = $derived(route.kind === 'all');
   const current = $derived(
-    ('slug' in route ? workspaces.find((w) => w.slug === route.slug) : null) ?? workspaces[0] ?? null,
+    isAll
+      ? null
+      : (('slug' in route ? workspaces.find((w) => w.slug === route.slug) : null) ??
+        workspaces[0] ??
+        null),
   );
   // Only a BOARD with no slug gets filled in. Asking "does this route carry a
   // slug?" caught `/planeador` and `/theme` too, and sent them straight back to
@@ -91,10 +101,14 @@
   let loadingBoard = $state(false);
   async function loadBoard() {
     const ws = current;
-    if (!ws) return;
+    if (!ws && !isAll) return;
     loadingBoard = true;
     try {
-      board = await api.board(ws.id);
+      // El de todos lo compone el SERVIDOR. Pedir el board de cada workspace
+      // desde aquí serían N respuestas calculadas en N instantes, y el calor es
+      // función del tiempo: dos burbujas medidas contra dos «ahora» no se
+      // pueden comparar, que es lo único que esta pantalla hace.
+      board = isAll ? await api.allBoard() : await api.board(ws!.id);
       error = '';
     } catch (e) {
       error = (e as Error).message;
@@ -104,6 +118,7 @@
   }
   $effect(() => {
     current?.id;
+    isAll;
     board = null;
     loadBoard();
   });
@@ -122,7 +137,7 @@
     // on an account that belongs to none — a fresh install, or the moment after
     // wiping one — every "← board" was a button that did nothing, and the
     // planner became a screen with no way out of it.
-    go(current ? boardUrl(current.slug) : '/');
+    go(isAll ? allUrl : current ? boardUrl(current.slug) : '/');
     loadBoard();
   }
 
@@ -253,7 +268,14 @@
   }
 
   const openWiki = (page: string) => current && go(wikiUrl(current.slug, page));
-  const openThread = (t: ThreadHeat) => current && go(threadUrl(current.slug, t.seq));
+  /** La dirección de un thread se hace del slug de SU workspace, que en el board
+   *  de todos no es el de la pantalla — ahí no hay ninguno. Por eso cada fila
+   *  viene diciendo de dónde es. */
+  function openThread(t: ThreadHeat) {
+    const slug =
+      current?.slug ?? (board?.workspaces ?? []).find((w) => w.id === t.workspace)?.slug;
+    if (slug) go(threadUrl(slug, t.seq));
+  }
 
   // ---- the omnibar -----------------------------------------------------------
   //
@@ -288,10 +310,19 @@
     // Making something comes first: it is the reason somebody opens this with
     // nothing in mind, and the right-click that also makes one is on a board
     // they may not be looking at.
-    { id: 'new-bubble', icon: '🫧', title: 'Nueva burbuja', hint: 'una agrupación de trabajo', run: () => (naming = 'bubble') },
-    { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
-    { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
-    { id: 'people', icon: '👥', title: 'Personas de este workspace', hint: 'invitar · roles', run: () => (crew = true) },
+    //
+    // Los cuatro primeros necesitan saber DÓNDE aterrizan, así que en Todos no
+    // se listan. Un comando que se ofrece y no hace nada enseña que la paleta no
+    // es de fiar, y entonces deja de usarse para todo lo demás.
+    ...(current
+      ? [
+          { id: 'new-bubble', icon: '🫧', title: 'Nueva burbuja', hint: 'una agrupación de trabajo', run: () => (naming = 'bubble') },
+          { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
+          { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
+          { id: 'people', icon: '👥', title: 'Personas de este workspace', hint: 'invitar · roles', run: () => (crew = true) },
+        ]
+      : []),
+    { id: 'all', icon: '∗', title: 'Todos los workspaces', hint: 'un board · Shift+Tab', run: () => go(allUrl) },
     isLead
       ? { id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }
       : { id: 'planner', icon: '🗓', title: 'Abrir el calendario', hint: 'lo que tiene fecha', run: openPlanner },
@@ -374,6 +405,23 @@
 
 <ThemeToggle />
 
+<!-- Shift+Tab, para workspaces. Vuelve de v0 con la propiedad que lo hacía
+     valer: el anillo va por RECENCIA con el actual primero, así que la segunda
+     casilla es siempre de donde vienes — un toque para salir, uno para volver.
+
+     Montado por encima de las pantallas y no dentro del board, porque cambiar de
+     proyecto es algo que se piensa leyendo un thread tanto como mirando el
+     board. Se apaga cuando otra cosa es dueña del teclado: el omnibar, un
+     diálogo o el campo que está pidiendo un nombre tienen su propia idea de qué
+     significa Tab. -->
+{#if signedIn}
+  <WorkspaceSwitcher
+    workspaces={workspaces.map((w) => ({ id: w.id, slug: w.slug, name: w.name }))}
+    current={isAll ? '' : (current?.slug ?? '')}
+    enabled={!omni && !naming && !crew && !doomed}
+    onpick={(url) => go(url)} />
+{/if}
+
 <!-- Una pantalla que se cae, lo dice.
      Hasta ahora un error al montar o desmontar una vista abortaba la
      actualización EN SILENCIO: el estado ya había cambiado —la dirección, por
@@ -443,10 +491,14 @@
   <Shell
     items={workspaces.map((w) => ({ id: w.id, name: w.name, hint: w.slug }))}
     pins={[
+      // Todos primero: es el board entero, y los workspaces de abajo son sus
+      // partes. Debajo el planeador, que es la otra pantalla que no pertenece a
+      // ningún proyecto.
+      { id: 'all', name: 'Todos', face: '∗', href: allUrl },
       { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
     ]}
-    pinned={route.kind === 'planner' ? 'planner' : ''}
-    onpin={openPlanner}
+    pinned={route.kind === 'planner' ? 'planner' : isAll ? 'all' : ''}
+    onpin={(id) => go(id === 'all' ? allUrl : plannerUrl)}
     onsignout={signOut}
     current={current?.id ?? ''}
     label="Workspaces"
@@ -459,7 +511,7 @@
     onrename={renameWorkspace}
     ondelete={deleteWorkspace}
     oncreate={createWorkspace}>
-    {#if current}
+    {#if current || isAll}
       <Board
         workspace={current}
         {board}
@@ -542,20 +594,25 @@
     </Portal>
   </Tooltip>
 
-  <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
-    <Tooltip.Trigger>
-      {#snippet element(attributes: Record<string, unknown>)}
-        <button class="float-btn wiki-btn" {...attributes} onclick={() => openWiki('README.md')}>
-          <span aria-hidden="true">📖</span>
-        </button>
-      {/snippet}
-    </Tooltip.Trigger>
-    <Portal>
-      <Tooltip.Positioner>
-        <Tooltip.Content>Wiki de {current?.name ?? ''}</Tooltip.Content>
-      </Tooltip.Positioner>
-    </Portal>
-  </Tooltip>
+  <!-- La wiki es de UN workspace. En Todos no hay cuál abrir, así que el botón
+       no está: uno que no puede contestar «de quién» es un botón que al pulsarlo
+       no hace nada, que es peor que su ausencia. -->
+  {#if current}
+    <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+      <Tooltip.Trigger>
+        {#snippet element(attributes: Record<string, unknown>)}
+          <button class="float-btn wiki-btn" {...attributes} onclick={() => openWiki('README.md')}>
+            <span aria-hidden="true">📖</span>
+          </button>
+        {/snippet}
+      </Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content>Wiki de {current.name}</Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip>
+  {/if}
   </div>
 
   {#if current}

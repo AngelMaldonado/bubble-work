@@ -867,6 +867,97 @@ patch is what git prints, two documents is what a merge view needs, and
 rebuilding one side from the other in the browser would be that second answer
 again.
 
+**Todos, and Shift+Tab to get there.** *(built)* Two halves of one thing: a board
+of every workspace at once, and the key that lands on it without reaching for the
+mouse. Both come back from v0, where the scope was a saved filter — here Todos is
+an ADDRESS, `/todos`, because looking at every project at once is a screen, and a
+screen you cannot link to is a screen you cannot send anybody.
+
+**The server aggregates it**, in `GET /api/board`. Asking for one board per
+workspace from the browser would be N answers computed at N different instants —
+heat is a function of evidence and TIME, so two bubbles measured against two
+"now" are not comparable, and comparing them is the only reason this screen
+exists. One clock, one calibration, and the membership boundary applied where
+every other rule is applied. Somebody who belongs to no workspace gets an empty
+board rather than an error, because that is a true answer.
+
+Every row now carries its `workspace`, and every board carries the list of the
+workspaces it was composed of — including the single-workspace board, which
+lists just itself. Not omitted when empty: a client that has to tell "field
+absent" from "empty list" is a client with two shapes to handle. The list is what
+turns an id into a name a person can read, and the slug in it is what
+`/w/<slug>/t/<seq>` is made of — a row that cannot say where it lives cannot be
+opened.
+
+**On Todos you look and you open, and that is the whole offer.** Creating a
+bubble or a thread, the wiki, the roster and renaming all need to know WHERE they
+land, and a view of several projects cannot answer that. So they are not
+disabled-looking, they are absent — from the orb's menu, the drawer, the floating
+buttons and ⌘K. A command that is offered and does nothing teaches that the
+palette is not to be trusted, and then it stops being used for anything. The orb
+wears its project's name instead of its owner's initials, which is also what
+saves N roster fetches: on a board of many projects, what you need from an orb is
+where it is from.
+
+**Shift+Tab is Alt+Tab, and the ring is ordered by RECENCY** — that is the
+property that makes it worth having rather than a list with a shortcut. Shift is
+held, Tab advances, releasing Shift commits; arrows move without committing, a
+letter jumps, Esc puts back what was scoped before. Alphabetical order put the
+neighbour you never visit next to the one you flick between all day, so a quick
+Shift+Tab landed somewhere arbitrary; ordered by recency with the current scope
+first, the second tile is always where you just came from. One tap out, one tap
+back. Todos is IN the ring rather than beside it, because it is a real
+destination.
+
+The ring lives in `localStorage` because it is about this browser — which of your
+projects you were in a minute ago is not a fact about the team — and it is
+recorded from `current` rather than from the panel's own jumps: workspaces are
+switched from the column and from ⌘K too, and a ring that counts only its own
+moves drifts silently until it points at where you no longer are.
+
+Shift+Tab is also how a keyboard user walks focus BACKWARDS, which is not a
+shortcut worth breaking, so it is only taken when nothing else owns the keyboard:
+not inside a field, an editor, a menu or a dialog, and not while the omnibar or a
+naming prompt is up. The bubble counts under each tile are asked for once, when
+the panel first opens — inside a workspace the board on screen only knows about
+that one, and a tile reading 0 for the others lies worse than a tile with no
+number at all.
+
+**Where you were, when you come back.** *(built)* Coming back from a thread used
+to land on a board scrolled to the top with the drawer shut, so the first thing
+after writing was finding your way back to the bubble you had just left. Two
+things persist now, and only two.
+
+**Which projects, on Todos.** In `localStorage`, not in the address, which is the
+same call v0 made and for the same reason: the address carries WHAT you are
+looking at — a board, a thread, a page — and that is why it can be sent to
+somebody. What you narrowed to is a preference of yours, and a link that drags
+the sender's choice shows the person who opens it a board that is not theirs. It
+is also exactly what makes coming back work: it was never in the address, so
+navigating cannot disturb it. Only on Todos — inside one project, choosing the
+project is saying the same thing twice — and a narrowed board says how many
+bubbles it is hiding, because one that does not is lying about how much work
+there is.
+
+**Two axes were built and then removed: whose, and which band.** The band one was
+wrong on the model's own terms — a band is not a filter, it is the shape of the
+board, and hiding one changes the only thing the board has to say. "Whose"
+answered a question the orb already answers with the initials of whoever is
+accountable, and it cost a roster fetch per workspace on Todos to do it worse.
+Both are gone rather than left switched off: a control nobody needs is a control
+somebody has to understand before ignoring.
+
+**The open bubble is `sessionStorage`, and deliberately not next to the project
+choice.** It is not a preference, it is where you were going — good for this tab
+and this hour, and finding it again tomorrow morning would be a panel nobody
+asked for. It is kept in sync from ONE effect over the drawer's own state rather
+than recorded at each exit, because there are four ways out — the thread, the ×,
+Escape and the click outside — and four places to remember the same fact is three
+places to forget it. The drawer does NOT close on the way to a thread: this
+screen is leaving whole, and leaving it open is what keeps "where I was" true.
+Restoring it also scrolls the bubble into view, because a drawer covering half
+the screen over a bubble you cannot see tells half the story.
+
 **Comments, in a drawer.** *(built)* The collection has existed since phase 1,
 with the rule that matters — the author owns what they said, so nobody, not even
 a lead, edits somebody else's words — and no surface. 💬 in the thread's HUD

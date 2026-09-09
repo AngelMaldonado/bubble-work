@@ -8,6 +8,7 @@
  *
  * The shape reads as what it is:
  *
+ *     /todos                       every workspace's bubbles on one board
  *     /w/alpha                     the board of a workspace
  *     /w/alpha/t/14                thread #14 of that workspace
  *     /w/alpha/wiki/docs/adr.md    a page in its wiki
@@ -20,6 +21,7 @@
  */
 export type Route =
   | { kind: 'board'; slug?: string }
+  | { kind: 'all' }
   | { kind: 'thread'; slug: string; seq: number }
   | { kind: 'wiki'; slug: string; page: string }
   | { kind: 'planner' }
@@ -31,6 +33,10 @@ export function parse(pathname: string): Route {
   if (p === '/theme') return { kind: 'theme' };
   if (p === '/theme/mock') return { kind: 'mock' };
   if (p === '/planeador') return { kind: 'planner' };
+  // Todos es una DIRECCIÓN y no un filtro guardado: mirar todos los proyectos a
+  // la vez es una pantalla, y una pantalla que no se puede enlazar es una
+  // pantalla que no se puede mandar a nadie.
+  if (p === '/todos') return { kind: 'all' };
 
   const m = p.match(/^\/w\/([^/]+)(?:\/(t|wiki)(?:\/(.*))?)?$/);
   if (!m) return { kind: 'board' };
@@ -43,6 +49,7 @@ export function parse(pathname: string): Route {
 }
 
 export const boardUrl = (slug: string) => `/w/${slug}`;
+export const allUrl = '/todos';
 export const threadUrl = (slug: string, seq: number) => `/w/${slug}/t/${seq}`;
 export const wikiUrl = (slug: string, page: string) =>
   `/w/${slug}/wiki/${page.split('/').map(encodeURIComponent).join('/')}`;

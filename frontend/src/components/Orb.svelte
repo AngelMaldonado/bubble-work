@@ -19,6 +19,7 @@
     burning = 0,
     people = [],
     owner = '',
+    project = '',
     index = 0,
     onclick,
     onaction,
@@ -28,6 +29,9 @@
     burning?: number;
     people?: string[];
     owner?: string;
+    /** de qué workspace es, cuando el board es de más de uno. Vacío en el board
+     *  de un proyecto: ahí decirlo en cada orbe es repetir la pantalla entera. */
+    project?: string;
     index?: number;
     onclick?: () => void;
     onaction?: (what: string) => void;
@@ -150,7 +154,14 @@
   </button>
   {/snippet}
   </Menu.ContextTrigger>
-  <span class="caption">{name}</span>
+  <span class="caption">
+    <!-- El proyecto ENCIMA del nombre y en pequeño: en el board de todos hay que
+         poder barrer la columna y saber de dónde es cada burbuja sin leer, y un
+         nombre de proyecto del mismo tamaño que el de la burbuja compite con lo
+         que sí se está leyendo. -->
+    {#if project}<span class="project">{project}</span>{/if}
+    {name}
+  </span>
 </div>
   <Portal>
     <Menu.Positioner>
@@ -313,6 +324,14 @@
     /* A hostname has no break opportunity, so without this it filled one line
        and clipped — wasting half the space it had already reserved. */
     overflow-wrap: anywhere;
+  }
+  .project {
+    display: block;
+    font-size: 0.62rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--faint);
   }
 
   /* Somebody who asked not to be moved should not be. */

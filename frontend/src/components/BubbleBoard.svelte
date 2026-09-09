@@ -11,6 +11,8 @@
     burning?: number;
     owner?: string;
     people?: string[];
+    /** su workspace, cuando el board es de varios */
+    project?: string;
   };
 </script>
 
@@ -34,10 +36,13 @@
     onopen,
     onaction,
     onnew,
+    controls,
     children,
   }: {
     title?: string;
     bubbles?: BoardBubble[];
+    /** los controles del board, sobre las bandas: a qué proyectos limitarse */
+    controls?: import('svelte').Snippet;
     onopen?: (bubble: BoardBubble) => void;
     onaction?: (what: string, bubble: BoardBubble) => void;
     /** right-click on the empty part of the board: what to make here */
@@ -80,9 +85,10 @@
   <Menu.ContextTrigger>
     {#snippet element(attributes: Record<string, unknown>)}
       <div class="board" bind:this={boardEl} {...attributes}>
-  {#if title}
+  {#if title || controls}
     <header class="board-head">
-      <h1 class="display text-2xl">{title}</h1>
+      {#if title}<h1 class="display text-2xl">{title}</h1>{/if}
+      {#if controls}{@render controls()}{/if}
     </header>
   {/if}
 
@@ -109,6 +115,7 @@
                 burning={b.burning ?? 0}
                 owner={b.owner ?? ''}
                 people={b.people ?? []}
+                project={b.project ?? ''}
                 index={i}
                 onclick={() => onopen?.(b)}
                 onaction={onaction ? (what) => onaction(what, b) : undefined} />

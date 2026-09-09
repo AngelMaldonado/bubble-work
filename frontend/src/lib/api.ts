@@ -18,6 +18,10 @@ export type Heat = {
 export type ThreadHeat = {
   id: string;
   seq: number;
+  /** de qué workspace es esta fila. Redundante en el board de uno, y lo único
+   *  que la hace abrible en el board de todos: la dirección se hace del slug de
+   *  su workspace y del seq. */
+  workspace: string;
   name: string;
   bubble?: string;
   priority?: string;
@@ -31,6 +35,7 @@ export type ThreadHeat = {
 
 export type BubbleHeat = {
   id: string;
+  workspace: string;
   name: string;
   /** who is accountable. Plural: the 🪦 band asks whether ANYBODY is. */
   owners?: string[];
@@ -44,12 +49,21 @@ export type BubbleHeat = {
 };
 
 export type Board = {
+  /** el workspace del board, o «» cuando el board es TODOS */
   workspace: string;
   at: string;
   tuning: Record<string, number | boolean>;
+  /** de qué se compuso este board. Siempre viene, y en el board de un
+   *  workspace trae ese solo: un cliente que tenga que distinguir «campo
+   *  ausente» de «lista vacía» es un cliente con dos formas que atender. */
+  workspaces: BoardWorkspace[];
   bubbles: BubbleHeat[];
   threads: ThreadHeat[];
 };
+
+/** Lo justo de un workspace para etiquetar una fila y para construir la
+ *  dirección que la abre. */
+export type BoardWorkspace = { id: string; slug: string; name: string };
 
 export type Workspace = { id: string; name: string; slug: string };
 
@@ -486,6 +500,16 @@ class Api {
 
   board(workspace: string) {
     return this.call<Board>(`/api/workspaces/${workspace}/board`);
+  }
+
+  /** TODOS: las burbujas de cada workspace que alcanzas, en un solo board.
+   *
+   *  Lo agrega el servidor y no este cliente. Pedir un board por workspace
+   *  serían N respuestas calculadas en N instantes distintos —el calor es
+   *  función del tiempo— y comparar dos burbujas medidas contra dos «ahora» es
+   *  exactamente lo que esta pantalla existe para no hacer. */
+  allBoard() {
+    return this.call<Board>('/api/board');
   }
 
   /** Qué se movió, por archivo. Lo calcula git, que ya tiene la respuesta:

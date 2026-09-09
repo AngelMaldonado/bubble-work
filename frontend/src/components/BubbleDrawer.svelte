@@ -267,11 +267,14 @@
               </span>
             </button>
             <!-- Outside the tile's own button, so removing a thread is never a
-                 mis-aimed attempt to open it. -->
-            <button
-              class="tile-x"
-              aria-label="eliminar thread #{t.seq}"
-              onclick={() => ondeletethread?.(t.seq)}>×</button>
+                 mis-aimed attempt to open it. Y sólo si hay a quién pedírselo:
+                 sin manejador esta × era un botón que no hacía nada. -->
+            {#if ondeletethread}
+              <button
+                class="tile-x"
+                aria-label="eliminar thread #{t.seq}"
+                onclick={() => ondeletethread?.(t.seq)}>×</button>
+            {/if}
 
           </li>
         {/each}
@@ -292,7 +295,11 @@
              for it here — rather than creating "Thread nuevo" and hoping
              somebody renames it — is the difference between a list of work and
              a list of placeholders. -->
-        {#if naming}
+        {#if !onnewthread}
+          <!-- Nada: en el board de TODOS no hay proyecto al que mandar un thread
+               nuevo, y un campo que no puede contestar «dónde» es un campo que
+               falla al enviarse. Se crea desde el board de su workspace. -->
+        {:else if naming}
           <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
             class="new-name"
             placeholder="¿Cómo se llama?"

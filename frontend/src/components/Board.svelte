@@ -13,6 +13,7 @@
   import Confirm, { type Doom } from './Confirm.svelte';
   import Minimap, { type MapItem } from './Minimap.svelte';
   import { ago, cycleLeft } from '../lib/when';
+  import { filters, lastOpenBubble } from '../lib/filters.svelte';
 
   let {
     workspace,
@@ -22,7 +23,13 @@
     onnew,
     scroller = null,
   }: {
-    workspace: Workspace;
+    /** El workspace en pantalla, o `null` cuando el board es TODOS.
+     *
+     *  Null y no un workspace inventado: los verbos de esta pantalla —crear una
+     *  burbuja, un thread, renombrar, cerrar— necesitan saber DÓNDE aterrizan, y
+     *  una vista de varios proyectos no puede contestar cuál. Así que en Todos
+     *  se mira y se abre, y lo que se escribe se escribe desde su proyecto. */
+    workspace: Workspace | null;
     /** The board, fetched by whoever owns the screen.
      *
      *  Not fetched here any more: a link straight to a thread has to resolve
@@ -42,20 +49,42 @@
   let error = $state('');
   const load = () => onreload?.();
 
+  /** Todos: más de un proyecto en la misma pantalla. Es lo que decide si esto es
+   *  un board donde se trabaja o un mirador donde se compara. */
+  const all = $derived(!workspace);
+  const projectOf = (id: string) =>
+    (board?.workspaces ?? []).find((w) => w.id === id)?.name ?? '';
+
   const threadsOf = (bubble: string) => (board?.threads ?? []).filter((t) => t.bubble === bubble);
 
   // Who works here. Read once per workspace, for the one field on this screen
   // that needs a person: who is accountable for a bubble.
+  //
+  //  En Todos no se pide: serían N peticiones para dibujar iniciales, y en un
+  //  board de varios proyectos lo que hace falta saber de un orbe no es quién
+  //  responde sino de dónde es. La insignia del proyecto ocupa ese sitio.
   let roster = $state<{ id: string; name: string }[]>([]);
   $effect(() => {
-    const id = workspace.id;
+    const id = workspace?.id;
     roster = [];
-    api.roster(id).then((r) => (roster = r)).catch(() => (roster = []));
+    if (id) api.roster(id).then((r) => (roster = r)).catch(() => (roster = []));
   });
   const nameOf = (id: string) => roster.find((p) => p.id === id)?.name ?? '';
 
+  // A qué proyectos te limitaste, en Todos.
+  //
+  // Se aplica aquí y no en el servidor: el board que llega es la verdad —qué
+  // flota y por qué— y limitar la vista es una elección de quien mira, que
+  // cambia al hacer clic y no debería costar una petición. El servidor sigue
+  // siendo el que clasifica; esto sólo decide qué se dibuja de lo clasificado.
+  const f = $derived(filters.current);
+
+  const visible = $derived(
+    (board?.bubbles ?? []).filter((b) => !f.projects.length || f.projects.includes(b.workspace)),
+  );
+
   const orbs = $derived<BoardBubble[]>(
-    (board?.bubbles ?? []).map((b) => ({
+    visible.map((b) => ({
       id: b.id,
       name: b.name,
       life: b.heat.lifecycle,
@@ -64,8 +93,9 @@
       // other half of what 😴 means.
       // Sólo los que ya tienen nombre: el roster llega por su cuenta, y un
       // avatar sin nombre no dice nada que valga la pena dibujar.
-      owner: nameOf((b.owners ?? [])[0] ?? ''),
-      people: (b.owners ?? []).map(nameOf).filter(Boolean),
+      owner: all ? '' : nameOf((b.owners ?? [])[0] ?? ''),
+      people: all ? [] : (b.owners ?? []).map(nameOf).filter(Boolean),
+      project: all ? projectOf(b.workspace) : '',
       // The flame counts what is PRODUCING inside it, which is the one number
       // an orb can carry without becoming a card.
       burning: threadsOf(b.id).filter((t) => t.heat.lifecycle === 'hot').length,
@@ -83,6 +113,37 @@
   const mapItems = $derived<MapItem[]>(orbs.map((b) => ({ id: b.id, name: b.name, life: b.life })));
 
   let open = $state<BubbleHeat | null>(null);
+
+  // Volver de un thread devuelve el cajón donde estaba.
+  //
+  // Un thread se abre DESDE una burbuja, así que volver al board y encontrarlo
+  // cerrado obliga a buscar otra vez la burbuja de la que acababas de salir. Se
+  // guarda al irse y se consume al volver — una vez, no en cada dibujado, o
+  // cerrar el cajón a mano lo reabriría en el siguiente cambio del board.
+  let restored = $state(false);
+  $effect(() => {
+    if (restored || !board) return;
+    restored = true;
+    const id = lastOpenBubble.get();
+    const b = id ? (board.bubbles.find((x) => x.id === id) ?? null) : null;
+    if (!b) return;
+    open = b;
+    drawer = true;
+    // Y se ve dónde está: el cajón tapa media pantalla, y abrirlo sobre una
+    // burbuja que quedó fuera de vista cuenta la mitad de la historia.
+    requestAnimationFrame(() =>
+      document.getElementById('bw-' + b.id)?.scrollIntoView({ block: 'center' }),
+    );
+  });
+
+  // De ahí en adelante, lo guardado ES el estado del cajón: abierto se recuerda,
+  // cerrado se olvida. Una sola regla en un solo sitio, en vez de anotarlo en
+  // cada puerta por la que se puede salir — y las puertas son cuatro: el thread,
+  // la ×, Escape y el clic fuera.
+  $effect(() => {
+    if (!restored) return;
+    lastOpenBubble.set(drawer && open ? open.id : '');
+  });
   // The drawer reads the bubble from the BOARD, not from the copy taken when it
   // was opened: renaming, handing it over or closing it reloads the board, and
   // a panel showing the snapshot would keep displaying what you just changed.
@@ -110,7 +171,7 @@
   let closure = $state('');
 
   async function newThread(name: string) {
-    if (!open) return;
+    if (!open || !workspace) return;
     try {
       await api.createThread({ workspace: workspace.id, bubble: open.id, name });
       // Creating a thread IS evidence, so the band this bubble sits in can have
@@ -149,6 +210,10 @@
   function act(what: string, b: BoardBubble) {
     const bubble = board?.bubbles.find((x) => x.id === b.id) ?? null;
     if (!bubble) return;
+    // En Todos el menú del orbe abre, y nada más. Renombrar o cerrar una burbuja
+    // desde una pantalla que no es la de su proyecto es escribir a ciegas: lo
+    // que cambia no está delante.
+    if (all && what !== 'open') return;
     if (what === 'open' || what === 'thread') {
       open = bubble;
       naming = what === 'thread';
@@ -192,6 +257,43 @@
   }
 </script>
 
+
+<!-- Los proyectos, en Todos: a cuáles quieres limitarte.
+     Sobre las bandas y no en una barra lateral, porque la respuesta a «¿por qué
+     falta esta burbuja?» tiene que estar donde se hizo la pregunta. Lo elegido
+     sobrevive irse a un thread y volver: vive en el navegador, no en la
+     dirección — un enlace lleva QUÉ miras, no a qué te limitaste.
+
+     Sólo aquí: dentro de un proyecto, elegir proyecto es decir dos veces lo
+     mismo. Y sólo las bandas se quedaron fuera de esto a propósito — una banda
+     no se filtra, se mira: esconderla cambia la forma del board, que es la única
+     cosa que el board tiene que decir. -->
+{#snippet controls()}
+  {#if all && (board?.workspaces ?? []).length > 1}
+    <div class="projects">
+      <div class="group" role="group" aria-label="Proyectos">
+        {#each board?.workspaces ?? [] as w (w.id)}
+          <button
+            class="chip"
+            class:on={f.projects.includes(w.id)}
+            aria-pressed={f.projects.includes(w.id)}
+            onclick={() => filters.toggle(w.id)}>
+            {w.name}
+          </button>
+        {/each}
+      </div>
+
+      {#if filters.on}
+        <!-- Cuántas quedaron fuera, y la salida. Un board limitado que no dice
+             que lo está es un board que miente sobre cuánto trabajo hay. -->
+        <button class="chip clear" onclick={() => filters.clear()}>
+          ✕ ver todos · {(board?.bubbles.length ?? 0) - visible.length} ocultas
+        </button>
+      {/if}
+    </div>
+  {/if}
+{/snippet}
+
 <Minimap items={mapItems} {scroller} />
 
 {#if error}
@@ -202,9 +304,10 @@
   <p class="faint p-6 text-sm">…</p>
 {:else}
   <BubbleBoard
-    title={workspace.name}
+    title={workspace?.name ?? 'Todos los workspaces'}
     bubbles={orbs}
-    {onnew}
+    {controls}
+    onnew={all ? undefined : onnew}
     onaction={act}
     onopen={(b) => {
       open = board?.bubbles.find((x) => x.id === b.id) ?? null;
@@ -237,17 +340,23 @@
     cycleLeft={cycle?.words ?? ''}
     onopenthread={(seq) => {
       const t = threadsOf(open?.id ?? '').find((x) => x.seq === seq);
-      if (t) {
-        drawer = false;
-        onOpen(t);
-      }
+      // El cajón NO se cierra al salir: esta pantalla se va entera, y dejarlo
+      // abierto es lo que hace que «dónde estaba» siga siendo verdad cuando se
+      // vuelva.
+      if (t) onOpen(t);
     }}
-    onnewthread={newThread}
-    ondeletethread={removeThread}
-    onoutcome={(text) => shown && write(() => api.update('bubbles', shown.id, { outcome: text }))}
-    onowners={(ids: string[]) => shown && write(() => api.update('bubbles', shown.id, { owners: ids }))}
-    onclose={() => shown && act('close', { id: shown.id, name: shown.name, life: shown.heat.lifecycle })}
-    onreopen={() => shown && reopen(shown)}
+    onnewthread={all ? undefined : newThread}
+    ondeletethread={all ? undefined : removeThread}
+    onoutcome={all
+      ? undefined
+      : (text) => shown && write(() => api.update('bubbles', shown.id, { outcome: text }))}
+    onowners={all
+      ? undefined
+      : (ids: string[]) => shown && write(() => api.update('bubbles', shown.id, { owners: ids }))}
+    onclose={all
+      ? undefined
+      : () => shown && act('close', { id: shown.id, name: shown.name, life: shown.heat.lifecycle })}
+    onreopen={all ? undefined : () => shown && reopen(shown)}
     bind:naming />
 {/if}
 
@@ -317,3 +426,55 @@
     </Portal>
   </Dialog>
 {/if}
+
+<style>
+  /* Los proyectos son CROMO, no contenido: por debajo del título en peso, tamaño
+     y color, o compiten con el board que están describiendo. Ningún acento
+     inventado — el encendido se dice con el texto a plena opacidad sobre el
+     mismo `--hover` que usa el resto de la aplicación. */
+  .projects {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    /* El hueco antes de «ver todos» es varias veces el de dentro del grupo:
+       quitar la limitación no es un proyecto más de la lista. */
+    gap: 0.4rem 1.4rem;
+    margin-top: 1rem;
+  }
+  .group {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.35rem;
+  }
+  .chip {
+    padding: 0.34rem 0.68rem;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: transparent;
+    color: var(--faint);
+    font-family: inherit;
+    font-size: 0.72rem;
+    font-weight: 600;
+    line-height: 1;
+    cursor: pointer;
+  }
+  .chip:hover {
+    color: var(--text);
+  }
+  .chip.on {
+    background: var(--hover);
+    color: var(--text);
+  }
+
+  /* Ver todos no es un proyecto más: sin borde hasta que se apunta, para que no
+     compita con los que sí dicen qué estás viendo. */
+  .clear {
+    border-color: transparent;
+    font-weight: 500;
+  }
+  .clear:hover {
+    border-color: var(--line);
+  }
+</style>

@@ -4,10 +4,17 @@
 # tiene que pasar" se separan, y la que se rompe siempre es la que nadie mira.
 name: check
 
+# Al abrir o actualizar un PR hacia main, y sólo ahí.
+#
+# No en cada push a una rama de trabajo: mientras se está construyendo algo, lo
+# que dice si va bien es `just check` en la máquina de quien lo escribe — el hook
+# de commit ya lo corre. Gastar cinco minutos de runner en cada empujón
+# intermedio enseña a mirar para otro lado cuando sale rojo, que es justo lo que
+# esta puerta no puede permitirse. El push a main tampoco lo necesita: el
+# release corre `scripts/check.sh` antes de tagear nada.
 on:
   pull_request:
-  push:
-    branches: [main, wip]
+    branches: [main]
 
 jobs:
   check:

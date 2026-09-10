@@ -523,10 +523,21 @@ chk ">>> guardar un thread ya completado no lo completa de nuevo" \
   "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 1
 
 echo
-chk ">>> nadie escribe evidencia desde un cliente" \
-  "$(pcode events "$A" "{\"workspace\":\"$ALPHA\",\"target_type\":\"thread\",\"target\":\"$T1ID\",\"kind\":\"document-changed\",\"at\":\"2026-01-01 00:00:00.000Z\"}")" 400
-chk ">>> ni el lead global" \
-  "$(pcode events "$C" "{\"workspace\":\"$ALPHA\",\"target_type\":\"thread\",\"target\":\"$T1ID\",\"kind\":\"document-changed\",\"at\":\"2026-01-01 00:00:00.000Z\"}")" 400
+# El cuerpo en una VARIABLE, no dentro de "$( … )" como argumento de chk. Es la
+# regla que este archivo ya se había puesto, y saltársela aquí costó cinco
+# aserciones que pasaban en macOS y fallaban en el runner de CI: la MISMA llamada
+# daba 400 en un sitio y 403 en el otro. Con el cuerpo en una variable da 403 en
+# los dos, que es lo que corresponde — la regla de `events` es nil, y en
+# PocketBase una regla nil significa "sólo superusers".
+#
+# Lo que se aprendió no es el mecanismo exacto del shell: es que una aserción que
+# sólo dice "4xx" no distingue "la regla lo rechazó" de "la petición ni siquiera
+# llegó a la regla", y verde por accidente es peor que ninguna aserción.
+EVBODY="{\"workspace\":\"$ALPHA\",\"target_type\":\"thread\",\"target\":\"$T1ID\",\"kind\":\"document-changed\",\"at\":\"2026-01-01 00:00:00.000Z\"}"
+EVCODE=$(pcode events "$A" "$EVBODY")
+chk ">>> nadie escribe evidencia desde un cliente" "$EVCODE" 403
+EVCODE=$(pcode events "$C" "$EVBODY")
+chk ">>> ni el lead global" "$EVCODE" 403
 chk "erin no ve la evidencia de alpha" \
   "$(EV "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
 chk "un miembro sí la ve" \
@@ -598,8 +609,9 @@ chk ">>> capturar NO es evidencia: no calienta nada" \
   "$(evcount "(kind='inbox-captured')")" 0
 chk ">>> anónimo no captura" \
   "$(code -X POST "$API/api/collections/inbox_items/records" -H "$JS" -d '{"note":"hola"}')" 400
-chk "nadie puede firmar una nota como otro" \
-  "$(post inbox_items "$A" "{\"note\":\"suplantada\",\"captured_by\":\"$BID\"}" | j "['captured_by']")" "$AID"
+SUPBODY="{\"note\":\"suplantada\",\"captured_by\":\"$BID\"}"
+SUP=$(post inbox_items "$A" "$SUPBODY")
+chk "nadie puede firmar una nota como otro" "$(echo "$SUP" | j "['captured_by']")" "$AID"
 
 # Triar: la nota se convierte en un thread —y ahí se decide de qué workspace es—
 # y se queda apuntando a lo que fue.
@@ -624,10 +636,12 @@ chk ">>> quien capturó lee su propia nota" \
   "$(curl -s "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $A" | j "['id']")" "$IN2ID"
 chk ">>> pero no la de otro" \
   "$(code "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A")" 404
+# Tres notas: la de bob, la de alice, y la que alice intentó firmar como bob y
+# quedó firmada como suya.
 chk ">>> el lead global ve el inbox entero" \
-  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $C" | j "['totalItems']")" 2
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $C" | j "['totalItems']")" 3
 chk "...y alice sólo lo suyo" \
-  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $A" | j "['totalItems']")" 1
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $A" | j "['totalItems']")" 2
 
 echo
 BOARD=$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A")
@@ -728,8 +742,9 @@ chk ">>> anónimo no late" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence")" 401
 chk ">>> anónimo tampoco ve quién está" \
   "$(curl -s "$API/api/collections/presence/records" | j "['totalItems']")" 0
-chk ">>> nadie escribe presencia desde un cliente: el reloj es del servidor" \
-  "$(pcode presence "$A" "{\"user\":\"$AID\",\"at\":\"2030-01-01 00:00:00.000Z\"}")" 400
+PRBODY="{\"user\":\"$AID\",\"at\":\"2030-01-01 00:00:00.000Z\"}"
+PRCODE=$(pcode presence "$A" "$PRBODY")
+chk ">>> nadie escribe presencia desde un cliente: el reloj es del servidor" "$PRCODE" 403
 chk ">>> latir NO es evidencia: no deja evento" \
   "$(curl -s "$API/api/collections/events/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"kind='presence'\"))")" \
      -H "Authorization: $SU" | j "['totalItems']")" 0

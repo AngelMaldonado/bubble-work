@@ -1,20 +1,24 @@
 <script lang="ts">
   // ONE renderer for every document in the app.
   //
-  // A thread's artifacts, a workspace's pages and a chat message all show the
-  // same thing — markdown the server rendered — and they used to each own a copy
-  // of the styling and the post-processing. Copies agree until they don't: pages
-  // never got mermaid diagrams or heading ids at all, because that code lived
-  // inside ThreadView.
+  // A thread's document and a wiki page show the same thing — markdown the
+  // server rendered — and in v0 they each owned a copy of the styling and the
+  // post-processing. Copies agree until they don't: pages never got mermaid
+  // diagrams or heading ids at all, because that code lived inside ThreadView.
   //
-  // Content arrives either as `html` (the common case) or as a `children`
-  // snippet, for a caller that needs to compose several regions inside one
-  // document — the Logbook and its Definition of Done, each with its own
-  // data-region. Svelte's scoping puts the class on the .prose element here, and
-  // every rule below reaches into it with :global, so snippet content is styled
-  // exactly like the {@html} case.
+  // Content arrives as `html` — the server's render. Svelte's scoping puts the
+  // class on the .prose element here and every rule below reaches into it with
+  // :global, so nothing about the styling depends on who is calling.
   import type { Snippet } from 'svelte';
-  import { enableCheckboxes, extractHeadings, renderMermaid, type Heading } from '../lib/prose';
+  import {
+    enableCheckboxes,
+    extractHeadings,
+    renderExcalidraw,
+    renderMermaid,
+    showImages,
+    type Heading,
+  } from '../lib/prose';
+  import { api } from '../lib/api';
 
   let {
     html = '',
@@ -61,7 +65,9 @@
     requestAnimationFrame(() => {
       enableCheckboxes(node);
       void (async () => {
+        await showImages(node, api.token);
         await renderMermaid(node);
+        await renderExcalidraw(node);
         onheadings?.(extractHeadings(node));
         onrendered?.();
       })();
@@ -80,6 +86,10 @@
 </article>
 
 <style>
+  /* `--wip` was v0's name for the accent and does not exist here. Ported
+     unchanged, every rule that used it resolved to nothing: links, quotes,
+     inline code and — the one that mattered — a TICKED checkbox, which was
+     drawn exactly like an empty one. */
   /* ---- prose: matches the mds tool's render (serif body, sans headings) ---- */
   .prose {
     --code-bg: color-mix(in oklab, var(--text) 7%, transparent);
@@ -144,7 +154,7 @@
     margin: 0.3em 0;
   }
   .prose :global(a) {
-    color: var(--wip);
+    color: var(--accent);
     text-decoration: underline;
     text-decoration-thickness: 0.08em;
     text-underline-offset: 0.18em;
@@ -172,9 +182,9 @@
     font-size: 0.82em;
   }
   .prose :global(a.plane-img:hover) {
-    color: var(--wip);
-    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
-    background: color-mix(in oklab, var(--wip) 8%, transparent);
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
   }
   /* Plane @mentions. Invisible until ARTIFACT-EDITING.md Phase 2 — a
      <mention-component> rendered to nothing at all — so this is the first time
@@ -185,15 +195,15 @@
     font-family: var(--sans);
     font-size: 0.88em;
     font-weight: 600;
-    color: var(--wip);
-    background: color-mix(in oklab, var(--wip) 12%, transparent);
+    color: var(--accent);
+    background: color-mix(in oklab, var(--accent) 12%, transparent);
     white-space: nowrap;
   }
   .prose :global(blockquote) {
     margin-left: 0;
     padding: 0.25em 1.15em;
     color: var(--muted);
-    border-left: 4px solid var(--wip);
+    border-left: 4px solid var(--accent);
     background: color-mix(in oklab, var(--text) 4%, transparent);
     border-radius: 0 10px 10px 0;
   }
@@ -268,8 +278,8 @@
     place-content: center;
   }
   .prose :global(input[type='checkbox']:checked) {
-    border-color: var(--wip);
-    background: var(--wip);
+    border-color: var(--accent);
+    background: var(--accent);
   }
   .prose :global(input[type='checkbox']:checked::before) {
     width: 0.5em;
@@ -279,8 +289,10 @@
     content: '';
     transform: translate(0, -0.06em) rotate(-45deg);
   }
-  /* mermaid diagrams */
-  .prose :global(.mermaid-diagram) {
+  /* Diagrams — mermaid and excalidraw sit in the same card, because they are
+     the same thing to a reader: a picture the document drew for itself. */
+  .prose :global(.mermaid-diagram),
+  .prose :global(.excalidraw-diagram) {
     margin: 28px 0;
     padding: 20px;
     overflow: auto;
@@ -290,10 +302,15 @@
     box-shadow: 0 18px 48px var(--shadow);
     text-align: center;
   }
-  .prose :global(.mermaid-diagram svg) {
+  .prose :global(.mermaid-diagram svg),
+  .prose :global(.excalidraw-diagram svg) {
     max-width: 100%;
     height: auto;
   }
+  /* A drawing is ink on paper: its strokes carry their own colours from the
+     scene, and `currentColor` is only used by the note an unknown element
+     leaves behind. */
+  .prose :global(.excalidraw-diagram) { color: var(--muted); }
   .prose :global(.mermaid-error) {
     color: oklch(0.62 0.2 20);
     font-family: var(--sans);
@@ -302,7 +319,7 @@
   /* a rendered todo is a control, not decoration (Phase 6) */
   .prose :global(input[type='checkbox']) {
     cursor: pointer;
-    accent-color: var(--wip);
+    accent-color: var(--accent);
     width: 0.95em;
     height: 0.95em;
     margin-right: 0.35em;
@@ -329,6 +346,17 @@
   .prose.compact :global(p:last-child) {
     margin-bottom: 0;
   }
+  /* Headings come down with the body. Left at page scale a `##` inside a field
+     is larger than the dialog's own title, which reads as the field shouting. */
+  .prose.compact :global(h1) { font-size: 1.15rem; margin: 0.6rem 0 0.3rem; padding: 0; border: none; }
+  .prose.compact :global(h2) { font-size: 1rem; margin: 0.7rem 0 0.3rem; padding: 0; border: none; }
+  .prose.compact :global(h3),
+  .prose.compact :global(h4) { font-size: 0.92rem; margin: 0.6rem 0 0.25rem; }
+  .prose.compact :global(h1:first-child),
+  .prose.compact :global(h2:first-child) { margin-top: 0; }
+  .prose.compact :global(ul),
+  .prose.compact :global(ol) { margin: 0.3rem 0; }
+  .prose.compact :global(li) { margin: 0.15rem 0; }
 
   @media (max-width: 640px) {
     .prose {

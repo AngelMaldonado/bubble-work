@@ -1,209 +1,126 @@
 package md
 
 import (
-	"reflect"
+	"errors"
 	"strings"
 	"testing"
 )
 
-func TestFromHTML_Basics(t *testing.T) {
-	cases := []struct {
-		name string
-		in   string
-		want string
-	}{
-		{"heading+para", `<h1>Title</h1><p>Hello world</p>`, "# Title\n\nHello world"},
-		{"h2h3", `<h2>A</h2><h3>B</h3>`, "## A\n\n### B"},
-		{"bold+italic", `<p>a <strong>b</strong> and <em>c</em></p>`, "a **b** and *c*"},
-		{"inline code", `<p>use <code>go build</code></p>`, "use `go build`"},
-		{"link", `<p><a href="https://x.dev">site</a></p>`, "[site](https://x.dev)"},
-		{"strikethrough", `<p><s>gone</s></p>`, "~~gone~~"},
-		{"hr", `<p>a</p><hr/><p>b</p>`, "a\n\n---\n\nb"},
-		{"blockquote", `<blockquote><p>quoted</p></blockquote>`, "> quoted"},
-		{"empty", ``, ""},
-		{"whitespace collapse", "<p>a\n   b\tc</p>", "a b c"},
-		{"block image", `<p>x</p><img src="https://e.com/a.png" alt="pic">`, "x\n\n![pic](https://e.com/a.png)"},
-		{"inline image", `<p>see <img src="https://e.com/b.png" alt="b"></p>`, "see ![b](https://e.com/b.png)"},
+func TestToggleTodoRefusesWhenTheItemMoved(t *testing.T) {
+	section := "- [ ] wire it up\n- [ ] ship it"
+
+	if _, err := ToggleTodo(section, 1, "wire it up", true); !errors.Is(err, ErrTodoMoved) {
+		t.Errorf("a mismatched text was accepted: %v", err)
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			if got := FromHTML(tc.in); got != tc.want {
-				t.Errorf("FromHTML(%q)\n got: %q\nwant: %q", tc.in, got, tc.want)
-			}
-		})
+	if _, err := ToggleTodo(section, 7, "ship it", true); !errors.Is(err, ErrNoSuchTodo) {
+		t.Errorf("an out-of-range index was accepted: %v", err)
+	}
+
+	got, err := ToggleTodo(section, 1, "ship it", true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "- [ ] wire it up\n- [x] ship it" {
+		t.Errorf("toggle: %q", got)
+	}
+	// Un-ticking is the same operation in reverse.
+	back, err := ToggleTodo(got, 1, "ship it", false)
+	if err != nil || back != section {
+		t.Errorf("un-tick: %q (%v)", back, err)
 	}
 }
 
-func TestFromHTML_Lists(t *testing.T) {
-	got := FromHTML(`<ul><li>one</li><li>two</li></ul>`)
-	if got != "- one\n- two" {
-		t.Errorf("ul: got %q", got)
-	}
-	got = FromHTML(`<ol><li>first</li><li>second</li></ol>`)
-	if got != "1. first\n2. second" {
-		t.Errorf("ol: got %q", got)
-	}
-	got = FromHTML(`<ul><li>a<ul><li>a1</li></ul></li><li>b</li></ul>`)
-	if got != "- a\n  - a1\n- b" {
-		t.Errorf("nested: got %q", got)
+func TestToggleTodoForgivesReflowedText(t *testing.T) {
+	if _, err := ToggleTodo("- [ ] ship   it", 0, "ship it", true); err != nil {
+		t.Errorf("a reflow was treated as a different todo: %v", err)
 	}
 }
 
-// Task lists are the logbook — checkbox state must survive both shapes Plane emits.
-func TestFromHTML_TaskLists(t *testing.T) {
-	// Shape A: data-checked attribute (TipTap default).
-	a := `<ul data-type="taskList">
-	  <li data-type="taskItem" data-checked="true"><div><p>done item</p></div></li>
-	  <li data-type="taskItem" data-checked="false"><div><p>open item</p></div></li>
-	</ul>`
-	if got := FromHTML(a); got != "- [x] done item\n- [ ] open item" {
-		t.Errorf("data-checked task list: got %q", got)
+func TestToggleTodoKeepsIndentationAndMarker(t *testing.T) {
+	got, err := ToggleTodo("* [ ] top\n  * [ ] nested", 1, "nested", true)
+	if err != nil {
+		t.Fatal(err)
 	}
-
-	// Shape B: nested <input type=checkbox>.
-	b := `<ul>
-	  <li><label><input type="checkbox" checked="checked"><span></span></label><div>shipped</div></li>
-	  <li><label><input type="checkbox"><span></span></label><div>todo</div></li>
-	</ul>`
-	if got := FromHTML(b); got != "- [x] shipped\n- [ ] todo" {
-		t.Errorf("input task list: got %q", got)
+	if got != "* [ ] top\n  * [x] nested" {
+		t.Errorf("toggle reformatted the list: %q", got)
 	}
 }
 
-func TestFromHTML_CodeBlock(t *testing.T) {
-	got := FromHTML("<pre><code>line1\nline2</code></pre>")
-	want := "```\nline1\nline2\n```"
-	if got != want {
-		t.Errorf("code block:\n got %q\nwant %q", got, want)
+func TestApplyEdits(t *testing.T) {
+	const src = "- [ ] measure the drop-off\n- [ ] rewrite the validation\n- [ ] ship it"
+
+	got, err := ApplyEdits(src, []Edit{{Old: "- [ ] ship it", New: "- [x] ship it"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != "- [ ] measure the drop-off\n- [ ] rewrite the validation\n- [x] ship it" {
+		t.Errorf("one line changed, the rest should be untouched: %q", got)
+	}
+
+	// Edits see each other, so a rename then an edit of the renamed line works.
+	got, err = ApplyEdits(src, []Edit{
+		{Old: "ship it", New: "ship the thing"},
+		{Old: "- [ ] ship the thing", New: "- [x] ship the thing"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(got, "- [x] ship the thing") {
+		t.Errorf("edits do not compose: %q", got)
+	}
+
+	// An empty Old appends — the one case with nothing to match.
+	got, err = ApplyEdits(src, []Edit{{New: "- [ ] and one more"}})
+	if err != nil || !strings.HasSuffix(got, "\n\n- [ ] and one more") {
+		t.Errorf("append: %q (%v)", got, err)
+	}
+
+	// An empty New deletes.
+	got, err = ApplyEdits(src, []Edit{{Old: "\n- [ ] ship it", New: ""}})
+	if err != nil || strings.Contains(got, "ship it") {
+		t.Errorf("delete: %q (%v)", got, err)
 	}
 }
 
-func TestFromHTML_Table(t *testing.T) {
-	got := FromHTML(`<table><tbody>
-	  <tr><th>H1</th><th>H2</th></tr>
-	  <tr><td>a</td><td>b</td></tr>
-	</tbody></table>`)
-	want := "| H1 | H2 |\n| --- | --- |\n| a | b |"
-	if got != want {
-		t.Errorf("table:\n got %q\nwant %q", got, want)
+func TestApplyEditsRefusesRatherThanGuesses(t *testing.T) {
+	const src = "- [ ] review the diff\n- [ ] review the docs"
+
+	// Quoting something that is not there means the caller is looking at a stale
+	// copy. Writing anything at that point would be a guess.
+	_, err := ApplyEdits(src, []Edit{{Old: "- [ ] review the tests", New: "x"}})
+	if !errors.Is(err, ErrEditNotFound) {
+		t.Errorf("a missing match was accepted: %v", err)
+	}
+
+	// "review the" matches twice. Picking the first is a question the caller
+	// cannot know it answered wrongly.
+	_, err = ApplyEdits(src, []Edit{{Old: "review the", New: "re-review the"}})
+	if !errors.Is(err, ErrEditAmbiguous) {
+		t.Errorf("an ambiguous match was accepted: %v", err)
+	}
+	if err != nil && !strings.Contains(err.Error(), "2 times") {
+		t.Errorf("the refusal should say how many it found: %v", err)
+	}
+	// ...unless the caller says it means all of them.
+	got, err := ApplyEdits(src, []Edit{{Old: "review the", New: "re-review the", All: true}})
+	if err != nil || strings.Count(got, "re-review the") != 2 {
+		t.Errorf("All: %q (%v)", got, err)
+	}
+
+	// A failure part-way applies NOTHING: half a patch is worse than none,
+	// because the caller cannot tell which half landed.
+	_, err = ApplyEdits(src, []Edit{
+		{Old: "review the diff", New: "review the patch"},
+		{Old: "not in here at all", New: "x"},
+	})
+	if err == nil {
+		t.Fatal("a set with a bad edit was accepted")
+	}
+	if !strings.Contains(err.Error(), "edit 2") {
+		t.Errorf("the refusal should say WHICH edit failed: %v", err)
 	}
 }
 
-func TestExtractSection(t *testing.T) {
-	body := "# Brief\n\nThe problem.\n\n## Logbook\n\n- [x] a\n- [ ] b\n\n## Notes\n\nmore"
-	section, rest, found := ExtractSection(body, "logbook")
-	if !found {
-		t.Fatal("logbook not found")
-	}
-	if section != "- [x] a\n- [ ] b" {
-		t.Errorf("section = %q", section)
-	}
-	// The Logbook heading+body is removed; Brief and Notes remain.
-	if strings.Contains(rest, "Logbook") || !strings.Contains(rest, "Notes") || !strings.Contains(rest, "Brief") {
-		t.Errorf("rest = %q", rest)
-	}
-}
-
-func TestExtractSection_Missing(t *testing.T) {
-	_, rest, found := ExtractSection("# Only\n\ntext", "logbook")
-	if found {
-		t.Error("should not find logbook")
-	}
-	if rest != "# Only\n\ntext" {
-		t.Errorf("rest mutated: %q", rest)
-	}
-}
-
-func TestSplit(t *testing.T) {
-	// No H1 → single fallback-titled artifact.
-	arts := Split("just a paragraph", "MyThread")
-	if len(arts) != 1 || arts[0].Title != "MyThread" {
-		t.Fatalf("fallback: %+v", arts)
-	}
-
-	// Multiple H1 with preamble → preamble + one per H1.
-	body := "intro line\n\n# File A\n\n## Sub\n\ntext\n\n# File B\n\nbody b"
-	arts = Split(body, "Brief")
-	if len(arts) != 3 {
-		t.Fatalf("want 3 artifacts, got %d: %+v", len(arts), arts)
-	}
-	if arts[0].Title != "Brief" || arts[1].Title != "File A" || arts[2].Title != "File B" {
-		t.Errorf("titles: %q %q %q", arts[0].Title, arts[1].Title, arts[2].Title)
-	}
-	if strings.Contains(arts[1].Markdown, "# File A") {
-		t.Error("artifact body should not include its own H1 heading")
-	}
-	// TOC of File A picks up the H2.
-	wantTOC := []TOCEntry{{Level: 2, Title: "Sub", Slug: "sub"}}
-	if !reflect.DeepEqual(arts[1].TOC, wantTOC) {
-		t.Errorf("toc = %+v", arts[1].TOC)
-	}
-}
-
-func TestParseTodos(t *testing.T) {
-	got := ParseTodos("- [x] done\n- [ ] open\n- [X] also done")
-	want := []Todo{{"done", true}, {"open", false}, {"also done", true}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("checkbox todos = %+v", got)
-	}
-	// Plain bullets (no checkboxes) become open todos.
-	got = ParseTodos("- first\n- second")
-	want = []Todo{{"first", false}, {"second", false}}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("bullet todos = %+v", got)
-	}
-	if ParseTodos("") != nil {
-		t.Error("empty should be nil")
-	}
-}
-
-func TestParseThread(t *testing.T) {
-	body := "# Brief\n\nWhat and why.\n\n## Logbook\n\n### Phase 1\n\n- [x] scaffold\n- [ ] wire\n\n## Definition of Done\n\n- [ ] tests pass"
-	arts, log := ParseThread(body, "Thread")
-	if log == nil {
-		t.Fatal("expected a logbook")
-	}
-	if !log.Phased {
-		t.Error("logbook with a phase subheading should be phased")
-	}
-	if len(log.Todos) != 2 || log.Todos[0].Text != "scaffold" || !log.Todos[0].Done {
-		t.Errorf("todos = %+v", log.Todos)
-	}
-	if len(log.DoD) != 1 || log.DoD[0].Text != "tests pass" {
-		t.Errorf("dod = %+v", log.DoD)
-	}
-	// Logbook and DoD are pulled out of the artifacts.
-	for _, a := range arts {
-		if strings.Contains(a.Markdown, "scaffold") || strings.Contains(a.Markdown, "tests pass") {
-			t.Errorf("artifact %q still contains logbook/dod content", a.Title)
-		}
-	}
-	// The Brief survives as an artifact.
-	if len(arts) == 0 || !strings.Contains(arts[0].Markdown, "What and why") {
-		t.Errorf("brief artifact missing: %+v", arts)
-	}
-}
-
-func TestParseThread_SimpleNoPhases(t *testing.T) {
-	body := "Do the thing.\n\n## Logbook\n\n- [ ] step one\n- [ ] step two"
-	_, log := ParseThread(body, "Thread")
-	if log == nil || log.Phased {
-		t.Errorf("flat task list should be simple (not phased): %+v", log)
-	}
-}
-
-// A realistic Plane birth page (as briefLogbookHTML would emit) round-trips.
-func TestFromHTML_BirthPage(t *testing.T) {
-	html := `<h2>Brief</h2><p>Ship the thing.</p><h2>Logbook</h2><p>plan</p>`
-	got := FromHTML(html)
-	want := "## Brief\n\nShip the thing.\n\n## Logbook\n\nplan"
-	if got != want {
-		t.Errorf("birth page:\n got %q\nwant %q", got, want)
-	}
-}
-
-// CountDone counts ticked items across the Logbook AND the Definition of Done —
-// it is what the refresher diffs to notice a thread produced something.
 func TestCountDone(t *testing.T) {
 	body := `# Brief
 Do the thing.
@@ -220,102 +137,54 @@ Do the thing.
 	if got := CountDone(body); got != 3 {
 		t.Fatalf("want 3 ticked items, got %d", got)
 	}
+	// Somebody's own shape: no Logbook, no DoD, a checklist under their own heading.
+	free := "# Importar CSV\n\n## Pasos\n- [x] leer el archivo\n- [ ] validar\n\n## Notas\n- [x] avisar al equipo\n"
+	if got := CountDone(free); got != 2 {
+		t.Fatalf("checkboxes outside the Logbook did not count: %d", got)
+	}
 	// Plain bullets are not checklist items, so they never count as done.
 	if got := CountDone("## Logbook\n- just a note\n- another"); got != 0 {
 		t.Fatalf("bullets counted as done: %d", got)
 	}
-	// A thread with no logbook at all has produced nothing.
-	if got := CountDone("# Brief\nNo logbook here."); got != 0 {
+	// A document with nothing ticked has produced nothing.
+	if got := CountDone("# Brief\nNo checklist here."); got != 0 {
 		t.Fatalf("want 0, got %d", got)
 	}
 }
 
-// LogbookFingerprint changes when the PLAN changes — a tick, an added item, a
-// reworded phase — but not when the prose around it moves or is reflowed.
-func TestLogbookFingerprint(t *testing.T) {
-	base := "# Brief\nDo the thing.\n\n## Logbook\n- [x] scaffold\n- [ ] wire it up\n"
+// The claim: only a real `- [ ]` box is a task. v0 fell back to treating any
+// plain bullet as one when a section had no boxes — its Logbook convention
+// leaking into the engine. A prose bullet is a sentence.
+func TestInvariant_MD_OnlyRealBoxesAreTasks(t *testing.T) {
+	doc := "# Notas\n\n- una idea suelta\n- otra idea\n"
+	if got := ParseChecklist(doc); len(got) != 0 {
+		t.Errorf("plain bullets parsed as %d todos, want 0: %+v", len(got), got)
+	}
+	if _, err := ToggleTodo(doc, 0, "", true); !errors.Is(err, ErrNoSuchTodo) {
+		t.Errorf("ticking a plain bullet gave %v, want ErrNoSuchTodo", err)
+	}
+	mixed := doc + "\n- [ ] esto sí\n"
+	if got := ParseChecklist(mixed); len(got) != 1 || got[0].Text != "esto sí" {
+		t.Errorf("got %+v, want exactly the one real box", got)
+	}
+}
 
-	if LogbookFingerprint("# Brief\nNo plan here.") != "" {
-		t.Fatal("a thread with no logbook should have no fingerprint")
+// Checkboxes count ANYWHERE, not only under a blessed heading.
+func TestMD_BoxesCountAnywhere(t *testing.T) {
+	doc := "- [x] arriba de todo\n\n## Lo que sea\n\n- [ ] a\n- [x] b\n\n### Hondo\n\n- [x] c\n"
+	if n := CountDone(doc); n != 3 {
+		t.Errorf("CountDone = %d, want 3", n)
 	}
-	h := LogbookFingerprint(base)
-	if h == "" {
-		t.Fatal("a logbook should fingerprint")
+	if n := len(ParseChecklist(doc)); n != 4 {
+		t.Errorf("ParseChecklist found %d, want 4", n)
 	}
-	// Whitespace and the surrounding prose are noise.
-	if got := LogbookFingerprint("# Brief\nSomething else entirely.\n\n## Logbook\n-  [x]   scaffold  \n\n- [ ] wire it up\n"); got != h {
-		t.Errorf("reflow/prose changed the fingerprint: %s vs %s", got, h)
-	}
-	// Ticking, unticking and adding all count as changes to the plan.
-	for _, changed := range []string{
-		"## Logbook\n- [x] scaffold\n- [x] wire it up\n",
-		"## Logbook\n- [ ] scaffold\n- [ ] wire it up\n",
-		"## Logbook\n- [x] scaffold\n- [ ] wire it up\n- [ ] ship\n",
-		"## Logbook\n- [x] scaffold the server\n- [ ] wire it up\n",
-	} {
-		if LogbookFingerprint(changed) == h {
-			t.Errorf("plan change went unnoticed: %q", changed)
+}
+
+func TestMD_RenderHTML(t *testing.T) {
+	out := RenderHTML("# T\n\n- [ ] a\n\n```go\nx := 1\n```\n")
+	for _, want := range []string{"<h1", "checkbox", "<code"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("rendered HTML has no %q:\n%s", want, out)
 		}
-	}
-	// The DoD is part of the plan too.
-	if LogbookFingerprint(base+"\n## Definition of Done\n- [ ] tests pass\n") == h {
-		t.Error("adding a Definition of Done should change the fingerprint")
-	}
-}
-
-// TestReplaceSection is really a test about blast radius: an agent rewriting a
-// Logbook must not be able to touch the Brief. The two live in one Plane
-// description by design (§3), so a whole-body write would be the natural shape
-// and the wrong one.
-func TestReplaceSection(t *testing.T) {
-	const doc = `# Brief
-
-The pull is that signups leak.
-
-## Logbook
-
-- [x] scaffold
-- [ ] wire
-
-## Notes
-
-keep me
-`
-	got := ReplaceSection(doc, "Logbook", "- [x] scaffold\n- [x] wire\n- [ ] ship")
-
-	if !strings.Contains(got, "The pull is that signups leak.") {
-		t.Error("the Brief was lost")
-	}
-	if !strings.Contains(got, "keep me") {
-		t.Error("a later section was lost")
-	}
-	if !strings.Contains(got, "- [x] wire") || strings.Contains(got, "- [ ] wire") {
-		t.Errorf("the Logbook was not replaced:\n%s", got)
-	}
-	// Order matters: a section that jumps to the end of the document on every
-	// edit would churn the diff and confuse anyone reading it in Plane.
-	if strings.Index(got, "## Logbook") > strings.Index(got, "## Notes") {
-		t.Errorf("the section moved:\n%s", got)
-	}
-	// The heading is kept verbatim rather than re-emitted, so an H3 "Logbook" or
-	// odd spacing survives a round trip.
-	if strings.Count(got, "Logbook") != 1 {
-		t.Errorf("the heading was duplicated:\n%s", got)
-	}
-}
-
-// A thread born small has no Logbook at all (§3.2 allows it). An update must
-// create one rather than quietly doing nothing.
-func TestReplaceSectionAppendsWhenAbsent(t *testing.T) {
-	got := ReplaceSection("# Brief\n\nJust a paragraph.", "Logbook", "- [ ] first todo")
-	if !strings.Contains(got, "## Logbook") || !strings.Contains(got, "- [ ] first todo") {
-		t.Errorf("absent section was not appended:\n%s", got)
-	}
-	if !strings.Contains(got, "Just a paragraph.") {
-		t.Error("appending clobbered the existing body")
-	}
-	// ...and it must be findable by the parser that reads it back.
-	if sec, _, ok := ExtractSection(got, "logbook"); !ok || !strings.Contains(sec, "first todo") {
-		t.Errorf("the appended section does not round-trip: %q", sec)
 	}
 }

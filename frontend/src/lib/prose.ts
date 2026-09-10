@@ -1,11 +1,37 @@
 // Post-processing for rendered markdown, shared by everything that shows a
-// document: a thread's artifacts, a workspace's pages, a chat message.
+// document: a thread's document, a wiki page, anything else that comes later.
 //
-// The server renders markdown to HTML (internal/md, goldmark), so the browser's
-// job is only what HTML cannot express on its own: diagrams, the headings a
-// table of contents needs, and making a checkbox a real control. It lives here
-// rather than in a component because "the same render" has to mean the same code,
-// not two copies that agree today.
+// The SERVER renders markdown to HTML (internal/md, goldmark), so the browser's
+// job is only what HTML cannot express on its own: diagrams, the headings a table
+// of contents needs, and making a checkbox a real control. It lives here rather
+// than in a component because "the same render" has to mean the same code, not
+// two copies that agree today.
+
+/**
+ * Replace ```excalidraw blocks with the drawing they describe.
+ *
+ * Same shape as the mermaid pass and lazy for the same reason: roughjs and the
+ * renderer only load once a document actually contains a drawing.
+ */
+export async function renderExcalidraw(el: HTMLElement): Promise<void> {
+  const blocks = [...el.querySelectorAll<HTMLElement>('pre > code.language-excalidraw')];
+  if (!blocks.length) return;
+  const { sceneToSvg } = await import('./excalidraw');
+  for (const code of blocks) {
+    const pre = code.parentElement;
+    if (!pre) continue;
+    const holder = document.createElement('div');
+    holder.className = 'excalidraw-diagram';
+    try {
+      holder.append(sceneToSvg(JSON.parse(code.textContent ?? '{}')));
+    } catch (err) {
+      // A scene that will not parse is a broken document, not a broken app: say
+      // which one and leave the rest of the page alone.
+      holder.innerHTML = `<div class="mermaid-error">excalidraw: ${String(err)}</div>`;
+    }
+    pre.replaceWith(holder);
+  }
+}
 
 export interface Heading {
   id: string;
@@ -62,15 +88,53 @@ export function extractHeadings(el: HTMLElement): Heading[] {
  * control and be dead. Plane's own taskList shape is not disabled, hence "if
  * present". Re-run on every render: {@html} replaces the nodes.
  *
- * Scoped to `[data-region]` because that is what marks a todo list the server can
- * actually be asked to tick. A page's checkboxes stay decorative: there is no
- * per-page toggle endpoint, and a control that silently does nothing is worse
- * than one that plainly cannot be clicked.
+ * Every checkbox in the document, not a blessed section: the server counts and
+ * toggles boxes ANYWHERE, so scoping them here would make live controls look
+ * dead for no reason.
  */
 export function enableCheckboxes(el: HTMLElement): void {
-  for (const box of el.querySelectorAll<HTMLInputElement>(
-    '[data-region] input[type=checkbox][disabled]',
-  )) {
+  for (const box of el.querySelectorAll<HTMLInputElement>('input[type=checkbox][disabled]')) {
     box.disabled = false;
   }
+}
+
+/** Pictures that need a token, drawn anyway.
+ *
+ *  A workspace's images are as private as its writing, so the route that serves
+ *  them requires the Authorization header — and an `<img>` cannot send one. It
+ *  is not a bug in the route: dropping the guard would make every picture public
+ *  to anybody with the URL, and putting the token in the URL would leave it in
+ *  the history and in every copied link.
+ *
+ *  So the fetch happens here, with the header, and the bytes become a blob URL
+ *  the browser can draw. Cached by path for the life of the tab: the same
+ *  diagram appears in a document that re-renders on every keystroke of a
+ *  preview, and one request per keystroke is one request per keystroke.
+ */
+const drawn = new Map<string, Promise<string>>();
+
+export async function showImages(el: HTMLElement, token: string): Promise<void> {
+  const imgs = [...el.querySelectorAll<HTMLImageElement>('img[src^="/api/workspaces/"]')];
+  await Promise.all(
+    imgs.map(async (img) => {
+      const src = img.getAttribute('src');
+      if (!src) return;
+      let job = drawn.get(src);
+      if (!job) {
+        job = fetch(src, { headers: token ? { Authorization: token } : {} })
+          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+          .then((b) => URL.createObjectURL(b));
+        drawn.set(src, job);
+        // A failure must not be cached: the next render should ask again rather
+        // than remember a broken picture for the rest of the session.
+        job.catch(() => drawn.delete(src));
+      }
+      try {
+        img.src = await job;
+      } catch {
+        // Leave the original src. The browser draws its own broken-image mark,
+        // which is the truth: that file is not there.
+      }
+    }),
+  );
 }

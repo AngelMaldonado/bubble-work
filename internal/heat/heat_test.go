@@ -1,219 +1,158 @@
 package heat
 
 import (
+	"math"
 	"testing"
 	"time"
-
-	"github.com/AngelMaldonado/bubble-work/internal/domain"
 )
 
-// tuning returns the default calibration with a given cycle length, so the
-// tests read as "default model, short cycle".
-func tuning(cycle time.Duration) domain.Tuning {
-	t := domain.DefaultTuning()
-	t.CycleHours = cycle.Hours()
-	return t
-}
+var now = time.Date(2026, 9, 4, 12, 0, 0, 0, time.UTC)
 
-func TestClassify(t *testing.T) {
-	tun := tuning(time.Hour)
-	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+// One-week cycles, dormant after 2, decay over 2, one cycle of grace.
+var tun = Tuning{CycleHours: 168, DormantCycles: 2, DecayCycles: 2, GraceCycles: 1, OwnerlessIsRip: true}
 
-	// evidence at `mins` minutes before now.
-	at := func(mins int) time.Time { return now.Add(-time.Duration(mins) * time.Minute) }
-	bubble := func(owner string, active bool, evMins ...int) domain.Bubble {
-		b := domain.Bubble{Owner: owner, Threads: []domain.Thread{{Active: active}}}
-		for _, m := range evMins {
-			b.Evidence = append(b.Evidence, domain.EvidenceEvent{At: at(m)})
-		}
-		return b
-	}
+func ago(d time.Duration) time.Time { return now.Add(-d) }
 
+const (
+	day  = 24 * time.Hour
+	week = 7 * day
+)
+
+func TestClassify_TheLadder(t *testing.T) {
 	cases := []struct {
 		name string
-		b    domain.Bubble
-		want domain.Lifecycle
+		ev   Evidence
+		want Lifecycle
+		code string
 	}{
-		{"hot: output this cycle", bubble("me", true, 10), domain.Hot},
-		{"warm: last cycle + active", bubble("me", true, 90), domain.Warm},
-		{"cooling: last cycle but no active threads", bubble("me", false, 90), domain.Cooling},
-		{"dormant: silent 2+ cycles", bubble("me", true, 200), domain.Dormant},
-		{"dormant: no owner", bubble("", false, 90), domain.Dormant},
-		{"dormant: no evidence at all", bubble("me", true), domain.Dormant},
-		{"closed wins", domain.Bubble{Closed: true, Owner: "me", Evidence: []domain.EvidenceEvent{{At: at(1)}}}, domain.Closed},
+		{"output today", Evidence{LastWarmAt: ago(day), WarmCount: 1}, Hot, ReasonHotCurrent},
+		{"output last cycle", Evidence{LastWarmAt: ago(10 * day), WarmCount: 1}, Hot, ReasonHotCurrent},
+		{"quiet two cycles", Evidence{LastWarmAt: ago(3 * week), WarmCount: 1}, Dormant, ReasonDormantSilent},
+		{"never produced", Evidence{CreatedAt: ago(8 * week)}, Dormant, ReasonDormantNever},
+		{"completed", Evidence{Completed: true, LastWarmAt: ago(day)}, Closed, ReasonClosed},
+		{"born a moment ago", Evidence{CreatedAt: ago(time.Hour)}, Dormant, ReasonNewborn},
 	}
 	for _, c := range cases {
-		t.Run(c.name, func(t *testing.T) {
-			got := Classify(c.b, tun, now)
-			if got.Lifecycle != c.want {
-				t.Fatalf("want %s, got %s (%s)", c.want, got.Lifecycle, got.Reason)
-			}
-		})
-	}
-}
-
-// A thread is classified from ITS OWN evidence against the bubble's window, so
-// two threads in one bubble can sit at different temperatures
-// (THREAD-LIFECYCLE.md Phase A).
-func TestClassifyThread(t *testing.T) {
-	tun := tuning(time.Hour)
-	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
-	at := func(mins int) time.Time { return now.Add(-time.Duration(mins) * time.Minute) }
-
-	hot := domain.Thread{ID: "a", Active: true, Owner: "me"}
-	cold := domain.Thread{ID: "b", Active: true, Owner: "me"}
-	shipped := time.Date(2026, 1, 9, 0, 0, 0, 0, time.UTC)
-	done := domain.Thread{ID: "c", Active: false, Owner: "me", CompletedAt: &shipped}
-
-	b := domain.Bubble{
-		Owner:   "me",
-		Threads: []domain.Thread{hot, cold, done},
-		Evidence: []domain.EvidenceEvent{
-			{ThreadID: "a", Kind: domain.EvCompletedTodo, At: at(5)},   // this cycle
-			{ThreadID: "b", Kind: domain.EvCompletedTodo, At: at(300)}, // long gone
-			{ThreadID: "c", Kind: domain.EvCompletedTodo, At: shipped},
-		},
-	}
-	win := WindowFor(b, tun, now)
-	byThread := Attribute(b.Evidence)
-
-	// The bubble as a whole is Hot — but only one of its threads is.
-	if r := Classify(b, tun, now); r.Lifecycle != domain.Hot {
-		t.Fatalf("bubble: want Hot, got %s", r.Lifecycle)
-	}
-	if r := ClassifyThread(hot, byThread["a"], win, tun, now); r.Lifecycle != domain.Hot {
-		t.Fatalf("thread a: want Hot, got %s", r.Lifecycle)
-	}
-	if r := ClassifyThread(cold, byThread["b"], win, tun, now); r.Lifecycle != domain.Dormant {
-		t.Fatalf("thread b: want Dormant, got %s", r.Lifecycle)
-	}
-	if r := ClassifyThread(done, byThread["c"], win, tun, now); r.Lifecycle != domain.Closed {
-		t.Fatalf("thread c: want Closed, got %s", r.Lifecycle)
-	}
-	// Birth does not heat a thread: a work item created minutes ago that has
-	// produced nothing is NOT 🔥 — otherwise every new Backlog item would read as
-	// in-progress for a whole cycle just for existing.
-	newborn := domain.Thread{ID: "e", Active: true, Owner: "me", CreatedAt: at(2)}
-	birthOnly := []domain.EvidenceEvent{{ThreadID: "e", Kind: domain.EvThreadCreated, At: at(2)}}
-	if r := ClassifyThread(newborn, birthOnly, win, tun, now); r.Lifecycle != domain.Dormant {
-		t.Fatalf("newborn thread: want Dormant, got %s (%s)", r.Lifecycle, r.Reason)
-	} else if r.Reason != "born recently; nothing produced yet" {
-		t.Errorf("newborn reason = %q", r.Reason)
-	}
-	// The bubble that gained it, however, IS warmed by the birth (§5.1).
-	nb := domain.Bubble{Owner: "me", Threads: []domain.Thread{newborn}, Evidence: birthOnly}
-	if r := Classify(nb, tun, now); r.Lifecycle != domain.Hot {
-		t.Fatalf("bubble gaining a thread: want Hot, got %s", r.Lifecycle)
-	}
-
-	// An unassigned open thread has nobody accountable → Dormant, like a bubble.
-	orphan := domain.Thread{ID: "d", Active: true}
-	if r := ClassifyThread(orphan, []domain.EvidenceEvent{{At: at(5)}}, win, tun, now); r.Lifecycle != domain.Hot {
-		t.Fatalf("orphan with fresh output should still be Hot, got %s", r.Lifecycle)
-	}
-	if r := ClassifyThread(orphan, nil, win, tun, now); r.Lifecycle != domain.Dormant {
-		t.Fatalf("orphan with no output: want Dormant, got %s", r.Lifecycle)
-	}
-}
-
-// Attribute drops bubble-level evidence (no ThreadID) and buckets the rest.
-func TestAttribute(t *testing.T) {
-	now := time.Now()
-	got := Attribute([]domain.EvidenceEvent{
-		{ThreadID: "a", At: now},
-		{ThreadID: "a", At: now},
-		{ThreadID: "b", At: now},
-		{At: now}, // bubble-level: belongs to no thread
-	})
-	if len(got) != 2 || len(got["a"]) != 2 || len(got["b"]) != 1 {
-		t.Fatalf("unexpected attribution: %v", got)
-	}
-}
-
-// Fresh evidence must score higher than stale evidence (buoyancy ordering).
-func TestScoreDecay(t *testing.T) {
-	tun := tuning(time.Hour)
-	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
-	fresh := Classify(domain.Bubble{Owner: "me", Evidence: []domain.EvidenceEvent{{At: now.Add(-1 * time.Minute)}}}, tun, now)
-	stale := Classify(domain.Bubble{Owner: "me", Evidence: []domain.EvidenceEvent{{At: now.Add(-50 * time.Minute)}}}, tun, now)
-	if !(fresh.Score > stale.Score) {
-		t.Fatalf("fresh (%.3f) should outscore stale (%.3f)", fresh.Score, stale.Score)
-	}
-}
-
-// TestClassifyCycleAware: when the bubble carries a Plane cycle window, recency
-// is measured against those real boundaries, not the rolling `cycle` argument.
-func TestClassifyCycleAware(t *testing.T) {
-	now := time.Date(2026, 7, 10, 12, 0, 0, 0, time.UTC)
-	curStart := time.Date(2026, 7, 1, 0, 0, 0, 0, time.UTC)   // active cycle began 9 days ago
-	prevStart := time.Date(2026, 6, 15, 0, 0, 0, 0, time.UTC) // previous cycle
-
-	base := func(evAt time.Time) domain.Bubble {
-		return domain.Bubble{
-			Owner:          "me",
-			Threads:        []domain.Thread{{Active: true}},
-			Evidence:       []domain.EvidenceEvent{{At: evAt}},
-			CycleStart:     curStart,
-			CyclePrevStart: prevStart,
+		got := Classify(c.ev, tun, now)
+		if got.Lifecycle != c.want || got.Code != c.code {
+			t.Errorf("%s: got %s/%s, want %s/%s", c.name, got.Lifecycle, got.Code, c.want, c.code)
 		}
 	}
+}
 
-	// The rolling cycle is deliberately tiny (1h) — if it were used instead of the
-	// window, everything would read as ancient. Cycle-aware must win.
-	tun := tuning(time.Hour)
-
-	// Evidence inside the active cycle → Hot, even though it's 3 days old
-	// (far older than the 1h rolling window).
-	if r := Classify(base(now.Add(-72*time.Hour)), tun, now); r.Lifecycle != domain.Hot {
-		t.Fatalf("in-cycle evidence: want Hot, got %s", r.Lifecycle)
+// The claim, and the reason RollUp is ordered the way it is: a bubble still
+// producing stays Hot with nobody accountable. Ownerlessness sinks what has
+// ALREADY gone quiet — output outranks paperwork.
+//
+// It is a BUBBLE rule. A thread has assignees; the contract is what needs an
+// owner, so this is the only grain where it can fire at all.
+func TestInvariant_Heat_OutputOutranksPaperwork(t *testing.T) {
+	producing := Classify(Evidence{LastWarmAt: ago(day), WarmCount: 3}, tun, now)
+	if got := RollUp([]Result{producing}, false, tun); got.Lifecycle != Hot {
+		t.Errorf("ownerless but producing = %s, want hot", got.Lifecycle)
 	}
-	// Evidence in the previous cycle (with active threads) → Warm.
-	if r := Classify(base(time.Date(2026, 6, 20, 0, 0, 0, 0, time.UTC)), tun, now); r.Lifecycle != domain.Warm {
-		t.Fatalf("prev-cycle evidence: want Warm, got %s", r.Lifecycle)
+	quiet := Classify(Evidence{LastWarmAt: ago(3 * week), WarmCount: 3}, tun, now)
+	if got := RollUp([]Result{quiet}, false, tun); got.Lifecycle != Rip || got.Code != ReasonRipOwnerless {
+		t.Errorf("ownerless and quiet = %s/%s, want rip/ownerless", got.Lifecycle, got.Code)
 	}
-	// Evidence before the previous cycle → Dormant (silent 2+ cycles).
-	if r := Classify(base(time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC)), tun, now); r.Lifecycle != domain.Dormant {
-		t.Fatalf("stale evidence: want Dormant, got %s", r.Lifecycle)
+	if got := RollUp([]Result{quiet}, true, tun); got.Lifecycle != Dormant || got.Code != ReasonDormantSilent {
+		t.Errorf("with an owner = %s/%s, want dormant/silent", got.Lifecycle, got.Code)
+	}
+	off := tun
+	off.OwnerlessIsRip = false
+	if got := RollUp([]Result{quiet}, false, off); got.Lifecycle != Dormant {
+		t.Errorf("with the knob off = %s/%s, want dormant", got.Lifecycle, got.Code)
 	}
 }
 
-// A comment is PRESENCE, not production: it must never warm anything, at either
-// grain, but it does keep a thread out of the grave (THREAD-LIFECYCLE.md).
-func TestPulseNeverWarms(t *testing.T) {
-	tun := tuning(time.Hour)
-	now := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
-	fresh := now.Add(-5 * time.Minute)
+// Grace is what keeps a newborn out of the grave. Nothing has been produced
+// because there has been no time to produce it, and burying a bubble on its
+// first morning is how a band stops being believed.
+func TestInvariant_Heat_GraceOutranksTheGrave(t *testing.T) {
+	newborn := Classify(Evidence{CreatedAt: ago(time.Hour)}, tun, now)
+	if got := RollUp([]Result{newborn}, false, tun); got.Lifecycle != Dormant {
+		t.Errorf("a newborn with no owner = %s, want dormant", got.Lifecycle)
+	}
+	old := Classify(Evidence{CreatedAt: ago(8 * week)}, tun, now)
+	if got := RollUp([]Result{old}, false, tun); got.Lifecycle != Rip {
+		t.Errorf("never produced, no owner = %s, want rip", got.Lifecycle)
+	}
+}
 
-	thread := domain.Thread{ID: "a", Active: true, Owner: "me", CreatedAt: now.AddDate(0, -6, 0)}
-	chatter := []domain.EvidenceEvent{{ThreadID: "a", Kind: domain.EvComment, At: fresh}}
+// The curve v0 documented: fresh ≈ 1.0, one decay window ≈ 0.37, two ≈ 0.14.
+func TestInvariant_Heat_TheDecayCurve(t *testing.T) {
+	decay := time.Duration(tun.DecayCycles) * week
+	for _, c := range []struct {
+		age  time.Duration
+		want float64
+	}{{0, 1.0}, {decay, 0.3679}, {2 * decay, 0.1353}} {
+		got := Classify(Evidence{LastWarmAt: ago(c.age), WarmCount: 1}, tun, now).Score
+		if math.Abs(got-c.want) > 0.001 {
+			t.Errorf("age %v: score %.4f, want %.4f", c.age, got, c.want)
+		}
+	}
+	if got := Classify(Evidence{}, tun, now).Score; got != 0 {
+		t.Errorf("no evidence scored %v, want 0", got)
+	}
+}
 
-	b := domain.Bubble{Owner: "me", Threads: []domain.Thread{thread}, Evidence: chatter}
-	// The bubble stays cold: a busy comment thread is not output.
-	if r := Classify(b, tun, now); r.Lifecycle != domain.Dormant {
-		t.Fatalf("comments warmed a bubble: %s", r.Lifecycle)
+// Time is a PARAMETER. The same evidence cools as `now` moves, with nothing
+// stored and no job running.
+func TestInvariant_Heat_TimeIsTheOnlyThingThatChanges(t *testing.T) {
+	ev := Evidence{LastWarmAt: now, WarmCount: 1}
+	want := []Lifecycle{Hot, Hot, Hot, Dormant}
+	for i, at := range []time.Time{now, now.Add(6 * day), now.Add(10 * day), now.Add(4 * week)} {
+		if got := Classify(ev, tun, at).Lifecycle; got != want[i] {
+			t.Errorf("at +%v: %s, want %s", at.Sub(now), got, want[i])
+		}
 	}
-	win := WindowFor(b, tun, now)
-	if r := ClassifyThread(thread, chatter, win, tun, now); r.Lifecycle != domain.Dormant {
-		t.Fatalf("comments warmed a thread: %s", r.Lifecycle)
+}
+
+// Recalibrating changes every verdict at once, because nothing was stored.
+func TestHeat_RecalibrationIsImmediate(t *testing.T) {
+	ev := Evidence{LastWarmAt: ago(4 * week), WarmCount: 1}
+	if got := Classify(ev, tun, now).Lifecycle; got != Dormant {
+		t.Fatalf("with weekly cycles: %s, want dormant", got)
 	}
-	// But the pulse is detectable, which is what blocks the grave.
-	if !HasPulse(chatter, win, tun, now) {
-		t.Error("a comment 5 minutes ago should register as a pulse")
+	monthly := tun
+	monthly.CycleHours = 24 * 30
+	if got := Classify(ev, monthly, now).Lifecycle; got != Hot {
+		t.Errorf("with monthly cycles: %s, want hot", got)
 	}
-	// Old chatter is no pulse at all.
-	stale := []domain.EvidenceEvent{{ThreadID: "a", Kind: domain.EvComment, At: now.Add(-300 * time.Minute)}}
-	if HasPulse(stale, win, tun, now) {
-		t.Error("a 5-hour-old comment should not register against a 1h pulse window")
+}
+
+// A comment holds a thread out of the grave and never warms it.
+func TestInvariant_Heat_PulseNeverWarms(t *testing.T) {
+	commented := Evidence{LastAnyAt: ago(day), CreatedAt: ago(8 * week)}
+	if got := Classify(commented, tun, now); got.Lifecycle != Dormant {
+		t.Errorf("a comment warmed it to %s", got.Lifecycle)
 	}
-	// And it can be switched off entirely.
-	off := tun
-	off.PulseCycles = 0
-	if HasPulse(chatter, win, off, now) {
-		t.Error("pulse_cycles=0 should disable the pulse")
+	if !HasPulse(commented, tun, now) {
+		t.Error("a recent comment is not registering as a pulse")
 	}
-	// Real progress still warms normally, so the pulse filter isn't over-eager.
-	work := append(chatter, domain.EvidenceEvent{ThreadID: "a", Kind: domain.EvLogbookUpdated, At: fresh})
-	if r := ClassifyThread(thread, work, win, tun, now); r.Lifecycle != domain.Hot {
-		t.Fatalf("progress alongside chatter should be Hot, got %s", r.Lifecycle)
+	silent := Evidence{LastAnyAt: ago(6 * week), CreatedAt: ago(8 * week)}
+	if HasPulse(silent, tun, now) {
+		t.Error("an old comment still counts as a pulse")
+	}
+}
+
+// A bubble is as hot as its hottest UNFINISHED thread — not the union of its
+// threads' evidence, which counts every birth as the bubble's own output and makes
+// a pile of untouched work read hot.
+func TestInvariant_Heat_BubbleIsItsHottestOpenThread(t *testing.T) {
+	hot := Classify(Evidence{LastWarmAt: ago(day), WarmCount: 1}, tun, now)
+	cold := Classify(Evidence{LastWarmAt: ago(4 * week), WarmCount: 1}, tun, now)
+	done := Classify(Evidence{Completed: true}, tun, now)
+
+	if got := RollUp([]Result{cold, hot, done}, true, tun).Lifecycle; got != Hot {
+		t.Errorf("roll-up = %s, want hot", got)
+	}
+	// A bubble whose only hot thread is FINISHED is not hot.
+	hotDone := Classify(Evidence{Completed: true, LastWarmAt: ago(time.Hour)}, tun, now)
+	if got := RollUp([]Result{cold, hotDone}, true, tun).Lifecycle; got != Dormant {
+		t.Errorf("with only a finished hot thread: %s, want dormant", got)
+	}
+	if got := RollUp(nil, true, tun).Lifecycle; got != Dormant {
+		t.Errorf("an empty bubble = %s, want dormant", got)
 	}
 }

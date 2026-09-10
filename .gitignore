@@ -1,12 +1,10 @@
+.env
 /dist/
+/pb_data/
+/repos/
 *.db
 .DS_Store
-/bubble
 
-# frontend toolchain — the built bundle (web/dist) IS committed so the Go build
-# needs no JS toolchain; only the dev artifacts are ignored.
-/frontend/node_modules/
-/frontend/.vite-dist/
-
-# the frontend uses bun; a stray npm lockfile would resolve different versions
-frontend/package-lock.json
+# Generados desde `simple-icons` por `bun run logos`: una dependencia fijada
+# reproduce 3459 archivos, y versionarlos ensucia cada diff a cambio de nada.
+frontend/public/logos/

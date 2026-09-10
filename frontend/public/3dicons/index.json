@@ -1,0 +1,482 @@
+[
+{
+"slug": "3d-coin",
+"title": "3d Coin"
+},
+{
+"slug": "3d",
+"title": "3d"
+},
+{
+"slug": "at",
+"title": "At"
+},
+{
+"slug": "axe",
+"title": "Axe"
+},
+{
+"slug": "back",
+"title": "Back"
+},
+{
+"slug": "backward",
+"title": "Backward"
+},
+{
+"slug": "bag",
+"title": "Bag"
+},
+{
+"slug": "battery",
+"title": "Battery"
+},
+{
+"slug": "blender",
+"title": "Blender"
+},
+{
+"slug": "bookmark-fav",
+"title": "Bookmark Fav"
+},
+{
+"slug": "bookmark",
+"title": "Bookmark"
+},
+{
+"slug": "boy",
+"title": "Boy"
+},
+{
+"slug": "brush",
+"title": "Brush"
+},
+{
+"slug": "bucket",
+"title": "Bucket"
+},
+{
+"slug": "bulb",
+"title": "Bulb"
+},
+{
+"slug": "calculator",
+"title": "Calculator"
+},
+{
+"slug": "calender",
+"title": "Calender"
+},
+{
+"slug": "camera",
+"title": "Camera"
+},
+{
+"slug": "can",
+"title": "Can"
+},
+{
+"slug": "card",
+"title": "Card"
+},
+{
+"slug": "chart",
+"title": "Chart"
+},
+{
+"slug": "chat-bubble",
+"title": "Chat Bubble"
+},
+{
+"slug": "chat-text",
+"title": "Chat Text"
+},
+{
+"slug": "chat",
+"title": "Chat"
+},
+{
+"slug": "chess",
+"title": "Chess"
+},
+{
+"slug": "circle",
+"title": "Circle"
+},
+{
+"slug": "clock",
+"title": "Clock"
+},
+{
+"slug": "color-palette",
+"title": "Color Palette"
+},
+{
+"slug": "computer",
+"title": "Computer"
+},
+{
+"slug": "copy",
+"title": "Copy"
+},
+{
+"slug": "crown",
+"title": "Crow"
+},
+{
+"slug": "cube",
+"title": "Cube"
+},
+{
+"slug": "cup",
+"title": "Cup"
+},
+{
+"slug": "dollar",
+"title": "Dollar"
+},
+{
+"slug": "eth",
+"title": "Eth"
+},
+{
+"slug": "euro",
+"title": "Euro"
+},
+{
+"slug": "explorer",
+"title": "Explorer"
+},
+{
+"slug": "eyedropper",
+"title": "Eyedropper"
+},
+{
+"slug": "fav-folder",
+"title": "Fav Folder"
+},
+{
+"slug": "figma",
+"title": "Figma"
+},
+{
+"slug": "file-fav",
+"title": "File Fav"
+},
+{
+"slug": "file-plus",
+"title": "File Plus"
+},
+{
+"slug": "file-text",
+"title": "File Text"
+},
+{
+"slug": "file",
+"title": "File"
+},
+{
+"slug": "fire",
+"title": "Fire"
+},
+{
+"slug": "flag",
+"title": "Flag"
+},
+{
+"slug": "flash",
+"title": "Flash"
+},
+{
+"slug": "folder",
+"title": "Folder"
+},
+{
+"slug": "forward",
+"title": "Forward"
+},
+{
+"slug": "gift",
+"title": "Gift"
+},
+{
+"slug": "girl",
+"title": "Girl"
+},
+{
+"slug": "glass",
+"title": "Glass"
+},
+{
+"slug": "gym",
+"title": "Gym"
+},
+{
+"slug": "headphone",
+"title": "Headphone"
+},
+{
+"slug": "heart",
+"title": "Heart"
+},
+{
+"slug": "key",
+"title": "Key"
+},
+{
+"slug": "lab",
+"title": "Lab"
+},
+{
+"slug": "link",
+"title": "Link"
+},
+{
+"slug": "location",
+"title": "Location"
+},
+{
+"slug": "lock",
+"title": "Lock"
+},
+{
+"slug": "locker",
+"title": "Locker"
+},
+{
+"slug": "magic-trick",
+"title": "Magic Trick"
+},
+{
+"slug": "mail",
+"title": "Mail"
+},
+{
+"slug": "map-pin",
+"title": "Map Pin"
+},
+{
+"slug": "medal",
+"title": "Medal"
+},
+{
+"slug": "megaphone",
+"title": "Megaphone"
+},
+{
+"slug": "mic",
+"title": "Mic"
+},
+{
+"slug": "minecraft",
+"title": "Minecraft"
+},
+{
+"slug": "mobile",
+"title": "Mobile"
+},
+{
+"slug": "money-bag",
+"title": "Money Bag"
+},
+{
+"slug": "money",
+"title": "Money"
+},
+{
+"slug": "moon",
+"title": "Moon"
+},
+{
+"slug": "music",
+"title": "Music"
+},
+{
+"slug": "new-folder",
+"title": "New Folder"
+},
+{
+"slug": "next",
+"title": "Next"
+},
+{
+"slug": "notebook",
+"title": "Notebook"
+},
+{
+"slug": "notify-heart",
+"title": "Notify Heart"
+},
+{
+"slug": "paint-brush",
+"title": "Paint Brush"
+},
+{
+"slug": "paint-kit",
+"title": "Paint Kit"
+},
+{
+"slug": "pause",
+"title": "Pause"
+},
+{
+"slug": "pencil",
+"title": "Pencil"
+},
+{
+"slug": "phone-end",
+"title": "Phone End"
+},
+{
+"slug": "phone-incoming",
+"title": "Phone Incoming"
+},
+{
+"slug": "phone-missing",
+"title": "Phone Missing"
+},
+{
+"slug": "phone-only",
+"title": "Phone Only"
+},
+{
+"slug": "phone-outgoing",
+"title": "Phone Outgoing"
+},
+{
+"slug": "phone-ringing",
+"title": "Phone Ringing"
+},
+{
+"slug": "picture",
+"title": "Picture"
+},
+{
+"slug": "pin",
+"title": "Pin"
+},
+{
+"slug": "play",
+"title": "Play"
+},
+{
+"slug": "plus",
+"title": "Plus"
+},
+{
+"slug": "pound",
+"title": "Pound"
+},
+{
+"slug": "puzzle",
+"title": "Puzzle"
+},
+{
+"slug": "rocket",
+"title": "Rocket"
+},
+{
+"slug": "roll-brush",
+"title": "Roll Brush"
+},
+{
+"slug": "rupee",
+"title": "Rupee"
+},
+{
+"slug": "scissor",
+"title": "Scissor"
+},
+{
+"slug": "setting",
+"title": "Setting"
+},
+{
+"slug": "sheild",
+"title": "Sheild"
+},
+{
+"slug": "sphere",
+"title": "Sphere"
+},
+{
+"slug": "star",
+"title": "Star"
+},
+{
+"slug": "sun",
+"title": "Sun"
+},
+{
+"slug": "takeaway-cup",
+"title": "Takeaway Cup"
+},
+{
+"slug": "target",
+"title": "Target"
+},
+{
+"slug": "tea-cup",
+"title": "Tea Cup"
+},
+{
+"slug": "text",
+"title": "Text"
+},
+{
+"slug": "thumb-down",
+"title": "Thumb Down"
+},
+{
+"slug": "thumb-up",
+"title": "Thumb Up"
+},
+{
+"slug": "tick",
+"title": "Tick"
+},
+{
+"slug": "toggle",
+"title": "Toggle"
+},
+{
+"slug": "tool",
+"title": "Tool"
+},
+{
+"slug": "trash-can",
+"title": "Trash Can"
+},
+{
+"slug": "travel",
+"title": "Travel"
+},
+{
+"slug": "trophy",
+"title": "Trophy"
+},
+{
+"slug": "umbrella",
+"title": "Umbrella"
+},
+{
+"slug": "video-camera",
+"title": "Video Camera"
+},
+{
+"slug": "wallet",
+"title": "Wallet"
+},
+{
+"slug": "wifi",
+"title": "Wifi"
+},
+{
+"slug": "yuan",
+"title": "Yuan"
+},
+{
+"slug": "zoom",
+"title": "Zoom"
+}
+]

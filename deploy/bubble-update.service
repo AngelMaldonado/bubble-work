@@ -1,0 +1,19 @@
+# Actualizar la instancia. Lo dispara el timer de al lado; no se habilita solo.
+#
+#   sudo cp deploy/bubble-update.* /etc/systemd/system/
+#   sudo systemctl enable --now bubble-update.timer
+#
+# `WorkingDirectory` es donde vive el compose.yml de ESTA instancia: cámbialo si
+# no la clonaste en /srv/bubble-work.
+[Unit]
+Description=Bubble Work — buscar y aplicar una versión nueva
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+WorkingDirectory=/srv/bubble-work
+ExecStart=/srv/bubble-work/scripts/update.sh
+# Sin reintentos automáticos: si falló, el propio script ya volvió a la imagen
+# anterior y dejó el porqué en el journal. Reintentar cada minuto contra el mismo
+# problema sólo escribe el mismo error mil veces.

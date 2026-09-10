@@ -7,8 +7,13 @@
 // that make markdown editing feel like markdown rather than like typing into a
 // box — Enter continues a list or checkbox, Backspace unwinds the marker.
 //
-// It lives behind a dynamic import (see ArtifactEditor) so none of it lands in
-// the main bundle: the editor only exists once somebody switches to Markdown.
+// It lives behind a dynamic import (see ThreadView) so none of it lands in the
+// main bundle: CodeMirror and the vim keymap only exist once somebody switches
+// to Markdown, and vim only once they ask for vim.
+//
+// Ported from v0 unchanged apart from the palette — `--wip` is `--accent` here,
+// which means the caret and the selection take the BAND's colour and the editor
+// agrees with the page it is inside.
 
 import { defaultKeymap, history, historyKeymap, indentWithTab } from '@codemirror/commands';
 import { markdown, markdownLanguage } from '@codemirror/lang-markdown';
@@ -16,6 +21,9 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { drawSelection, EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+// What to do with an Escape that was taken away from this editor, keyed by the
+// editor's element. See `lib/escape.ts` for why the key is caught at the window.
+import { escapeHandlers } from './escape';
 
 export interface CaretPoint {
   /** Relative to the editor's own box, so a menu can be positioned inside it. */
@@ -27,6 +35,8 @@ export interface CaretPoint {
 export interface MarkdownEditor {
   destroy(): void;
   value(): string;
+  /** Replace the whole document — for when the SERVER's copy changed. */
+  setDoc(text: string): void;
   focus(): void;
   cursor(): number;
   caret(): CaretPoint | null;
@@ -69,9 +79,9 @@ function highlight(): Extension {
     { tag: tags.strong, fontWeight: '750' },
     { tag: tags.emphasis, fontStyle: 'italic' },
     { tag: tags.strikethrough, textDecoration: 'line-through' },
-    { tag: tags.link, color: 'var(--wip)', textDecoration: 'underline' },
+    { tag: tags.link, color: 'var(--accent)', textDecoration: 'underline' },
     { tag: tags.url, color: 'var(--muted)' },
-    { tag: tags.monospace, color: 'var(--wip)' },
+    { tag: tags.monospace, color: 'var(--accent)' },
     { tag: tags.quote, color: 'var(--muted)', fontStyle: 'italic' },
     // The marker characters themselves — "##", "-", "*" — recede so the words
     // they decorate stay the thing you read.
@@ -100,17 +110,17 @@ function theme(dark: boolean): Extension {
         padding: '0.9rem 0',
         overflow: 'auto',
       },
-      '.cm-content': { padding: '0 1rem', caretColor: 'var(--wip)' },
+      '.cm-content': { padding: '0 1rem', caretColor: 'var(--accent)' },
       '&.cm-focused': { outline: 'none' },
       '.cm-cursor, .cm-dropCursor': {
-        borderLeftColor: 'var(--wip)',
+        borderLeftColor: 'var(--accent)',
         borderLeftWidth: '2px',
       },
       '.cm-activeLine': {
-        backgroundColor: 'color-mix(in oklab, var(--wip) 6%, transparent)',
+        backgroundColor: 'color-mix(in oklab, var(--accent) 6%, transparent)',
       },
       '&.cm-focused .cm-selectionBackground, .cm-selectionBackground, ::selection': {
-        backgroundColor: 'color-mix(in oklab, var(--wip) 24%, transparent)',
+        backgroundColor: 'color-mix(in oklab, var(--accent) 24%, transparent)',
       },
       '.cm-placeholder': { color: 'var(--faint)' },
     },
@@ -118,14 +128,14 @@ function theme(dark: boolean): Extension {
   );
 }
 
-// :w and :q have to reach THIS editor, but Vim.defineEx is global and there can
-// be two editors on screen (a Logbook and its Definition of Done). So the
-// commands are defined once and dispatch through a per-view registry.
+// :w and :q have to reach THIS editor, but `Vim.defineEx` is global and there
+// can be more than one editor on a screen. So the commands are defined once and
+// dispatch through a per-view registry.
 const vimHooks = new WeakMap<EditorView, { save: () => void; done: () => void }>();
 let vimExDefined = false;
 
 async function vimExtensions(opts: EditorOptions) {
-  const { vim, Vim } = await import('@replit/codemirror-vim');
+  const { vim, Vim, getCM } = await import('@replit/codemirror-vim');
   if (!vimExDefined) {
     vimExDefined = true;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -142,11 +152,49 @@ async function vimExtensions(opts: EditorOptions) {
   }
   // vim() must come before every other keymap, and drawSelection is what makes
   // visual mode render correctly when you are not using basicSetup.
-  return [vim({ status: true }), drawSelection()];
+  return { exts: [vim({ status: true }), drawSelection()], Vim, getCM };
+}
+
+/** Un diff, montado sobre el mismo editor.
+ *
+ *  `@codemirror/merge` en lugar de una librería de diff aparte: es de los mismos
+ *  autores del editor que esta aplicación ya carga, así que el diff sale con la
+ *  misma fuente, el mismo tema y el mismo desplazamiento que el markdown de al
+ *  lado — y no entra un segundo sistema de estilos para que una pantalla se vea
+ *  como otra aplicación.
+ *
+ *  Los dos lados los da el SERVIDOR: git ya sabe qué cambió, y calcularlo otra
+ *  vez aquí sería una segunda respuesta a la misma pregunta.
+ */
+export async function createDiffView(opts: {
+  parent: HTMLElement;
+  before: string;
+  after: string;
+  dark: boolean;
+}): Promise<{ destroy(): void }> {
+  const { MergeView } = await import('@codemirror/merge');
+  const common = [
+    EditorView.editable.of(false),
+    EditorState.readOnly.of(true),
+    theme(opts.dark),
+    EditorView.lineWrapping,
+  ];
+  const view = new MergeView({
+    a: { doc: opts.before, extensions: common },
+    b: { doc: opts.after, extensions: common },
+    parent: opts.parent,
+    // Unificado y no dos columnas: la columna de un thread es angosta y dos
+    // paneles de 40 caracteres hacen ilegibles los dos.
+    collapseUnchanged: { margin: 3, minSize: 6 },
+    gutter: false,
+    highlightChanges: true,
+  });
+  return { destroy: () => view.destroy() };
 }
 
 export async function createMarkdownEditor(opts: EditorOptions): Promise<MarkdownEditor> {
-  const vimExt = opts.vim ? await vimExtensions(opts) : [];
+  const loaded = opts.vim ? await vimExtensions(opts) : null;
+  const vimExt = loaded?.exts ?? [];
   // The slash menu owns these keys while it is open, so they bind ABOVE the
   // default keymap — otherwise Enter would insert a newline before the menu
   // ever saw it.
@@ -162,7 +210,7 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
   const commands = keymap.of([
     { key: 'Mod-s', preventDefault: true, run: () => (opts.onSave(), true) },
     // In vim, Escape means "leave insert mode" and belongs to vim. Leaving the
-    // editor is :q there, which is what a vim user would reach for anyway.
+    // editor is `:q` there, which is what a vim user reaches for anyway.
     ...(opts.vim ? [] : [{ key: 'Escape', run: () => (opts.onEscape(), true) }]),
   ]);
 
@@ -194,13 +242,48 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
     }),
   });
 
+  // The Escape this editor never receives, handed to it by name.
+  //
+  // A dialog swallows the key before it can arrive (`lib/escape.ts`), so the
+  // interceptor calls this instead of trying to fake a keypress. In vim it is
+  // vim's own `<Esc>` — leave insert mode, cancel a pending command. Without
+  // vim it is what Escape has always meant here: stop editing.
+  escapeHandlers.set(view.dom, () => {
+    const cm = loaded?.getCM(view);
+    if (cm) return void loaded!.Vim.handleKey(cm, '<Esc>', 'user');
+    opts.onEscape();
+  });
+
   if (opts.vim) {
     vimHooks.set(view, { save: opts.onSave, done: opts.onEscape });
   }
 
+  // Password managers attach to anything that looks like a field, and
+  // CodeMirror's editing surface is a `contenteditable` — which 1Password reads
+  // as one, and then offers to save what is being typed as a login. These
+  // attributes are how each of them is told to leave an element alone; the only
+  // credential fields in this product are the two on the sign-in screen.
+  view.contentDOM.setAttribute('data-1p-ignore', '');
+  view.contentDOM.setAttribute('data-lpignore', 'true');
+  view.contentDOM.setAttribute('data-bwignore', '');
+  view.contentDOM.setAttribute('data-form-type', 'other');
+  view.contentDOM.setAttribute('autocomplete', 'off');
+  view.contentDOM.setAttribute('autocorrect', 'off');
+  view.contentDOM.setAttribute('spellcheck', 'false');
+
   const api: MarkdownEditor = {
-    destroy: () => view.destroy(),
+    destroy: () => {
+      escapeHandlers.delete(view.dom);
+      view.destroy();
+    },
     value: () => view.state.doc.toString(),
+    setDoc(text) {
+      if (view.state.doc.toString() === text) return;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: text },
+        selection: { anchor: Math.min(view.state.selection.main.head, text.length) },
+      });
+    },
     focus: () => view.focus(),
     cursor: () => view.state.selection.main.head,
 

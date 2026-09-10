@@ -1,0 +1,1133 @@
+#!/usr/bin/env bash
+# Every test: the Go ones, then the ones that need a running server.
+#
+#   just test
+#
+# The second half is here because an API rule is not a function you can call.
+# Everything runs against a throwaway data directory on its own port.
+#
+# What it is really guarding: nothing supplies the workspace boundary any more, so
+# every collection is insecure until its rule says which workspace it belongs to.
+# The >>> lines are the ones that would be security bugs rather than wrong answers.
+#
+# These want to be Go tests eventually — PocketBase ships a `tests` package for
+# exactly this. Curl is what they are until somebody moves them.
+set -uo pipefail
+cd "$(dirname "$0")/.."
+
+echo "==> go test"
+go test -race ./... || exit 1
+
+echo "==> live"
+D=${TMPDIR:-/tmp}/bubble-test-data
+B=./dist/bubble
+API=http://127.0.0.1:8099
+R=${TMPDIR:-/tmp}/bubble-test-repos
+
+# Kill only OUR leftover, matched by the test port — never a bare
+# `pkill -f "bubble serve"`.
+#
+# That pattern matches every server on the machine, including the one somebody is
+# looking at in a browser. It ran at the start AND in the trap, so every
+# `just check` took down a running `just dev` twice. The tests are supposed to be
+# invisible to whoever is working.
+pkill -f "bubble serve.*8099" 2>/dev/null; sleep 0.3
+rm -rf "$D" "$R"
+[[ -x "$B" ]] || scripts/build.sh
+
+pass=0; fail=0
+ok(){ echo "  PASS  $1"; pass=$((pass+1)); }
+no(){ echo "  FAIL  $1  -> $2"; fail=$((fail+1)); }
+chk(){ if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "esperaba $3, dio $2"; fi; }
+
+"$B" superuser upsert root@bubble.test rootrootroot --dir "$D" >/dev/null 2>&1
+BUBBLE_REPOS="$R" "$B" serve --http 127.0.0.1:8099 --dir "$D" >/tmp/bubble-test.log 2>&1 &
+SRV=$!
+# By PID: the only process this script is entitled to end is the one it started.
+trap 'kill "$SRV" 2>/dev/null' EXIT
+for i in $(seq 1 60); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.25; done
+if ! curl -sf "$API/api/health" >/dev/null 2>&1; then
+  echo "  el server no arrancó — ver /tmp/bubble-test.log" >&2; exit 1
+fi
+
+j(){ python3 -c 'import sys,json
+try:
+    d=json.load(sys.stdin); exec("v=d"+sys.argv[1]); print(v)
+except Exception: print("")' "$1"; }
+code(){ curl -s -o /dev/null -w '%{http_code}' "$@"; }
+JS='Content-Type: application/json'
+post(){ curl -s -X POST "$API/api/collections/$1/records" -H "Authorization: $2" -H "$JS" -d "$3"; }
+pcode(){ code -X POST "$API/api/collections/$1/records" -H "Authorization: $2" -H "$JS" -d "$3"; }
+list(){ curl -s "$API/api/collections/$1/records" -H "Authorization: $2"; }
+
+# ---------------------------------------------------------------- phase 0 ----
+SU=$(curl -s -X POST "$API/api/collections/_superusers/auth-with-password" -H "$JS" \
+  -d '{"identity":"root@bubble.test","password":"rootrootroot"}' | j "['token']")
+[ -n "$SU" ] && ok "superuser autentica" || { no "superuser autentica" "sin token"; exit 1; }
+
+# Guard against talking to somebody else's server on this port. A leftover process
+# from an earlier run answers every request with an OLDER database, which does not
+# fail — it passes, against data this run never created. Chasing that once was
+# enough: a wrong-server is now loud.
+FRESH=$(curl -s "$API/api/collections/workspaces/records" -H "Authorization: $SU" | j "['totalItems']")
+if [ "$FRESH" != "0" ]; then
+  echo "  el server en $API no es el nuestro (ya tiene datos: workspaces=$FRESH)" >&2
+  echo "  mata lo que esté escuchando ahí y vuelve a correr" >&2
+  exit 1
+fi
+ok "el server es nuestro y está vacío"
+
+mkuser(){ post users "$SU" "{\"email\":\"$1\",\"password\":\"passwordpass\",\"passwordConfirm\":\"passwordpass\",\"display_name\":\"$2\",\"role\":\"${3:-member}\",\"verified\":true}"; }
+login(){ curl -s -X POST "$API/api/collections/users/auth-with-password" -H "$JS" \
+  -d "{\"identity\":\"$1\",\"password\":\"passwordpass\"}" | j "['token']"; }
+
+AID=$(mkuser alice@bubble.test Alice | j "['id']")
+BID=$(mkuser bob@bubble.test Bob     | j "['id']")
+CID=$(mkuser carol@bubble.test Carol lead | j "['id']")   # lead GLOBAL, de ningún workspace
+if [ -n "$AID" ] && [ -n "$BID" ] && [ -n "$CID" ]; then ok "users acepta display_name y role"; else no "crear users" "$AID/$BID/$CID"; fi
+A=$(login alice@bubble.test); B=$(login bob@bubble.test); C=$(login carol@bubble.test)
+if [ -n "$A" ] && [ -n "$B" ] && [ -n "$C" ]; then ok "alice, bob y carol autentican"; else no "login" "vacío"; fi
+
+# Reaplicar la MISMA contraseña no debe tocar nada: `SetPassword` rota el
+# `tokenKey`, que es parte de lo que firma los tokens de esa persona, y
+# `just dev` corre esto en cada arranque. Sin este cuidado, cada reinicio sacaba
+# al operador de su navegador y mataba el token que estuviera usando su agente,
+# sin que nada hubiera cambiado.
+# `$B` ya no es el binario a esta altura del archivo — es el token de bob.
+./dist/bubble person alice@bubble.test passwordpass member --dir "$D" >/dev/null 2>&1
+chk ">>> reaplicar la misma contraseña NO invalida los tokens vivos" \
+  "$(code "$API/api/collections/workspaces/records" -H "Authorization: $A")" 200
+
+ALPHA=$(post workspaces "$A" '{"name":"Alpha","slug":"alpha"}' | j "['id']")
+BETA=$(post  workspaces "$B" '{"name":"Beta","slug":"beta"}'   | j "['id']")
+if [ -n "$ALPHA" ] && [ -n "$BETA" ]; then ok "alice y bob crean workspace"; else no "crear workspace" "$ALPHA/$BETA"; fi
+
+# Un workspace recién fundado ya puede trabajar: sin estados, ningún thread
+# puede completarse nunca, y "Terminar" no tiene a dónde apuntar.
+WSS=$(curl -s "$API/api/collections/states/records?perPage=50&filter=(workspace='$ALPHA')" -H "Authorization: $A")
+chk ">>> fundar un workspace le da su flujo de trabajo" "$(echo "$WSS" | j "['totalItems']")" 3
+chk "...con uno por defecto" \
+  "$(echo "$WSS" | python3 -c 'import sys,json;print(sum(1 for x in json.load(sys.stdin)["items"] if x["is_default"]))')" 1
+chk "...y uno que SÍ completa" \
+  "$(echo "$WSS" | python3 -c 'import sys,json;print(sum(1 for x in json.load(sys.stdin)["items"] if x["group"]=="completed"))')" 1
+
+MS=$(curl -s "$API/api/collections/memberships/records?filter=(workspace='$ALPHA')" -H "Authorization: $SU")
+if [ "$(echo "$MS"|j "['totalItems']")" = "1" ] && [ "$(echo "$MS"|j "['items'][0]['role']")" = "lead" ] \
+   && [ "$(echo "$MS"|j "['items'][0]['user']")" = "$AID" ]; then
+  ok "membresía fundadora: 1 fila, role=lead, user=el creador"
+else no "membresía fundadora" "$(echo "$MS"|head -c 200)"; fi
+
+WA=$(list workspaces "$A"); WB=$(list workspaces "$B")
+if [ "$(echo "$WA"|j "['totalItems']")" = "1" ] && [ "$(echo "$WA"|j "['items'][0]['slug']")" = "alpha" ] \
+   && [ "$(echo "$WB"|j "['items'][0]['slug']")" = "beta" ]; then
+  ok "cada quien lista SOLO su workspace"
+else no "aislamiento de lista" "A=$(echo "$WA"|j "['totalItems']") B=$(echo "$WB"|j "['totalItems']")"; fi
+
+chk "alice no ve beta por id" "$(code "$API/api/collections/workspaces/records/$BETA" -H "Authorization: $A")" 404
+chk "anónimo lista 0 workspaces" "$(curl -s "$API/api/collections/workspaces/records" | j "['totalItems']")" 0
+
+INV=$(pcode memberships "$A" "{\"workspace\":\"$ALPHA\",\"user\":\"$BID\",\"role\":\"member\"}")
+chk ">>> alice (lead del workspace) SÍ puede invitar" "$INV" 200
+chk "bob (member) ahora ve alpha y beta" "$(list workspaces "$B" | j "['totalItems']")" 2
+chk ">>> bob (member raso) NO puede invitar" \
+  "$(pcode memberships "$B" "{\"workspace\":\"$ALPHA\",\"user\":\"$CID\",\"role\":\"member\"}")" 400
+
+echo
+chk ">>> bob (member) NO puede editar alpha  [las dos ?= atan a la MISMA fila]" \
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$ALPHA" -H "Authorization: $B" -H "$JS" -d '{"name":"Secuestrado"}')" 404
+chk ">>> alice (lead) SÍ puede editar alpha" \
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$ALPHA" -H "Authorization: $A" -H "$JS" -d '{"name":"Alpha renombrado"}')" 200
+echo
+
+chk "alice ve el roster de alpha (2), no el de beta" "$(list memberships "$A" | j "['totalItems']")" 2
+chk "membresía duplicada rechazada (índice único)" "$(pcode memberships "$A" "{\"workspace\":\"$ALPHA\",\"user\":\"$BID\",\"role\":\"lead\"}")" 400
+chk "slug duplicado rechazado" "$(pcode workspaces "$A" '{"name":"Otro","slug":"alpha"}')" 400
+chk "slug con espacios/mayúsculas rechazado" "$(pcode workspaces "$A" '{"name":"Otro","slug":"Con Espacios"}')" 400
+
+# --------------------------------------------------------------- phase 1a ----
+echo
+# Nombres propios: fundar el workspace ya dejó "Por hacer / En curso / Hecho",
+# y el índice (workspace, name) es único.
+ST_A=$(post states "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"En revisión\",\"group\":\"started\",\"position\":4}" | j "['id']")
+LB_A=$(post labels "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"bug\",\"color\":\"#f00\"}" | j "['id']")
+BU_A=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Primera burbuja\",\"outcome\":\"algo cambió\"}" | j "['id']")
+BU_B=$(post bubbles "$B" "{\"workspace\":\"$BETA\",\"name\":\"Burbuja de beta\"}" | j "['id']")
+if [ -n "$ST_A" ] && [ -n "$LB_A" ] && [ -n "$BU_A" ] && [ -n "$BU_B" ]; then
+  ok "state, label y bubbles creados"; else no "crear estructura" "$ST_A/$LB_A/$BU_A/$BU_B"; fi
+
+T1=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"bubble\":\"$BU_A\",\"name\":\"Primer thread\",\"state\":\"$ST_A\",\"labels\":[\"$LB_A\"],\"impact\":\"high\",\"urgency\":\"high\"}")
+T2=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"bubble\":\"$BU_A\",\"name\":\"Segundo\"}")
+T3=$(post threads "$B" "{\"workspace\":\"$BETA\",\"bubble\":\"$BU_B\",\"name\":\"Primero de beta\"}")
+T1ID=$(echo "$T1"|j "['id']")
+if [ "$(echo "$T1"|j "['seq']")" = "1" ] && [ "$(echo "$T2"|j "['seq']")" = "2" ]; then
+  ok "seq se asigna en el server: 1, 2"; else no "seq" "$(echo "$T1"|j "['seq']")/$(echo "$T2"|j "['seq']")"; fi
+chk "seq reinicia por workspace (beta arranca en 1)" "$(echo "$T3"|j "['seq']")" 1
+T4=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Con seq falso\",\"seq\":99}")
+chk "el cliente no puede imponer su seq" "$(echo "$T4" | j "['seq']")" 3
+
+echo
+chk ">>> thread de beta con una bubble de ALPHA se rechaza" \
+  "$(pcode threads "$B" "{\"workspace\":\"$BETA\",\"bubble\":\"$BU_A\",\"name\":\"Colado\"}")" 400
+chk ">>> bob (member) NO puede crear un state en alpha (config = lead)" \
+  "$(pcode states "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"Colado\",\"group\":\"backlog\"}")" 400
+chk ">>> bob (member) SÍ puede crear un label en alpha" \
+  "$(pcode labels "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"chore\"}")" 200
+chk ">>> bob (member) NO puede borrar una bubble de alpha (lead)" \
+  "$(code -X DELETE "$API/api/collections/bubbles/records/$BU_A" -H "Authorization: $B")" 404
+echo
+
+# alice no es miembro de beta: nada de beta le existe
+chk "alice no ve bubbles de beta" "$(list bubbles "$A" | j "['totalItems']")" 1
+chk "alice no ve threads de beta" "$(list threads "$A" | j "['totalItems']")" 3
+chk "alice no ve la bubble de beta por id" \
+  "$(code "$API/api/collections/bubbles/records/$BU_B" -H "Authorization: $B")" 200
+chk "...y alice sí recibe 404 por esa misma" \
+  "$(code "$API/api/collections/bubbles/records/$BU_B" -H "Authorization: $A")" 404
+chk "anónimo no ve threads" "$(curl -s "$API/api/collections/threads/records" | j "['totalItems']")" 0
+
+# autoría: el server la impone, el cliente no la elige
+C1=$(post comments "$B" "{\"thread\":\"$T1ID\",\"author\":\"$AID\",\"body\":\"firmado como alice\"}")
+chk ">>> el comentario de bob queda firmado por BOB aunque pidió alice" "$(echo "$C1"|j "['author']")" "$BID"
+C1ID=$(echo "$C1"|j "['id']")
+# Lo dicho, dicho: el hilo es un registro al que se AGREGA. Ni el autor lo
+# reescribe — un hilo donde las frases cambian deja de servir para entender por
+# qué se decidió algo, y las respuestas quedan contestando a lo que ya no está.
+# 403 y no 404, y la diferencia dice algo: un 404 es "no hay regla que te
+# incluya" y esconde si la fila existe; un 403 es "esta puerta está cerrada para
+# todos", que es exactamente lo que pasa aquí.
+chk ">>> alice no puede editar el comentario de bob" \
+  "$(code -X PATCH "$API/api/collections/comments/records/$C1ID" -H "Authorization: $A" -H "$JS" -d '{"body":"editado"}')" 403
+chk ">>> ni bob el suyo: los comentarios se escriben, no se reescriben" \
+  "$(code -X PATCH "$API/api/collections/comments/records/$C1ID" -H "Authorization: $B" -H "$JS" -d '{"body":"editado"}')" 403
+chk ">>> y nadie los borra" \
+  "$(code -X DELETE "$API/api/collections/comments/records/$C1ID" -H "Authorization: $B")" 403
+
+L1=$(post thread_links "$B" "{\"thread\":\"$T1ID\",\"url\":\"https://example.com/pr/1\",\"title\":\"PR\",\"added_by\":\"$AID\"}")
+chk "el link queda a nombre de quien lo puso, no de quien dijo" "$(echo "$L1"|j "['added_by']")" "$BID"
+
+R1=$(pcode thread_relations "$A" "{\"thread\":\"$T1ID\",\"type\":\"blocking\",\"related\":\"$(echo "$T2"|j "['id']")\"}")
+chk "relación creada" "$R1" 200
+chk "relación duplicada rechazada (índice único)" \
+  "$(pcode thread_relations "$A" "{\"thread\":\"$T1ID\",\"type\":\"blocking\",\"related\":\"$(echo "$T2"|j "['id']")\"}")" 400
+
+# borrar una bubble NO debe llevarse la escritura de sus threads
+curl -s -X DELETE "$API/api/collections/bubbles/records/$BU_A" -H "Authorization: $A" >/dev/null
+chk ">>> borrar la bubble deja vivos sus threads" "$(list threads "$A" | j "['totalItems']")" 3
+chk "...y el thread queda sin bubble" \
+  "$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" | j "['bubble']")" ""
+
+
+# ------------------------------------------------------- lead global ----
+echo
+chk ">>> carol (lead global) ve LOS DOS workspaces sin ser miembro" "$(list workspaces "$C" | j "['totalItems']")" 2
+chk ">>> ...y un miembro raso sigue SIN cruzar (bob ve 2 porque es de ambos)" "$(list workspaces "$B" | j "['totalItems']")" 2
+DAVE=$(mkuser dave@bubble.test Dave | j "['id']")
+DV=$(login dave@bubble.test)
+chk ">>> dave, sin membresías, ve 0 workspaces  [el prefijo no abrió todo]" "$(list workspaces "$DV" | j "['totalItems']")" 0
+chk ">>> dave ve 0 threads" "$(list threads "$DV" | j "['totalItems']")" 0
+chk "carol (lead global) ve los threads de ambos" "$(list threads "$C" | j "['totalItems']")" 4
+chk "carol puede renombrar un workspace del que no es miembro" \
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$BETA" -H "Authorization: $C" -H "$JS" -d '{"name":"Beta por carol"}')" 200
+chk "cualquiera logueado puede listar personas (para poder invitar)" \
+  "$([ "$(list users "$DV" | j "['totalItems']")" -ge 4 ] && echo si || echo no)" si
+
+echo
+# 404 y no 400: la regla FILTRA, no rechaza — para dave ese registro deja de
+# existir en cuanto el cuerpo trae `role`. Invisible en vez de prohibido.
+chk ">>> dave NO puede autopromoverse a lead global" \
+  "$(code -X PATCH "$API/api/collections/users/records/$DAVE" -H "Authorization: $DV" -H "$JS" -d '{"role":"lead"}')" 404
+chk "dave sí puede editar su propio nombre" \
+  "$(code -X PATCH "$API/api/collections/users/records/$DAVE" -H "Authorization: $DV" -H "$JS" -d '{"display_name":"Dave B"}')" 200
+chk "carol (lead global) sí puede promover a dave" \
+  "$(code -X PATCH "$API/api/collections/users/records/$DAVE" -H "Authorization: $C" -H "$JS" -d '{"role":"lead"}')" 200
+
+# ------------------------------------------------------ último lead ----
+echo
+MA=$(curl -s "$API/api/collections/memberships/records?filter=(workspace=%27$ALPHA%27)" -H "Authorization: $SU")
+LEADROW=$(echo "$MA" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(next((i["id"] for i in d["items"] if i["role"]=="lead"), ""))')
+chk ">>> el ÚLTIMO lead no puede degradarse" \
+  "$(code -X PATCH "$API/api/collections/memberships/records/$LEADROW" -H "Authorization: $A" -H "$JS" -d '{"role":"member"}')" 400
+chk ">>> el ÚLTIMO lead no puede borrar su membresía" \
+  "$(code -X DELETE "$API/api/collections/memberships/records/$LEADROW" -H "Authorization: $A")" 400
+BOBROW=$(echo "$MA" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(next((i["id"] for i in d["items"] if i["role"]=="member"), ""))')
+chk "alice promueve a bob a lead" \
+  "$(code -X PATCH "$API/api/collections/memberships/records/$BOBROW" -H "Authorization: $A" -H "$JS" -d '{"role":"lead"}')" 200
+chk "con dos leads, alice YA puede degradarse" \
+  "$(code -X PATCH "$API/api/collections/memberships/records/$LEADROW" -H "Authorization: $A" -H "$JS" -d '{"role":"member"}')" 200
+
+
+# ------------------------------------------- documentos: el árbol de markdown ----
+#
+# Las peticiones que MUTAN se arman en una variable y se llaman directo, nunca
+# dentro de $( ) como argumento de chk. Tres veces en esta sesión una llamada así
+# no ocurrió y la aserción pasó de todas formas — con el cuerpo llegando vacío al
+# curl, que el server contesta 200 sin escribir nada. Un test que silenciosamente
+# no corre es peor que uno que falla.
+echo
+GETDOC="$API/api/threads/$T1ID/document"
+getdoc(){ curl -s "$GETDOC" -H "Authorization: $1"; }
+patchdoc(){ # $1 token, $2 body -> imprime el código; el cuerpo queda en /tmp/bubble-put.json
+  curl -s -o /tmp/bubble-put.json -w '%{http_code}' -X PATCH "$GETDOC" \
+    -H "Authorization: $1" -H "$JS" -d "$2"; }
+
+WSA=$(curl -s "$API/api/collections/workspaces/records/$ALPHA" -H "Authorization: $SU")
+chk "el workspace tiene repo_path" "$(echo "$WSA" | j "['repo_path']")" "alpha"
+TH1=$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $SU")
+chk "el thread tiene doc_path derivado de seq y nombre" \
+  "$(echo "$TH1" | j "['doc_path']")" "threads/1-primer-thread.md"
+
+D0=$(getdoc "$A")
+chk "un documento que no existe se lee vacío" "$(echo "$D0" | j "['content']")" ""
+H0=$(echo "$D0" | j "['hash']")
+
+BODY="{\"content\":\"# Uno\\n\\n- [ ] algo\\n\",\"base\":\"$H0\",\"message\":\"born: uno\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk "primera escritura con el hash de vacío" "$CODE" 200
+D1=$(getdoc "$A")
+chk "y se lee de vuelta" "$(echo "$D1" | j "['content']" | head -c 5)" "# Uno"
+# Leer y escribir responden la misma forma: la web redibuja con lo que devolvió
+# la escritura, así que un campo que solo aparece en una de las dos se pierde.
+chk "la lectura trae el html del servidor" "$(echo "$D1" | j "['html']" | head -c 7)" "<h1 id="
+chk "...y la cuenta de casillas hechas" "$(echo "$D1" | j "['done']")" "0"
+H1=$(echo "$D1" | j "['hash']")
+
+BODY="{\"content\":\"pisado\",\"base\":\"$H0\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> escribir con un base viejo es CONFLICTO, no sobreescritura" "$CODE" 409
+chk "...y el contenido sigue intacto" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
+
+BODY="{\"content\":\"# Uno\\n\\n- [x] algo\\n\",\"base\":\"$H1\",\"message\":\"tick\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk "con el base correcto sí escribe" "$CODE" 200
+H2=$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["hash"])')
+
+# --- el PATCH único: tres formas, un solo endpoint ---
+echo
+BODY="{\"base\":\"$H2\",\"edits\":[{\"old\":\"# Uno\",\"new\":\"# Uno editado\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> edits: parche por contexto" "$CODE" 200
+chk "...aplicado" "$(getdoc "$A" | j "['content']" | head -c 13)" "# Uno editado"
+H3=$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["hash"])')
+
+BODY="{\"base\":\"$H3\",\"edits\":[{\"old\":\"no existe en el documento\",\"new\":\"x\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> un edit que no encuentra su texto se rechaza" "$CODE" 400
+chk "...con un mensaje accionable" \
+  "$(python3 -c 'import json;print("si" if "not in this section" in json.load(open("/tmp/bubble-put.json"))["message"] else "no")')" si
+
+BODY="{\"base\":\"$H3\",\"edits\":[{\"old\":\"o\",\"new\":\"0\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> un edit ambiguo se rechaza en vez de adivinar" "$CODE" 400
+chk "...y dice que cites más" \
+  "$(python3 -c 'import json;print("si" if "quote more" in json.load(open("/tmp/bubble-put.json"))["message"] else "no")')" si
+
+# La casilla viene marcada de la escritura anterior, así que desmarcarla es lo
+# que de verdad cambia el archivo. Marcar lo ya marcado no cambia nada y por eso
+# no produce commit — eso se comprueba aparte, abajo.
+BODY="{\"base\":\"$H3\",\"todo\":{\"index\":0,\"done\":false}}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> todo: desmarcar una casilla por índice" "$CODE" 200
+chk "...y devuelve cuántas van hechas" \
+  "$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["done"])')" 0
+H4=$(python3 -c 'import json;print(json.load(open("/tmp/bubble-put.json"))["hash"])')
+
+BODY="{\"base\":\"$H4\",\"todo\":{\"index\":0,\"text\":\"otra cosa\",\"done\":false}}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> ...pero no si el texto citado ya no coincide" "$CODE" 400
+
+BODY="{\"base\":\"$H4\",\"todo\":{\"index\":0,\"done\":false}}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> una escritura que no cambia nada responde 200" "$CODE" 200
+
+BODY="{\"base\":\"$H4\",\"content\":\"x\",\"edits\":[{\"old\":\"a\",\"new\":\"b\"}]}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> dos formas a la vez se rechazan" "$CODE" 400
+BODY="{\"base\":\"$H4\"}"
+CODE=$(patchdoc "$A" "$BODY")
+chk ">>> ninguna forma también" "$CODE" 400
+
+# erin: recién creada, sin membresías y sin promover. dave YA es lead global a
+# estas alturas — lo promovió carol arriba — así que no sirve para esta prueba.
+ERIN=$(mkuser erin@bubble.test Erin | j "['id']")
+ER=$(login erin@bubble.test)
+echo
+chk ">>> erin (sin membresía) no alcanza el documento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC" -H "Authorization: $ER")" 404
+BODY='{"content":"x","base":""}'
+CODE=$(patchdoc "$ER" "$BODY")
+chk ">>> erin tampoco puede escribirlo" "$CODE" 404
+chk "anónimo tampoco" "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC")" 401
+chk "carol (lead global) sí lo lee sin ser miembro" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC" -H "Authorization: $C")" 200
+
+echo
+NCOM=$(curl -s "$API/api/threads/$T1ID/history" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin).get("commits") or []; print(len(d))')
+# 4 escrituras que cambiaron algo: la primera, la del base correcto, el parche
+# por contexto y el desmarcado. La que no cambió nada NO cuenta.
+chk ">>> cada escritura que cambia algo es un commit (4)" "$NCOM" 4
+WHO=$(curl -s "$API/api/threads/$T1ID/history" -H "Authorization: $A" | python3 -c 'import sys,json
+c=json.load(sys.stdin).get("commits") or [""]; print("si" if "alice@bubble.test" in c[0] else "no")')
+chk ">>> y queda firmado por quien escribió" "$WHO" si
+
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d '{"name":"Renombrado"}' >/dev/null
+TH2=$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $SU")
+chk ">>> al renombrar, el archivo se mueve con el thread" \
+  "$(echo "$TH2" | j "['doc_path']")" "threads/1-renombrado.md"
+chk "...el contenido sobrevive la mudanza" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
+NC2=$(curl -s "$API/api/threads/$T1ID/history" -H "Authorization: $A" | python3 -c 'import sys,json
+c=json.load(sys.stdin).get("commits") or []; print("si" if len(c)>=3 else "no")')
+chk ">>> ...y la historia la sigue (git mv, no copiar y borrar)" "$NC2" si
+
+
+# ------------------------------------- la wiki: docs/ y el árbol del workspace ----
+echo
+WSDOC="$API/api/workspaces/$ALPHA/document"
+wpatch(){ curl -s -o /tmp/bubble-put.json -w '%{http_code}' -X PATCH "$WSDOC" \
+  -H "Authorization: $1" -H "$JS" -d "$2"; }
+E0=$(python3 -c 'import hashlib;print(hashlib.sha256(b"").hexdigest()[:32])')
+
+BODY="{\"path\":\"docs/onboarding.md\",\"base\":\"$E0\",\"content\":\"# Onboarding\\n\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> una página de docs/ nace sin crear ningún thread" "$CODE" 200
+BODY="{\"path\":\"docs/guias/estilo.md\",\"base\":\"$E0\",\"content\":\"# Estilo\\n\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> docs/ anida" "$CODE" 200
+BODY="{\"path\":\"README.md\",\"base\":\"$E0\",\"content\":\"# Alpha\\n\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk "README.md en la raíz" "$CODE" 200
+BODY="{\"path\":\"docs/diagrama.excalidraw\",\"base\":\"$E0\",\"content\":\"{}\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk "excalidraw se acepta" "$CODE" 200
+
+BODY="{\"path\":\"threads/uno/dos/tres.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> threads/ anida UN nivel, no dos" "$CODE" 400
+BODY="{\"path\":\"suelto.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> en la raíz solo va README" "$CODE" 400
+BODY="{\"path\":\"docs/foto.png\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> un binario se rechaza (quiere otra puerta)" "$CODE" 400
+BODY="{\"path\":\"../fuera.md\",\"base\":\"$E0\",\"content\":\"x\"}"
+CODE=$(wpatch "$A" "$BODY")
+chk ">>> una ruta que se escapa se rechaza" "$CODE" 400
+
+chk "un miembro raso también escribe la wiki" \
+  "$(wpatch "$B" "{\"path\":\"docs/de-bob.md\",\"base\":\"$E0\",\"content\":\"# Bob\\n\"}")" 200
+chk ">>> erin (sin membresía) no escribe la wiki" \
+  "$(wpatch "$ER" "{\"path\":\"docs/colado.md\",\"base\":\"$E0\",\"content\":\"x\"}")" 404
+
+TREE=$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A")
+chk ">>> el árbol lista docs, threads y README" \
+  "$(echo "$TREE" | python3 -c 'import sys,json
+p={e["path"] for e in json.load(sys.stdin)["entries"]}
+need={"README.md","threads","docs","docs/onboarding.md","docs/guias","docs/guias/estilo.md"}
+print("si" if need <= p else "faltan "+str(need-p))')" si
+chk "...el título de un archivo es su nombre" \
+  "$(echo "$TREE" | python3 -c 'import sys,json
+print(next(e["title"] for e in json.load(sys.stdin)["entries"] if e["path"]=="docs/onboarding.md"))')" onboarding
+chk "...y .git no se filtra" \
+  "$(echo "$TREE" | python3 -c 'import sys,json
+print("si" if not any(e["path"].startswith(".git") for e in json.load(sys.stdin)["entries"]) else "no")')" si
+chk "erin no ve el árbol" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $ER")" 404
+
+chk "borrar una página de docs/" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$WSDOC?path=docs/de-bob.md" -H "Authorization: $A")" 200
+chk ">>> pero no el documento de un thread por esa puerta" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$WSDOC?path=threads/1-renombrado.md" -H "Authorization: $A")" 400
+
+# Cuánto cambió, en líneas. No lo calcula nadie dos veces: cada escritura es un
+# commit, así que git ya tiene la respuesta.
+echo
+CH=$(curl -s "$API/api/workspaces/$ALPHA/changes" -H "Authorization: $A")
+chk ">>> el ciclo dice cuánto se escribió en cada archivo" \
+  "$(echo "$CH" | python3 -c 'import sys,json
+d=json.load(sys.stdin)["changes"]
+c=next((x for x in d if x["path"].startswith("threads/")), None)
+print("si" if c and c["added"] > 0 else d)')" si
+chk ">>> ...y el diff de un documento viene del propio git" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/diff?path=docs/onboarding.md" -H "Authorization: $A" | python3 -c 'import sys,json
+print("si" if "+# Onboarding" in json.load(sys.stdin)["diff"] else "no")')" si
+chk ">>> ...y \"último cambio\" contesta aunque el ciclo esté vacío" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/diff?path=docs/onboarding.md&since=last" -H "Authorization: $A" | python3 -c 'import sys,json
+print("si" if json.load(sys.stdin)["diff"] else "no")')" si
+chk ">>> ...y trae los DOS lados, que es lo que una vista de diff necesita" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/diff?path=docs/onboarding.md&since=last" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if "after" in d and "before" in d and d["after"] else d)')" si
+chk ">>> erin no ve lo que cambió en un workspace que no alcanza" \
+  "$(code "$API/api/workspaces/$ALPHA/changes" -H "Authorization: $ER")" 404
+
+chk "el repo del workspace es un git de verdad" "$([ -d "$R/alpha/.git" ] && echo si || echo no)" si
+chk "y el árbol queda limpio tras las escrituras" \
+  "$(cd "$R/alpha" && git status --porcelain | wc -l | tr -d ' ')" 0
+
+
+# ---------------------------------------------------- la evidencia (fase 2) ----
+echo
+EV(){ curl -s "$API/api/collections/events/records?perPage=200&filter=$1" -H "Authorization: $2"; }
+evcount(){ EV "$1" "$SU" | j "['totalItems']"; }
+
+chk ">>> crear un thread deja evidencia" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-created')")" 1
+chk ">>> cada escritura que cambió algo dejó evidencia (4)" \
+  "$(evcount "(target='$T1ID'%26%26kind='document-changed')")" 4
+chk ">>> la escritura que NO cambió nada no dejó evidencia" \
+  "$(evcount "(target='$T1ID'%26%26kind='document-changed')")" 4
+chk ">>> un link deja evidencia" \
+  "$(evcount "(target='$T1ID'%26%26kind='link-added')")" 1
+chk ">>> un comentario también, pero es pulso" \
+  "$(evcount "(target='$T1ID'%26%26kind='comment')")" 1
+chk ">>> la wiki se registra a grano de workspace" \
+  "$([ "$(evcount "(kind='doc-changed')")" -ge 4 ] && echo si || echo no)" si
+chk ">>> ...y NUNCA a grano de thread" \
+  "$(evcount "(kind='doc-changed'%26%26target_type='thread')")" 0
+
+chk "la evidencia queda firmada por quien la produjo" \
+  "$(EV "(target='$T1ID'%26%26kind='thread-created')" "$SU" | j "['items'][0]['actor']")" "$AID"
+
+# Un thread escribe más de un archivo cuando el trabajo lo pide: viven en SU
+# carpeta, son suyos (la evidencia va al thread, no al workspace) y se borran
+# como cualquier documento.
+PG="threads/1-renombrado/notas.md"
+BODY="{\"path\":\"$PG\",\"base\":\"$E0\",\"content\":\"# Notas\\n\"}"
+chk ">>> un thread puede tener otro documento al lado" "$(wpatch "$A" "$BODY")" 200
+chk ">>> ...y esa escritura calienta al THREAD, no al workspace" \
+  "$(curl -s "$API/api/collections/events/records?perPage=1&sort=-at&filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"kind='document-changed'\"))")" \
+     -H "Authorization: $SU" | j "['items'][0]['target_type']")" thread
+chk ">>> ...y se borra como cualquier otro documento" \
+  "$(code -X DELETE "$API/api/workspaces/$ALPHA/document?path=$PG" -H "Authorization: $A")" 200
+
+
+# completar un thread es una TRANSICIÓN de estado, no un campo
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d "{\"state\":\"$ST_A\"}" >/dev/null
+chk "pasar a un estado que no es completed no completa nada" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 0
+# carol, no alice: alice quedó degradada a member arriba y crear estados es de lead.
+ST_DONE=$(post states "$C" "{\"workspace\":\"$ALPHA\",\"name\":\"Cerrado\",\"group\":\"completed\"}" | j "['id']")
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d "{\"state\":\"$ST_DONE\"}" >/dev/null
+chk ">>> llegar a un estado completed sí" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 1
+curl -s -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" \
+  -d '{"name":"Renombrado otra vez"}' >/dev/null
+chk ">>> guardar un thread ya completado no lo completa de nuevo" \
+  "$(evcount "(target='$T1ID'%26%26kind='thread-completed')")" 1
+
+echo
+# El cuerpo en una VARIABLE, no dentro de "$( … )" como argumento de chk. Es la
+# regla que este archivo ya se había puesto, y saltársela aquí costó cinco
+# aserciones que pasaban en macOS y fallaban en el runner de CI: la MISMA llamada
+# daba 400 en un sitio y 403 en el otro. Con el cuerpo en una variable da 403 en
+# los dos, que es lo que corresponde — la regla de `events` es nil, y en
+# PocketBase una regla nil significa "sólo superusers".
+#
+# Lo que se aprendió no es el mecanismo exacto del shell: es que una aserción que
+# sólo dice "4xx" no distingue "la regla lo rechazó" de "la petición ni siquiera
+# llegó a la regla", y verde por accidente es peor que ninguna aserción.
+EVBODY="{\"workspace\":\"$ALPHA\",\"target_type\":\"thread\",\"target\":\"$T1ID\",\"kind\":\"document-changed\",\"at\":\"2026-01-01 00:00:00.000Z\"}"
+EVCODE=$(pcode events "$A" "$EVBODY")
+chk ">>> nadie escribe evidencia desde un cliente" "$EVCODE" 403
+EVCODE=$(pcode events "$C" "$EVBODY")
+chk ">>> ni el lead global" "$EVCODE" 403
+chk "erin no ve la evidencia de alpha" \
+  "$(EV "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
+chk "un miembro sí la ve" \
+  "$([ "$(EV "(workspace='$ALPHA')" "$A" | j "['totalItems']")" -gt 5 ] && echo si || echo no)" si
+
+
+# --------------------------------------- los dos ejes derivados (fase 2) ----
+echo
+PRI(){ curl -s "$API/api/collections/thread_priority/records?perPage=100&filter=$1" -H "Authorization: $2"; }
+T5=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Critico\",\"impact\":\"high\",\"urgency\":\"high\"}" | j "['id']")
+T6=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Backlog\",\"impact\":\"low\",\"urgency\":\"low\"}" | j "['id']")
+T7=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Medio\",\"impact\":\"mid\",\"urgency\":\"high\"}" | j "['id']")
+chk ">>> prioridad derivada: alto x alto = P1" "$(PRI "(id='$T5')" "$A" | j "['items'][0]['priority']")" P1
+chk ">>> bajo x bajo = P4" "$(PRI "(id='$T6')" "$A" | j "['items'][0]['priority']")" P4
+chk ">>> medio x alto = P2" "$(PRI "(id='$T7')" "$A" | j "['items'][0]['priority']")" P2
+# T2 nació sin impact ni urgency; T1 sí los trae desde arriba.
+T2ID=$(echo "$T2" | j "['id']")
+chk ">>> sin impacto ni urgencia, sin prioridad" "$(PRI "(id='$T2ID')" "$A" | j "['items'][0]['priority']")" ""
+chk ">>> priority NO es una columna de threads" \
+  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | python3 -c 'import sys,json;print("si" if "priority" not in json.load(sys.stdin) else "NO, es columna")')" si
+# dos: el "Primer thread" del principio y el "Critico" de aquí.
+chk "se puede filtrar por prioridad como cualquier campo" \
+  "$(PRI "(priority='P1')" "$A" | j "['totalItems']")" 2
+chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
+
+# ----------------------------------------- el planeador: fase 5 (server) ----
+#
+# El planeador es del DEPARTAMENTO, no de un workspace. Los objetivos que
+# aparecen cuando alguien los dice en voz alta —clientes, rentabilidad, ISO
+# 9001— no son de un proyecto: los proyectos son lo que cuelga de ellos. Y una
+# nota entra al inbox antes de que nadie sepa de qué proyecto es; decidirlo es
+# justo lo que hace triar.
+#
+# Lo que NO hay aquí es una tarjeta. Un planeador con tarjetas propias es un
+# segundo inventario del trabajo al lado de los threads. Las columnas son los
+# `states` que el workspace ya define y lo que se mueve es un THREAD.
+echo
+OBJ=$(post objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\",\"outcome\":\"todo el ingreso facturado\"}" | j "['id']")
+chk ">>> el lead GLOBAL define el objetivo" "$([ -n "$OBJ" ] && echo si || echo no)" si
+chk ">>> el lead de un workspace NO lo define: la capa estratégica es del departamento" \
+  "$(pcode objectives "$B" "{\"name\":\"Mio\"}")" 400
+chk "el mismo nombre dos veces se rechaza" \
+  "$(pcode objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\"}")" 400
+chk ">>> el plan lo LEE el lead global, y nadie más" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $C" | j "['totalItems']")" 1
+chk "...ni siquiera un lead de workspace" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $A" | j "['totalItems']")" 0
+chk "...ni erin, que no es de ningún workspace" \
+  "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $ER" | j "['totalItems']")" 0
+chk "anónimo tampoco" \
+  "$(curl -s "$API/api/collections/objectives/records" | j "['totalItems']")" 0
+
+T8=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Bajo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
+T8B=$(post threads "$B" "{\"workspace\":\"$BETA\",\"name\":\"Beta bajo el mismo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
+chk ">>> threads de DOS workspaces cuelgan del mismo objetivo" \
+  "$([ -n "$T8" ] && [ -n "$T8B" ] && echo si || echo no)" si
+chk "borrar el objetivo NO se lleva el trabajo hecho bajo él" \
+  "$(code -X DELETE "$API/api/collections/objectives/records/$OBJ" -H "Authorization: $C")" 204
+chk "...y el thread sigue ahí, sin objetivo" \
+  "$(curl -s "$API/api/collections/threads/records/$T8" -H "Authorization: $A" | j "['id']")" "$T8"
+
+echo
+IN1=$(post inbox_items "$B" "{\"note\":\"revisar el rate limit del portal\"}")
+IN1ID=$(echo "$IN1" | j "['id']")
+chk ">>> cualquiera captura en el inbox" "$([ -n "$IN1ID" ] && echo si || echo no)" si
+chk ">>> y queda firmado por quien capturó, no por quien dijo" \
+  "$(echo "$IN1" | j "['captured_by']")" "$BID"
+chk ">>> capturar NO es evidencia: no calienta nada" \
+  "$(evcount "(kind='inbox-captured')")" 0
+chk ">>> anónimo no captura" \
+  "$(code -X POST "$API/api/collections/inbox_items/records" -H "$JS" -d '{"note":"hola"}')" 400
+SUPBODY="{\"note\":\"suplantada\",\"captured_by\":\"$BID\"}"
+SUP=$(post inbox_items "$A" "$SUPBODY")
+chk "nadie puede firmar una nota como otro" "$(echo "$SUP" | j "['captured_by']")" "$AID"
+
+# Triar: la nota se convierte en un thread —y ahí se decide de qué workspace es—
+# y se queda apuntando a lo que fue.
+T9=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Rate limit del portal\"}" | j "['id']")
+chk ">>> el lead global tría la nota a un thread" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" -H "$JS" -d "{\"thread\":\"$T9\"}")" 200
+chk "...y la nota conserva a dónde fue" \
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" | j "['thread']")" "$T9"
+
+IN2ID=$(post inbox_items "$A" "{\"note\":\"la de alice\"}" | j "['id']")
+chk ">>> quien la escribió la edita" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $A" -H "$JS" -d '{"note":"la de alice, corregida"}')" 200
+chk ">>> otra persona NO la edita, aunque sea lead de su workspace" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $B" -H "$JS" -d '{"note":"secuestrada"}')" 404
+chk ">>> el lead global sí (triar es su trabajo)" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $C" -H "$JS" -d '{"note":"triada"}')" 200
+
+# El inbox se LEE como se edita: quien capturó, y quien tría. Capturar sigue
+# abierto a todo el mundo — una nota que escribes y no vuelves a ver es una nota
+# que se deja de escribir.
+chk ">>> quien capturó lee su propia nota" \
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN2ID" -H "Authorization: $A" | j "['id']")" "$IN2ID"
+chk ">>> pero no la de otro" \
+  "$(code "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A")" 404
+# Tres notas: la de bob, la de alice, y la que alice intentó firmar como bob y
+# quedó firmada como suya.
+chk ">>> el lead global ve el inbox entero" \
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $C" | j "['totalItems']")" 3
+chk "...y alice sólo lo suyo" \
+  "$(curl -s "$API/api/collections/inbox_items/records" -H "Authorization: $A" | j "['totalItems']")" 2
+
+echo
+BOARD=$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A")
+chk ">>> el board calcula heat sin guardarlo" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("si" if d["threads"] and "lifecycle" in d["threads"][0]["heat"] else "no")')" si
+chk ">>> un thread completado sale closed, no caliente" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$T1ID"'"))')" closed
+chk ">>> un thread recién nacido sin evidencia NO está dormant" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$T5"'"))')" hot
+chk ">>> el board trae las dos escalas por separado" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+t=next(t for t in d["threads"] if t["id"]=="'"$T5"'")
+print("si" if t["priority"]=="P1" and t["heat"]["lifecycle"]=="hot" else t)')" si
+chk "el board dice contra qué calibración clasificó" \
+  "$(echo "$BOARD" | python3 -c 'import sys,json;print(int(json.load(sys.stdin)["tuning"]["cycle_hours"]))')" 168
+chk "erin no ve el board" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $ER")" 404
+
+# Todos: las burbujas de cada workspace que alguien alcanza, en un solo board.
+# Lo agrega el SERVIDOR — un reloj y una calibración — porque el calor es función
+# del tiempo y dos filas medidas contra dos "ahora" no son comparables, que es
+# justo lo único que esta pantalla existe para hacer.
+echo
+ALL_B=$(curl -s "$API/api/board" -H "Authorization: $B")
+chk ">>> el board de TODOS junta los workspaces de quien mira" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+print(len(json.load(sys.stdin)["workspaces"]))')" 2
+chk ">>> ...y cada fila dice de qué workspace es" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if d["bubbles"] and all(b.get("workspace") for b in d["bubbles"]) else "no")')" si
+chk ">>> ...con el slug, que es de lo que se hace la dirección" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+print("si" if all(w.get("slug") for w in json.load(sys.stdin)["workspaces"]) else "no")')" si
+chk ">>> ...ordenado por banda a través de proyectos, no agrupado por proyecto" \
+  "$(echo "$ALL_B" | python3 -c 'import sys,json
+band={"hot":3,"dormant":2,"rip":1,"closed":0}
+v=[band[b["heat"]["lifecycle"]] for b in json.load(sys.stdin)["bubbles"]]
+print("si" if v==sorted(v,reverse=True) else v)')" si
+chk ">>> alice sólo ve el suyo: el board de todos NO cruza la frontera" \
+  "$(curl -s "$API/api/board" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if [w["slug"] for w in d["workspaces"]]==["alpha"] else d["workspaces"])')" si
+chk ">>> carol (lead global) los ve todos sin ser miembro" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json
+print(len(json.load(sys.stdin)["workspaces"]))')" 2
+chk ">>> erin, que no es de ninguno, recibe un board vacío y no un error" \
+  "$(curl -s "$API/api/board" -H "Authorization: $ER" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if d["workspaces"]==[] and d["bubbles"]==[] else d)')" si
+chk ">>> anónimo no ve el board de todos" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/board")" 401
+
+# Cerrar una burbuja es una DECISIÓN con fecha, no un borrado: baja a la banda
+# de cerradas, dice cómo terminó, y se puede reabrir. Y quién está a cargo es una
+# LISTA, porque el trabajo compartido es la norma y la banda 🪦 solo pregunta si
+# hay alguien.
+echo
+BU_X=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Se cierra\"}" | j "['id']")
+onbubble(){ curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/bubbles/records/$BU_X" -H "Authorization: $1" -H "$JS" -d "$2"; }
+bubbleon(){ curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json
+d=json.load(sys.stdin); b=next(x for x in d['bubbles'] if x['id']=='$BU_X'); print($1)"; }
+
+chk ">>> una burbuja recién creada no está cerrada" "$(bubbleon "b['closed']")" False
+chk ">>> cerrada, el board la pone en la banda closed" \
+  "$(onbubble "$A" '{"closed_at":"2026-01-02 03:04:05.000Z","closure":"se resolvió por otro lado"}' >/dev/null; bubbleon "b['heat']['lifecycle']")" closed
+chk ">>> ...y carga la frase de quien la cerró" "$(bubbleon "b.get('closure','')")" "se resolvió por otro lado"
+chk ">>> reabrir la devuelve a una banda viva" "$(onbubble "$A" '{"closed_at":"","closure":""}')" 200
+chk "...y el board ya no la da por cerrada" "$(bubbleon "b['closed']")" False
+
+# El cuerpo va en una variable, como el resto del archivo: escrito en línea
+# dentro de "$( ... )" el shell se come el escape de las comillas y el JSON llega
+# roto, que es un 400 genérico y una tarde perdida.
+DOS="{\"owners\":[\"$BID\",\"$AID\"]}"
+chk ">>> a cargo es una LISTA: dos personas caben en la misma burbuja" "$(onbubble "$B" "$DOS")" 200
+chk "...y el board las devuelve las dos" "$(bubbleon "len(b.get('owners',[]))")" 2
+chk ">>> vaciar la lista es una respuesta válida: nadie a cargo" "$(onbubble "$B" '{"owners":[]}')" 200
+chk ">>> el board dice cuándo pasó algo en cada thread, para poder decir la edad" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("si" if all(t.get("at") for t in d["threads"]) else "no")')" si
+# Presencia: un latido, y nada más. No es evidencia, no calienta nada, y no se
+# escribe desde un cliente — el reloj es del servidor.
+echo
+chk ">>> latir crea la fila de quien late" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence" -H "Authorization: $A")" 200
+chk "...y latir otra vez la actualiza en vez de duplicarla" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence" -H "Authorization: $A" >/dev/null
+     curl -s "$API/api/collections/presence/records" -H "Authorization: $A" | j "['totalItems']")" 1
+chk ">>> cualquiera que trabaje aquí ve quién está" \
+  "$(curl -s "$API/api/collections/presence/records" -H "Authorization: $ER" | j "['totalItems']")" 1
+chk ">>> anónimo no late" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/presence")" 401
+chk ">>> anónimo tampoco ve quién está" \
+  "$(curl -s "$API/api/collections/presence/records" | j "['totalItems']")" 0
+PRBODY="{\"user\":\"$AID\",\"at\":\"2030-01-01 00:00:00.000Z\"}"
+PRCODE=$(pcode presence "$A" "$PRBODY")
+chk ">>> nadie escribe presencia desde un cliente: el reloj es del servidor" "$PRCODE" 403
+chk ">>> latir NO es evidencia: no deja evento" \
+  "$(curl -s "$API/api/collections/events/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"kind='presence'\"))")" \
+     -H "Authorization: $SU" | j "['totalItems']")" 0
+
+chk ">>> una persona nueva es nombrable: su correo es visible para sus colegas" \
+  "$(curl -s "$API/api/collections/users/records/$AID" -H "Authorization: $B" | j "['email']")" alice@bubble.test
+chk "...y el roster del workspace se lee expandido, para poder elegir a quién" \
+  "$(curl -s "$API/api/collections/memberships/records?expand=user&filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace='$ALPHA'\"))")" \
+     -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("si" if d["items"] and d["items"][0].get("expand",{}).get("user",{}).get("display_name") else "no")')" si
+
+echo
+chk ">>> recalibrar cambia el veredicto sin migración ni backfill" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/tuning/records/$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")" \
+     -H "Authorization: $C" -H "$JS" -d '{"cycle_hours":1}')" 200
+chk "...y un miembro raso no puede recalibrar" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/tuning/records/$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")" \
+     -H "Authorization: $B" -H "$JS" -d '{"cycle_hours":72}')" 404
+
+
+# --------------------------------------------------- el MCP (fase 3) ----
+echo
+# El transporte es SSE: `event: message` y luego `data: {json}`. Se extrae el
+# último objeto JSON de la respuesta.
+mcp(){ # $1 token, $2 method, $3 params-json -> imprime el result como json
+  curl -s -X POST "$API/mcp" -H "Authorization: $1" -H "$JS" \
+    -H 'Accept: application/json, text/event-stream' \
+    -d "{\"jsonrpc\":\"2.0\",\"id\":1,\"method\":\"$2\",\"params\":$3}" \
+  | python3 -c 'import sys,json,re
+raw=sys.stdin.read()
+objs=re.findall(r"^data: (.*)$", raw, re.M) or [raw]
+try: print(json.dumps(json.loads(objs[-1])))
+except Exception: print("{}")'
+}
+mcptool(){ mcp "$1" "tools/call" "{\"name\":\"$2\",\"arguments\":$3}"; }
+# el texto que devuelve una tool
+mcptext(){ mcptool "$1" "$2" "$3" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+r=d.get("result",{})
+c=r.get("content") or []
+print(c[0]["text"] if c else json.dumps(d))'; }
+
+# Qué está corriendo aquí. Sin sesión y sin tocar la base: es la comprobación de
+# salud del contenedor y lo que mira el actualizador antes y después de cambiar
+# la imagen.
+chk ">>> /api/version contesta sin sesión" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/version")" 200
+chk ">>> ...y dice qué versión es" \
+  "$(curl -s "$API/api/version" | python3 -c 'import sys,json;print(bool(json.load(sys.stdin).get("version")))')" True
+
+chk ">>> tools/list expone la superficie" \
+  "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
+n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
+print(",".join(n))')" \
+  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+# Los dos documentos que no describen el sistema sino qué hacer con él: el que un
+# agente se pega en SUS instrucciones, y la plantilla que una persona copia para
+# configurar su asistente. Markdown servido, no cadenas dentro del código.
+chk ">>> house_rules trae la sección que un agente se instala" \
+  "$(mcptext "$A" house_rules '{}' | grep -c '<SLUG>')" 1
+chk ">>> ...y es el mismo markdown que sirve la API" \
+  "$(curl -s "$API/api/house-rules" | grep -c '<SLUG>')" 1
+chk ">>> el prompt de conexión sale SIN rellenar: los huecos los pone el cliente" \
+  "$(curl -s "$API/api/connect" | grep -c '{{token}}')" 1
+chk ">>> ...y dice que hay que instalar la sección" \
+  "$(curl -s "$API/api/connect" | grep -c 'house_rules')" 1
+
+chk ">>> la guía es prompt Y tool (no todo cliente lista prompts)" \
+  "$(mcp "$A" "prompts/list" "{}" | python3 -c 'import sys,json
+print(",".join(p["name"] for p in json.load(sys.stdin)["result"]["prompts"]))')" bubble-work
+chk "la tool guide devuelve el mismo markdown que /api/guide" \
+  "$(mcptext "$A" guide '{}' | head -1)" "# Bubble Work"
+chk "sin token, /mcp no responde" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/mcp" -H "$JS" -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" 401
+
+chk ">>> workspaces respeta la frontera: erin no ve ninguno" \
+  "$(mcptext "$ER" workspaces '{}' | python3 -c 'import sys,json
+try: print(len(json.loads(sys.stdin.read()) or []))
+except Exception: print(0)')" 0
+
+# ---- el bucle completo de un agente, por slug ----
+echo
+NT=$(mcptext "$A" create_thread '{"workspace":"alpha","name":"Trabajo del agente","impact":"high","urgency":"high"}')
+NTID=$(echo "$NT" | j "['id']")
+chk ">>> un agente crea un thread por SLUG, sin conocer ids" "$([ -n "$NTID" ] && echo si || echo no)" si
+chk "...y el server le puso número y ruta" "$(echo "$NT" | j "['doc_path']")" "threads/$(echo "$NT" | j "['seq']")-trabajo-del-agente.md"
+
+RD=$(mcptext "$A" read "{\"thread\":\"$NTID\"}")
+H=$(echo "$RD" | j "['hash']")
+chk "read devuelve el hash que la escritura necesita" "$([ -n "$H" ] && echo si || echo no)" si
+W1=$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"# Trabajo\\n\\n- [ ] investigar el rate limit\\n\"}")
+chk ">>> escribe el documento" "$(echo "$W1" | j "['done']")" 0
+H2=$(echo "$W1" | j "['hash']")
+chk ">>> escribir con el base viejo se rechaza también por MCP" \
+  "$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"pisado\"}" | grep -c "changed since you read it")" 1
+W2=$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H2\",\"todo\":{\"index\":0,\"done\":true}}")
+chk ">>> marca la casilla y devuelve el conteo" "$(echo "$W2" | j "['done']")" 1
+
+chk ">>> search encuentra lo que acaba de escribir" \
+  "$(mcptext "$A" search '{"workspace":"alpha","query":"rate limit"}' | python3 -c 'import sys,json
+h=json.loads(sys.stdin.read()) or []
+print("si" if any("trabajo-del-agente" in x["path"] for x in h) else "no")')" si
+chk ">>> link: evidencia externa" \
+  "$(mcptext "$A" link "{\"thread\":\"$NTID\",\"url\":\"https://example.com/pr/9\",\"title\":\"PR\"}" | j "['url']")" "https://example.com/pr/9"
+
+chk ">>> y la burbuja se calienta por eso: el thread sale hot" \
+  "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" hot
+chk "...con su prioridad derivada al lado, sin mezclarse" \
+  "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(next(t["priority"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" P1
+chk ">>> completar es un cambio de estado, no un examen" \
+  "$(mcptext "$A" complete_thread "{\"thread\":\"$NTID\"}" | j "['id']")" "$NTID"
+chk "...y el board lo refleja" \
+  "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" closed
+
+chk ">>> erin no alcanza el thread por MCP" \
+  "$(mcptext "$ER" read "{\"thread\":\"$NTID\"}" | grep -c "not found")" 1
+
+# La otra mitad de la superficie: un agente que sólo escribe el documento
+# trabaja a ciegas — no puede decir para qué es el trabajo, cuándo vence, quién
+# responde por la burbuja que lo contiene, ni leer lo que ya se hizo.
+#
+# Cada cuerpo va en una VARIABLE. Escrito en línea dentro de "$( ... )" el shell
+# se come el escape de las comillas y el JSON llega roto; el servidor contesta
+# "malformed payload" y la prueba parece pasar contra la nada.
+echo
+# Fundar por MCP tiene que hacer TODO lo que fundar significa: repositorio,
+# membresía de quien funda, y el flujo de trabajo. Los ganchos que hacen eso en
+# la web cuelgan de la PETICIÓN, y esta puerta no pasa por una.
+ARG="{\"name\":\"Laboratorio\"}"
+NWS=$(mcptext "$B" create_workspace "$ARG" | j "['slug']")
+chk ">>> un agente funda un workspace" "$NWS" laboratorio
+chk ">>> ...y queda como su lead" \
+  "$(curl -s "$API/api/collections/memberships/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace.slug='laboratorio'\"))")" \
+     -H "Authorization: $B" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["items"][0]["role"] if d["items"] else "sin membresía")')" lead
+chk ">>> ...con su flujo de trabajo, o un thread no tendría dónde estar" \
+  "$(curl -s "$API/api/collections/states/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace.slug='laboratorio'\"))")" \
+     -H "Authorization: $B" | j "['totalItems']")" 3
+chk ">>> ...y alice no lo ve: fundar no lo hace de todos" \
+  "$(mcptext "$A" tree "{\"workspace\":\"laboratorio\"}" | grep -c "not found")" 1
+
+ARG="{\"workspace\":\"alpha\",\"name\":\"Portal\",\"outcome\":\"la gente entra sin pedir ayuda\"}"
+NBUB=$(mcptext "$A" create_bubble "$ARG" | j "['id']")
+chk ">>> un agente crea una burbuja con su outcome" "$([ -n "$NBUB" ] && echo si || echo no)" si
+
+ARG="{\"bubble\":\"$NBUB\",\"owners\":[\"$AID\"]}"
+chk ">>> ...y dice quién responde por ella" \
+  "$(mcptext "$A" set_bubble "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["owners"]))')" 1
+
+ARG="{\"bubble\":\"$NBUB\",\"closed\":true,\"closure\":\"se resolvió en soporte\"}"
+chk ">>> cerrar es una decisión con frase, no un borrado" \
+  "$(mcptext "$A" set_bubble "$ARG" | j "['closed']")" True
+ARG="{\"bubble\":\"$NBUB\",\"closed\":false}"
+chk ">>> ...y se reabre" "$(mcptext "$A" set_bubble "$ARG" | j "['closed']")" False
+
+ARG="{\"thread\":\"$NTID\",\"bubble\":\"$NBUB\",\"due\":\"2026-12-31\",\"impact\":\"high\",\"urgency\":\"mid\"}"
+chk ">>> el thread se mueve a esa burbuja" "$(mcptext "$A" set_thread "$ARG" | j "['bubble']")" "$NBUB"
+chk ">>> ...y la prioridad la deriva el servidor de impacto x urgencia" \
+  "$(curl -s "$API/api/collections/thread_priority/records/$NTID" -H "Authorization: $A" | j "['priority']")" P2
+ARG="{\"thread\":\"$NTID\",\"due\":\"31/12/2026\"}"
+chk ">>> una fecha mal formada se rechaza en vez de guardarse rara" \
+  "$(mcptext "$A" set_thread "$ARG" | grep -c "a due date is a day")" 1
+
+ARG="{\"note\":\"el portal tarda en cargar\"}"
+chk ">>> capturar en el inbox por MCP" \
+  "$(mcptext "$B" capture "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+
+ARG="{\"name\":\"Soporte sin fricción\",\"outcome\":\"nadie escribe dos veces\"}"
+chk ">>> el lead global crea un objetivo" \
+  "$(mcptext "$C" set_objective "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+ARG="{\"name\":\"Mío\"}"
+chk ">>> y un lead de workspace NO: la capa estratégica es del departamento" \
+  "$(mcptext "$A" set_objective "$ARG" | grep -c "not found")" 1
+
+chk ">>> el plan: los objetivos son del lead global" \
+  "$(mcptext "$C" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]) >= 1)')" True
+chk ">>> ...quien no lo es ve el plan sin objetivos" \
+  "$(mcptext "$A" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]))')" 0
+chk ">>> ...pero sí la nota que capturó" \
+  "$(mcptext "$B" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["inbox"]) >= 1)')" True
+
+# Comentar es PULSO: mantiene al thread fuera de la tumba y NO lo calienta. Es
+# justo lo que permite que un agente diga "busqué y no había nada" sin fingir
+# que produjo evidencia.
+ARG="{\"thread\":\"$NTID\",\"body\":\"Revisé el log y no encontré el error\"}"
+chk ">>> un agente comenta" \
+  "$(mcptext "$A" comment "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> ...y lee el hilo" \
+  "$(mcptext "$A" comments "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)) >= 1)')" True
+chk ">>> comentar NO calienta: queda como pulso" \
+  "$(mcptext "$A" board "{\"workspace\":\"alpha\"}" | python3 -c 'import sys,json
+t=next(x for x in json.load(sys.stdin)["threads"] if x["id"]=="'"$NTID"'")
+print("si" if t["pulse"] else t)')" si
+chk ">>> el stream filtra por la regla: erin no recibe lo que no puede leer" \
+  "$(curl -s "$API/api/collections/comments/records?perPage=1" -H "Authorization: $ER" | j "['totalItems']")" 0
+chk ">>> erin no comenta en un thread que no alcanza" \
+  "$(mcptext "$ER" comment "{\"thread\":\"$NTID\",\"body\":\"hola\"}" | grep -c "not found")" 1
+
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> timeline: qué le pasó al thread y cuándo" \
+  "$(mcptext "$A" timeline "$ARG" | python3 -c 'import sys,json
+ks=[m["kind"] for m in json.load(sys.stdin)]
+print("si" if "thread-created" in ks and "document-changed" in ks else ks)')" si
+chk ">>> erin no ve el timeline de un thread que no alcanza" \
+  "$(mcptext "$ER" timeline "$ARG" | grep -c "not found")" 1
+
+ARG="{\"workspace\":\"alpha\",\"path\":\"docs/agente.md\",\"base\":\"$E0\",\"content\":\"# Del agente\\n\"}"
+chk ">>> un agente escribe una página de wiki" "$(mcptext "$A" edit "$ARG" | j "['path']")" docs/agente.md
+ARG="{\"workspace\":\"alpha\",\"path\":\"docs/agente.md\"}"
+chk "...y la borra" "$(mcptext "$A" delete_page "$ARG" | j "['deleted']")" True
+ARG="{\"workspace\":\"alpha\",\"path\":\"threads/1-renombrado.md\"}"
+chk ">>> pero el documento propio de un thread no se borra por esa puerta" \
+  "$(mcptext "$A" delete_page "$ARG" | grep -c "goes when the thread does")" 1
+
+
+# ---------------------------------------------------------- inventario ----
+#
+# Dónde vive lo que hace funcionar todo esto. VERLO se asigna, y se asigna con
+# una fila: es como se dice pertenecer en todo el resto de este modelo.
+echo
+GRP=$(post inventory_groups "$C" '{"name":"VPS","note":"máquinas que sostienen esto"}' | j "['id']")
+chk ">>> el lead global levanta un grupo del inventario" "$([ -n "$GRP" ] && echo si || echo no)" si
+chk ">>> ...y un lead de workspace NO: el inventario es del departamento" \
+  "$(pcode inventory_groups "$A" '{"name":"Mío"}')" 400
+ITM=$(post inventory_items "$C" "{\"group\":\"$GRP\",\"name\":\"vps-01\",\"provider\":\"Hetzner\",\"cost\":\"6 EUR/mes\",\"renews_at\":\"2027-01-01 00:00:00.000Z\"}" | j "['id']")
+chk ">>> ...y una cosa dentro, con su proveedor y su renovación" "$([ -n "$ITM" ] && echo si || echo no)" si
+
+chk ">>> sin asignación NO se ve: ni los grupos" \
+  "$(list inventory_groups "$A" | j "['totalItems']")" 0
+chk ">>> ...ni lo que hay dentro" \
+  "$(list inventory_items "$A" | j "['totalItems']")" 0
+# Con cero filas de acceso, "vacío ?= vacío" daba verdadero y el inventario se
+# veía desde una sesión anónima — vacío, que es cuando nadie lo habría notado.
+chk ">>> anónimo tampoco, ni siquiera con el inventario recién creado" \
+  "$(curl -s "$API/api/collections/inventory_groups/records" | j "['totalItems']")" 0
+
+chk ">>> asignar el acceso es escribir una FILA" \
+  "$(pcode inventory_access "$C" "{\"user\":\"$AID\"}")" 200
+chk ">>> ...y con ella alice ya lo ve" \
+  "$(list inventory_groups "$A" | j "['totalItems']")" 1
+chk ">>> ...pero bob sigue sin verlo" \
+  "$(list inventory_groups "$B" | j "['totalItems']")" 0
+chk ">>> nadie se asigna a sí mismo" \
+  "$(pcode inventory_access "$B" "{\"user\":\"$BID\"}")" 400
+chk ">>> quien mira sólo ve SU propia asignación, para poder preguntarse si le toca" \
+  "$(list inventory_access "$A" | j "['totalItems']")" 1
+chk ">>> y con acceso se LEE, pero no se escribe: el armario es del lead" \
+  "$(pcode inventory_items "$A" "{\"group\":\"$GRP\",\"name\":\"mío\"}")" 400
+# Por MCP se LEE, con la misma llave: la fila de acceso. El armario sigue siendo
+# del lead, y `vault` es un enlace — este servidor no guarda secretos, así que no
+# puede entregar uno por ninguna puerta.
+chk ">>> un agente con acceso lee el inventario" \
+  "$(mcptext "$A" inventory '{}' | grep -c 'vps-01')" 1
+chk ">>> ...y trae dónde está la contraseña, nunca cuál es" \
+  "$(mcptext "$A" inventory '{}' | grep -c 'password')" 0
+# `ErrDenied` dice "not found", que es la misma respuesta que da la aplicación:
+# quien no alcanza algo no aprende que existe.
+chk ">>> sin asignación, el agente tampoco: bob no lo lee" \
+  "$(mcptext "$B" inventory '{}' | grep -c 'not found')" 1
+chk ">>> y no hay tool para escribirlo: el alta es de la aplicación" \
+  "$(mcp "$A" "tools/list" "{}" | grep -c 'inventory_item\|create_inventory')" 0
+
+curl -s -o /dev/null -X DELETE "$API/api/collections/inventory_groups/records/$GRP" -H "Authorization: $C"
+chk ">>> borrar un grupo se lleva lo que había dentro" \
+  "$(list inventory_items "$C" | j "['totalItems']")" 0
+
+# ------------------------------------------------------------- repos ----
+#
+# Dónde vive el CÓDIGO. Una fila por repositorio, del workspace: lo ven sus
+# miembros y lo escribe su lead — la misma frase que gobierna todo lo demás que
+# pertenece a un workspace.
+#
+# A estas alturas del guion el lead de alpha es BOB: alice lo promovió y se
+# degradó a sí misma unas secciones más arriba. Los papeles aquí son los de este
+# punto de la historia, no los del principio.
+echo
+REPO=$(post workspace_repos "$B" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/bubble-work\"}" | j "['id']")
+chk ">>> el lead del workspace enlaza un repositorio" "$([ -n "$REPO" ] && echo si || echo no)" si
+chk ">>> ...un miembro lo VE" \
+  "$(list workspace_repos "$A" | j "['totalItems']")" 1
+chk ">>> ...pero no enlaza ninguno" \
+  "$(pcode workspace_repos "$A" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/alice/suyo\"}")" 400
+chk ">>> el mismo repositorio dos veces se rechaza (índice único)" \
+  "$(pcode workspace_repos "$B" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/bubble-work\"}")" 400
+chk ">>> el lead global también enlaza, como en todo lo demás" \
+  "$(pcode workspace_repos "$C" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/otro\"}")" 200
+chk ">>> quien no es del workspace no ve dónde está el código" \
+  "$(list workspace_repos "$ER" | j "['totalItems']")" 0
+chk ">>> anónimo tampoco" \
+  "$(curl -s "$API/api/collections/workspace_repos/records" | j "['totalItems']")" 0
+ARG='{"workspace":"alpha"}'
+chk ">>> un agente pregunta dónde vive el código" \
+  "$(mcptext "$B" repos "$ARG" | grep -c 'cuby/bubble-work')" 1
+chk ">>> ...y no puede enlazar ninguno: no existe la tool" \
+  "$(mcp "$B" "tools/list" "{}" | grep -c 'add_repo\|link_repo')" 0
+chk ">>> erin no alcanza el workspace, tampoco por esa puerta" \
+  "$(mcptext "$ER" repos "$ARG" | grep -c 'not found')" 1
+
+chk ">>> quitar un repositorio es del lead, no del miembro" \
+  "$(code -X DELETE "$API/api/collections/workspace_repos/records/$REPO" -H "Authorization: $A")" 404
+chk ">>> ...y el lead sí lo quita" \
+  "$(code -X DELETE "$API/api/collections/workspace_repos/records/$REPO" -H "Authorization: $B")" 204
+
+# ------------------------------------------------------------ imágenes ----
+echo
+PNG=/tmp/bubble-test.png
+printf '\x89PNG\r\n\x1a\n' > "$PNG"; head -c 300 /dev/urandom >> "$PNG"
+UP=$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+  -F "file=@$PNG" -F "name=Mi Diagrama.png")
+chk ">>> se sube una imagen y aterriza en assets/" "$(echo "$UP" | j "['path']")" "assets/mi-diagrama.png"
+chk "...y devuelve la url para embeberla" \
+  "$(echo "$UP" | j "['url']")" "/api/workspaces/$ALPHA/file?path=assets/mi-diagrama.png"
+
+FILEURL="$API/api/workspaces/$ALPHA/file?path=assets/mi-diagrama.png"
+chk ">>> se sirve con su content-type" \
+  "$(curl -s -o /dev/null -w '%{content_type}' "$FILEURL" -H "Authorization: $A")" "image/png"
+chk ">>> y con la política que impide que un svg ejecute algo" \
+  "$(curl -s -D - -o /dev/null "$FILEURL" -H "Authorization: $A" | grep -ci "content-security-policy: default-src 'none'; sandbox")" 1
+chk "...y con nosniff" \
+  "$(curl -s -D - -o /dev/null "$FILEURL" -H "Authorization: $A" | grep -ci "x-content-type-options: nosniff")" 1
+chk ">>> los bytes vuelven idénticos" \
+  "$(curl -s "$FILEURL" -H "Authorization: $A" | cmp -s - "$PNG" && echo si || echo no)" si
+
+chk ">>> una imagen es tan privada como la escritura: erin no la ve" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$FILEURL" -H "Authorization: $ER")" 404
+chk "anónimo tampoco" "$(curl -s -o /dev/null -w '%{http_code}' "$FILEURL")" 401
+
+chk ">>> en assets/ no entra un documento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$PNG" -F "name=notas.md")" 400
+BIG=/tmp/bubble-big.png; head -c 200000 /dev/urandom > "$BIG"
+chk "una imagen dentro del límite pasa" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$BIG" -F "name=grande.png")" 200
+# El documento guarda la ruta CORTA y el servidor la resuelve al renderizar: un
+# markdown con `/api/workspaces/<id>/file?path=…` dentro es un markdown que no
+# sobrevive una mudanza ni se lee desde un clon de git.
+IMGDOC="{\"path\":\"docs/con-imagen.md\",\"base\":\"$E0\",\"content\":\"# Con imagen\\n\\n![d](assets/mi-diagrama.png)\\n\"}"
+wpatch "$A" "$IMGDOC" >/dev/null
+PAGE=$(curl -s "$WSDOC?path=docs/con-imagen.md" -H "Authorization: $A")
+chk ">>> el markdown conserva assets/… tal cual" \
+  "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "(assets/mi-diagrama.png)" in json.load(sys.stdin)["content"] else "no")')" si
+chk ">>> ...y el html sale apuntando a la ruta que sí la sirve" \
+  "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "/api/workspaces/'"$ALPHA"'/file?path=assets/mi-diagrama.png" in json.load(sys.stdin)["html"] else "no")')" si
+
+chk ">>> el árbol lista la imagen" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A" | python3 -c 'import sys,json
+e=json.load(sys.stdin)["entries"]
+print(next((x["area"] for x in e if x["path"]=="assets/mi-diagrama.png"), "falta"))')" asset
+chk "y quedó commiteada como todo lo demás" \
+  "$(cd "$R/alpha" && git log --oneline -- assets/mi-diagrama.png | wc -l | tr -d ' ')" 1
+rm -f "$PNG" "$BIG"
+
+
+# --------------------------------- el superuser: opera la caja, no trabaja ----
+echo
+chk ">>> el superuser SÍ ve el board (se salta las reglas en todos lados o en ninguno)" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $SU")" 200
+chk ">>> y el documento de un thread" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$GETDOC" -H "Authorization: $SU")" 200
+SUH=$(getdoc "$SU" | j "['hash']")
+BODY="{\"base\":\"$SUH\",\"content\":\"escrito por nadie\"}"
+CODE=$(patchdoc "$SU" "$BODY")
+chk ">>> pero NO escribe: no hay a quién atribuirle la escritura" "$CODE" 400
+chk "...y lo dice, en vez de un 404 misterioso" \
+  "$(python3 -c 'import json;print("si" if "attributed to a person" in json.load(open("/tmp/bubble-put.json"))["message"] else "no")')" si
+chk "el contenido quedó intacto" "$(getdoc "$A" | j "['content']" | head -c 5)" "# Uno"
+
+# la misma persona puede tener las dos cuentas, con el mismo correo
+chk ">>> el mismo correo existe en users y en _superusers a la vez" \
+  "$(pcode users "$SU" '{"email":"root@bubble.test","password":"passwordpass","passwordConfirm":"passwordpass","role":"member","verified":true}')" 200
+chk "...y autentica como persona" \
+  "$(curl -s -X POST "$API/api/collections/users/auth-with-password" -H "$JS" \
+     -d '{"identity":"root@bubble.test","password":"passwordpass"}' | j "['record']['email']")" "root@bubble.test"
+chk "...sin dejar de autenticar como superuser" \
+  "$(curl -s -X POST "$API/api/collections/_superusers/auth-with-password" -H "$JS" \
+     -d '{"identity":"root@bubble.test","password":"rootrootroot"}' | j "['record']['email']")" "root@bubble.test"
+
+echo; echo "  $pass pasaron, $fail fallaron"
+[ "$fail" = "0" ]

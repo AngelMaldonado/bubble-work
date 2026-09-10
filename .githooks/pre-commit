@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Runs `just check` before every commit: gofmt, vet, build, and the tests —
+# including the ones that need a live server.
+#
+# Installed by `just hooks`, which points core.hooksPath here. Versioned rather
+# than left in .git/hooks so it is reviewable and arrives with a clone; the one
+# thing a clone still has to do is run `just hooks` once.
+#
+# `git commit --no-verify` skips it. That is the escape hatch, and using it for a
+# work-in-progress commit on a branch is fine — what it must not become is the
+# habit that hides a red check from everybody else.
+set -euo pipefail
+cd "$(git rev-parse --show-toplevel)"
+
+if ! command -v just >/dev/null 2>&1; then
+  echo "pre-commit: just is not installed — skipping the check" >&2
+  exit 0
+fi
+
+# Worth being honest about: this checks the WORKING TREE, not the index. With
+# unstaged changes present, what passed is not exactly what is being committed.
+# Stashing to close that gap is the usual fix and it is worse than the gap — a
+# hook that moves your uncommitted work around is a hook that eventually loses
+# some. So: say so, and let the person decide.
+if ! git diff --quiet; then
+  echo "pre-commit: unstaged changes present — checking the working tree, which is not exactly what is being committed" >&2
+fi
+
+just check

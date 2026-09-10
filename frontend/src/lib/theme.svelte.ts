@@ -1,47 +1,29 @@
-// Theme: light / dark / system. The choice is persisted; "system" follows the
-// OS preference live. The resolved mode is stamped on <html data-theme> so CSS
-// can switch variables.
-export type Theme = 'light' | 'dark' | 'system';
+// The theme, applied before first paint by a script in index.html and kept in
+// step here. Three states, not two: "system" is a real choice and the default.
+export type Mode = 'system' | 'light' | 'dark';
 
 const KEY = 'bubble.theme';
-const mql = window.matchMedia('(prefers-color-scheme: dark)');
 
-class ThemeStore {
-  choice = $state<Theme>((localStorage.getItem(KEY) as Theme) || 'system');
-
-  get resolved(): 'light' | 'dark' {
-    if (this.choice === 'system') return mql.matches ? 'dark' : 'light';
-    return this.choice;
-  }
-
-  constructor() {
-    this.apply();
-    mql.addEventListener('change', () => {
-      if (this.choice === 'system') this.apply();
-    });
-  }
-
-  set(t: Theme): void {
-    this.choice = t;
-    localStorage.setItem(KEY, t);
-    this.apply();
-  }
-
-  cycle(): void {
-    const order: Theme[] = ['system', 'light', 'dark'];
-    this.set(order[(order.indexOf(this.choice) + 1) % order.length]);
-  }
-
-  apply(): void {
-    const mode = this.resolved;
-    // data-mode drives our tokens; data-theme stays Skeleton's ("cerberus").
-    document.documentElement.setAttribute('data-mode', mode);
-    document.documentElement.style.colorScheme = mode;
-  }
-
-  get icon(): string {
-    return this.choice === 'system' ? '🖥' : this.choice === 'dark' ? '🌙' : '☀️';
-  }
+function apply(mode: Mode) {
+  const dark =
+    mode === 'dark' ||
+    (mode === 'system' && matchMedia('(prefers-color-scheme: dark)').matches);
+  document.documentElement.setAttribute('data-mode', dark ? 'dark' : 'light');
+  document.documentElement.style.colorScheme = dark ? 'dark' : 'light';
 }
 
-export const theme = new ThemeStore();
+export const theme = $state({
+  mode: (localStorage.getItem(KEY) as Mode) || 'system',
+  set(mode: Mode) {
+    this.mode = mode;
+    localStorage.setItem(KEY, mode);
+    apply(mode);
+  },
+});
+
+apply(theme.mode);
+// Following the system while it is the chosen mode: a laptop that switches at
+// sunset should switch this too, without a reload.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', () => {
+  if (theme.mode === 'system') apply('system');
+});

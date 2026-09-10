@@ -1,273 +1,770 @@
-// Thin typed client over the server REST surface (§9). The browser presents the
-// same credential as the CLI — a Plane API key — as a Bearer token.
-import type {
-  Actor,
-  BubbleView,
-  ThreadHit,
-  Inbox,
-  AdminStats,
-  AdminInstance,
-  InstanceMembers,
-  KioskToken,
-  ThreadNode,
-  ThreadDetail,
-  RegionName,
-  Comment,
-  TuningView,
-  SyncStatus,
-  SyncDiff,
-  SyncFidelity,
-  SyncResult,
-  OutboxView,
-  ServiceStatus,
-  Workspace,
-  Page,
-  PageList,
-  PageDetail,
-} from './types';
+// The one place that talks to the server.
+//
+// Two kinds of call live here and they are not the same thing: PocketBase's own
+// record API for structure, and Bubble's routes for everything the rules cannot
+// express — the board, documents, the tree, search, assets. Both are the same
+// origin (vite proxies in development), so nothing here deals with CORS.
 
-const TOKEN_KEY = 'bubble.token';
-const KIOSK_KEY = 'bubble.kiosk';
+export type Lifecycle = 'hot' | 'dormant' | 'rip' | 'closed';
 
-// A kiosk display token (sessionStorage) takes precedence over a personal login
-// (localStorage) so opening a ?kiosk= URL never clobbers someone's own token and
-// is scoped to that browser tab.
-export function getToken(): string {
-  return sessionStorage.getItem(KIOSK_KEY) || localStorage.getItem(TOKEN_KEY) || '';
-}
+export type Heat = {
+  lifecycle: Lifecycle;
+  score: number;
+  reason: string;
+  code: string;
+  args?: Record<string, string>;
+};
 
-export function setToken(tok: string): void {
-  localStorage.setItem(TOKEN_KEY, tok.trim());
-}
+export type ThreadHeat = {
+  id: string;
+  seq: number;
+  /** de qué workspace es esta fila. Redundante en el board de uno, y lo único
+   *  que la hace abrible en el board de todos: la dirección se hace del slug de
+   *  su workspace y del seq. */
+  workspace: string;
+  name: string;
+  bubble?: string;
+  priority?: string;
+  heat: Heat;
+  pulse: boolean;
+  /** who has it */
+  assignees?: string[];
+  /** when anything last happened to it, RFC3339 — the row says it in words */
+  at?: string;
+};
 
-export function clearToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-}
+export type BubbleHeat = {
+  id: string;
+  workspace: string;
+  name: string;
+  /** who is accountable. Plural: the 🪦 band asks whether ANYBODY is. */
+  owners?: string[];
+  outcome?: string;
+  closed: boolean;
+  /** how it ended, if it did */
+  closure?: string;
+  /** when it last produced anything, RFC3339 — what the cycle bar measures */
+  warm_at?: string;
+  heat: Heat;
+};
 
-export function setKioskToken(tok: string): void {
-  sessionStorage.setItem(KIOSK_KEY, tok.trim());
-}
+export type Board = {
+  /** el workspace del board, o «» cuando el board es TODOS */
+  workspace: string;
+  at: string;
+  tuning: Record<string, number | boolean>;
+  /** de qué se compuso este board. Siempre viene, y en el board de un
+   *  workspace trae ese solo: un cliente que tenga que distinguir «campo
+   *  ausente» de «lista vacía» es un cliente con dos formas que atender. */
+  workspaces: BoardWorkspace[];
+  bubbles: BubbleHeat[];
+  threads: ThreadHeat[];
+};
 
-export function clearKioskToken(): void {
-  sessionStorage.removeItem(KIOSK_KEY);
-}
+/** Lo justo de un workspace para etiquetar una fila y para construir la
+ *  dirección que la abre. */
+export type BoardWorkspace = { id: string; slug: string; name: string };
 
-export function isKiosk(): boolean {
-  return !!sessionStorage.getItem(KIOSK_KEY);
-}
+export type Workspace = { id: string; name: string; slug: string };
 
+/** A column of the planner's board: the workflow the workspace defined. */
+export type State = {
+  id: string;
+  name: string;
+  group: 'backlog' | 'unstarted' | 'started' | 'completed' | 'cancelled';
+  position: number;
+  is_default: boolean;
+};
+
+/** A thread as the planner reads it — the record, not the board's heat view. */
+export type ThreadRecord = {
+  id: string;
+  seq: number;
+  name: string;
+  workspace: string;
+  bubble?: string;
+  state?: string;
+  objective?: string;
+  due_date?: string;
+  impact?: string;
+  urgency?: string;
+  completed_at?: string;
+};
+
+export type Objective = {
+  id: string;
+  name: string;
+  outcome?: string;
+  due_date?: string;
+  position?: number;
+  closed_at?: string;
+};
+
+export type InboxItem = {
+  id: string;
+  note: string;
+  captured_by: string;
+  thread?: string;
+  created: string;
+};
+export type Person = { id: string; email: string; display_name?: string; role?: string };
+
+/** One person's place in one workspace. `id` is the MEMBERSHIP's — that is what
+ *  a role change or a removal edits — and `user` is the person's. */
+export type Member = {
+  id: string;
+  user: string;
+  name: string;
+  role: 'lead' | 'member';
+};
+
+/** Lo que alguien dijo en un thread. El cuerpo es markdown: lo renderiza el
+ *  mismo servidor que el documento, porque dos renderers coinciden hasta que
+ *  dejan de hacerlo. */
+export type Comment = {
+  id: string;
+  thread: string;
+  author: string;
+  name: string;
+  body: string;
+  created: string;
+  mine: boolean;
+};
+
+/** El inventario: dónde vive lo que hace funcionar todo esto. No es trabajo y no
+ *  calienta nada; es lo primero que alguien busca a las tres de la mañana. */
+/** Un repositorio de código asociado al workspace. `name` puede venir vacío:
+ *  entonces lo dice la URL, que es como se llama un repositorio en voz alta. */
+export type Repo = { id: string; workspace: string; url: string; name?: string };
+
+export type InvGroup = {
+  id: string;
+  name: string;
+  note?: string;
+  /** el slug de la pieza que lo representa — `computer`, `key`, `servidor`… */
+  art?: string;
+  image?: string;
+  /** cuántas cosas hay dentro — la galería lo dice sin abrir el grupo */
+  items?: number;
+  position?: number;
+};
+
+export type InvItem = {
+  id: string;
+  group: string;
+  name: string;
+  art?: string;
+  provider?: string;
+  url?: string;
+  /** el enlace a la bóveda. NUNCA la contraseña. */
+  vault?: string;
+  notes?: string;
+  renews_at?: string;
+  cost?: string;
+  image?: string;
+  position?: number;
+};
+
+export type Doc = {
+  workspace: string;
+  path: string;
+  thread?: string;
+  hash: string;
+  /** the markdown — the record, and what an `edits` quote must match */
+  content: string;
+  /** the same text rendered by the SERVER, so every surface shows one thing */
+  html: string;
+  done: number;
+};
+
+/** Cuánto se escribió en un archivo dentro de una ventana. Sumado y quitado por
+ *  separado: «+120 −4» y «+124 −8» son dos tardes distintas, y un neto las
+ *  esconde. */
+export type Churn = { path: string; added: number; removed: number };
+
+export type Entry = {
+  path: string;
+  name: string;
+  title?: string;
+  dir: boolean;
+  area?: 'thread' | 'doc' | 'asset';
+  size?: number;
+};
+
+const TOKEN = 'bubble.token';
+
+/**
+ * A failed call, with the status kept.
+ *
+ * The status is what tells a caller WHICH failure this is: 409 means somebody
+ * wrote first and the honest answer is to offer a reload, not to show the
+ * sentence and lose the edit. Matching on the message would work until the
+ * message is reworded.
+ */
 export class ApiError extends Error {
   constructor(
-    public status: number,
     message: string,
+    readonly status: number,
   ) {
     super(message);
+    this.name = 'ApiError';
+  }
+
+  get conflict() {
+    return this.status === 409;
   }
 }
 
-async function req<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
-    method,
-    headers: {
-      Authorization: `Bearer ${getToken()}`,
-      ...(body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
-  if (!res.ok) {
-    const text = (await res.text()).trim();
-    throw new ApiError(res.status, text || res.statusText);
+class Api {
+  token = localStorage.getItem(TOKEN) ?? '';
+  me: Person | null = null;
+
+  private async call<T>(path: string, init: RequestInit = {}): Promise<T> {
+    const headers = new Headers(init.headers);
+    if (this.token) headers.set('Authorization', this.token);
+    // FormData carries its own multipart boundary in the Content-Type. Setting
+    // JSON over it produces a body the server cannot parse and an error that
+    // blames the upload.
+    if (init.body && !(init.body instanceof FormData) && !headers.has('Content-Type')) {
+      headers.set('Content-Type', 'application/json');
+    }
+    const res = await fetch(path, { ...init, headers });
+    const text = await res.text();
+    let body: any = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = text;
+    }
+    if (!res.ok) {
+      // The server's own sentence is almost always the useful one — "quote more
+      // of it", "the document changed since you read it". Do not replace it.
+      const err = new ApiError(body?.message || res.statusText || `HTTP ${res.status}`, res.status);
+      throw err;
+    }
+    return body as T;
   }
-  if (res.status === 204) return undefined as T;
-  const ct = res.headers.get('content-type') ?? '';
-  if (!ct.includes('application/json')) return undefined as T;
-  return (await res.json()) as T;
-}
 
-export const api = {
-  whoami: () => req<Actor>('GET', '/api/whoami'),
-  bubbles: () => req<BubbleView[]>('GET', '/api/bubbles'),
-  threads: (q: string) =>
-    req<ThreadHit[]>('GET', `/api/threads?q=${encodeURIComponent(q)}`),
-  inbox: () => req<Inbox>('GET', '/api/notifications'),
-  // cheap: two indexed sqlite queries, no Plane traffic (PLANE-SYNC.md Phase 7)
-  status: () => req<ServiceStatus>('GET', '/api/status'),
+  get signedIn() {
+    return !!this.token;
+  }
 
-  // interior read model (INTERIOR-PLAN.md)
-  timeline: (bubbleId: string) =>
-    req<ThreadNode[]>('GET', `/api/bubbles/${encodeURIComponent(bubbleId)}/threads`),
-  thread: (id: string) => req<ThreadDetail>('GET', `/api/threads/${encodeURIComponent(id)}`),
-  comments: (id: string) =>
-    req<Comment[]>('GET', `/api/threads/${encodeURIComponent(id)}/comments`),
-  postComment: (id: string, body: string) =>
-    req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/comments`, { body }),
-  // A failed post returns 202 with the draft; retry re-sends it with the live
-  // session credential (PLANE-SYNC.md Phase 5).
-  retryDraft: (id: string, draftId: number) =>
-    req<Comment>('POST', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}/retry`),
-  discardDraft: (id: string, draftId: number) =>
-    req<void>('DELETE', `/api/threads/${encodeURIComponent(id)}/drafts/${draftId}`),
-  // Artifact editing (docs/ARTIFACT-EDITING.md). A field you omit is untouched;
-  // `base` carries the region hashes read, so a write that lost a race gets a
-  // 409 instead of silently clobbering somebody else's edit.
-  updateThread: (
-    id: string,
-    edit: {
-      title?: string;
-      brief?: string;
-      logbook?: string;
-      dod?: string;
-      base?: Partial<Record<RegionName, string>>;
-      /** Downgrade a markdown-standard violation to a warning. The editor sets
-       *  it because autosave that stops mid-sentence is its own kind of broken;
-       *  every other surface is refused, agents included. */
-      lenient?: boolean;
-    },
-  ) => req<ThreadDetail>('PATCH', `/api/threads/${encodeURIComponent(id)}`, edit),
-  // text guards index: the server refuses rather than ticking the wrong box.
-  toggleTodo: (id: string, region: RegionName, index: number, text: string, done: boolean) =>
-    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/todo`, {
-      region,
-      index,
-      text,
-      done,
-    }),
+  async signIn(identity: string, password: string) {
+    const out = await this.call<{ token: string; record: Person }>(
+      '/api/collections/users/auth-with-password',
+      { method: 'POST', body: JSON.stringify({ identity, password }) },
+    );
+    this.token = out.token;
+    this.me = out.record;
+    localStorage.setItem(TOKEN, out.token);
+    return out.record;
+  }
 
-  markCommentsRead: (id: string, commentIds: string[]) =>
-    req<{ ok: boolean }>('POST', `/api/threads/${encodeURIComponent(id)}/comments/read`, {
-      comment_ids: commentIds,
-    }),
+  signOut() {
+    this.token = '';
+    this.me = null;
+    localStorage.removeItem(TOKEN);
+  }
 
-  createBubble: (input: {
-    instance: string;
-    project: string;
-    name: string;
-    outcome?: string;
-    owner?: string;
-  }) => req<{ id: string; name: string }>('POST', '/api/bubbles', input),
-  birth: (input: {
-    instance: string;
-    bubble_id: string;
-    name: string;
-    brief: string;
-    logbook: string;
-    small_thread: boolean;
-  }) => req<{ thread_id: string; created: boolean; message: string }>('POST', '/api/threads/birth', input),
+  async refresh(): Promise<Person | null> {
+    if (!this.token) return null;
+    try {
+      const out = await this.call<{ token: string; record: Person }>(
+        '/api/collections/users/auth-refresh',
+        { method: 'POST' },
+      );
+      this.token = out.token;
+      this.me = out.record;
+      localStorage.setItem(TOKEN, out.token);
+      return out.record;
+    } catch {
+      this.signOut();
+      return null;
+    }
+  }
 
-  // A Workspace is the boundary for a body of work — a Plane PROJECT, not a
-  // Plane workspace. Its id is namespaced "<instance>:<project>".
+  async workspaces() {
+    const out = await this.call<{ items: Workspace[] }>(
+      '/api/collections/workspaces/records?perPage=200&sort=name',
+    );
+    return out.items;
+  }
+
+  createWorkspace(name: string, slug: string) {
+    return this.call<Workspace>('/api/collections/workspaces/records', {
+      method: 'POST',
+      body: JSON.stringify({ name, slug }),
+    });
+  }
+
+  renameWorkspace(id: string, name: string) {
+    return this.call<Workspace>(`/api/collections/workspaces/records/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ name }),
+    });
+  }
+
+  // The slug is NOT renamed with it. It is the workspace's address on disk —
+  // the repository's directory — and a name people change on a Tuesday must not
+  // move a git repo.
+  deleteWorkspace(id: string) {
+    return this.call<unknown>(`/api/collections/workspaces/records/${id}`, { method: 'DELETE' });
+  }
+
+  createThread(fields: { workspace: string; bubble?: string; name: string }) {
+    return this.call<{ id: string; seq: number }>('/api/collections/threads/records', {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  deleteThread(id: string) {
+    return this.call<unknown>(`/api/collections/threads/records/${id}`, { method: 'DELETE' });
+  }
+
+  createBubble(fields: { workspace: string; name: string; outcome?: string }) {
+    return this.call<{ id: string }>('/api/collections/bubbles/records', {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  // ---- the planner ---------------------------------------------------------
   //
-  // This is the ONLY list that includes an empty workspace. The board is built
-  // from bubbles and skips a project with no modules, so a workspace nothing has
-  // been put in yet cannot be inferred from it.
-  workspaces: () => req<Workspace[]>('GET', '/api/workspaces'),
-  createWorkspace: (input: { instance: string; name: string; identifier?: string }) =>
-    req<{ id: string; name: string; identifier: string; instance: string }>(
-      'POST',
-      '/api/workspaces',
-      input,
-    ),
-  renameWorkspace: (id: string, name: string) =>
-    req<{ id: string; name: string }>('PATCH', `/api/workspaces/${encodeURIComponent(id)}`, {
-      name,
-    }),
-  // The counts come back from the server, which took them BEFORE deleting —
-  // afterwards there is nothing left to count.
-  deleteWorkspace: (id: string) =>
-    req<{ deleted_bubbles: number; deleted_threads: number }>(
-      'DELETE',
-      `/api/workspaces/${encodeURIComponent(id)}`,
-    ),
+  // Plain record calls: the planner reads and writes the same collections the
+  // board does, and every rule that guards them is the server's. What is NOT
+  // here is a card: the kanban's columns are `states` and what moves across
+  // them is a thread.
+  states(workspace: string) {
+    return this.list<State>('states', workspace, 'position,name');
+  }
 
-  // Project pages: a workspace's documentation. Read live from Plane rather
-  // than from the mirror — a page is opened deliberately, one at a time.
-  pages: (workspaceId: string) =>
-    req<PageList>('GET', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`),
-  page: (id: string) => req<PageDetail>('GET', `/api/pages/${encodeURIComponent(id)}`),
-  // `parent` nests the new page under an existing one — the tree Plane already
-  // models and shows in its own UI.
-  createPage: (workspaceId: string, title: string, markdown: string, parent?: string) =>
-    req<PageDetail>('POST', `/api/workspaces/${encodeURIComponent(workspaceId)}/pages`, {
-      title,
-      markdown,
-      parent,
-    }),
-  updatePage: (id: string, patch: { title?: string; markdown?: string; base_hash?: string }) =>
-    req<PageDetail>('PATCH', `/api/pages/${encodeURIComponent(id)}`, patch),
-  deletePage: (id: string) => req<{ ok: boolean }>('DELETE', `/api/pages/${encodeURIComponent(id)}`),
+  threads(workspace: string) {
+    return this.list<ThreadRecord>('threads', workspace, '-created');
+  }
 
-  // 🏆 is Plane's state, not a flag we keep: these move the work item, so a thread
-  // finished here and one finished by dragging the card in Plane end up identical.
-  // complete is REFUSED while the Definition of Done has unticked items; force is
-  // the deliberate override for a DoD that turned out to be wrong.
-  completeThread: (id: string, force = false) =>
-    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/complete`, { force }),
-  reopenThread: (id: string) =>
-    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/reopen`),
+  /** Every thread this person can see, across every workspace. What the
+   *  department's planner is looking at; the rules decide what "can see" means
+   *  and the global lead's includes everything. */
+  async allThreads() {
+    const out = await this.call<{ items: ThreadRecord[] }>(
+      '/api/collections/threads/records?perPage=500&sort=-created',
+    );
+    return out.items;
+  }
 
-  // Re-home a thread. Nothing is lost: the Brief, Logbook, comments, history and
-  // id survive, and it leaves every other bubble, so this is a move not a copy.
-  moveThread: (id: string, bubbleId: string) =>
-    req<ThreadDetail>('POST', `/api/threads/${encodeURIComponent(id)}/move`, {
-      bubble_id: bubbleId,
-    }),
+  /** …and their derived priorities, same scope. */
+  async allPriorities() {
+    const out = await this.call<{ items: { id: string; priority: string }[] }>(
+      '/api/collections/thread_priority/records?perPage=500',
+    );
+    return out.items;
+  }
 
-  // Only the handle changes: the contract, the stage and every thread inside are
-  // untouched, and no heat is earned — a name is not what has been done.
-  renameBubble: (id: string, name: string) =>
-    req<{ id: string; name: string }>('PATCH', `/api/bubbles/${encodeURIComponent(id)}`, { name }),
+  // No workspace: the plan belongs to the DEPARTMENT. Everybody signed in reads
+  // it, the global lead shapes it, and a thread from any project can hang from
+  // any objective — which is what makes the objective worth stating.
+  async objectives() {
+    const out = await this.call<{ items: Objective[] }>(
+      '/api/collections/objectives/records?perPage=500&sort=position,created',
+    );
+    return out.items;
+  }
 
-  // Deleting is IRREVERSIBLE and deletes from Plane. Closing a bubble keeps the
-  // record of what was done and is almost always the right verb.
-  deleteBubble: (id: string) =>
-    req<{ unbubbled_threads: number }>('DELETE', `/api/bubbles/${encodeURIComponent(id)}`),
-  deleteThread: (id: string) =>
-    req<{ deleted_revisions: number }>('DELETE', `/api/threads/${encodeURIComponent(id)}`),
-  deleteRegion: (id: string, region: RegionName) =>
-    req<ThreadDetail>('DELETE', `/api/threads/${encodeURIComponent(id)}/regions/${region}`),
+  /** Who works HERE: the workspace's roster, membership row and all.
+   *
+   *  Read from `memberships` rather than from `users` on purpose. Everybody
+   *  signed in can list people — that is what makes inviting possible — but the
+   *  question a workspace asks is not "who exists", it is "who is in this", and
+   *  that is a membership. The row's own id comes back because changing a role
+   *  or removing somebody edits THE MEMBERSHIP, not the person. */
+  async members(workspace: string): Promise<Member[]> {
+    const out = await this.call<{
+      items: {
+        id: string;
+        user: string;
+        role: 'lead' | 'member';
+        expand?: { user?: { display_name?: string; email?: string } };
+      }[];
+    }>(
+      `/api/collections/memberships/records?perPage=200&expand=user` +
+        `&filter=${encodeURIComponent(`workspace='${workspace}'`)}`,
+    );
+    return out.items.map((m) => ({
+      id: m.id,
+      user: m.user,
+      role: m.role,
+      // `display_name` no es obligatorio, y PocketBase OCULTA el correo de otra
+      // persona salvo que ella lo haya hecho visible — así que el correo es un
+      // segundo intento, no el respaldo. Lo último es decirlo, no imprimir un id.
+      name: m.expand?.user?.display_name || m.expand?.user?.email || 'sin nombre',
+    }));
+  }
 
-  review: (id: string) => req<void>('POST', `/api/bubbles/${id}/review`),
-  unreview: (id: string) => req<void>('POST', `/api/bubbles/${id}/unreview`),
-  close: (id: string) => req<void>('POST', `/api/bubbles/${id}/close`),
-  reopen: (id: string) => req<void>('POST', `/api/bubbles/${id}/reopen`),
-  contract: (id: string, patch: { outcome?: string; owner?: string }) =>
-    req<void>('POST', `/api/bubbles/${id}/contract`, patch),
+  /** The same roster, shaped for a field that only needs to name a person. */
+  async roster(workspace: string) {
+    const rows = await this.members(workspace);
+    return rows.map((m) => ({ id: m.user, name: m.name }));
+  }
 
-  // service-admin (godmode) — server gates these on ServiceAdmin (§ admin).
-  adminStats: () => req<AdminStats>('GET', '/api/admin/stats'),
-  adminInstances: () => req<AdminInstance[]>('GET', '/api/admin/instances'),
-  adminBubbles: () => req<BubbleView[]>('GET', '/api/admin/bubbles'),
-  adminRefresh: () => req<void>('POST', '/api/admin/refresh'),
-  adminTick: () => req<void>('POST', '/api/admin/tick'),
-  adminMembers: () => req<InstanceMembers[]>('GET', '/api/admin/members'),
-  adminKiosk: () => req<KioskToken[]>('GET', '/api/admin/kiosk'),
-  adminKioskCreate: (instance: string, name: string) =>
-    req<KioskToken>('POST', '/api/admin/kiosk', { instance, name }),
-  adminKioskRevoke: (token: string) =>
-    req<void>('DELETE', `/api/admin/kiosk/${encodeURIComponent(token)}`),
-  adminAutoState: (slug: string, enabled: boolean) =>
-    req<{ instance: string; auto_state: boolean }>(
-      'POST',
-      `/api/admin/instances/${encodeURIComponent(slug)}/autostate`,
-      { enabled },
-    ),
-  adminTuning: () => req<TuningView>('GET', '/api/admin/tuning'),
-  // a partial body patches only the keys it names; the server clamps and persists
-  adminTuningSet: (patch: Record<string, number | boolean>) =>
-    req<TuningView>('PUT', '/api/admin/tuning', patch),
+  /** Everybody with an account. Listing people is open to anybody signed in —
+   *  that is what makes an invitation possible — and it is deliberately NOT the
+   *  same list as a workspace's roster. */
+  async people() {
+    const out = await this.call<{ items: Person[] }>(
+      '/api/collections/users/records?perPage=500&sort=display_name,email',
+    );
+    return out.items;
+  }
 
-  // Plane mirror (PLANE-SYNC.md). Status is a local census — cheap. Diff and
-  // backfill both walk Plane completely and can take minutes on a large
-  // workspace, hence POST rather than GET: neither should be prefetchable.
-  adminSync: (slug: string) =>
-    req<SyncStatus>('GET', `/api/admin/sync/${encodeURIComponent(slug)}`),
-  adminSyncDiff: (slug: string) =>
-    req<SyncDiff>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/diff`),
-  // GET, unlike diff: fidelity reads only the mirror, so it spends no rate budget.
-  adminSyncFidelity: (slug: string) =>
-    req<SyncFidelity>('GET', `/api/admin/sync/${encodeURIComponent(slug)}/fidelity`),
-  adminSyncBackfill: (slug: string) =>
-    req<SyncResult>('POST', `/api/admin/sync/${encodeURIComponent(slug)}/backfill`),
-  adminOutbox: () => req<OutboxView>('GET', '/api/admin/outbox'),
-  adminOutboxDrop: (id: number) => req<void>('DELETE', `/api/admin/outbox/${id}`),
-};
+  /** Qué está corriendo. Sin sesión: es la misma respuesta que mira el
+   *  healthcheck del contenedor, y una que necesitara sesión no serviría para
+   *  eso. */
+  async version(): Promise<string> {
+    try {
+      const out = await this.call<{ version: string }>('/api/version');
+      return out.version ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  // ---- dónde vive el código ----------------------------------------------
+  //
+  // Una fila por repositorio. No es el árbol de markdown del workspace —ése lo
+  // escribe este servidor y no se elige— sino el enlace a donde está el código,
+  // que este servidor no toca.
+
+  async repos(workspace: string): Promise<Repo[]> {
+    const out = await this.call<{ items: Repo[] }>(
+      `/api/collections/workspace_repos/records?perPage=100&sort=created` +
+        `&filter=${encodeURIComponent(`workspace='${workspace}'`)}`,
+    );
+    return out.items;
+  }
+
+  addRepo(workspace: string, url: string, name = '') {
+    return this.create<Repo>('workspace_repos', { workspace, url, name });
+  }
+
+  removeRepo(id: string) {
+    return this.remove('workspace_repos', id);
+  }
+
+  /** Mi papel AQUÍ. El lead global escribe en todas partes; los demás, sólo
+   *  donde su membresía dice lead. Se pregunta con una fila y no con el roster
+   *  entero porque la respuesta es una palabra. */
+  async myRole(workspace: string): Promise<'lead' | 'member' | ''> {
+    if (this.me?.role === 'lead') return 'lead';
+    try {
+      const out = await this.call<{ items: { role: 'lead' | 'member' }[] }>(
+        `/api/collections/memberships/records?perPage=1&fields=role` +
+          `&filter=${encodeURIComponent(
+            `workspace='${workspace}' && user='${this.me?.id ?? ''}'`,
+          )}`,
+      );
+      return out.items[0]?.role ?? '';
+    } catch {
+      return '';
+    }
+  }
+
+  // ---- el inventario ------------------------------------------------------
+  //
+  // Verlo se ASIGNA, y se asigna con una fila. Preguntar "¿me toca?" es leer la
+  // propia: la regla deja ver la tuya y ninguna más, así que la aplicación puede
+  // averiguar si tiene permiso sin pedir permiso para averiguarlo.
+  async seesInventory() {
+    if (this.me?.role === 'lead') return true;
+    try {
+      const out = await this.call<{ totalItems: number }>(
+        `/api/collections/inventory_access/records?perPage=1` +
+          `&filter=${encodeURIComponent(`user='${this.me?.id ?? ''}'`)}`,
+      );
+      return out.totalItems > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Quién puede verlo. Sólo el lead global lo lee entero: repartirlo es su
+   *  trabajo. */
+  async inventoryAccess() {
+    const out = await this.call<{
+      items: { id: string; user: string; expand?: { user?: { display_name?: string; email?: string } } }[];
+    }>('/api/collections/inventory_access/records?perPage=200&expand=user');
+    return out.items.map((r) => ({
+      id: r.id,
+      user: r.user,
+      name: r.expand?.user?.display_name || r.expand?.user?.email || 'sin nombre',
+    }));
+  }
+
+  grantInventory(user: string) {
+    return this.create<{ id: string }>('inventory_access', { user });
+  }
+
+  async invGroups(): Promise<InvGroup[]> {
+    const out = await this.call<{ items: (InvGroup & { collectionId: string })[] }>(
+      '/api/collections/inventory_groups/records?perPage=200&sort=position,name',
+    );
+    // Las cuentas se piden aparte y en una sola llamada: una galería que cuesta
+    // una petición por tarjeta es una galería que se deja de dibujar.
+    const items = await this.call<{ items: { group: string }[] }>(
+      '/api/collections/inventory_items/records?perPage=500&fields=group',
+    );
+    const by: Record<string, number> = {};
+    for (const i of items.items) by[i.group] = (by[i.group] ?? 0) + 1;
+    return out.items.map((g) => ({
+      ...g,
+      items: by[g.id] ?? 0,
+      image: g.image ? this.fileUrl('inventory_groups', g.id, String(g.image)) : '',
+    }));
+  }
+
+  createInvGroup(fields: { name: string; note?: string; art?: string }) {
+    return this.create<{ id: string }>('inventory_groups', fields);
+  }
+
+  createInvItem(fields: Record<string, unknown>) {
+    return this.create<{ id: string }>('inventory_items', fields);
+  }
+
+  async invItems(group: string): Promise<InvItem[]> {
+    const out = await this.call<{ items: (InvItem & { collectionId: string })[] }>(
+      `/api/collections/inventory_items/records?perPage=500&sort=position,name` +
+        `&filter=${encodeURIComponent(`group='${group}'`)}`,
+    );
+    return out.items.map((i) => ({
+      ...i,
+      image: i.image ? this.fileUrl('inventory_items', i.id, String(i.image)) : '',
+    }));
+  }
+
+  /** La url de un archivo de PocketBase. Las imágenes del inventario no van a
+   *  `assets/` del workspace a propósito: ese árbol es de un proyecto, y una
+   *  factura de dominio no pertenece a ninguno. */
+  fileUrl(collection: string, id: string, file: string) {
+    return `/api/files/${collection}/${id}/${file}`;
+  }
+
+  /** Lo dicho en un thread, del más viejo al más nuevo: una conversación se lee
+   *  hacia abajo, y la última línea es la que estabas esperando. */
+  async comments(thread: string): Promise<Comment[]> {
+    const out = await this.call<{
+      items: {
+        id: string; thread: string; author: string; body: string; created: string;
+        expand?: { author?: { display_name?: string; email?: string } };
+      }[];
+    }>(
+      `/api/collections/comments/records?perPage=500&sort=created&expand=author` +
+        `&filter=${encodeURIComponent(`thread='${thread}'`)}`,
+    );
+    return out.items.map((c) => ({
+      id: c.id,
+      thread: c.thread,
+      author: c.author,
+      name: c.expand?.author?.display_name || c.expand?.author?.email || 'alguien',
+      body: c.body,
+      created: c.created,
+      mine: c.author === this.me?.id,
+    }));
+  }
+
+  /** El autor NO se manda: lo estampa el servidor, y por eso nadie firma como
+   *  otro. Mandarlo desde aquí sería pedir permiso para algo ya decidido. */
+  comment(thread: string, body: string) {
+    return this.create<{ id: string }>('comments', { thread, body });
+  }
+
+  /** "Sigo aquí." The server stamps the time; this only says who asked. */
+  beat() {
+    return this.call<{ at: string }>('/api/presence', { method: 'POST' });
+  }
+
+  /** Claim a realtime stream as this person, and say what to hear about.
+   *
+   *  The EventSource that opened the stream is ANONYMOUS — it cannot carry a
+   *  header — so this is where the token arrives and where the connection stops
+   *  being a stranger's. Sending it again with a different list replaces the
+   *  subscriptions rather than adding to them, which is PocketBase's contract
+   *  and not ours. */
+  subscribe(clientId: string, subscriptions: string[]) {
+    return this.call<unknown>('/api/realtime', {
+      method: 'POST',
+      body: JSON.stringify({ clientId, subscriptions }),
+    });
+  }
+
+  /** Who has said it lately. One row per person, so this is small by
+   *  construction; WHAT counts as online is decided by the reader, not stored. */
+  async presence() {
+    const out = await this.call<{
+      items: { user: string; at: string; expand?: { user?: { display_name?: string; email?: string } } }[];
+    }>('/api/collections/presence/records?perPage=200&expand=user');
+    return out.items.map((r) => ({
+      id: r.user,
+      at: r.at,
+      name: r.expand?.user?.display_name || r.expand?.user?.email || 'alguien',
+    }));
+  }
+
+  /** An invitation is a ROW: one person, one workspace, one role. The server
+   *  decides who may write it — this workspace's lead, or the global one. */
+  invite(workspace: string, user: string, role: 'lead' | 'member' = 'member') {
+    return this.create<{ id: string }>('memberships', { workspace, user, role });
+  }
+
+  setRole(membership: string, role: 'lead' | 'member') {
+    return this.update('memberships', membership, { role });
+  }
+
+  bubbles(workspace: string) {
+    return this.list<{ id: string; name: string; closed_at?: string }>('bubbles', workspace, 'name');
+  }
+
+  /** The derived priorities, by thread. A VIEW collection: the server computes
+   *  it from impact × urgency, and nothing writes to it. */
+  priorities(workspace: string) {
+    return this.list<{ id: string; priority: string }>('thread_priority', workspace, 'id');
+  }
+
+  /** The department's inbox: captured before anybody knows whose it is. */
+  async inbox() {
+    const out = await this.call<{ items: InboxItem[] }>(
+      '/api/collections/inbox_items/records?perPage=500&sort=-created',
+    );
+    return out.items;
+  }
+
+  private async list<T>(collection: string, workspace: string, sort: string) {
+    const out = await this.call<{ items: T[] }>(
+      `/api/collections/${collection}/records?perPage=500&sort=${sort}` +
+        `&filter=${encodeURIComponent(`workspace='${workspace}'`)}`,
+    );
+    return out.items;
+  }
+
+  create<T>(collection: string, fields: Record<string, unknown>) {
+    return this.call<T>(`/api/collections/${collection}/records`, {
+      method: 'POST',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  update<T>(collection: string, id: string, fields: Record<string, unknown>) {
+    return this.call<T>(`/api/collections/${collection}/records/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(fields),
+    });
+  }
+
+  remove(collection: string, id: string) {
+    return this.call<unknown>(`/api/collections/${collection}/records/${id}`, { method: 'DELETE' });
+  }
+
+  board(workspace: string) {
+    return this.call<Board>(`/api/workspaces/${workspace}/board`);
+  }
+
+  /** TODOS: las burbujas de cada workspace que alcanzas, en un solo board.
+   *
+   *  Lo agrega el servidor y no este cliente. Pedir un board por workspace
+   *  serían N respuestas calculadas en N instantes distintos —el calor es
+   *  función del tiempo— y comparar dos burbujas medidas contra dos «ahora» es
+   *  exactamente lo que esta pantalla existe para no hacer. */
+  allBoard() {
+    return this.call<Board>('/api/board');
+  }
+
+  /** Qué se movió, por archivo. Lo calcula git, que ya tiene la respuesta:
+   *  cada escritura aquí es un commit. `since` vacío es EL CICLO — la misma
+   *  ventana contra la que se mide todo lo demás. */
+  async changes(workspace: string, since = '') {
+    const out = await this.call<{ changes: Churn[] }>(
+      `/api/workspaces/${workspace}/changes${since ? `?since=${encodeURIComponent(since)}` : ''}`,
+    );
+    return out.changes;
+  }
+
+  /** Y lo mismo en palabras: el parche que git escribe, MÁS los dos lados. Un
+   *  parche es lo que git imprime; dos documentos es lo que una vista de diff
+   *  necesita, y reconstruir un lado a partir del otro en el navegador sería una
+   *  segunda implementación de «qué cambió». */
+  diff(workspace: string, path: string, since = '') {
+    return this.call<{ path: string; diff: string; before: string; after: string }>(
+      `/api/workspaces/${workspace}/diff?path=${encodeURIComponent(path)}` +
+        (since ? `&since=${encodeURIComponent(since)}` : ''),
+    );
+  }
+
+  tree(workspace: string) {
+    return this.call<{ entries: Entry[] }>(`/api/workspaces/${workspace}/tree`);
+  }
+
+  search(workspace: string, q: string) {
+    return this.call<{ hits: any[] }>(
+      `/api/workspaces/${workspace}/search?q=${encodeURIComponent(q)}`,
+    );
+  }
+
+  /** Markdown → HTML by the server's renderer. The browser has none, and a
+   *  second one is how two screens show the same document differently. */
+  async renderMarkdown(content: string, workspace = '') {
+    const out = await this.call<{ html: string }>('/api/markdown', {
+      method: 'POST',
+      body: JSON.stringify({ content, workspace }),
+    });
+    return out.html;
+  }
+
+  /** Attach an image. It lands in `assets/`, is committed like every other
+   *  write, and comes back as the path a document refers to it by — the SHORT
+   *  one, because that is what the layout says and what survives a move. */
+  async uploadAsset(workspace: string, file: File, name = '') {
+    const form = new FormData();
+    form.append('file', file);
+    if (name) form.append('name', name);
+    return this.call<{ path: string; url: string; bytes: number }>(
+      `/api/workspaces/${workspace}/asset`,
+      { method: 'POST', body: form },
+    );
+  }
+
+  readThread(thread: string) {
+    return this.call<Doc>(`/api/threads/${thread}/document`);
+  }
+
+  readPath(workspace: string, path: string) {
+    return this.call<Doc>(
+      `/api/workspaces/${workspace}/document?path=${encodeURIComponent(path)}`,
+    );
+  }
+
+  // Every write goes through here, and every write carries the hash it read.
+  // That is the only thing standing between two editors and a lost paragraph.
+  patchThread(thread: string, patch: Record<string, unknown>) {
+    return this.call<Doc>(`/api/threads/${thread}/document`, {
+      method: 'PATCH',
+      body: JSON.stringify(patch),
+    });
+  }
+
+  /** Remove a page. Only under `docs/` — a thread's document belongs to the
+   *  thread, and the server refuses it by that door for the same reason. */
+  removePath(workspace: string, path: string) {
+    return this.call<unknown>(
+      `/api/workspaces/${workspace}/document?path=${encodeURIComponent(path)}`,
+      { method: 'DELETE' },
+    );
+  }
+
+  patchPath(workspace: string, path: string, patch: Record<string, unknown>) {
+    return this.call<Doc>(`/api/workspaces/${workspace}/document`, {
+      method: 'PATCH',
+      body: JSON.stringify({ path, ...patch }),
+    });
+  }
+}
+
+export const api = new Api();

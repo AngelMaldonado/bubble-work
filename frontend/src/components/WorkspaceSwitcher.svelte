@@ -1,87 +1,149 @@
 <script lang="ts">
-  // Alt+Tab, for workspaces.
+  // Alt+Tab, para workspaces.
   //
-  // Shift is the HELD key and Tab is the advance, exactly as Windows uses Alt:
-  // press Shift+Tab to open and step forward, keep tapping Tab to keep going,
-  // release Shift to commit. Arrows move without committing, a letter jumps to
-  // the next workspace starting with it, Esc puts back whatever was scoped
-  // before.
+  // Shift es la tecla que se MANTIENE y Tab la que avanza, igual que Windows usa
+  // Alt: Shift+Tab abre y da un paso, seguir tecleando Tab sigue avanzando,
+  // soltar Shift confirma. Las flechas mueven sin confirmar, una letra salta al
+  // siguiente workspace que empieza por ella, y Esc devuelve dónde estabas.
   //
-  // Shift+Tab is also how a keyboard user walks focus BACKWARDS, which is not a
-  // shortcut worth breaking. So it is only taken over when focus is on the board
-  // itself: inside any field, editor or menu the browser keeps it.
-  import { store } from '../lib/store.svelte';
-  import { t } from '../lib/i18n.svelte';
+  // Shift+Tab es TAMBIÉN como un usuario de teclado camina el foco hacia atrás, y
+  // ese no es un atajo que valga la pena romper. Por eso sólo se toma cuando el
+  // foco está en el board: dentro de un campo, un editor o un menú se lo queda el
+  // navegador.
+  import { api } from '../lib/api';
+  import { allUrl, boardUrl } from '../lib/routes';
 
-  // The board suppresses this while a modal, the omnibar or a context menu owns
-  // the keyboard — those have their own idea of what Tab and Escape mean.
-  let { enabled = true }: { enabled?: boolean } = $props();
+  let {
+    workspaces,
+    current,
+    enabled = true,
+    onpick,
+  }: {
+    workspaces: { id: string; slug: string; name: string }[];
+    /** el slug en pantalla, o «» cuando lo que se mira es Todos */
+    current: string;
+    /** el board lo suprime mientras un modal, el omnibar o un menú son dueños
+     *  del teclado: esos tienen su propia idea de qué significan Tab y Escape */
+    enabled?: boolean;
+    onpick: (url: string) => void;
+  } = $props();
 
-  type Entry = { id: string; name: string; identifier: string; bubbles: number };
+  type Entry = { slug: string; name: string; count: number | null };
 
-  // "" is All projects and belongs in the ring: it is a real scope, and without
-  // it there is no way back to the whole board without reaching for the mouse.
+  const RECENT_CAP = 12;
+  const KEY = 'bw.recent-workspaces';
+
+  // El anillo de recencia vive en el navegador porque es de ESTE navegador: en
+  // cuál de tus proyectos estuviste hace un minuto no es un hecho del equipo.
+  let recent = $state<string[]>(read());
+  function read(): string[] {
+    try {
+      const raw = JSON.parse(localStorage.getItem(KEY) ?? '[]');
+      return Array.isArray(raw) ? raw.filter((x) => typeof x === 'string') : [];
+    } catch {
+      return [];
+    }
+  }
+  /** Anota la visita: mueve el destino al frente del anillo.
+   *
+   *  Colgado de `current` y no de este panel a propósito: se cambia de workspace
+   *  desde la columna, desde ⌘K y desde aquí, y un anillo que sólo cuenta sus
+   *  propios saltos deriva en silencio hasta señalar a donde ya no estás. */
+  function touch(slug: string): void {
+    if (recent[0] === slug) return;
+    recent = [slug, ...recent.filter((s) => s !== slug)].slice(0, RECENT_CAP);
+    try {
+      localStorage.setItem(KEY, JSON.stringify(recent));
+    } catch {
+      // Un navegador que no deja guardar deja el anillo en memoria, que sirve
+      // durante la sesión. No es motivo para no cambiar de workspace.
+    }
+  }
+
+  $effect(() => touch(current));
+
+  // Cuántas burbujas tiene cada uno. Se pregunta al ABRIR el panel y una sola
+  // vez: estando dentro de un workspace, el board en pantalla sólo sabe de ese,
+  // y una cifra que dice 0 para los demás miente peor que una casilla sin cifra.
+  let counts = $state<Record<string, number> | null>(null);
+  let asked = false;
+  async function countBubbles(): Promise<void> {
+    if (asked) return;
+    asked = true;
+    try {
+      const b = await api.allBoard();
+      const n: Record<string, number> = {};
+      for (const x of b.bubbles) n[x.workspace] = (n[x.workspace] ?? 0) + 1;
+      counts = n;
+    } catch {
+      counts = null; // sin cifras, con casillas: el panel sigue sirviendo
+    }
+  }
+
+  // «Todos» está EN el anillo, y no aparte: es un destino real, y sin él no hay
+  // forma de volver al board entero sin ir por el ratón.
   //
-  // ORDERED BY RECENCY, current scope first — the property that makes this Alt+Tab
-  // rather than a list. Alphabetical order put the neighbour you never visit next
-  // to the one you flick between all day, so a quick Shift+Tab landed somewhere
-  // arbitrary and you had to read the panel to find your way back. Now the second
-  // tile is always where you just came from, which is the whole point: one tap
-  // out, one tap back.
+  // ORDENADO POR RECENCIA, el actual primero — la propiedad que hace de esto un
+  // Alt+Tab y no una lista. Por orden alfabético, el vecino que nunca visitas
+  // queda junto al que usas todo el día, así que un Shift+Tab rápido aterrizaba
+  // en cualquier parte y había que leer el panel para volver. Ahora la segunda
+  // casilla es siempre de donde vienes: un toque para salir, uno para volver.
   //
-  // Projects never visited on this browser sort after the visited ones, keeping
-  // their alphabetical order from store.projects — a stable place to hunt in,
-  // rather than an arbitrary one.
+  // Lo nunca visitado en este navegador va detrás, conservando su propio orden —
+  // un sitio estable donde buscar, en vez de uno arbitrario.
   const entries = $derived.by<Entry[]>(() => {
+    const c = counts;
     const all: Entry = {
-      id: '',
-      name: t('combo.allProjects'),
-      identifier: '',
-      bubbles: store.bubbles.length,
+      slug: '',
+      name: 'Todos',
+      count: c ? Object.values(c).reduce((n, x) => n + x, 0) : null,
     };
-    const rest = store.projects.map((p) => ({
-      id: p.id,
-      name: p.name,
-      identifier: store.workspaces.find((w) => w.id === p.id)?.identifier ?? '',
-      bubbles: store.bubbles.filter((b) => b.project === p.id).length,
-    }));
-    const live = [all, ...rest];
-
-    const rank = new Map(store.recentProjects.map((id, i) => [id, i]));
+    const live: Entry[] = [
+      all,
+      ...workspaces.map((w) => ({
+        slug: w.slug,
+        name: w.name,
+        count: c ? (c[w.id] ?? 0) : null,
+      })),
+    ];
+    const rank = new Map(recent.map((s, i) => [s, i]));
     const seen = rank.size;
     return live
-      // Unvisited entries key on `seen + i`, which is past every visited rank, so
-      // they land behind them while keeping their own order. Every key is
-      // distinct, so the sort is total and cannot reshuffle between renders.
-      .map((e, i) => ({ e, key: rank.get(e.id) ?? seen + i }))
+      // Lo no visitado indexa en `seen + i`, que está pasado todo rango visitado,
+      // así que cae detrás conservando su orden. Cada clave es distinta, así que
+      // el orden es total y no puede rebarajarse entre dibujados.
+      .map((e, i) => ({ e, key: rank.get(e.slug) ?? seen + i }))
       .sort((a, b) => a.key - b.key)
       .map((x) => x.e);
   });
 
   let open = $state(false);
   let idx = $state(0);
-  /** what was scoped when the switcher opened — what Escape puts back */
+  /** qué se miraba cuando esto se abrió — lo que Escape devuelve */
   let before = $state('');
-
-  // Typing a letter jumps to the next match, Windows-style. The buffer resets
-  // between openings rather than on a timer: one pass through a list is one
-  // interaction.
-  let typed = $state('');
 
   function isEditable(el: EventTarget | null): boolean {
     if (!(el instanceof HTMLElement)) return false;
     if (el.isContentEditable) return true;
-    return ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) || el.closest('[role="menu"]') !== null;
+    return (
+      ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) ||
+      el.closest('[role="menu"]') !== null ||
+      el.closest('[role="dialog"]') !== null ||
+      el.closest('.cm-editor') !== null
+    );
   }
 
   function show(): void {
-    before = store.project;
-    // The ring is ordered current-first, so this is 0 in the normal case — but it
-    // is derived rather than assumed, because a filter pruned from under us can
-    // leave the scope somewhere else, and stepping from the wrong tile would send
-    // you to a project you were never at.
-    idx = Math.max(0, entries.findIndex((e) => e.id === store.project));
-    typed = '';
+    before = current;
+    countBubbles();
+    // El anillo va con el actual primero, así que esto es 0 en el caso normal —
+    // pero se deriva en vez de suponerse, porque un workspace borrado bajo los
+    // pies puede dejar el foco en otro sitio, y dar un paso desde la casilla
+    // equivocada te manda a un proyecto en el que nunca estuviste.
+    idx = Math.max(
+      0,
+      entries.findIndex((e) => e.slug === current),
+    );
     open = true;
   }
 
@@ -90,19 +152,23 @@
     idx = (idx + by + n) % n;
   }
 
+  const urlOf = (slug: string) => (slug ? boardUrl(slug) : allUrl);
+
   function commit(): void {
     open = false;
     const target = entries[idx];
-    if (target && target.id !== store.project) store.selectProject(target.id);
+    if (!target) return;
+    touch(target.slug);
+    if (target.slug !== current) onpick(urlOf(target.slug));
   }
 
   function cancel(): void {
     open = false;
-    if (store.project !== before) store.selectProject(before);
+    if (current !== before) onpick(urlOf(before));
   }
 
-  // Jump to the next entry starting with the letter — "next", not "first", so
-  // pressing the same letter walks through the workspaces that share it.
+  // Salta a la SIGUIENTE entrada que empieza por esa letra — «siguiente» y no
+  // «primera», para que repetir la tecla camine entre las que la comparten.
   function jump(letter: string): void {
     const n = entries.length;
     for (let i = 1; i <= n; i++) {
@@ -114,19 +180,22 @@
     }
   }
 
-  // Two letters, always. A Plane identifier is free text and the real ones run
-  // to eight characters, which no square badge can hold — and a badge that
-  // resizes per workspace stops reading as a grid. Two initials are decoration
-  // that anchors the eye; the name underneath is what actually identifies it.
-  function initials(e: Entry): string {
-    return (e.identifier || e.name).replace(/[^\p{L}\p{N}]/gu, '').slice(0, 2).toUpperCase();
-  }
+  // Dos letras, siempre. Un nombre de workspace es texto libre y los de verdad
+  // llegan a ser hostnames, que no caben en ninguna casilla cuadrada — y una
+  // casilla que cambia de tamaño por workspace deja de leerse como una rejilla.
+  // Las iniciales son decoración que ancla el ojo; el nombre debajo es lo que
+  // identifica.
+  const initials = (e: Entry) =>
+    e.name
+      .replace(/[^\p{L}\p{N}]/gu, '')
+      .slice(0, 2)
+      .toUpperCase();
 
   function onKeyDown(e: KeyboardEvent): void {
     if (!open) {
       if (!enabled || !e.shiftKey || e.key !== 'Tab') return;
-      if (isEditable(e.target)) return; // reverse-tabbing still belongs to the browser
-      if (entries.length < 2) return; // nothing to switch between
+      if (isEditable(e.target)) return; // tabular hacia atrás sigue siendo del navegador
+      if (entries.length < 2) return; // no hay entre qué cambiar
       e.preventDefault();
       show();
       step(1);
@@ -134,12 +203,10 @@
     }
 
     switch (e.key) {
-      // Shift is HELD throughout, so Tab cannot also mean "go back" the way
-      // Alt+Shift+Tab does on Windows. The arrows are the way back.
+      // Shift se MANTIENE todo el rato, así que Tab no puede significar también
+      // «hacia atrás» como hace Alt+Shift+Tab en Windows. Las flechas son la
+      // vuelta.
       case 'Tab':
-        e.preventDefault();
-        step(1);
-        return;
       case 'ArrowRight':
       case 'ArrowDown':
         e.preventDefault();
@@ -169,18 +236,17 @@
     }
     if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
-      typed = e.key.toLowerCase();
-      jump(typed);
+      jump(e.key.toLowerCase());
     }
   }
 
-  // Releasing the held key commits — the whole point of the metaphor.
+  // Soltar la tecla que se mantenía confirma — el sentido entero de la metáfora.
   function onKeyUp(e: KeyboardEvent): void {
     if (open && e.key === 'Shift') commit();
   }
 
-  // A window that loses focus mid-switch must not leave the overlay stuck over
-  // the board with no key left to dismiss it.
+  // Una ventana que pierde el foco a media conmutación no puede dejar el panel
+  // clavado sobre el board sin una tecla con la que quitarlo.
   function onBlur(): void {
     if (open) cancel();
   }
@@ -197,27 +263,27 @@
       role="dialog"
       tabindex="-1"
       aria-modal="true"
-      aria-label={t('switch.title')}
-      onclick={(e) => e.stopPropagation()}
-    >
+      aria-label="Cambiar de workspace"
+      onclick={(e) => e.stopPropagation()}>
       <div class="tiles">
-        {#each entries as e, i (e.id)}
+        {#each entries as e, i (e.slug)}
           <button
             class="tile"
             class:on={i === idx}
             aria-current={i === idx}
             onmouseenter={() => (idx = i)}
-            onclick={commit}
-          >
-            <span class="mark" class:allmark={e.id === ''}>
-              {e.id === '' ? '∗' : initials(e)}
+            onclick={commit}>
+            <span class="mark" class:allmark={e.slug === ''}>
+              {e.slug === '' ? '∗' : initials(e)}
             </span>
             <span class="name">{e.name}</span>
-            <span class="count">{t('switch.bubbles', { n: e.bubbles })}</span>
+            <span class="count">
+              {#if e.count !== null}{e.count} {e.count === 1 ? 'burbuja' : 'burbujas'}{/if}
+            </span>
           </button>
         {/each}
       </div>
-      <p class="hint">{t('switch.hint')}</p>
+      <p class="hint">Tab avanza · ← → mueven · suelta Shift para ir · Esc cancela</p>
     </div>
   </div>
 {/if}
@@ -264,11 +330,15 @@
     font-family: inherit;
     cursor: pointer;
   }
-  /* The selection ring is the whole UI — it has to read at a glance, from the
-     corner of the eye, while a key is held down. */
+  /* El anillo de selección ES la interfaz entera: tiene que leerse de un
+     vistazo, con el rabillo del ojo, mientras se mantiene una tecla.
+     Con `--hot` porque es el acento más vivo del sistema y el único que ya
+     significa «esto es lo que está pasando»; v0 usaba un `--wip` que aquí no
+     existe, y un color-mix sobre una variable que no existe es una declaración
+     inválida: la casilla elegida no se distinguía de las demás. */
   .tile.on {
-    background: color-mix(in oklab, var(--wip) 14%, transparent);
-    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
+    background: color-mix(in oklab, var(--hot) 14%, transparent);
+    border-color: color-mix(in oklab, var(--hot) 55%, var(--line));
   }
   .mark {
     display: grid;
@@ -284,16 +354,15 @@
     color: var(--muted);
   }
   .tile.on .mark {
-    background: var(--wip);
+    background: var(--hot);
     border-color: transparent;
     color: oklch(0.99 0 0);
   }
   .allmark {
     font-size: 1.1rem;
   }
-  /* Workspace names are hostnames here — warehouse.cuby.work does not fit on one
-     line at any tile width worth having. Two lines, broken anywhere, with the
-     height reserved either way so the counts underneath stay on one baseline. */
+  /* Dos líneas, partidas donde sea, con la altura reservada de todos modos para
+     que las cifras de abajo queden en la misma línea base. */
   .name {
     width: 100%;
     min-height: 2.5em;

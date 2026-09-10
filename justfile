@@ -1,123 +1,101 @@
-# Bubble Work — build and dev recipes.
+# Bubble Work — the command surface for developing it.
 #
-# `just` with no arguments lists everything. The one thing worth internalising:
-# the web bundle is EMBEDDED in the binary (web/embed.go, //go:embed all:dist),
-# so `just build` alone will not show a frontend change. `just dist` is the
-# honest "rebuild everything" — it builds the bundle first, then the binary that
-# carries it.
-#
-# bun, never npm: the repo standardised on bun (frontend/package-lock.json is
-# git-ignored), so a stray npm install resolves a different tree than CI checks.
+# Every recipe is a thin call into scripts/, so the same thing runs from a
+# terminal, from CI and from an editor task without three copies of the logic.
+# Configuration comes from .env (see .env.example); scripts/env.sh holds the
+# defaults, so none of this needs a .env to work.
 
-bin := "dist/bubble"
-port := env_var_or_default("PORT", "4006")
-
-# List the recipes (default).
+# List the recipes.
 default:
-    @just --list --unsorted
-
-# ---- building ----
-
-# Compile the binary only. Fast, and blind to frontend changes.
-build:
-    go build -o {{bin}} ./cmd/bubble
-
-# Build the web bundle into web/dist (committed, so this belongs in your commit).
-web:
-    cd frontend && bun run build
-
-# Bundle + binary: the full rebuild, and what you want after touching frontend/.
-dist: web build
-    @echo "built {{bin}} with a fresh bundle"
-
-# Install the binary onto your PATH via go install.
-install:
-    go install ./cmd/bubble
+    @just --list
 
 # ---- running ----
 
-# Rebuild and restart the local server (Go only), then wait until it is healthy.
+# THE dev session: build, then run every service in a tmux session and attach.
 dev:
     scripts/dev.sh
 
-# Same, rebuilding the web bundle first — the one to use after a UI change.
-dev-web:
-    scripts/dev.sh --web
-
-# Run the server in the foreground (PORT, default 4006).
-serve: build
-    {{bin}} serve --addr ":{{port}}"
-
-# Stop the running server (graceful; a missing one is not an error).
+# Stop the dev session and everything in it.
 stop:
-    -{{bin}} stop
+    scripts/stop.sh
 
-# Follow the running server's log. Ctrl-C detaches without stopping it.
-logs:
-    {{bin}} attach
+# ---- building ----
 
-# THE way to iterate on the UI: no bundle build, no Go build, no restart. Vite
-# proxies /api, /mcp, /webhooks and /health to the server, so that has to be
-# running already (`just dev`) — this serves the frontend only.
+# Compile the binary to $BUBBLE_BIN (default ./dist/bubble).
+build:
+    scripts/build.sh
 
-# Vite with hot reload, proxying the API to the running server.
-ui:
-    cd frontend && bun run dev
+# Install the frontend toolchain. bun, never npm: package-lock.json is ignored,
+# so npm resolves a different tree than anything else here.
+install:
+    cd frontend && bun install
+
+# The bundle is COMMITTED, so `just build` needs no JS toolchain and a UI change
+# is invisible until this runs.
+
+# Rebuild the SPA into web/dist.
+bundle:
+    cd frontend && bun run build
 
 # ---- checking ----
 
-# Everything CI gates, in the order it gates it. Run this before you commit.
-check: fmt-check vet test web-check
-    @echo "all clear"
+# Run once per clone. `git commit --no-verify` is the escape hatch.
 
-# gofmt, as a check rather than a fix — the same command CI fails on.
-fmt-check:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    unformatted="$(gofmt -l ./cmd ./internal)"
-    if [ -n "$unformatted" ]; then
-        echo "gofmt needed on:" >&2
-        echo "$unformatted" >&2
-        exit 1
-    fi
-    echo "gofmt clean"
+# Point git at .githooks, so `just check` runs before every commit.
+hooks:
+    git config core.hooksPath .githooks
+    @echo 'hooks installed - just check now runs on every commit'
 
-# Rewrite what gofmt-check would complain about.
-fmt:
-    gofmt -w ./cmd ./internal
+# gofmt + vet + build + test. What CI gates.
+check:
+    scripts/check.sh
 
-# go vet across every package.
-vet:
-    go vet ./...
-
-# The Go test suite.
+# Every test: the Go ones, plus the ones that need a running server.
 test:
-    go test ./...
+    scripts/test.sh
 
-# One package, or one test: `just test-one internal/server TestPagesNest`
-test-one pkg test="":
-    go test ./{{pkg}}/ {{ if test != "" { "-run " + test } else { "" } }} -v
+# ---- database ----
 
-# Types and Svelte diagnostics. Not a build: `bun run build` happily emits a
-# bundle for code this rejects, which is why CI runs both.
+# `just migrate up`, `just migrate down 1`, `just migrate history-sync`.
+# `down` asks for confirmation on the terminal, so it cannot run unattended.
 
-# svelte-check: types and Svelte diagnostics.
-web-check:
-    cd frontend && bun run check
+# Run migrations against $BUBBLE_DATA without starting the server.
+migrate *ARGS:
+    scripts/build.sh
+    {{env('BUBBLE_BIN', './dist/bubble')}} migrate {{ARGS}} --dir {{env('BUBBLE_DATA', './pb_data')}}
 
-# The frontend unit tests (vitest).
-web-test:
-    cd frontend && bun run test
+# `just person you@example.com <password> [lead|member]`
 
-# Install/refresh frontend dependencies from bun.lock.
-deps:
-    cd frontend && bun install
+# Create a PERSON — the account that works, as opposed to the one that operates
+# the box. Without this the only way to make the first one is the dashboard.
+person +ARGS:
+    scripts/person.sh {{ARGS}}
 
-# ---- housekeeping ----
+# Create or update a superuser. `just superuser upsert you@example.com <password>`
+superuser *ARGS:
+    scripts/build.sh
+    {{env('BUBBLE_BIN', './dist/bubble')}} superuser {{ARGS}} --dir {{env('BUBBLE_DATA', './pb_data')}}
 
-# web/dist is deliberately NOT touched: it is committed, so removing it would
-# leave the tree dirty and the binary unbuildable until the next `just web`.
+# ---- publicar ----
 
-# Remove the built binary.
+# Qué versión saldría de lo que hay commiteado, y con qué notas. No publica.
+# Publicar lo hace el CI al empujar a main: nadie decide un número a mano.
+release-preview:
+    @echo "siguiente: $(scripts/version.sh || echo '(nada que publicar)')"
+    @scripts/notes.sh
+
+# Actualizar ESTA máquina si aloja una instancia (necesita compose.yml y docker).
+update *ARGS:
+    scripts/update.sh {{ARGS}}
+
+# ---- cleaning ----
+
+# Remove build output. Leaves the data directory alone, on purpose.
 clean:
-    rm -f {{bin}}
+    rm -rf dist
+
+# Delete the LOCAL DATABASE and start over. Asks first.
+[confirm("This deletes the local database. Type yes to continue:")]
+reset:
+    rm -rf {{env('BUBBLE_DATA', './pb_data')}}
+    @echo "gone. `just dev` will migrate a fresh one."

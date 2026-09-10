@@ -1,8 +1,8 @@
 // Whether the markdown editor uses vim keybindings.
 //
 // A preference, not a setting: it belongs to the person, survives reloads, and
-// is shared by every editor on screen (the Logbook and its Definition of Done
-// are two editors, and having one of them in vim mode would be absurd).
+// is shared by every editor on screen — having one editor in vim mode and the
+// one beside it not would be absurd.
 const KEY = 'bubble.vim';
 
 class VimPref {

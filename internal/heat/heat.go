@@ -1,268 +1,220 @@
-// Package heat derives a bubble's temperature as a PURE function of its
-// evidence, the tuning, and the current time (§0, §5). Nothing is stored and
-// nothing decays in the background — time passing changes the inputs, and the
-// output changes for free.
+// Package heat derives a temperature from evidence.
 //
-// The same classifier runs at two grains: a whole bubble (Classify) and a single
-// thread measured against its bubble's window (ClassifyThread) — see
-// THREAD-LIFECYCLE.md. Every threshold it uses lives in domain.Tuning, which a
-// service admin can calibrate at runtime.
+// It is a PURE function of the evidence, the calibration and the current time.
+// Nothing is stored and nothing decays in a background job — time passing changes
+// the inputs, so the output changes for free. Two consequences worth stating: there
+// is no cooling job that can fall behind, and there is no stored level that can be
+// wrong.
+//
+// `now` is a PARAMETER, not `time.Now()` read inside. That is what lets the curve
+// be pinned at a fixed instant in a test, and what keeps "what did this look like
+// last Tuesday" answerable at all.
 package heat
 
 import (
 	"fmt"
 	"math"
-	"strconv"
 	"time"
-
-	"github.com/AngelMaldonado/bubble-work/internal/domain"
 )
 
-// Reason codes. Reason carries the English sentence — the CLI, MCP and logs read
-// it and are unaffected by any of this — while Code and Args say the same thing
-// structurally so a client can render it in its own language.
+// Lifecycle is the band something sits in.
+type Lifecycle string
+
+// Four bands, not five. There were Warm and Cooling between Hot and Dormant,
+// and they were a gradient nobody acted on: "produced last cycle" and "produced
+// neither cycle" both mean the same thing to a reader deciding what to do this
+// morning. What is left is the set v0 shipped and people used — producing,
+// quiet, abandoned, finished — where every band names a different ACTION.
 //
-// Deliberately NOT a translation layer in here: the heat model has no business
-// knowing what language anyone reads. It states what it concluded; presentation
-// is the client's problem.
+// Rip is a band and not a decoration on Dormant. Quiet with somebody
+// accountable is a person to ask; quiet with nobody accountable is a decision
+// to make. Same silence, different problem, so it gets its own place to sit.
 const (
-	ReasonHotCurrent       = "hot_current"       // output in the current cycle
-	ReasonWarmPrevious     = "warm_previous"     // output last cycle, threads still open
-	ReasonCooling          = "cooling"           // nothing this cycle or last
-	ReasonDormantOwnerless = "dormant_ownerless" // nobody accountable
-	ReasonDormantNever     = "dormant_never"     // nothing ever produced
-	ReasonDormantSilent    = "dormant_silent"    // silent for {cycles}+ cycles
-	ReasonThreadWarmOpen   = "thread_warm_open"  // thread wording for Warm
-	ReasonThreadNewborn    = "thread_newborn"    // born recently, nothing yet
-	ReasonClosedBubble     = "closed_bubble"     // outcome reached or abandoned
-	ReasonClosedThread     = "closed_thread"     // the work item is complete
+	Hot     Lifecycle = "hot"
+	Dormant Lifecycle = "dormant"
+	Rip     Lifecycle = "rip"
+	Closed  Lifecycle = "closed"
 )
 
-// Result is the derived temperature of a bubble or thread.
-type Result struct {
-	Lifecycle domain.Lifecycle
-	Score     float64 // 0..1, higher = hotter = floats higher
-	Reason    string  // English, for the CLI and logs
-	Code      string  // stable key for clients that translate (see above)
-	Args      map[string]string
+// Reason codes. Reason carries the English sentence for logs; Code and Args say
+// the same thing structurally, so a client renders it in its own language. The
+// heat model has no business knowing what language anyone reads.
+const (
+	ReasonHotCurrent    = "hot_current"
+	ReasonRipOwnerless  = "rip_ownerless"
+	ReasonDormantNever  = "dormant_never"
+	ReasonDormantSilent = "dormant_silent"
+	ReasonNewborn       = "newborn"
+	ReasonClosed        = "closed"
+)
+
+// Tuning is the calibration, which lives in a row rather than in this file.
+type Tuning struct {
+	// Tagged because this struct is SERVED: the board hands its calibration to
+	// the browser so a screen can say what it was computed against. Without the
+	// tags the wire carried Go's field names and the footer read "ciclo de h".
+	CycleHours     float64 `json:"cycle_hours"`
+	DormantCycles  float64 `json:"dormant_cycles"`
+	DecayCycles    float64 `json:"decay_cycles"`
+	GraceCycles    float64 `json:"grace_cycles"`
+	OwnerlessIsRip bool    `json:"ownerless_is_rip"`
 }
 
-// Window is the resolved heat window recency is measured against: the current
-// cycle's start, the start of the oldest cycle that still counts as "recent",
-// the resolved cycle length, and the length the score decays over.
+// Cycle is the resolved window length.
+func (t Tuning) Cycle() time.Duration {
+	if t.CycleHours <= 0 {
+		return 168 * time.Hour
+	}
+	return time.Duration(t.CycleHours * float64(time.Hour))
+}
+
+// Evidence is what a thread's log adds up to — the shape the aggregation view
+// returns. One timestamp for the newest thing that WARMS, one for the newest
+// thing of any kind (a comment is presence, not production), and a count.
+type Evidence struct {
+	LastWarmAt time.Time
+	LastAnyAt  time.Time
+	WarmCount  int
+	CreatedAt  time.Time
+	Completed  bool
+}
+
+// Result is the derived temperature.
+type Result struct {
+	Lifecycle Lifecycle         `json:"lifecycle"`
+	Score     float64           `json:"score"` // 0..1 — higher floats higher
+	Reason    string            `json:"reason"`
+	Code      string            `json:"code"`
+	Args      map[string]string `json:"args,omitempty"`
+}
+
+// Window is what recency is measured against.
 type Window struct {
 	CurStart  time.Time
 	PrevStart time.Time
-	Length    time.Duration // one cycle
-	Decay     time.Duration // Length × Tuning.DecayCycles
+	Length    time.Duration
+	Decay     time.Duration
 }
 
-// WindowFor resolves a bubble's heat window: the Plane cycle boundaries when the
-// project has an active cycle (§3.6), otherwise a rolling window of one cycle
-// ending now. A bubble's threads are classified against the SAME window, so
-// thread and bubble temperature stay commensurable.
-func WindowFor(b domain.Bubble, tun domain.Tuning, now time.Time) Window {
+// WindowFor resolves the rolling window ending now.
+func WindowFor(tun Tuning, now time.Time) Window {
 	length := tun.Cycle()
-	curStart := now.Add(-length)
-	var prevStart time.Time
-
-	if !b.CycleStart.IsZero() {
-		curStart = b.CycleStart
-		if !b.CyclePrevStart.IsZero() {
-			if d := curStart.Sub(b.CyclePrevStart); d > 0 {
-				length = d // the project's real cycle length
-			}
-			if tun.DormantCycles == 2 {
-				prevStart = b.CyclePrevStart // exact Plane boundary at the default
-			}
-		}
+	dormant := tun.DormantCycles
+	if dormant < 1 {
+		dormant = 2
 	}
-	if prevStart.IsZero() {
-		prevStart = curStart.Add(-time.Duration(float64(length) * (tun.DormantCycles - 1)))
+	decay := tun.DecayCycles
+	if decay <= 0 {
+		decay = 2
 	}
+	cur := now.Add(-length)
 	return Window{
-		CurStart:  curStart,
-		PrevStart: prevStart,
+		CurStart:  cur,
+		PrevStart: cur.Add(-time.Duration(float64(length) * (dormant - 1))),
 		Length:    length,
-		Decay:     time.Duration(float64(length) * tun.DecayCycles),
+		Decay:     time.Duration(float64(length) * decay),
 	}
 }
 
-// Classify computes a bubble's lifecycle and buoyancy score.
+// Classify turns one thread's evidence into a band.
 //
-// The cycle is the repeating pulse against which recency is measured (§1). A
-// bubble is Hot if it produced meaningful output in the current cycle, Warm if
-// it did last cycle and still has active threads, Cooling if it has gone quiet,
-// and Dormant once it has been silent for Tuning.DormantCycles cycles or has no
-// owner.
-func Classify(b domain.Bubble, tun domain.Tuning, now time.Time) Result {
-	if b.Closed {
-		return Result{domain.Closed, 0, "outcome reached or explicitly abandoned", ReasonClosedBubble, nil}
+// Ownership is not consulted here, and that is deliberate. A thread has assignees;
+// a BUBBLE has an owner, because the contract is what needs somebody accountable.
+// The rule lives in RollUp, which is the only grain where it can fire.
+func Classify(ev Evidence, tun Tuning, now time.Time) Result {
+	if ev.Completed {
+		return Result{Closed, 0, "the thread is complete", ReasonClosed, nil}
 	}
-	active := false
-	for _, t := range b.Threads {
-		if t.Active {
-			active = true
-			break
-		}
-	}
-	ownerless := tun.OwnerlessIsDormant && b.Owner == ""
-	// Pulse (comments) is presence, not output — it must not warm a bubble either.
-	return classify(without(b.Evidence, pulseOnly), WindowFor(b, tun, now), ownerless, active, tun, now)
-}
+	w := WindowFor(tun, now)
 
-// ClassifyThread computes ONE thread's lifecycle from its own evidence stream,
-// measured against its bubble's window (THREAD-LIFECYCLE.md). A completed thread
-// is Closed; otherwise the bubble rules apply at the work-item grain, with the
-// thread's assignee standing in for the bubble's owner and its own openness
-// standing in for "active threads remain".
-//
-// One rule differs from the bubble grain: unless Tuning.ThreadBirthHeats is on,
-// a thread's own BIRTH does not heat it. A new work item is a real output for
-// the bubble that gained it, but the item itself has produced nothing by
-// existing — otherwise every freshly created thread would read 🔥 for a whole
-// cycle while sitting untouched in Backlog.
-func ClassifyThread(t domain.Thread, ev []domain.EvidenceEvent, w Window, tun domain.Tuning, now time.Time) Result {
-	if !t.Active || t.CompletedAt != nil {
-		return Result{domain.Closed, 0, "thread completed", ReasonClosedThread, nil}
-	}
-	// Only production heats a thread. Comments are stripped always (presence), and
-	// the thread's own birth unless the calibration says otherwise.
-	keep := func(e domain.EvidenceEvent) bool { return e.Progress() }
-	if tun.ThreadBirthHeats {
-		keep = func(e domain.EvidenceEvent) bool { return !e.Pulse() }
-	}
-	progress := make([]domain.EvidenceEvent, 0, len(ev))
-	for _, e := range ev {
-		if keep(e) {
-			progress = append(progress, e)
-		}
-	}
-	ownerless := tun.OwnerlessIsDormant && t.Owner == ""
-	r := classify(progress, w, ownerless, t.Active, tun, now)
-	switch {
-	case r.Lifecycle == domain.Warm:
-		// the bubble wording doesn't fit a thread
-		r.Reason, r.Code = "progress last cycle; still open", ReasonThreadWarmOpen
-	case len(progress) == 0 && Newborn(t, w, tun, now):
-		r.Reason, r.Code = "born recently; nothing produced yet", ReasonThreadNewborn
-	}
-	return r
-}
-
-// Newborn reports whether a thread is still inside its grace period — born less
-// than Tuning.ThreadGraceCycles cycles ago. A newborn that hasn't produced
-// anything yet is waiting its turn (😴), not abandoned (🪦).
-func Newborn(t domain.Thread, w Window, tun domain.Tuning, now time.Time) bool {
-	if tun.ThreadGraceCycles <= 0 || t.CreatedAt.IsZero() {
-		return false
-	}
-	return t.CreatedAt.After(now.Add(-time.Duration(float64(w.Length) * tun.ThreadGraceCycles)))
-}
-
-// HasPulse reports whether someone has commented on a thread recently enough to
-// keep it out of the grave. A pulse never warms anything — it only says a human
-// is still paying attention, so declaring the thread abandoned would be wrong
-// (THREAD-LIFECYCLE.md).
-func HasPulse(ev []domain.EvidenceEvent, w Window, tun domain.Tuning, now time.Time) bool {
-	if tun.PulseCycles <= 0 {
-		return false
-	}
-	cutoff := now.Add(-time.Duration(float64(w.Length) * tun.PulseCycles))
-	for _, e := range ev {
-		if e.Pulse() && e.At.After(cutoff) {
-			return true
-		}
-	}
-	return false
-}
-
-func pulseOnly(e domain.EvidenceEvent) bool { return e.Pulse() }
-
-// without returns the events that do NOT match drop, sharing the input when
-// nothing matches (the common case: most threads have no comments).
-func without(ev []domain.EvidenceEvent, drop func(domain.EvidenceEvent) bool) []domain.EvidenceEvent {
-	n := 0
-	for _, e := range ev {
-		if drop(e) {
-			n++
-		}
-	}
-	if n == 0 {
-		return ev
-	}
-	out := make([]domain.EvidenceEvent, 0, len(ev)-n)
-	for _, e := range ev {
-		if !drop(e) {
-			out = append(out, e)
-		}
-	}
-	return out
-}
-
-// Attribute buckets a bubble's evidence by the thread that produced it, so each
-// thread can be classified from its own stream. Events with no ThreadID (bubble-
-// level evidence) are dropped — they belong to no single thread.
-func Attribute(evidence []domain.EvidenceEvent) map[string][]domain.EvidenceEvent {
-	out := make(map[string][]domain.EvidenceEvent, len(evidence))
-	for _, e := range evidence {
-		if e.ThreadID == "" {
-			continue
-		}
-		out[e.ThreadID] = append(out[e.ThreadID], e)
-	}
-	return out
-}
-
-// classify is the shared rule, applied identically to a bubble and to a thread.
-// ownerless means "nobody is accountable AND that should sink it"; active means
-// "work remains open".
-func classify(evidence []domain.EvidenceEvent, w Window, ownerless, active bool, tun domain.Tuning, now time.Time) Result {
-	var latest time.Time
-	inCurrent, inPrevious := false, false
-	for _, e := range evidence {
-		if e.At.After(latest) {
-			latest = e.At
-		}
-		switch {
-		case e.At.After(w.CurStart):
-			inCurrent = true
-		case e.At.After(w.PrevStart):
-			inPrevious = true
-		}
-	}
-
-	// Buoyancy score: exponential decay of the most-recent evidence over the decay
-	// window. Fresh output ≈ 1.0; one decay-window old ≈ 0.37; two ≈ 0.14.
 	score := 0.0
-	if !latest.IsZero() {
-		score = math.Exp(-now.Sub(latest).Seconds() / w.Decay.Seconds())
+	if !ev.LastWarmAt.IsZero() {
+		score = math.Exp(-now.Sub(ev.LastWarmAt).Seconds() / w.Decay.Seconds())
 	}
 
-	// Note the ordering: something actively producing stays Hot/Warm even with
-	// nobody named as owner. Ownerlessness sinks what has already gone quiet.
 	switch {
-	case inCurrent:
-		return Result{domain.Hot, score, "meaningful output in the current cycle", ReasonHotCurrent, nil}
-	case inPrevious && active:
-		return Result{domain.Warm, score, "output last cycle; active threads remain", ReasonWarmPrevious, nil}
-	case latest.IsZero() || latest.Before(w.PrevStart) || ownerless:
-		r := Result{Lifecycle: domain.Dormant, Score: score}
-		r.Reason, r.Code, r.Args = dormantReason(latest, ownerless, tun.DormantCycles)
-		return r
+	// Anything that produced inside the dormancy window is producing. The window
+	// is what DormantCycles configures, so the boundary stays tunable — it just
+	// no longer has a band sitting on top of it.
+	case ev.LastWarmAt.After(w.PrevStart):
+		return Result{Hot, score, "meaningful output within the cycle window", ReasonHotCurrent, nil}
+
+	// A thread born a moment ago with nothing on it is NEW, not abandoned. It
+	// still reads quiet — it IS quiet — but the reason is what keeps grace from
+	// calling it a grave.
+	case ev.WarmCount == 0 && newborn(ev.CreatedAt, w, tun, now):
+		return Result{Dormant, score, "born recently; nothing produced yet", ReasonNewborn, nil}
+
 	default:
-		return Result{domain.Cooling, score, "no meaningful output this cycle or last", ReasonCooling, nil}
+		r := Result{Lifecycle: Dormant, Score: score}
+		r.Reason, r.Code, r.Args = dormantReason(ev.LastWarmAt, tun)
+		return r
 	}
 }
 
-func dormantReason(latest time.Time, ownerless bool, cycles float64) (text, code string, args map[string]string) {
-	switch {
-	case ownerless:
-		return "no active owner", ReasonDormantOwnerless, nil
-	case latest.IsZero():
-		return "no meaningful output ever recorded", ReasonDormantNever, nil
-	default:
-		n := strconv.FormatFloat(cycles, 'g', -1, 64)
-		return fmt.Sprintf("silent for %s+ cycles", n), ReasonDormantSilent, map[string]string{"cycles": n}
+// HasPulse reports whether somebody has commented recently enough to keep a
+// thread out of the grave. A pulse NEVER warms anything — it only says a human is
+// still paying attention, so calling the work abandoned would be wrong.
+func HasPulse(ev Evidence, tun Tuning, now time.Time) bool {
+	if ev.LastAnyAt.IsZero() {
+		return false
 	}
+	return ev.LastAnyAt.After(WindowFor(tun, now).PrevStart)
+}
+
+// RollUp gives a bubble the band of its HOTTEST unfinished thread, and then puts
+// it in the grave if nobody is accountable and it has already gone quiet.
+//
+// Not the union of its threads' evidence, which is what v0 did and what v0 found
+// misleading: the union counts every thread's birth as the bubble's own output, so
+// a bubble full of untouched new work reads Hot. The roll-up reports what its
+// threads are actually doing.
+//
+// Ownerlessness is applied HERE and only here. The order is the model: a bubble
+// still producing stays Hot with nobody named — output outranks paperwork — and
+// the missing owner only buries what had already stopped.
+func RollUp(threads []Result, hasOwner bool, tun Tuning) Result {
+	rank := map[Lifecycle]int{Hot: 3, Dormant: 2, Rip: 1, Closed: 0}
+	best := Result{Lifecycle: Dormant, Code: ReasonDormantNever,
+		Reason: "nothing here has produced anything"}
+	seen := false
+	for _, t := range threads {
+		if t.Lifecycle == Closed {
+			continue // a finished thread says nothing about whether the bubble is alive
+		}
+		if !seen || rank[t.Lifecycle] > rank[best.Lifecycle] ||
+			(rank[t.Lifecycle] == rank[best.Lifecycle] && t.Score > best.Score) {
+			best, seen = t, true
+		}
+	}
+	// Grace is what a newborn bubble is for: nothing has been produced yet
+	// because there has been no time to produce it, and burying it on its first
+	// morning teaches people to ignore the band.
+	if tun.OwnerlessIsRip && !hasOwner &&
+		best.Lifecycle != Hot && best.Code != ReasonNewborn {
+		best.Lifecycle = Rip
+		best.Reason = "quiet, and nobody accountable"
+		best.Code = ReasonRipOwnerless
+		best.Args = nil
+	}
+	return best
+}
+
+func newborn(created time.Time, w Window, tun Tuning, now time.Time) bool {
+	if tun.GraceCycles <= 0 || created.IsZero() {
+		return false
+	}
+	return created.After(now.Add(-time.Duration(float64(w.Length) * tun.GraceCycles)))
+}
+
+func dormantReason(latest time.Time, tun Tuning) (string, string, map[string]string) {
+	if latest.IsZero() {
+		return "nothing has ever been produced here", ReasonDormantNever, nil
+	}
+	n := tun.DormantCycles
+	if n < 1 {
+		n = 2
+	}
+	return fmt.Sprintf("silent for %g cycles or more", n), ReasonDormantSilent,
+		map[string]string{"cycles": fmt.Sprintf("%g", n)}
 }

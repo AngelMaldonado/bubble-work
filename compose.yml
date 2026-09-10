@@ -1,0 +1,34 @@
+# Una instancia. La imagen la publica el CI en cada tag; aquí sólo se dice qué
+# canal seguir y dónde vive el estado.
+#
+#   docker compose up -d          arrancar
+#   scripts/update.sh             actualizar (o el timer de systemd, ver deploy/)
+services:
+  bubble:
+    image: ghcr.io/angelmaldonado/bubble-work:${BUBBLE_CHANNEL:-stable}
+    restart: unless-stopped
+    # El puerto sólo en el loopback: delante va el proxy que ya termina TLS.
+    # Publicarlo en 0.0.0.0 pondría un servidor sin cifrar en internet, y el
+    # token de MCP viaja en una cabecera.
+    ports:
+      - "127.0.0.1:${BUBBLE_PORT:-8090}:8090"
+    volumes:
+      # UN volumen con las dos cosas dentro: la base y los repositorios de
+      # markdown son un solo estado —un commit sin su fila, o al revés, no
+      # significan nada— así que se respaldan y se restauran juntos o no sirve.
+      - bubble-data:/data
+    environment:
+      BUBBLE_DATA: /data/pb_data
+      BUBBLE_REPOS: /data/repos
+    healthcheck:
+      # `/api/version` contesta sin base de datos y sin sesión: es lo que hace
+      # que un arranque a medias —migración corriendo, disco lleno— se vea como
+      # lo que es en vez de como un contenedor "arriba".
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8090/api/version"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 40s
+
+volumes:
+  bubble-data:

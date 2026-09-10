@@ -6,31 +6,39 @@
     "dev": "vite",
     "build": "vite build",
     "check": "svelte-check --tsconfig ./tsconfig.json",
-    "test": "vitest run"
-  },
-  "dependencies": {
-    "@codemirror/commands": "^6.10.4",
-    "@codemirror/lang-markdown": "^6.5.2",
-    "@codemirror/language": "^6.12.4",
-    "@codemirror/state": "^6.7.1",
-    "@codemirror/view": "^6.43.8",
-    "@lezer/highlight": "^1.2.3",
-    "@replit/codemirror-vim": "^6.4.0",
-    "@skeletonlabs/skeleton": "5.0.0",
-    "@skeletonlabs/skeleton-svelte": "5.0.0",
-    "driver.js": "^1.8.0",
-    "mermaid": "^11.16.0"
+    "logos": "node scripts/logos.mjs",
+    "prebuild": "node scripts/logos.mjs",
+    "predev": "node scripts/logos.mjs"
   },
   "devDependencies": {
-    "@sveltejs/vite-plugin-svelte": "7.2.0",
-    "@tailwindcss/vite": "4.3.3",
-    "@types/node": "26.1.1",
-    "jsdom": "29.1.1",
-    "svelte": "5.56.7",
-    "svelte-check": "4.7.3",
-    "tailwindcss": "4.3.3",
-    "typescript": "5.9.3",
-    "vite": "8.1.5",
-    "vitest": "4.1.10"
+    "@skeletonlabs/skeleton": "^5.0.1",
+    "@skeletonlabs/skeleton-svelte": "^5.0.1",
+    "@sveltejs/vite-plugin-svelte": "^7.2.0",
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^26.4.1",
+    "svelte": "^5.56.7",
+    "svelte-check": "^4.7.3",
+    "tailwindcss": "^4.3.3",
+    "typescript": "^5.9.3",
+    "vite": "^8.1.5"
+  },
+  "dependencies": {
+    "@atlaskit/pragmatic-drag-and-drop": "^3.1.0",
+    "@atlaskit/pragmatic-drag-and-drop-hitbox": "^2.2.0",
+    "@codemirror/commands": "^6.11.0",
+    "@codemirror/lang-markdown": "^6.5.2",
+    "@codemirror/language": "^6.12.4",
+    "@codemirror/merge": "^6.12.2",
+    "@codemirror/state": "^6.7.4",
+    "@codemirror/view": "^6.43.11",
+    "@event-calendar/core": "^5.12.2",
+    "@fontsource-variable/dm-sans": "^5.3.0",
+    "@fontsource/boogaloo": "^5.3.0",
+    "@lezer/highlight": "^1.2.3",
+    "@lucide/svelte": "^1.41.0",
+    "@replit/codemirror-vim": "^6.4.0",
+    "mermaid": "^11.17.2",
+    "roughjs": "^4.6.6",
+    "simple-icons": "^16.30.0"
   }
 }

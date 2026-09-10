@@ -1,635 +1,312 @@
+<script lang="ts" module>
+  export type Hit = {
+    id: string;
+    kind: string;
+    icon: string;
+    title: string;
+    hint?: string;
+    /** where this row goes in the list. Rows keep the caller's order inside it. */
+    group?: string;
+  };
+
+  /** A verb typed rather than clicked. Reached with `/`. */
+  export type Command = {
+    id: string;
+    icon: string;
+    title: string;
+    hint?: string;
+    run: () => void;
+  };
+</script>
+
 <script lang="ts">
-  import { untrack } from 'svelte';
-  import { t } from '../lib/i18n.svelte';
-  import { store } from '../lib/store.svelte';
-  import { api, ApiError } from '../lib/api';
-  import { fuzzyFilter } from '../lib/fuzzy';
-  import type { BubbleView, ThreadHit, Workspace } from '../lib/types';
+  // One field that finds a thread, a bubble or a page — and, when something is
+  // waiting on a pick, hands it back instead of navigating.
+  //
+  // It is the same field in both cases on purpose: "relate this thread to
+  // another" and "take me to that thread" are the same act of finding, and
+  // giving each its own control is how a picker ends up nailed to the bottom of
+  // a sidebar answering the second half of the question first.
+  //
+  // Three things share it, in this order, because that is the order of how sure
+  // the answer is:
+  //   · what the browser already holds — threads and bubbles, matched fuzzily,
+  //     with no round trip, so the list moves with the keys;
+  //   · what only the server can answer — the text INSIDE the documents, asked
+  //     for after a pause, because a request per keystroke is a request per
+  //     keystroke;
+  //   · commands, which are not found but named, and so live behind `/`.
+  import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
+  import SearchIcon from '@lucide/svelte/icons/search';
+  import { pieces, rank, type Range } from '../lib/fuzzy';
 
   let {
     open = $bindable(false),
-    onbirth,
-    onnewbubble,
+    items = [],
+    /** hits from the server's search over the document text */
+    found = [],
+    /** the verbs behind `/` */
+    commands = [],
+    /** the server is still answering the query being typed */
+    searching = false,
+    /** shown in place of the placeholder while something is waiting on a pick */
+    prompt = '',
+    /** ask the server. Called after a pause, never per keystroke. */
+    onquery,
+    onpick,
   }: {
     open?: boolean;
-    onbirth: (b: BubbleView) => void;
-    onnewbubble: () => void;
+    items?: Hit[];
+    found?: Hit[];
+    commands?: Command[];
+    searching?: boolean;
+    prompt?: string;
+    onquery?: (q: string) => void;
+    onpick?: (hit: Hit) => void;
   } = $props();
 
-  type Cmd = {
-    id: string;
-    label: string;
-    hint?: string;
-    needsBubble?: boolean;
-    needsInput?: string; // placeholder → run(bubble, value)
-    /** pre-fills the input stage from the chosen bubble. Renaming starts from the
-     *  name it has now: the common case is editing a word, not retyping it. */
-    seed?: (b: BubbleView) => string;
-    run: (b?: BubbleView, value?: string) => Promise<void> | void;
-  };
+  let q = $state('');
+  let cursor = $state(0);
 
-  let query = $state('');
-  let commandMode = $state(false); // entered by typing ">"; the ">" is never kept as text
-  let sel = $state(0);
-  let threads = $state<ThreadHit[]>([]);
-  let searching = $state(false);
-  let inputEl = $state<HTMLInputElement | null>(null);
-  let resultsEl = $state<HTMLDivElement | null>(null);
-
-  // two-stage state for commands that target a bubble / need text
-  let stage = $state<'root' | 'pick' | 'input'>('root');
-  let pending = $state<Cmd | null>(null);
-  let pendingBubble = $state<BubbleView | null>(null);
-  let argValue = $state('');
-
-  // Typing ">" flips into command mode and is consumed (rendered as the mode
-  // badge, never shown as a literal character in the field).
-  $effect(() => {
-    if (!commandMode && query.startsWith('>')) {
-      commandMode = true;
-      query = query.replace(/^>+\s*/, '');
-    }
-  });
-
-  const isCommand = $derived(commandMode);
-  const cmdQuery = $derived(query.trim());
-
-  const COMMANDS: Cmd[] = [
-    { id: 'refresh', label: t('cmd.refresh'), hint: t('cmd.refreshHint'), run: () => store.refresh() },
-    {
-      id: 'newbubble',
-      label: t('cmd.newBubble'),
-      hint: t('cmd.newBubbleHint'),
-      run: () => onnewbubble(),
-    },
-    {
-      id: 'birth',
-      label: t('cmd.birth'),
-      hint: t('cmd.birthHint'),
-      needsBubble: true,
-      run: (b) => b && onbirth(b),
-    },
-    {
-      id: 'review',
-      label: t('cmd.review'),
-      hint: '→ 👀',
-      needsBubble: true,
-      run: (b) => b && api.review(b.id).then(() => store.refresh()),
-    },
-    {
-      id: 'unreview',
-      label: t('cmd.unreview'),
-      needsBubble: true,
-      run: (b) => b && api.unreview(b.id).then(() => store.refresh()),
-    },
-    {
-      id: 'close',
-      label: t('cmd.close'),
-      hint: '→ 🏆',
-      needsBubble: true,
-      run: (b) => b && api.close(b.id).then(() => store.refresh()),
-    },
-    {
-      id: 'owner',
-      label: t('cmd.setOwner'),
-      needsBubble: true,
-      needsInput: 'owner name / email',
-      run: (b, v) => {
-        // Guarded rather than chained: `v !== undefined &&` yields `false`,
-        // which is not a valid Cmd result.
-        if (!b || v === undefined) return;
-        return api.contract(b.id, { owner: v }).then(() => store.refresh());
-      },
-    },
-    {
-      id: 'outcome',
-      label: t('cmd.setOutcome'),
-      needsBubble: true,
-      needsInput: 'the intended outcome',
-      run: (b, v) => {
-        // Guarded rather than chained: `v !== undefined &&` yields `false`,
-        // which is not a valid Cmd result.
-        if (!b || v === undefined) return;
-        return api.contract(b.id, { outcome: v }).then(() => store.refresh());
-      },
-    },
-    {
-      id: 'rename',
-      label: t('cmd.renameBubble'),
-      hint: t('cmd.renameBubbleHint'),
-      needsBubble: true,
-      needsInput: 'the new name',
-      seed: (b) => b.name,
-      run: (b, v) => {
-        if (!b || v === undefined) return;
-        const next = v.trim();
-        // An empty name is a slip, not a rename — and the server refuses it
-        // anyway, so there is nothing to gain from the round trip.
-        if (next === '' || next === b.name) return;
-        return api.renameBubble(b.id, next).then(() => store.refresh());
-      },
-    },
-    {
-      id: 'signout',
-      label: t('cmd.signOut'),
-      run: () => store.signOut(),
-    },
-  ];
-
-  // instance switch commands (one per instance + "all")
-  const instanceCmds = $derived<Cmd[]>([
-    {
-      id: 'inst:all',
-      label: t('cmd.viewAll'),
-      hint: store.instance === '' ? 'active' : '',
-      run: () => void (store.instance = ''),
-    },
-    ...store.instances.map((slug) => ({
-      id: `inst:${slug}`,
-      label: t('cmd.switchTo', { slug }),
-      hint: store.instance === slug ? 'active' : '',
-      run: () => void (store.instance = slug),
-    })),
-  ]);
-
-  // service-admin (godmode) commands — only present when the caller is elevated.
-  const adminCmds = $derived<Cmd[]>(
-    store.godmode
-      ? [
-          {
-            id: 'god:panel',
-            label: t('cmd.godPanel'),
-            hint: t('cmd.godPanelHint'),
-            run: () => store.openGodMode(),
-          },
-          {
-            id: 'god:allorgs',
-            label: store.allOrgs ? 'godmode: my orgs only' : 'godmode: all orgs',
-            hint: t('cmd.godCrossOrg'),
-            run: () => {
-              store.allOrgs = !store.allOrgs;
-              return store.refresh();
-            },
-          },
-          {
-            id: 'god:stats',
-            label: t('cmd.godStats'),
-            run: () =>
-              api.adminStats().then((s) => {
-                store.flash = `godmode · ${s.instances} instances · ${s.cached_instances} cached · ${s.cached_identities} ids · rev ${s.revision.slice(0, 7)}`;
-              }),
-          },
-          {
-            id: 'god:instances',
-            label: t('cmd.godInstances'),
-            run: () =>
-              api.adminInstances().then((list) => {
-                store.flash =
-                  'instances: ' +
-                  list.map((i) => i.slug + (i.cached ? '·cached' : '')).join(', ');
-              }),
-          },
-          {
-            id: 'god:refresh',
-            label: t('cmd.godRefresh'),
-            run: () =>
-              api
-                .adminRefresh()
-                .then(() => store.refresh())
-                .then(() => {
-                  store.flash = t('toast.cachesRefreshed');
-                }),
-          },
-          {
-            id: 'god:tick',
-            label: t('cmd.godTick'),
-            run: () =>
-              api.adminTick().then(() => {
-                store.flash = t('toast.tickTriggered');
-              }),
-          },
-        ]
-      : [],
-  );
-
-  const allCommands = $derived([...COMMANDS, ...adminCmds, ...instanceCmds]);
-  const filteredCmds = $derived(fuzzyFilter(cmdQuery, allCommands, (c) => c.label));
-  const filteredBubbles = $derived(fuzzyFilter(query, store.visible, (b) => b.name).slice(0, 8));
-
-  // Workspaces are matched on their identifier too — SB and CECUBYMX are what
-  // people actually type, and they appear nowhere in the name.
-  //
-  // Only when something is typed: an empty query means "show me what is here",
-  // and every workspace is not an answer to that. Capped at three because they
-  // sit ABOVE the threads and must never push the search results off-screen.
-  const filteredWorkspaces = $derived(
-    query.trim() === ''
-      ? []
-      : fuzzyFilter(query, store.workspaces, (w) => w.name + ' ' + w.identifier).slice(0, 3),
-  );
-  const pickBubbles = $derived(fuzzyFilter(argValue, store.visible, (b) => b.name).slice(0, 8));
-
-  // debounced thread search
-  let debounce: ReturnType<typeof setTimeout> | null = null;
-  $effect(() => {
-    const q = query;
-    if (isCommand || stage !== 'root' || q.trim().length < 2) {
-      threads = [];
-      return;
-    }
-    searching = true;
-    if (debounce) clearTimeout(debounce);
-    debounce = setTimeout(async () => {
-      try {
-        threads = await api.threads(q.trim());
-      } catch {
-        threads = [];
-      } finally {
-        searching = false;
-      }
-    }, 180);
-  });
-
-  // reset selection whenever the visible list changes shape
-  $effect(() => {
-    void [query, stage, threads.length];
-    sel = 0;
-  });
-
-  $effect(() => {
-    if (open && inputEl) inputEl.focus();
-  });
-
-  // A seeded input arrives with text already in it (rename), so select it: the
-  // seed is a starting point to edit or replace, not a prefix to type after.
-  // argValue is read untracked — tracking it would re-select on every keystroke.
-  $effect(() => {
-    if (stage !== 'input') return;
-    if (untrack(() => argValue) !== '') inputEl?.select();
-  });
-
-  // keep the highlighted row visible as you arrow through the list
-  $effect(() => {
-    void sel;
-    const el = resultsEl?.querySelector('.row.active');
-    if (el) (el as HTMLElement).scrollIntoView({ block: 'nearest' });
-  });
+  /** `/` at the start is the mode switch, and the rest is the command's name. */
+  const slash = $derived(q.startsWith('/'));
+  const term = $derived(slash ? q.slice(1) : q.trim());
 
   type Row =
-    | { kind: 'thread'; t: ThreadHit }
-    | { kind: 'bubble'; b: BubbleView }
-    | { kind: 'ws'; w: Workspace }
-    | { kind: 'cmd'; c: Cmd };
+    | { kind: 'head'; key: string; label: string }
+    | { kind: 'hit'; key: string; hit: Hit; ranges: Range[] }
+    | { kind: 'cmd'; key: string; cmd: Command; ranges: Range[] };
 
-  const rows = $derived.by<Row[]>(() => {
-    if (stage === 'pick') return pickBubbles.map((b) => ({ kind: 'bubble', b }) as Row);
-    if (stage === 'input') return [];
-    if (isCommand) return filteredCmds.map((c) => ({ kind: 'cmd', c }) as Row);
-    // Workspaces first: there are at most three, they are the coarsest thing
-    // here, and scoping the board is a navigation act you want to reach without
-    // arrowing past a page of threads. Threads are debounced and arrive late, so
-    // putting them first would also make the top row jump under the cursor.
-    return [
-      ...filteredWorkspaces.map((w) => ({ kind: 'ws', w }) as Row),
-      ...threads.map((t) => ({ kind: 'thread', t }) as Row),
-      ...filteredBubbles.map((b) => ({ kind: 'bubble', b }) as Row),
-    ];
+  const rows = $derived.by((): Row[] => {
+    const out: Row[] = [];
+    if (slash) {
+      for (const c of rank(term, commands, (c) => c.title)) {
+        out.push({ kind: 'cmd', key: 'c:' + c.id, cmd: c, ranges: c.match.ranges });
+      }
+      return out;
+    }
+
+    // Grouped, with the caller's order preserved inside each group: threads
+    // before bubbles is a real signal, and a sort that flattens it looks random.
+    const ranked = term ? rank(term, items, (i) => i.title + ' ' + (i.hint ?? '')) : items.map((i) => ({ ...i, match: { score: 0, ranges: [] as Range[] } }));
+    const groups = new Map<string, typeof ranked>();
+    for (const r of ranked) {
+      const g = r.group ?? '';
+      let list = groups.get(g);
+      if (!list) groups.set(g, (list = []));
+      list.push(r);
+    }
+    for (const [label, list] of groups) {
+      if (label) out.push({ kind: 'head', key: 'h:' + label, label });
+      for (const r of list) out.push({ kind: 'hit', key: 'i:' + r.id, hit: r, ranges: r.match.ranges });
+    }
+
+    // The server's hits are already the answer to this exact query; ranking them
+    // again against the same string only reorders somebody else's ordering.
+    if (found.length) {
+      out.push({ kind: 'head', key: 'h:texto', label: 'En el texto' });
+      for (const f of found) out.push({ kind: 'hit', key: 'f:' + f.id, hit: f, ranges: [] });
+    }
+    return out;
   });
 
-  function reset() {
-    query = '';
-    commandMode = false;
-    argValue = '';
-    stage = 'root';
-    pending = null;
-    pendingBubble = null;
-    threads = [];
-    sel = 0;
-  }
+  /** Only these can be picked; headings are furniture. */
+  const pickable = $derived(rows.filter((r) => r.kind !== 'head'));
 
-  function close() {
-    open = false;
-    reset();
-  }
-
-  async function runCmd(c: Cmd) {
-    if (c.needsBubble) {
-      pending = c;
-      stage = 'pick';
-      argValue = '';
-      sel = 0;
-      return;
+  // The cursor is an index into a list that changes as you type; clamping it
+  // here is what stops Enter from picking whatever happens to be at position 7.
+  $effect(() => {
+    if (cursor > pickable.length - 1) cursor = Math.max(0, pickable.length - 1);
+  });
+  $effect(() => {
+    if (open) {
+      q = '';
+      cursor = 0;
     }
-    await Promise.resolve(c.run());
-    close();
-  }
+  });
 
-  async function pickBubble(b: BubbleView) {
-    pendingBubble = b;
-    if (pending?.needsInput) {
-      stage = 'input';
-      argValue = pending.seed?.(b) ?? '';
-      return;
-    }
-    await Promise.resolve(pending?.run(b));
-    // birth keeps its own modal open; everything else closes
-    close();
-  }
+  // The pause before asking the server. Long enough that typing a word is one
+  // request and not six; short enough that stopping to think shows the answer.
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  $effect(() => {
+    const ask = slash ? '' : term;
+    clearTimeout(timer);
+    if (!onquery) return;
+    timer = setTimeout(() => onquery(ask), 180);
+    return () => clearTimeout(timer);
+  });
 
-  async function submitInput() {
-    if (!pending || !pendingBubble) return;
-    try {
-      await Promise.resolve(pending.run(pendingBubble, argValue));
-    } catch (e) {
-      store.error = e instanceof ApiError ? e.message : String(e);
-    }
-    close();
-  }
-
-  // Scoping to a workspace also fixes the instance filter when it disagrees:
-  // filtering to a project outside the current instance scope shows an empty
-  // board, which reads as "this workspace is empty" rather than "you cannot see
-  // it from here".
-  function scopeTo(w: Workspace) {
-    if (store.instance && store.instance !== w.instance) store.selectInstance(w.instance);
-    store.selectProject(w.id);
-    store.flash = t('omni.scoped', { name: w.name });
-    close();
-  }
-
-  function activate(row: Row) {
-    if (row.kind === 'cmd') return runCmd(row.c);
-    if (row.kind === 'ws') return scopeTo(row.w);
-    if (row.kind === 'bubble' && stage === 'pick') return pickBubble(row.b);
-    // thread / bubble in search mode → open in Plane not yet wired; just close.
-    close();
-  }
-
-  function onKey(e: KeyboardEvent) {
-    if (e.key === 'Escape') {
+  function keys(e: KeyboardEvent) {
+    if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) {
       e.preventDefault();
-      if (stage !== 'root' || commandMode) {
-        reset();
-      } else {
-        close();
-      }
-      return;
-    }
-    // Backspace on an empty command field leaves command mode (removes the badge).
-    if (e.key === 'Backspace' && commandMode && query === '' && stage === 'root') {
+      cursor = Math.min(cursor + 1, pickable.length - 1);
+    } else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) {
       e.preventDefault();
-      commandMode = false;
-      return;
-    }
-    if (stage === 'input') {
-      if (e.key === 'Enter') {
-        e.preventDefault();
-        void submitInput();
-      }
-      return;
-    }
-    if (e.key === 'ArrowDown') {
-      e.preventDefault();
-      sel = Math.min(sel + 1, Math.max(0, rows.length - 1));
-    } else if (e.key === 'ArrowUp') {
-      e.preventDefault();
-      sel = Math.max(sel - 1, 0);
+      cursor = Math.max(cursor - 1, 0);
     } else if (e.key === 'Enter') {
       e.preventDefault();
-      const row = rows[sel];
-      if (row) void activate(row);
+      run(pickable[cursor]);
     }
+  }
+
+  function run(row?: Row) {
+    if (!row || row.kind === 'head') return;
+    open = false;
+    if (row.kind === 'cmd') row.cmd.run();
+    else onpick?.(row.hit);
+  }
+
+  /** The index a row has among the pickable ones — headings do not take a turn. */
+  function index(row: Row): number {
+    return pickable.indexOf(row as (typeof pickable)[number]);
   }
 </script>
 
-{#if open}
-  <div
-    class="scrim"
-    role="button"
-    tabindex="-1"
-    onclick={close}
-    onkeydown={(e) => e.key === 'Escape' && close()}
-  ></div>
-  <div class="palette" role="dialog" aria-modal="true">
-    <div class="omnifield">
-      {#if isCommand || stage !== 'root'}
-        <span class="glyph cmd" aria-label={t('chrome.commandMode')}>›</span>
-      {:else}
-        <span class="glyph">⌘K</span>
-      {/if}
-      {#if stage === 'pick'}
-        <input
-          bind:this={inputEl}
-          bind:value={argValue}
-          onkeydown={onKey}
-          placeholder="pick a bubble for “{pending?.label.replace('…', '')}”…"
-        />
-      {:else if stage === 'input'}
-        <input
-          bind:this={inputEl}
-          bind:value={argValue}
-          onkeydown={onKey}
-          placeholder={pending?.needsInput}
-        />
-      {:else}
-        <input
-          bind:this={inputEl}
-          bind:value={query}
-          onkeydown={onKey}
-          placeholder={commandMode ? 'run a command…' : 'search threads · type > for commands'}
-        />
-      {/if}
-    </div>
+<Dialog {open} onOpenChange={(e: { open: boolean }) => (open = e.open)}>
+  <Portal>
+    <Dialog.Backdrop
+      class="scrim"
+      style="z-index: var(--z-drawer-scrim)" />
+    <!-- Near the top, not centred: the list grows downward, and a box that
+         grows from the middle of the screen moves the field you are typing in. -->
+    <Dialog.Positioner
+      class="fixed inset-0 flex items-start justify-center p-4 pt-[12vh]"
+      style="z-index: var(--z-drawer)">
+      <Dialog.Content class="omni card bg-surface-100-900 w-full max-w-xl p-0 shadow-xl">
+        <label class="field">
+          <SearchIcon class="size-4 shrink-0" />
+          <!-- svelte-ignore a11y_autofocus -->
+          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+            bind:value={q}
+            onkeydown={keys}
+            placeholder={prompt || 'Buscar, o «/» para un comando…'}
+            {@attach (el: HTMLInputElement) => el.focus()} />
+          {#if searching}<span class="wait" aria-label="buscando">…</span>{/if}
+          <kbd>esc</kbd>
+        </label>
 
-    <div class="results" bind:this={resultsEl}>
-      {#if stage === 'input'}
-        <div class="ctx">
-          {pending?.label.replace('…', '')} → <b>{pendingBubble?.name}</b> · ⏎ to apply
-        </div>
-      {:else if rows.length === 0}
-        <div class="empty">
-          {#if searching}searching…{:else}no matches{/if}
-        </div>
-      {:else}
-        {#each rows as row, i (row.kind + ':' + (row.kind === 'cmd' ? row.c.id : row.kind === 'thread' ? row.t.id : row.kind === 'ws' ? row.w.id : row.b.id))}
-          <button
-            class="row"
-            class:active={i === sel}
-            onmouseenter={() => (sel = i)}
-            onclick={() => activate(row)}
-          >
-            {#if row.kind === 'thread'}
-              <span class="lead">›</span>
-              <span class="main">{row.t.name}</span>
-              <span class="tail">{row.t.bubble_name} · {row.t.instance} · {row.t.open ? '🔥 open' : '🏆 done'}</span>
-            {:else if row.kind === 'ws'}
-              <span class="lead">▤</span>
-              <span class="main">{row.w.name}</span>
-              <span class="tail">
-                {row.w.identifier ? row.w.identifier + ' · ' : ''}{t('omni.workspace')}
-              </span>
-            {:else if row.kind === 'bubble'}
-              <span class="lead">◯</span>
-              <span class="main">{row.b.name}</span>
-              <span class="tail">{row.b.instance} · {row.b.level.replace('_', ' ')}</span>
+        <ul class="hits">
+          {#each rows as r (r.key)}
+            {#if r.kind === 'head'}
+              <li class="head">{r.label}</li>
+            {:else if r.kind === 'cmd'}
+              {@const i = index(r)}
+              <li>
+                <button class="hit" class:on={i === cursor} onmouseenter={() => (cursor = i)} onclick={() => run(r)}>
+                  <span class="ico" aria-hidden="true">{r.cmd.icon}</span>
+                  <span class="t">
+                    {#each pieces(r.cmd.title, r.ranges) as p}<span class:hi={p.on}>{p.text}</span>{/each}
+                  </span>
+                  {#if r.cmd.hint}<span class="hint">{r.cmd.hint}</span>{/if}
+                  <span class="kind">comando</span>
+                </button>
+              </li>
             {:else}
-              <span class="lead">›</span>
-              <span class="main">{row.c.label}</span>
-              {#if row.c.hint}<span class="tail">{row.c.hint}</span>{/if}
+              {@const i = index(r)}
+              <li>
+                <button class="hit" class:on={i === cursor} onmouseenter={() => (cursor = i)} onclick={() => run(r)}>
+                  <span class="ico" aria-hidden="true">{r.hit.icon}</span>
+                  <span class="t">
+                    {#each pieces(r.hit.title, r.ranges) as p}<span class:hi={p.on}>{p.text}</span>{/each}
+                  </span>
+                  {#if r.hit.hint}<span class="hint">{r.hit.hint}</span>{/if}
+                  <span class="kind">{r.hit.kind}</span>
+                </button>
+              </li>
             {/if}
-          </button>
-        {/each}
-      {/if}
-    </div>
-
-    <div class="foot">
-      {#if stage === 'pick'}
-        <span>↑↓ move · ⏎ pick bubble · esc back</span>
-      {:else if stage === 'input'}
-        <span>{t('omni.applyHint')}</span>
-      {:else}
-        <span>{t('omni.navHint')} <b>&gt;</b> {t('omni.forCommands')}</span>
-      {/if}
-    </div>
-  </div>
-{/if}
+          {/each}
+          {#if !pickable.length}
+            <li class="none">
+              {#if slash}Ningún comando con «{term}»
+              {:else if searching}Buscando «{term}»…
+              {:else}Nada con «{term}»{/if}
+            </li>
+          {/if}
+        </ul>
+      </Dialog.Content>
+    </Dialog.Positioner>
+  </Portal>
+</Dialog>
 
 <style>
-  .scrim {
-    position: fixed;
-    inset: 0;
-    z-index: 40;
-    background: oklch(0.08 0.02 265 / 0.55);
-    backdrop-filter: blur(3px);
-    border: none;
-  }
-  .palette {
-    position: fixed;
-    z-index: 50;
-    top: 14vh;
-    left: 50%;
-    transform: translateX(-50%);
-    width: min(94vw, 620px);
-    border-radius: 18px;
-    background: var(--surface-solid);
-    border: 1px solid var(--line);
-    box-shadow: 0 30px 80px var(--shadow-strong);
-    /* clip children to the rounded rect; the input's glow sits inside its
-       0.7rem margin, so it stays fully visible. */
+  /* Skeleton ships no CSS for Dialog; the surface comes from its own utilities
+     (`card bg-surface-100-900 shadow-xl`) and only the two things it cannot
+     know are ours: the list must be able to scroll inside the panel, and the
+     panel must clip its own rounded corners. */
+  :global(.omni) {
+    display: flex;
+    flex-direction: column;
+    max-height: 70vh;
     overflow: hidden;
   }
-  /* the input is its own inset field (margin, not padding) so its focus glow is
-     fully rounded and never clipped by the palette's overflow. */
-  .omnifield {
+
+  .field {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
-    margin: 0.7rem;
-    padding: 0.8rem 0.95rem;
-    border-radius: 12px;
-    background: color-mix(in oklab, var(--text) 5%, transparent);
-    border: 1px solid var(--line);
-    transition:
-      border-color 0.15s ease,
-      box-shadow 0.15s ease;
+    gap: 0.6rem;
+    padding: 0.85rem 1rem;
+    border-bottom: 1px solid var(--line);
+    color: var(--faint);
   }
-  .omnifield:focus-within {
-    border-color: color-mix(in oklab, var(--wip) 55%, var(--line));
-    box-shadow: 0 0 0 3px color-mix(in oklab, var(--wip) 20%, transparent);
-  }
-  .glyph {
-    display: inline-grid;
-    place-content: center;
-    min-width: 2.1rem;
-    height: 1.7rem;
-    padding: 0 0.4rem;
-    border-radius: 8px;
-    background: var(--hover);
-    border: 1px solid var(--line);
-    font-size: 0.82rem;
-    font-weight: 800;
-    color: var(--muted);
-    flex: none;
-  }
-  /* command-mode badge — same footprint as ⌘K, bigger chevron */
-  .glyph.cmd {
-    font-size: 1.15rem;
-    line-height: 1;
-    color: var(--wip);
-    border-color: color-mix(in oklab, var(--wip) 45%, var(--line));
-  }
-  .omnifield input {
+  .field input {
     flex: 1;
     min-width: 0;
-    background: transparent;
     border: none;
-    outline: none;
-    box-shadow: none;
+    background: transparent;
     color: var(--text);
     font-size: 1rem;
-  }
-  /* defeat any framework focus ring on the bare input (the field glows instead) */
-  .omnifield input:focus,
-  .omnifield input:focus-visible {
     outline: none;
-    box-shadow: none;
-    border: none;
   }
-  .results {
-    max-height: 46vh;
+  .wait { flex: none; font-size: 0.8rem; }
+  kbd {
+    flex: none;
+    padding: 0 0.35rem;
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    font-size: 0.7rem;
+  }
+
+  .hits {
+    flex: 1;
+    min-height: 0;
     overflow-y: auto;
-    padding: 0.5rem;
-    scroll-padding-block: 0.5rem;
-    border-top: 1px solid var(--line);
+    margin: 0;
+    padding: 0.35rem;
+    list-style: none;
   }
-  .row {
-    width: 100%;
+  .head {
+    padding: 0.55rem 0.6rem 0.25rem;
+    color: var(--faint);
+    font-size: 0.68rem;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+  }
+  .hit {
     display: flex;
-    align-items: baseline;
+    align-items: center;
     gap: 0.6rem;
-    padding: 0.55rem 0.7rem;
-    border-radius: 10px;
+    width: 100%;
+    padding: 0.5rem 0.6rem;
     border: none;
+    border-radius: 9px;
     background: transparent;
-    color: var(--text);
-    cursor: pointer;
+    color: var(--muted);
     text-align: left;
   }
-  .row.active {
+  /* One highlight, driven by the cursor — the pointer moves it rather than
+     drawing a second one, so the keyboard and the mouse never disagree about
+     what Enter will open. */
+  .hit.on { background: var(--hover); color: var(--text); }
+  .ico { flex: none; }
+  .t { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  /* The characters that earned the row its place. Weight and colour, never a
+     background: a highlight that boxes every other letter is unreadable. */
+  .hi { color: var(--text); font-weight: 650; }
+  .hint, .kind { flex: none; font-size: 0.72rem; color: var(--faint); }
+  .kind {
+    padding: 0 0.4rem;
+    border-radius: 999px;
     background: var(--hover);
   }
-  .lead {
-    color: var(--faint);
-    font-size: 0.85rem;
-  }
-  .main {
-    font-size: 0.9rem;
-    flex: 1;
-    white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
-  }
-  .tail {
-    font-size: 0.72rem;
-    color: var(--faint);
-    white-space: nowrap;
-  }
-  .empty,
-  .ctx {
-    padding: 1rem;
-    color: var(--faint);
-    font-size: 0.85rem;
-  }
-  .ctx b {
-    color: var(--text);
-  }
-  .foot {
-    padding: 0.5rem 1rem;
-    border-top: 1px solid var(--line);
-    font-size: 0.72rem;
-    color: var(--faint);
-  }
-  .foot b {
-    color: var(--muted);
-  }
+  .none { padding: 1rem; color: var(--faint); font-size: 0.85rem; }
 </style>

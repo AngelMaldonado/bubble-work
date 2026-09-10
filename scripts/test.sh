@@ -968,6 +968,35 @@ curl -s -o /dev/null -X DELETE "$API/api/collections/inventory_groups/records/$G
 chk ">>> borrar un grupo se lleva lo que había dentro" \
   "$(list inventory_items "$C" | j "['totalItems']")" 0
 
+# ------------------------------------------------------------- repos ----
+#
+# Dónde vive el CÓDIGO. Una fila por repositorio, del workspace: lo ven sus
+# miembros y lo escribe su lead — la misma frase que gobierna todo lo demás que
+# pertenece a un workspace.
+#
+# A estas alturas del guion el lead de alpha es BOB: alice lo promovió y se
+# degradó a sí misma unas secciones más arriba. Los papeles aquí son los de este
+# punto de la historia, no los del principio.
+echo
+REPO=$(post workspace_repos "$B" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/bubble-work\"}" | j "['id']")
+chk ">>> el lead del workspace enlaza un repositorio" "$([ -n "$REPO" ] && echo si || echo no)" si
+chk ">>> ...un miembro lo VE" \
+  "$(list workspace_repos "$A" | j "['totalItems']")" 1
+chk ">>> ...pero no enlaza ninguno" \
+  "$(pcode workspace_repos "$A" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/alice/suyo\"}")" 400
+chk ">>> el mismo repositorio dos veces se rechaza (índice único)" \
+  "$(pcode workspace_repos "$B" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/bubble-work\"}")" 400
+chk ">>> el lead global también enlaza, como en todo lo demás" \
+  "$(pcode workspace_repos "$C" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/otro\"}")" 200
+chk ">>> quien no es del workspace no ve dónde está el código" \
+  "$(list workspace_repos "$ER" | j "['totalItems']")" 0
+chk ">>> anónimo tampoco" \
+  "$(curl -s "$API/api/collections/workspace_repos/records" | j "['totalItems']")" 0
+chk ">>> quitar un repositorio es del lead, no del miembro" \
+  "$(code -X DELETE "$API/api/collections/workspace_repos/records/$REPO" -H "Authorization: $A")" 404
+chk ">>> ...y el lead sí lo quita" \
+  "$(code -X DELETE "$API/api/collections/workspace_repos/records/$REPO" -H "Authorization: $B")" 204
+
 # ------------------------------------------------------------ imágenes ----
 echo
 PNG=/tmp/bubble-test.png

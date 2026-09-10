@@ -1244,6 +1244,34 @@ una sesión anónima, y justo mientras estaba vacío, que es cuando nadie lo
 habría notado. Un armario que se abre solo hasta que alguien le pone la primera
 llave.
 
+## Dónde vive el código — la caja de repositorios
+
+Una caja 3D fija abajo a la izquierda, enfrente de la HUD. Cerrada es una caja;
+al pasar por encima se abre y saca una marca de GitHub por repositorio
+asociado, cada una un enlace.
+
+**Una fila por repositorio** (`workspace_repos`: workspace, url, name), no una
+lista separada por comas dentro del workspace: son varios, entran y salen, y
+cada uno quiere su propio nombre — que en una cadena es exactamente el momento
+en que alguien inventa un formato. Además una fila se puede mirar, contar y
+quitar. Lo ven los miembros del workspace, lo escribe su lead; el índice único
+`(workspace, url)` impide enlazar dos veces lo mismo.
+
+**No es el repositorio del workspace.** Ése es `repo_path`, el árbol de markdown
+que este servidor escribe, y no se elige ni se enlaza. Estos son los sitios
+donde vive el CÓDIGO, que este servidor no toca: un enlace, y la honestidad de
+decir que la evidencia vive ahí afuera.
+
+**Enfrente de la HUD, y no dentro de ella.** Los botones de la derecha son
+verbos —buscar, invitar, conectar un agente—; esto es un lugar, y un lugar al
+que se va tiene su propia esquina. El nombre se deduce de la URL (`owner/repo`)
+en vez de pedirse: es como se llama un repositorio en voz alta, y un campo que
+casi siempre repite lo que ya se escribió es un campo que se deja vacío.
+
+La marca vive en `frontend/public/marks/` y no en `public/logos/`, que se GENERA
+desde `simple-icons` y está ignorado: un archivo que la interfaz necesita
+siempre no puede vivir donde `npm run logos` lo borra y lo rehace.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

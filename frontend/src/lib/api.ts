@@ -133,6 +133,10 @@ export type Comment = {
 
 /** El inventario: dónde vive lo que hace funcionar todo esto. No es trabajo y no
  *  calienta nada; es lo primero que alguien busca a las tres de la mañana. */
+/** Un repositorio de código asociado al workspace. `name` puede venir vacío:
+ *  entonces lo dice la URL, que es como se llama un repositorio en voz alta. */
+export type Repo = { id: string; workspace: string; url: string; name?: string };
+
 export type InvGroup = {
   id: string;
   name: string;
@@ -411,6 +415,46 @@ class Api {
       '/api/collections/users/records?perPage=500&sort=display_name,email',
     );
     return out.items;
+  }
+
+  // ---- dónde vive el código ----------------------------------------------
+  //
+  // Una fila por repositorio. No es el árbol de markdown del workspace —ése lo
+  // escribe este servidor y no se elige— sino el enlace a donde está el código,
+  // que este servidor no toca.
+
+  async repos(workspace: string): Promise<Repo[]> {
+    const out = await this.call<{ items: Repo[] }>(
+      `/api/collections/workspace_repos/records?perPage=100&sort=created` +
+        `&filter=${encodeURIComponent(`workspace='${workspace}'`)}`,
+    );
+    return out.items;
+  }
+
+  addRepo(workspace: string, url: string, name = '') {
+    return this.create<Repo>('workspace_repos', { workspace, url, name });
+  }
+
+  removeRepo(id: string) {
+    return this.remove('workspace_repos', id);
+  }
+
+  /** Mi papel AQUÍ. El lead global escribe en todas partes; los demás, sólo
+   *  donde su membresía dice lead. Se pregunta con una fila y no con el roster
+   *  entero porque la respuesta es una palabra. */
+  async myRole(workspace: string): Promise<'lead' | 'member' | ''> {
+    if (this.me?.role === 'lead') return 'lead';
+    try {
+      const out = await this.call<{ items: { role: 'lead' | 'member' }[] }>(
+        `/api/collections/memberships/records?perPage=1&fields=role` +
+          `&filter=${encodeURIComponent(
+            `workspace='${workspace}' && user='${this.me?.id ?? ''}'`,
+          )}`,
+      );
+      return out.items[0]?.role ?? '';
+    } catch {
+      return '';
+    }
   }
 
   // ---- el inventario ------------------------------------------------------

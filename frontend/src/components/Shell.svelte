@@ -39,6 +39,7 @@
     /** create one and say which it is, so it can be named straight away */
     oncreate,
     children,
+    corner,
   }: {
     items?: ShellItem[];
     /** screens pinned above the list — the planner, and whatever joins it */
@@ -59,6 +60,11 @@
     ondelete?: (id: string) => void;
     oncreate?: () => Promise<string | void> | string | void;
     children?: Snippet;
+    /** lo que flota sobre el pane sin ir DENTRO de él: la esquina de abajo a la
+     *  izquierda. Va aquí y no en la aplicación porque `position: fixed` mide
+     *  contra la ventana, y la ventana incluye la columna de proyectos — un
+     *  flotante fijo a la izquierda se dibuja encima del sidebar. */
+    corner?: Snippet;
   } = $props();
 
   let railed = $state(false);
@@ -222,6 +228,7 @@
     <main class="pane" bind:this={pane} style={paneFade.style} {@attach paneFade.attach}>
       {@render children?.()}
     </main>
+    {@render corner?.()}
   </div>
 </div>
 
@@ -302,7 +309,10 @@
     padding-top: 0.4rem;
     border-top: 1px solid var(--line);
   }
-  .col { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+  /* `position: relative` para que la esquina mida contra el pane y no contra la
+     ventana. La columna no scrollea —lo hace `.pane`— así que lo que se ancla
+     aquí se queda quieto. */
+  .col { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 
   /* A row. Every selector here is scoped to `[data-scope='navigation']` on
      purpose: the ⋮ is a `Menu.Trigger`, which carries `data-part='trigger'`

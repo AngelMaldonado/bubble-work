@@ -8,6 +8,7 @@
   import Planner from './components/Planner.svelte';
   import Agenda from './components/Agenda.svelte';
   import Inventory from './components/Inventory.svelte';
+  import Repos from './components/Repos.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
@@ -262,6 +263,18 @@
   // strategic layer's job, and a screen full of verbs somebody cannot use reads
   // as a broken screen rather than as one that is not theirs.
   const isLead = $derived(me?.role === 'lead');
+
+  /** El papel AQUÍ, que no es el mismo que el global: enlazar un repositorio lo
+   *  hace el lead del workspace. Se relee al cambiar de workspace. */
+  let hereLead = $state(false);
+  $effect(() => {
+    const ws = current;
+    if (!ws) {
+      hereLead = false;
+      return;
+    }
+    api.myRole(ws.id).then((role) => (hereLead = role === 'lead'));
+  });
   const openPlanner = () => go(plannerUrl);
 
   /** Salir: se deja de latir ANTES de tirar el token, o el latido siguiente
@@ -558,6 +571,17 @@
         <NewWorkspace onDone={boot} />
       </div>
     {/if}
+
+    <!-- Dónde vive el código: la esquina de abajo a la izquierda DEL PANE.
+         Enfrente de la HUD, y dentro del board — fija contra la ventana se
+         dibujaba encima de la columna de proyectos. Sólo con un workspace
+         abierto: un repositorio pertenece a uno, y en TODOS no hay cuál
+         enseñar. -->
+    {#snippet corner()}
+      {#if current}
+        <Repos workspace={current} canWrite={hereLead} />
+      {/if}
+    {/snippet}
   </Shell>
 
   <!-- The verbs that live over the page rather than in it. The theme button
@@ -565,6 +589,7 @@
        slots, because this screen has no planner and a reserved empty place
        reads as a button that failed to draw. -->
   <Presence people={presence.around} me={api.me?.id ?? ''} />
+
 
   <div class="floats">
   {#if current}

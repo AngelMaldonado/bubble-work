@@ -19,10 +19,17 @@ echo "==> go test"
 go test -race ./... || exit 1
 
 echo "==> live"
-D=${TMPDIR:-/tmp}/bubble-test-data
+# El puerto, y con él el directorio de datos.
+#
+# Fijo bastaba mientras esto sólo corría en la máquina de quien escribe. En un
+# runner compartido —una VM que atiende varios repositorios— dos suites con el
+# mismo puerto se pisan, y el fallo parece del código. Quien comparta máquina
+# pone `BUBBLE_TEST_PORT` y se lleva su propio puerto y su propio directorio.
+PORT=${BUBBLE_TEST_PORT:-8099}
+D=${TMPDIR:-/tmp}/bubble-test-data-$PORT
 B=./dist/bubble
-API=http://127.0.0.1:8099
-R=${TMPDIR:-/tmp}/bubble-test-repos
+API=http://127.0.0.1:$PORT
+R=${TMPDIR:-/tmp}/bubble-test-repos-$PORT
 
 # Kill only OUR leftover, matched by the test port — never a bare
 # `pkill -f "bubble serve"`.
@@ -31,7 +38,7 @@ R=${TMPDIR:-/tmp}/bubble-test-repos
 # looking at in a browser. It ran at the start AND in the trap, so every
 # `just check` took down a running `just dev` twice. The tests are supposed to be
 # invisible to whoever is working.
-pkill -f "bubble serve.*8099" 2>/dev/null; sleep 0.3
+pkill -f "bubble serve.*$PORT" 2>/dev/null; sleep 0.3
 rm -rf "$D" "$R"
 [[ -x "$B" ]] || scripts/build.sh
 
@@ -41,13 +48,13 @@ no(){ echo "  FAIL  $1  -> $2"; fail=$((fail+1)); }
 chk(){ if [ "$2" = "$3" ]; then ok "$1"; else no "$1" "esperaba $3, dio $2"; fi; }
 
 "$B" superuser upsert root@bubble.test rootrootroot --dir "$D" >/dev/null 2>&1
-BUBBLE_REPOS="$R" "$B" serve --http 127.0.0.1:8099 --dir "$D" >/tmp/bubble-test.log 2>&1 &
+BUBBLE_REPOS="$R" "$B" serve --http 127.0.0.1:$PORT --dir "$D" >/tmp/bubble-test-$PORT.log 2>&1 &
 SRV=$!
 # By PID: the only process this script is entitled to end is the one it started.
 trap 'kill "$SRV" 2>/dev/null' EXIT
 for i in $(seq 1 60); do curl -sf "$API/api/health" >/dev/null 2>&1 && break; sleep 0.25; done
 if ! curl -sf "$API/api/health" >/dev/null 2>&1; then
-  echo "  el server no arrancó — ver /tmp/bubble-test.log" >&2; exit 1
+  echo "  el server no arrancó — ver /tmp/bubble-test-$PORT.log" >&2; exit 1
 fi
 
 j(){ python3 -c 'import sys,json

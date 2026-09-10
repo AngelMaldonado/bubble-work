@@ -1,0 +1,49 @@
+# La máquina que hace la ceremonia: check y release, en Linux, en casa.
+#
+#   limactl start --name=bubble-ci deploy/reko-ci.yaml
+#
+# Debian sobre Virtualization.framework, aarch64 NATIVO. La arquitectura da
+# igual para lo que esta VM aporta —semántica de Linux: bash 5 y coreutils de
+# GNU— y emular x86_64 haría lenta la suite sin ganar nada. Los binarios de
+# amd64 salen cross-compilados, que es lo que Go hace bien.
+#
+# Existe porque el cruce de sistemas es lo que encontró cinco aserciones que en
+# macOS pasaban sin llegar nunca a la regla que decían comprobar. Con el CI aquí,
+# ese cruce deja de depender de GitHub: la máquina de quien escribe es macOS y
+# la que publica es Linux.
+vmType: vz
+arch: aarch64
+
+images:
+  - location: "https://cloud.debian.org/images/cloud/bookworm/latest/debian-12-genericcloud-arm64.qcow2"
+    arch: aarch64
+
+cpus: 4
+memory: "4GiB"
+# Escaso a propósito: en reko quedan ~31 GiB libres y las otras VMs ya ocupan 33.
+# El disco es sparse, así que esto es un techo, no una reserva.
+disk: "25GiB"
+
+mountType: virtiofs
+# NADA del host montado. El CI ejecuta código de la rama que se propone en un
+# PR; que no pueda ver tu disco es la mitad de por qué vive en una VM.
+mounts: []
+
+provision:
+  - mode: system
+    script: |
+      #!/bin/bash
+      set -eux
+      apt-get update
+      # git de verdad: el árbol de markdown se escribe llamando al programa, que
+      # es el mismo con el que una persona clona y lee.
+      # python3, curl y jq los usa scripts/test.sh.
+      apt-get install -y git curl ca-certificates python3 jq
+      # docker desde el repo oficial y no el `docker.io` de Debian: ése no trae
+      # el plugin buildx, y sin buildx no hay imagen multiarco.
+      curl -fsSL https://get.docker.com | sh
+      usermod -aG docker "${LIMA_CIDATA_USER}"
+
+# Go y bun NO se instalan aquí: `setup-go` y `setup-bun` los bajan en la primera
+# corrida y quedan en la caché del runner. Fijarlos en la imagen sería una
+# segunda versión que mantener, y la que manda es la de `go.mod`.

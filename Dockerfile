@@ -3,7 +3,7 @@
 # El bundle de la interfaz está commiteado y embebido, así que construir no
 # necesita bun — sólo Go. Es la misma propiedad que hace que `just build`
 # funcione en un clon recién hecho, aprovechada aquí.
-FROM golang:1.27-alpine AS build
+FROM --platform=$BUILDPLATFORM golang:1.27-alpine AS build
 WORKDIR /src
 
 # Las dependencias primero, en su propia capa: el código cambia en cada commit y
@@ -17,7 +17,12 @@ COPY . .
 # averiguarla por su cuenta — y un binario que no sabe qué es no puede decirlo
 # cuando alguien pregunte por qué se comporta raro.
 ARG VERSION=dev
-RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/bubble .
+# Compila CRUZADO en vez de emular: la etapa corre en la arquitectura de quien
+# construye y Go produce el binario de la que se pide. Es la diferencia entre
+# sacar linux/amd64 desde una máquina arm64 en segundos o bajo qemu en minutos.
+ARG TARGETARCH
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=$TARGETARCH \
+    go build -trimpath -ldflags "-X main.version=${VERSION}" -o /out/bubble .
 
 FROM alpine:3.21
 # git de verdad, no una biblioteca: el árbol de markdown de cada workspace es un

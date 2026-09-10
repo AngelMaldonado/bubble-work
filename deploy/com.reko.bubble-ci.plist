@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Levanta la VM del CI al arrancar reko.
+
+    cp deploy/com.reko.bubble-ci.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.reko.bubble-ci.plist
+
+  Sin esto, un reinicio de la Mac deja el CI apagado y los PR se quedan en cola
+  sin decir por qué — que es la peor forma de fallar: parece lento, no roto.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.reko.bubble-ci</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/opt/homebrew/bin/limactl</string>
+    <string>start</string>
+    <string>bubble-ci</string>
+  </array>
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Sin KeepAlive: `limactl start` termina cuando la VM está arriba. Volver a
+       lanzarlo en bucle sería reiniciarla cada pocos segundos. -->
+  <key>StandardOutPath</key>
+  <string>/tmp/bubble-ci.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/bubble-ci.log</string>
+</dict>
+</plist>

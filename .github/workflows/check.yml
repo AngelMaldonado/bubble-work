@@ -16,31 +16,30 @@ on:
   pull_request:
     branches: [main]
 
-# Una corrida a la vez en esa máquina. En un runner alojado cada trabajo es una
-# VM nueva; en el nuestro comparten disco, y `scripts/test.sh` levanta el
-# servidor en un puerto fijo (8099) sobre un directorio de datos fijo. Dos PR a
-# la vez se pisarían y el fallo parecería del código.
+# Una corrida a la vez en esa máquina, y el grupo es COMPARTIDO con `release`:
+# los dos corren ahí, y los grupos de concurrencia valen para todo el
+# repositorio. En un runner alojado cada trabajo es una VM nueva; en el nuestro
+# comparten disco, y `scripts/test.sh` levanta el servidor en un puerto fijo
+# (8099) sobre un directorio de datos fijo. Dos a la vez se pisarían y el fallo
+# parecería del código.
 concurrency:
-  group: check-reko
+  group: reko-ci
   cancel-in-progress: false
 
 jobs:
   check:
-    # La Mac mini de reko, que está siempre encendida. Este repositorio es
-    # PRIVADO, así que cada corrida en un runner alojado se paga, y ésta ya no
-    # tenía nada que hacer desde que se fueron los workflows de despliegue de v0.
+    # La VM de Linux dentro de reko (ver deploy/CI.md). Este repositorio es
+    # PRIVADO, así que cada corrida en un runner alojado se paga.
     #
-    # reko y NO ayetec, que también tiene runner: `pull_request` ejecuta código
-    # de la rama que se propone, y el agente de ayetec corre con sudo sin
-    # contraseña en la máquina que sirve la instancia pública. Aquí el peor caso
-    # se queda en una máquina de la LAN.
+    # En una VM y no en el host macOS por dos razones: la suite corre con bash 5
+    # y coreutils de GNU —el cruce de sistemas que encontró cinco aserciones que
+    # en macOS pasaban sin llegar a la regla que decían comprobar— y el código
+    # de un PR se ejecuta donde no se ve el disco de nadie y se puede resetear.
     #
-    # El `release` se queda en ubuntu alojado a propósito: es el segundo par de
-    # ojos en LINUX. La primera vez que corrió encontró cinco aserciones que en
-    # macOS pasaban sin llegar nunca a la regla que decían comprobar. Un CI que
-    # sólo mira desde el mismo sistema que la máquina de quien escribe no es un
-    # segundo par de ojos.
-    runs-on: [self-hosted, reko]
+    # Y NO en ayetec, que también tiene runner: ése corre con sudo sin
+    # contraseña en la máquina que sirve la instancia pública, y `pull_request`
+    # ejecuta código de la rama que se propone.
+    runs-on: [self-hosted, reko-linux]
     steps:
       - uses: actions/checkout@v4
         with:

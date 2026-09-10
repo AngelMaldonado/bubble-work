@@ -1,0 +1,38 @@
+# Bubble Work sin contenedor: sólo el binario.
+#
+#   sudo cp deploy/bubble.service /etc/systemd/system/
+#   sudo systemctl enable --now bubble
+#
+# Las DOS rutas van explícitas, y no es ceremonia. Sin `--dir` y sin
+# `BUBBLE_REPOS`, el binario crea `pb_data/` y `repos/` en el directorio desde
+# el que se lanzó — que en una unidad de systemd sin `WorkingDirectory=` es `/`.
+# Y si un día arranca desde otro sitio, se crea una instancia nueva y vacía
+# mientras la anterior parece haber desaparecido.
+[Unit]
+Description=Bubble Work
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bubble
+Group=bubble
+WorkingDirectory=/var/lib/bubble
+Environment=BUBBLE_REPOS=/var/lib/bubble/repos
+ExecStart=/usr/local/bin/bubble serve --http 127.0.0.1:8090 --dir /var/lib/bubble/pb_data
+Restart=on-failure
+RestartSec=5
+
+# El árbol de markdown lo escribe git de verdad, llamando al programa: sin él
+# el servidor arranca y falla en la primera escritura.
+#
+# Sólo /var/lib/bubble es escribible. El resto del disco no tiene por qué serlo,
+# y una instancia que sólo puede tocar su propio estado es una que no se lleva
+# nada por delante si algo sale mal.
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ReadWritePaths=/var/lib/bubble
+
+[Install]
+WantedBy=multi-user.target

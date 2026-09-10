@@ -386,3 +386,90 @@ body::before {
   background: var(--scrim);
   backdrop-filter: blur(2px);
 }
+
+/* El calendario, una sola vez.
+ *
+ * Vivía dentro de la tarjeta del planeador, que es donde nació; la segunda
+ * pantalla que pidió una fecha —el inventario, con su renovación— habría
+ * necesitado una copia, y dos copias del mismo calendario se ven distinto la
+ * semana en que alguien toca una. Las clases se pasan como props a los
+ * componentes de Skeleton, así que no hay `:global` que valga: aquí ya es CSS
+ * de la aplicación.
+ */
+.dp-control {
+  /* La caja la pone `.input` de Skeleton, que es la misma que llevan los demás
+     campos de la hoja: un calendario que se ve distinto al campo de al lado
+     parece de otro formulario. Esto sólo lo vuelve una FILA, para que el 🗓
+     quepa dentro del borde en vez de quedar como un botón aparte. */
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+/* El campo de dentro NO es otra caja.
+ *
+ * Skeleton estiliza su `input` por parte, con su propio borde, su radio y su
+ * fondo; dentro de un control que ya es la caja, eso se lee como una caja
+ * dibujada dentro de otra. Se apunta al `data-part` y no al elemento porque por
+ * elemento la regla de Skeleton gana y el borde de dentro se quedaba. */
+.dp-control input,
+.dp-control [data-part='input'] {
+  min-width: 0;
+  flex: 1;
+  padding: 0.15rem 0.25rem;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  box-shadow: none;
+  color: var(--text);
+  font-size: 0.85rem;
+  outline: none;
+}
+.dp-control [data-part='trigger'] {
+  flex: none;
+  padding: 0 0.15rem;
+  border: none;
+  background: transparent;
+  color: var(--faint);
+  font-size: 0.9rem;
+  line-height: 1;
+}
+.dp-control [data-part='trigger']:hover { color: var(--text); }
+  .dp-content {
+    padding: 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-solid);
+    box-shadow: 0 20px 50px var(--shadow-strong);
+    z-index: var(--z-float);
+  }
+  .dp-nav {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.5rem;
+    padding-bottom: 0.4rem;
+    color: var(--muted);
+    font-size: 0.82rem;
+    font-weight: 700;
+  }
+  .dp-content [data-part='table-header'] {
+    padding: 0.2rem;
+    color: var(--faint);
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .dp-content [data-part='table-cell-trigger'] {
+    display: grid;
+    place-content: center;
+    width: 2rem;
+    height: 2rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+  }
+  .dp-content [data-part='table-cell-trigger']:hover { background: var(--hover); }
+  .dp-content [data-part='table-cell-trigger'][data-selected] {
+    background: var(--accent);
+    color: var(--bg);
+    font-weight: 700;
+  }
+  .dp-content [data-part='table-cell-trigger'][data-outside-range] { opacity: 0.35; }

@@ -4,3 +4,7 @@
 /repos/
 *.db
 .DS_Store
+
+# Generados desde `simple-icons` por `bun run logos`: una dependencia fijada
+# reproduce 3459 archivos, y versionarlos ensucia cada diff a cambio de nada.
+frontend/public/logos/

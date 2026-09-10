@@ -1202,6 +1202,89 @@ dropdown that writes nowhere is a control that lies.
 
 **Done when:** a lead triages an inbox item into a thread without leaving the view.
 
+## Inventario — dónde vive lo que hace funcionar todo esto
+
+VPS, dominios, servicios contratados, licencias. No es trabajo y **no calienta
+nada**: documentar un servidor no es evidencia de que la realidad cambió, igual
+que capturar en el inbox. Pero es lo primero que alguien busca a las tres de la
+mañana, y hasta ahora vivía en la cabeza de una persona o en un chat que nadie
+encuentra.
+
+Del departamento y no de un workspace: un VPS no es de un proyecto, los
+proyectos viven encima de él.
+
+**Verlo se ASIGNA, y se asigna con una fila** (`inventory_access`). Es como se
+dice pertenecer en todo el resto de este modelo — una membresía es una fila —
+y es la razón de no haber usado un booleano en `users`: un tercer eje sobre el
+rol, invisible desde el lado del inventario y difícil de auditar. Una fila se ve,
+se quita, y dice quién la dio. Cada quien lee SU propia fila y ninguna más, así
+que la aplicación puede preguntarse «¿me toca?» sin pedir permiso para averiguar
+si tiene permiso; el lead global las ve todas, porque repartirlas es su trabajo.
+
+Dos niveles, porque «¿dónde está el DNS?» y «¿cuándo se renueva ESTE dominio?»
+son preguntas distintas y una lista plana de cuarenta filas no contesta bien
+ninguna: una galería de `inventory_groups` —datos, no un `select` en el código,
+porque qué clases de cosas se contratan cambia sin que nadie recompile— y sus
+`inventory_items` dentro, con proveedor, costo, fecha de renovación y notas en
+markdown. La renovación es el campo que le gana la pantalla: un dominio que
+expira es el clásico «nadie se dio cuenta».
+
+**Nunca credenciales.** Hay un campo para el enlace a la bóveda: el inventario
+dice DÓNDE está la contraseña, no cuál es. Un inventario que guarda secretos es
+una brecha con buen diseño, y la primera persona que pegue una ahí lo hará
+porque el campo existía.
+
+Las imágenes van como archivo de PocketBase y no a `assets/`: ese árbol es el
+repositorio de un proyecto, y una factura de dominio no pertenece a ninguno.
+
+Un error que dejó una prueba escrita: la regla de acceso era
+`@collection.inventory_access.user ?= @request.auth.id`, y con CERO filas eso
+compara vacío contra vacío y da verdadero — el inventario se veía entero desde
+una sesión anónima, y justo mientras estaba vacío, que es cuando nadie lo
+habría notado. Un armario que se abre solo hasta que alguien le pone la primera
+llave.
+
+## Versioning and release
+
+**A version is a binary, and a tag is what names it.** `scripts/build.sh`
+already stamps `git describe --tags --always --dirty` into `main.version`, so a
+deployed binary can say what it is; tagging is the only thing that was missing.
+
+**Conventional Commits, keeping the sentence.** The convention constrains the
+first line's prefix and nothing else, so `feat: un documento no decía cuánto
+había cambiado` keeps the voice this repo has used since the beginning — a
+subject that says what was WRONG, which is more than an imperative says.
+Adopting the convention's imperative style as well was rejected: it would flatten
+that for no machine-readable gain.
+
+**Releases are automatic, from CI, to GitHub.** A push to the main branch runs
+the checks and, when the commits since the last tag warrant it, cuts the tag,
+writes the release notes from those commits, and attaches the built binary.
+Nobody decides a number by hand, and nobody writes a changelog twice.
+
+Rejected, and worth writing down: cutting tags by hand (`git tag -a`) is what
+this was doing implicitly and it does not survive two people or a bad Friday —
+the number gets skipped, or the changelog is written from memory. `cocogitto`
+and `git-cliff` both do part of it well and still leave a human running a command
+on a laptop, which is the step that stops happening.
+
+**What BREAKING means here is not the HTTP API.** This is a self-hosted binary,
+so the contract that can hurt somebody is their data and their agents:
+
+  · a migration that cannot be rolled back — the database belongs to whoever
+    hosts it, and `just migrate down` has to remain an honest offer;
+  · an MCP tool that disappears or changes shape — an agent configured last
+    month stops working, and it will not say why in a way its person can act on.
+
+A change to the interface, however large it looks, breaks nothing that somebody
+else depends on.
+
+**Numbering starts at `v2.0.0-alpha.N`.** `v2.0.0` would claim v2 is delivered
+while phase 6 has not started, and the one existing tag —
+`v0-plane-as-record` — is an archive marker rather than a version. The alpha
+prefix ends when the v0 databases have been migrated and this can hold the only
+copy of somebody's writing.
+
 ### Phase 6 — migration
 Read the two v0 `bubble.db` files: mint local ids, write the markdown tree from
 `thread_docs` and `local_pages`, and backfill `events` from the timestamps that

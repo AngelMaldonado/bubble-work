@@ -645,45 +645,6 @@
     font-size: 0.8rem;
   }
 
-  :global(.dp-content) {
-    padding: 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--surface-solid);
-    box-shadow: 0 20px 50px var(--shadow-strong);
-    z-index: var(--z-float);
-  }
-  :global(.dp-nav) {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 0.5rem;
-    padding-bottom: 0.4rem;
-    color: var(--muted);
-    font-size: 0.82rem;
-    font-weight: 700;
-  }
-  :global(.dp-content [data-part='table-header']) {
-    padding: 0.2rem;
-    color: var(--faint);
-    font-size: 0.7rem;
-    font-weight: 600;
-  }
-  :global(.dp-content [data-part='table-cell-trigger']) {
-    display: grid;
-    place-content: center;
-    width: 2rem;
-    height: 2rem;
-    border-radius: 8px;
-    font-size: 0.8rem;
-  }
-  :global(.dp-content [data-part='table-cell-trigger']:hover) { background: var(--hover); }
-  :global(.dp-content [data-part='table-cell-trigger'][data-selected]) {
-    background: var(--accent);
-    color: var(--bg);
-    font-weight: 700;
-  }
-  :global(.dp-content [data-part='table-cell-trigger'][data-outside-range]) { opacity: 0.35; }
 
 
   /* Trello's shape: the list above the title, the title with a status mark, one

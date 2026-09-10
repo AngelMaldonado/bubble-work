@@ -131,6 +131,36 @@ export type Comment = {
   mine: boolean;
 };
 
+/** El inventario: dónde vive lo que hace funcionar todo esto. No es trabajo y no
+ *  calienta nada; es lo primero que alguien busca a las tres de la mañana. */
+export type InvGroup = {
+  id: string;
+  name: string;
+  note?: string;
+  /** el slug de la pieza que lo representa — `computer`, `key`, `servidor`… */
+  art?: string;
+  image?: string;
+  /** cuántas cosas hay dentro — la galería lo dice sin abrir el grupo */
+  items?: number;
+  position?: number;
+};
+
+export type InvItem = {
+  id: string;
+  group: string;
+  name: string;
+  art?: string;
+  provider?: string;
+  url?: string;
+  /** el enlace a la bóveda. NUNCA la contraseña. */
+  vault?: string;
+  notes?: string;
+  renews_at?: string;
+  cost?: string;
+  image?: string;
+  position?: number;
+};
+
 export type Doc = {
   workspace: string;
   path: string;
@@ -381,6 +411,85 @@ class Api {
       '/api/collections/users/records?perPage=500&sort=display_name,email',
     );
     return out.items;
+  }
+
+  // ---- el inventario ------------------------------------------------------
+  //
+  // Verlo se ASIGNA, y se asigna con una fila. Preguntar "¿me toca?" es leer la
+  // propia: la regla deja ver la tuya y ninguna más, así que la aplicación puede
+  // averiguar si tiene permiso sin pedir permiso para averiguarlo.
+  async seesInventory() {
+    if (this.me?.role === 'lead') return true;
+    try {
+      const out = await this.call<{ totalItems: number }>(
+        `/api/collections/inventory_access/records?perPage=1` +
+          `&filter=${encodeURIComponent(`user='${this.me?.id ?? ''}'`)}`,
+      );
+      return out.totalItems > 0;
+    } catch {
+      return false;
+    }
+  }
+
+  /** Quién puede verlo. Sólo el lead global lo lee entero: repartirlo es su
+   *  trabajo. */
+  async inventoryAccess() {
+    const out = await this.call<{
+      items: { id: string; user: string; expand?: { user?: { display_name?: string; email?: string } } }[];
+    }>('/api/collections/inventory_access/records?perPage=200&expand=user');
+    return out.items.map((r) => ({
+      id: r.id,
+      user: r.user,
+      name: r.expand?.user?.display_name || r.expand?.user?.email || 'sin nombre',
+    }));
+  }
+
+  grantInventory(user: string) {
+    return this.create<{ id: string }>('inventory_access', { user });
+  }
+
+  async invGroups(): Promise<InvGroup[]> {
+    const out = await this.call<{ items: (InvGroup & { collectionId: string })[] }>(
+      '/api/collections/inventory_groups/records?perPage=200&sort=position,name',
+    );
+    // Las cuentas se piden aparte y en una sola llamada: una galería que cuesta
+    // una petición por tarjeta es una galería que se deja de dibujar.
+    const items = await this.call<{ items: { group: string }[] }>(
+      '/api/collections/inventory_items/records?perPage=500&fields=group',
+    );
+    const by: Record<string, number> = {};
+    for (const i of items.items) by[i.group] = (by[i.group] ?? 0) + 1;
+    return out.items.map((g) => ({
+      ...g,
+      items: by[g.id] ?? 0,
+      image: g.image ? this.fileUrl('inventory_groups', g.id, String(g.image)) : '',
+    }));
+  }
+
+  createInvGroup(fields: { name: string; note?: string; art?: string }) {
+    return this.create<{ id: string }>('inventory_groups', fields);
+  }
+
+  createInvItem(fields: Record<string, unknown>) {
+    return this.create<{ id: string }>('inventory_items', fields);
+  }
+
+  async invItems(group: string): Promise<InvItem[]> {
+    const out = await this.call<{ items: (InvItem & { collectionId: string })[] }>(
+      `/api/collections/inventory_items/records?perPage=500&sort=position,name` +
+        `&filter=${encodeURIComponent(`group='${group}'`)}`,
+    );
+    return out.items.map((i) => ({
+      ...i,
+      image: i.image ? this.fileUrl('inventory_items', i.id, String(i.image)) : '',
+    }));
+  }
+
+  /** La url de un archivo de PocketBase. Las imágenes del inventario no van a
+   *  `assets/` del workspace a propósito: ese árbol es de un proyecto, y una
+   *  factura de dominio no pertenece a ninguno. */
+  fileUrl(collection: string, id: string, file: string) {
+    return `/api/files/${collection}/${id}/${file}`;
   }
 
   /** Lo dicho en un thread, del más viejo al más nuevo: una conversación se lee

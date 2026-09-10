@@ -931,6 +931,43 @@ chk ">>> pero el documento propio de un thread no se borra por esa puerta" \
   "$(mcptext "$A" delete_page "$ARG" | grep -c "goes when the thread does")" 1
 
 
+# ---------------------------------------------------------- inventario ----
+#
+# Dónde vive lo que hace funcionar todo esto. VERLO se asigna, y se asigna con
+# una fila: es como se dice pertenecer en todo el resto de este modelo.
+echo
+GRP=$(post inventory_groups "$C" '{"name":"VPS","note":"máquinas que sostienen esto"}' | j "['id']")
+chk ">>> el lead global levanta un grupo del inventario" "$([ -n "$GRP" ] && echo si || echo no)" si
+chk ">>> ...y un lead de workspace NO: el inventario es del departamento" \
+  "$(pcode inventory_groups "$A" '{"name":"Mío"}')" 400
+ITM=$(post inventory_items "$C" "{\"group\":\"$GRP\",\"name\":\"vps-01\",\"provider\":\"Hetzner\",\"cost\":\"6 EUR/mes\",\"renews_at\":\"2027-01-01 00:00:00.000Z\"}" | j "['id']")
+chk ">>> ...y una cosa dentro, con su proveedor y su renovación" "$([ -n "$ITM" ] && echo si || echo no)" si
+
+chk ">>> sin asignación NO se ve: ni los grupos" \
+  "$(list inventory_groups "$A" | j "['totalItems']")" 0
+chk ">>> ...ni lo que hay dentro" \
+  "$(list inventory_items "$A" | j "['totalItems']")" 0
+# Con cero filas de acceso, "vacío ?= vacío" daba verdadero y el inventario se
+# veía desde una sesión anónima — vacío, que es cuando nadie lo habría notado.
+chk ">>> anónimo tampoco, ni siquiera con el inventario recién creado" \
+  "$(curl -s "$API/api/collections/inventory_groups/records" | j "['totalItems']")" 0
+
+chk ">>> asignar el acceso es escribir una FILA" \
+  "$(pcode inventory_access "$C" "{\"user\":\"$AID\"}")" 200
+chk ">>> ...y con ella alice ya lo ve" \
+  "$(list inventory_groups "$A" | j "['totalItems']")" 1
+chk ">>> ...pero bob sigue sin verlo" \
+  "$(list inventory_groups "$B" | j "['totalItems']")" 0
+chk ">>> nadie se asigna a sí mismo" \
+  "$(pcode inventory_access "$B" "{\"user\":\"$BID\"}")" 400
+chk ">>> quien mira sólo ve SU propia asignación, para poder preguntarse si le toca" \
+  "$(list inventory_access "$A" | j "['totalItems']")" 1
+chk ">>> y con acceso se LEE, pero no se escribe: el armario es del lead" \
+  "$(pcode inventory_items "$A" "{\"group\":\"$GRP\",\"name\":\"mío\"}")" 400
+curl -s -o /dev/null -X DELETE "$API/api/collections/inventory_groups/records/$GRP" -H "Authorization: $C"
+chk ">>> borrar un grupo se lleva lo que había dentro" \
+  "$(list inventory_items "$C" | j "['totalItems']")" 0
+
 # ------------------------------------------------------------ imágenes ----
 echo
 PNG=/tmp/bubble-test.png

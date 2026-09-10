@@ -1,12 +1,13 @@
 <script lang="ts">
   import { api, type Board as BoardData, type Person, type ThreadHeat, type Workspace } from './lib/api';
-  import { allUrl, boardUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
   import Wiki from './components/Wiki.svelte';
   import Planner from './components/Planner.svelte';
   import Agenda from './components/Agenda.svelte';
+  import Inventory from './components/Inventory.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
@@ -41,6 +42,10 @@
   // never again. That is how "eres lead" stayed false after the answer arrived,
   // and why a screen gated on it looked like a button that did nothing.
   let me = $state<Person | null>(null);
+  // Ver el inventario se ASIGNA, así que la fila del sidebar sólo existe para
+  // quien lo tiene: un lugar al que no puedes entrar, listado, es una puerta
+  // cerrada con tu nombre encima.
+  let seesInv = $state(false);
   let workspaces = $state<Workspace[]>([]);
 
   // Which workspace is on screen is a question the address answers. Landing on
@@ -85,6 +90,7 @@
       // Says "here" and starts reading everybody else's. Only once signed in:
       // presence is about people, and there is nobody yet.
       presence.start();
+      api.seesInventory().then((yes) => (seesInv = yes));
     }
     ready = true;
   }
@@ -320,6 +326,9 @@
           { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
           { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
           { id: 'people', icon: '👥', title: 'Personas de este workspace', hint: 'invitar · roles', run: () => (crew = true) },
+    ...(seesInv
+      ? [{ id: 'inventory', icon: '🗄', title: 'Abrir el inventario', hint: 'VPS · dominios · servicios', run: () => go(inventoryUrl) }]
+      : []),
         ]
       : []),
     { id: 'all', icon: '∗', title: 'Todos los workspaces', hint: 'un board · Shift+Tab', run: () => go(allUrl) },
@@ -455,6 +464,13 @@
     onback={back}
     onsearch={() => (omni = true)}
     onopen={(slug, seq) => go(threadUrl(slug, seq))} />
+{:else if route.kind === 'inventory' && signedIn}
+  <!-- Guardado en la DIRECCIÓN y no sólo en la fila del sidebar: esconder un
+       lugar no es cerrarlo, y un enlace pegado en un chat es exactamente cómo se
+       entra a una pantalla que no es tuya. Quien no lo tiene asignado ve una
+       galería vacía porque el servidor no le manda nada — así que además se lo
+       decimos. -->
+  <Inventory onback={back} onsearch={() => (omni = true)} canWrite={isLead} />
 {:else if route.kind === 'thread'}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. It is resolved from the address, so this is also
@@ -496,9 +512,16 @@
       // ningún proyecto.
       { id: 'all', name: 'Todos', face: '∗', href: allUrl },
       { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
+      ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
     ]}
-    pinned={route.kind === 'planner' ? 'planner' : isAll ? 'all' : ''}
-    onpin={(id) => go(id === 'all' ? allUrl : plannerUrl)}
+    pinned={route.kind === 'planner'
+      ? 'planner'
+      : route.kind === 'inventory'
+        ? 'inventory'
+        : isAll
+          ? 'all'
+          : ''}
+    onpin={(id) => go(id === 'all' ? allUrl : id === 'inventory' ? inventoryUrl : plannerUrl)}
     onsignout={signOut}
     current={current?.id ?? ''}
     label="Workspaces"

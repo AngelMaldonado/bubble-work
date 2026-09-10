@@ -25,6 +25,7 @@ export type Route =
   | { kind: 'thread'; slug: string; seq: number }
   | { kind: 'wiki'; slug: string; page: string }
   | { kind: 'planner' }
+  | { kind: 'inventory' }
   | { kind: 'theme' }
   | { kind: 'mock' };
 
@@ -33,6 +34,7 @@ export function parse(pathname: string): Route {
   if (p === '/theme') return { kind: 'theme' };
   if (p === '/theme/mock') return { kind: 'mock' };
   if (p === '/planeador') return { kind: 'planner' };
+  if (p === '/inventario') return { kind: 'inventory' };
   // Todos es una DIRECCIÓN y no un filtro guardado: mirar todos los proyectos a
   // la vez es una pantalla, y una pantalla que no se puede enlazar es una
   // pantalla que no se puede mandar a nadie.
@@ -54,3 +56,4 @@ export const threadUrl = (slug: string, seq: number) => `/w/${slug}/t/${seq}`;
 export const wikiUrl = (slug: string, page: string) =>
   `/w/${slug}/wiki/${page.split('/').map(encodeURIComponent).join('/')}`;
 export const plannerUrl = '/planeador';
+export const inventoryUrl = '/inventario';

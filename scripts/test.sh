@@ -1017,6 +1017,24 @@ curl -s -o /dev/null -X DELETE "$API/api/collections/inventory_groups/records/$G
 chk ">>> borrar un grupo se lleva lo que había dentro" \
   "$(list inventory_items "$C" | j "['totalItems']")" 0
 
+# ------------------------------------------------------- publicar ----
+#
+# Los dos scripts que deciden la versión y escriben sus notas. Se prueban por su
+# CÓDIGO DE SALIDA porque así es como los usa el CI, y así es como falló el
+# primer release: `notes.sh` terminaba en `[[ -n "$last" ]] && echo …`, y con la
+# primera versión —que no tiene ninguna anterior— ese test es falso, el script
+# salía 1 y el workflow moría sin haber tageado nada.
+echo
+scripts/version.sh >/dev/null 2>&1
+chk ">>> version.sh sale bien aunque no haya nada que publicar" "$?" 0
+scripts/notes.sh >/dev/null 2>&1
+chk ">>> notes.sh sale bien aunque una sección quede vacía" "$?" 0
+# Que además DIGA algo: este repositorio lleva `feat:` desde hace muchos
+# commits, así que unas notas sin una sola sección serían un sed que dejó de
+# reconocer la convención.
+chk ">>> ...y las notas traen al menos una sección" \
+  "$([ "$(scripts/notes.sh | grep -c '^### ')" -ge 1 ] && echo si || echo no)" si
+
 # ------------------------------------------------------------- repos ----
 #
 # Dónde vive el CÓDIGO. Una fila por repositorio, del workspace: lo ven sus

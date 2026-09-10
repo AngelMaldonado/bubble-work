@@ -15,10 +15,21 @@ last="${1:-$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' 2>/d
 range="HEAD"
 [[ -n "$last" ]] && range="$last..HEAD"
 
+# `if` y no `[[ … ]] && { … }`, que es lo que hizo fallar el primer release.
+#
+# Con `set -e`, una función cuyo ÚLTIMO comando es un `[[ ]]` falso devuelve 1, y
+# una función que devuelve 1 mata el script. Una sección vacía —ningún `fix:` en
+# esta versión, por ejemplo— es un caso normal, no un error, y estaba abortando
+# la publicación entera.
 section() { # $1 título, $2 regex de tipos
   local body
   body="$(git log --format='%s' "$range" | sed -nE "s/^($2)(\([^)]+\))?!?: (.*)/- \3/p")"
-  [[ -n "$body" ]] && { echo "### $1"; echo; echo "$body"; echo; }
+  if [[ -n "$body" ]]; then
+    echo "### $1"
+    echo
+    echo "$body"
+    echo
+  fi
 }
 
 breaking="$(git log --format='%s%n%b%n--' "$range" | sed -nE 's/^BREAKING CHANGE: (.*)/- \1/p')"
@@ -37,4 +48,12 @@ section "Nuevo" "feat"
 section "Arreglado" "fix|perf"
 section "Por dentro" "refactor|build|ci|test"
 
-[[ -n "$last" ]] && echo "Desde \`$last\`."
+# La PRIMERA versión no tiene desde dónde: no hay ninguna anterior, y decirlo
+# así —callándolo— es más honesto que inventar un punto de partida.
+if [[ -n "$last" ]]; then
+  echo "Desde \`$last\`."
+fi
+
+# Explícito, y por la misma razón: el último comando de un script es su código de
+# salida, y aquí terminar sin nada que decir es éxito.
+exit 0

@@ -16,9 +16,31 @@ on:
   pull_request:
     branches: [main]
 
+# Una corrida a la vez en esa máquina. En un runner alojado cada trabajo es una
+# VM nueva; en el nuestro comparten disco, y `scripts/test.sh` levanta el
+# servidor en un puerto fijo (8099) sobre un directorio de datos fijo. Dos PR a
+# la vez se pisarían y el fallo parecería del código.
+concurrency:
+  group: check-reko
+  cancel-in-progress: false
+
 jobs:
   check:
-    runs-on: ubuntu-latest
+    # La Mac mini de reko, que está siempre encendida. Este repositorio es
+    # PRIVADO, así que cada corrida en un runner alojado se paga, y ésta ya no
+    # tenía nada que hacer desde que se fueron los workflows de despliegue de v0.
+    #
+    # reko y NO ayetec, que también tiene runner: `pull_request` ejecuta código
+    # de la rama que se propone, y el agente de ayetec corre con sudo sin
+    # contraseña en la máquina que sirve la instancia pública. Aquí el peor caso
+    # se queda en una máquina de la LAN.
+    #
+    # El `release` se queda en ubuntu alojado a propósito: es el segundo par de
+    # ojos en LINUX. La primera vez que corrió encontró cinco aserciones que en
+    # macOS pasaban sin llegar nunca a la regla que decían comprobar. Un CI que
+    # sólo mira desde el mismo sistema que la máquina de quien escribe no es un
+    # segundo par de ojos.
+    runs-on: [self-hosted, reko]
     steps:
       - uses: actions/checkout@v4
         with:

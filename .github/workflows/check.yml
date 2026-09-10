@@ -16,14 +16,16 @@ on:
   pull_request:
     branches: [main]
 
-# Una corrida a la vez en esa máquina, y el grupo es COMPARTIDO con `release`:
-# los dos corren ahí, y los grupos de concurrencia valen para todo el
-# repositorio. En un runner alojado cada trabajo es una VM nueva; en el nuestro
-# comparten disco, y `scripts/test.sh` levanta el servidor en un puerto fijo
-# (8099) sobre un directorio de datos fijo. Dos a la vez se pisarían y el fallo
-# parecería del código.
+# Una corrida a la vez de ESTE repositorio, y el grupo es COMPARTIDO con
+# `release`: los dos corren en la misma VM, y los grupos de concurrencia valen
+# para todo el repositorio. En un runner alojado cada trabajo es una VM nueva;
+# en el nuestro comparten disco, y la suite levanta un servidor sobre un
+# directorio de datos. Dos a la vez se pisarían y el fallo parecería del código.
+#
+# Entre REPOSITORIOS la concurrencia de GitHub no cruza: eso lo resuelve
+# `BUBBLE_TEST_PORT`, que le da a cada proyecto su puerto y su directorio.
 concurrency:
-  group: reko-ci
+  group: bubble-work-ci
   cancel-in-progress: false
 
 jobs:
@@ -39,7 +41,7 @@ jobs:
     # Y NO en ayetec, que también tiene runner: ése corre con sudo sin
     # contraseña en la máquina que sirve la instancia pública, y `pull_request`
     # ejecuta código de la rama que se propone.
-    runs-on: [self-hosted, reko-linux]
+    runs-on: [self-hosted, reko-ci]
     steps:
       - uses: actions/checkout@v4
         with:

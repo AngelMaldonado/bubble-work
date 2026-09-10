@@ -17,7 +17,7 @@ on:
 # vale para todo el repositorio. Además, un release a la vez — dos calcularían
 # el mismo número siguiente y el segundo pisaría el tag del primero.
 concurrency:
-  group: reko-ci
+  group: bubble-work-ci
   cancel-in-progress: false
 
 permissions:
@@ -29,7 +29,7 @@ jobs:
     # La misma VM que el `check` (deploy/CI.md). Publicar depende de que reko
     # esté encendida: es el precio de no pagar minutos, y si algún día hace
     # falta que no dependa de casa, `ubuntu-latest` vuelve en una línea.
-    runs-on: [self-hosted, reko-linux]
+    runs-on: [self-hosted, reko-ci]
     steps:
       - uses: actions/checkout@v4
         with:

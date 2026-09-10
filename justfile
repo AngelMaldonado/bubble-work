@@ -76,6 +76,18 @@ superuser *ARGS:
     scripts/build.sh
     {{env('BUBBLE_BIN', './dist/bubble')}} superuser {{ARGS}} --dir {{env('BUBBLE_DATA', './pb_data')}}
 
+# ---- publicar ----
+
+# Qué versión saldría de lo que hay commiteado, y con qué notas. No publica.
+# Publicar lo hace el CI al empujar a main: nadie decide un número a mano.
+release-preview:
+    @echo "siguiente: $(scripts/version.sh || echo '(nada que publicar)')"
+    @scripts/notes.sh
+
+# Actualizar ESTA máquina si aloja una instancia (necesita compose.yml y docker).
+update *ARGS:
+    scripts/update.sh {{ARGS}}
+
 # ---- cleaning ----
 
 # Remove build output. Leaves the data directory alone, on purpose.

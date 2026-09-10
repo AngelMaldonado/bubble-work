@@ -7,6 +7,7 @@ package main
 
 import (
 	"log"
+	"net/http"
 	"os"
 
 	"github.com/pocketbase/pocketbase"
@@ -60,6 +61,19 @@ func main() {
 	// The agent surface. Every tool calls the same function the REST route calls,
 	// so the two cannot drift and neither can bypass what the other enforces.
 	mcpapi.Register(app, t)
+
+	// Qué está corriendo aquí. Sin sesión y sin tocar la base a propósito: es la
+	// comprobación de salud del contenedor y lo que mira un actualizador antes y
+	// después de cambiar la imagen, y una respuesta que necesita la base no
+	// distingue "arrancando" de "roto". La versión de un binario autoalojado no
+	// es un secreto: quien puede pedirla puede leer el mismo número en la
+	// interfaz.
+	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
+		se.Router.GET("/api/version", func(e *core.RequestEvent) error {
+			return e.JSON(http.StatusOK, map[string]string{"version": version})
+		})
+		return se.Next()
+	})
 
 	// The SPA, last: a catch-all route must not shadow /api or /mcp, and
 	// registering it after them is what keeps that true. `true` serves index.html

@@ -417,6 +417,18 @@ class Api {
     return out.items;
   }
 
+  /** Qué está corriendo. Sin sesión: es la misma respuesta que mira el
+   *  healthcheck del contenedor, y una que necesitara sesión no serviría para
+   *  eso. */
+  async version(): Promise<string> {
+    try {
+      const out = await this.call<{ version: string }>('/api/version');
+      return out.version ?? '';
+    } catch {
+      return '';
+    }
+  }
+
   // ---- dónde vive el código ----------------------------------------------
   //
   // Una fila por repositorio. No es el árbol de markdown del workspace —ése lo

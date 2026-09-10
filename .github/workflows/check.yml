@@ -1,0 +1,32 @@
+# Lo mismo que corre antes de cada commit, corriendo también aquí.
+#
+# `scripts/check.sh` y no una lista de pasos de Actions: dos definiciones de "qué
+# tiene que pasar" se separan, y la que se rompe siempre es la que nadie mira.
+name: check
+
+on:
+  pull_request:
+  push:
+    branches: [main, wip]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          # El historial entero: `scripts/build.sh` sella la versión con
+          # `git describe`, y un clon superficial no tiene tags que describir.
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # bun para el type-check de la interfaz. `check.sh` se lo salta si no está,
+      # y saltárselo aquí sería no comprobarlo en ningún sitio.
+      - uses: oven-sh/setup-bun@v2
+      - run: cd frontend && bun install --frozen-lockfile
+
+      - run: scripts/check.sh

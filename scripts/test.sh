@@ -772,6 +772,14 @@ r=d.get("result",{})
 c=r.get("content") or []
 print(c[0]["text"] if c else json.dumps(d))'; }
 
+# Qué está corriendo aquí. Sin sesión y sin tocar la base: es la comprobación de
+# salud del contenedor y lo que mira el actualizador antes y después de cambiar
+# la imagen.
+chk ">>> /api/version contesta sin sesión" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/version")" 200
+chk ">>> ...y dice qué versión es" \
+  "$(curl -s "$API/api/version" | python3 -c 'import sys,json;print(bool(json.load(sys.stdin).get("version")))')" True
+
 chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])

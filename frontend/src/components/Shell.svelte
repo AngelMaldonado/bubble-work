@@ -39,6 +39,7 @@
     pinned = '',
     current = '',
     label = 'Proyectos',
+    version = '',
     newLabel = 'Nuevo',
     pane = $bindable<HTMLElement | null>(null),
     onselect,
@@ -58,6 +59,8 @@
     pinned?: string;
     current?: string;
     label?: string;
+    /** qué versión corre el servidor, o el entorno cuando no es una versión */
+    version?: string;
     newLabel?: string;
     pane?: HTMLElement | null;
     onselect?: (id: string) => void;
@@ -257,6 +260,17 @@
                 <Navigation.TriggerText>Salir</Navigation.TriggerText>
               </Navigation.Trigger>
             {/if}
+
+            <!-- Y debajo de todo, qué versión es esto. Chico y apagado: no es
+                 un control, es una respuesta a una pregunta que sólo se hace
+                 cuando algo va mal — y un producto autoalojado donde nadie sabe
+                 qué versión tiene es uno que nunca se actualiza.
+                 También en el rail: `v1.0.0` y `dev` caben en esa anchura, y
+                 esconderlo justo ahí lo escondía de quien trabaja con la columna
+                 estrecha, que es quien más tiempo pasa mirándola. -->
+            {#if version}
+              <p class="ver" title={version}>{version}</p>
+            {/if}
           </Navigation.Menu>
         </Navigation.Footer>
       {/if}
@@ -435,4 +449,13 @@
   }
 
   .pane { min-width: 0; flex: 1; overflow-y: auto; }
+
+  .ver {
+    padding: 0.15rem 0.35rem 0.1rem;
+    color: var(--faint);
+    font-size: 0.68rem;
+    font-variant-numeric: tabular-nums;
+    text-align: center;
+    user-select: text;
+  }
 </style>

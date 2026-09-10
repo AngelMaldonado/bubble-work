@@ -1336,6 +1336,53 @@ the number gets skipped, or the changelog is written from memory. `cocogitto`
 and `git-cliff` both do part of it well and still leave a human running a command
 on a laptop, which is the step that stops happening.
 
+**Actualizar una instancia: ella TIRA, el CI no empuja.** *(built)* Un despliegue
+por SSH desde Actions necesita una llave con acceso al servidor guardada en el
+repositorio, no alcanza una instancia detrás de NAT, y si la máquina estaba
+apagada ese día el evento se pierde. Tirando, añadir una instancia cuesta cero y
+ese secreto no existe.
+
+Las piezas: el CI publica en cada tag los binarios y una imagen multiarco en
+GHCR (`:stable` es el canal, el tag con número congela); `compose.yml` describe
+una instancia con UN volumen —la base y los repositorios de markdown son un solo
+estado, y una copia con la mitad restaura algo que dice cosas que sus archivos no
+dicen—; y `scripts/update.sh`, disparado por un timer diario de systemd, tira,
+arranca, espera a `/api/version` y **vuelve a la imagen anterior** si no
+contesta. Sin docker sale gratis igual: los binarios se publican con sus sumas.
+
+`/api/version` contesta sin sesión y sin tocar la base a propósito. Es la
+comprobación de salud, y una que necesita la base no distingue «arrancando» de
+«roto».
+
+**La copia previa es opt-in, y por defecto está apagada.** La migración corre
+sola al arrancar y es la puerta de un solo sentido de toda actualización, así que
+esa copia es lo único que deja volver — y aun así el valor por defecto es 0,
+porque el estado es de quien aloja esto: hay quien ya respalda el volumen entero
+desde fuera, y un actualizador que empieza a llenarle el disco de tarballs sin
+que lo pidiera es uno que acaba desactivado del todo. Lo que sí hace el script es
+pararlo antes de copiar: SQLite en WAL y git escribiendo archivos, copiados en
+caliente, dan la peor clase de respaldo — el que parece bueno hasta el día que
+hace falta.
+
+Rechazado: Watchtower. Reinicia con cualquier digest nuevo, sin sitio donde
+meter la copia ni la vuelta atrás, y «se actualizó solo y ahora no arranca» es
+exactamente el caso que hay que cubrir.
+
+**La serie arranca en `v1.0.0`.** No en 0.x: esto ya sostiene trabajo de verdad
+en instancias de verdad, y un 0.x le dice a quien lo aloja que puede romperse sin
+aviso, que es lo contrario de lo que promete el resto de este modelo. Y no en v2:
+`v0-plane-as-record` es un tag con NOMBRE —el archivo de otra implementación— y
+no la versión 0 de ésta. De ahí en adelante lo deciden los commits:
+`BREAKING CHANGE` o `tipo!:` el mayor, `feat:` el menor, `fix:` y `perf:` el
+parche. `docs:`, `chore:` y `style:` no publican nada — una versión que no cambia
+nada enseña a ignorar las versiones.
+
+**La versión se VE, abajo del todo en la columna.** Un producto autoalojado donde
+nadie sabe qué versión tiene es uno que nunca se actualiza, y toda incidencia
+empieza adivinando. En desarrollo dice `dev` en vez de un número: lo que sale de
+`git describe` ahí es `v1.0.0-12-gabc1234-dirty`, que como número de versión no
+es cierto — el binario no es esa versión, es doce commits después de ella.
+
 **What BREAKING means here is not the HTTP API.** This is a self-hosted binary,
 so the contract that can hurt somebody is their data and their agents:
 
@@ -1347,11 +1394,20 @@ so the contract that can hurt somebody is their data and their agents:
 A change to the interface, however large it looks, breaks nothing that somebody
 else depends on.
 
-**Numbering starts at `v2.0.0-alpha.N`.** `v2.0.0` would claim v2 is delivered
-while phase 6 has not started, and the one existing tag —
-`v0-plane-as-record` — is an archive marker rather than a version. The alpha
-prefix ends when the v0 databases have been migrated and this can hold the only
-copy of somebody's writing.
+**Numbering starts at `v1.0.0`** — corrigiendo lo que esto decía. Decía
+`v2.0.0-alpha.N`, con dos argumentos: que `v2.0.0` reclamaría una v2 entregada
+con la fase 6 sin empezar, y que el único tag existente es un marcador de
+archivo. El segundo sigue en pie y es justo por lo que el número NO es 2:
+`v0-plane-as-record` es un tag con nombre, el archivo de otra implementación, no
+la versión 0 de ésta — así que no hay ninguna serie previa que continuar y el
+«2» no significaba nada fuera de esta conversación.
+
+El primero se cayó solo: la fase 6 es leer dos bases de v0, no una promesa
+pendiente sobre lo que este binario hace. Lo que hay ya sostiene trabajo de
+verdad en instancias de verdad, y una serie alpha indefinida le dice a quien lo
+aloja que puede romperse sin aviso — que es lo contrario de lo que promete el
+resto de este modelo, y la razón por la que «BREAKING» aquí significa su base de
+datos y sus agentes.
 
 ### Phase 6 — migration
 Read the two v0 `bubble.db` files: mint local ids, write the markdown tree from

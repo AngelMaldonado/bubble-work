@@ -1,0 +1,16 @@
+# Una vez al día, y no a la hora en punto.
+#
+# `RandomizedDelaySec` reparte a las instancias en una hora: si algún día hay
+# veinte, todas pidiendo la misma imagen al mismo minuto es un pico que no hace
+# falta. `Persistent` la pone al día en cuanto arranca si la máquina estuvo
+# apagada — que es exactamente el caso que un despliegue por push se pierde.
+[Unit]
+Description=Bubble Work — comprobar versiones nuevas a diario
+
+[Timer]
+OnCalendar=daily
+RandomizedDelaySec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

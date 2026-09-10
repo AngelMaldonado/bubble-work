@@ -92,6 +92,7 @@
       // presence is about people, and there is nobody yet.
       presence.start();
       api.seesInventory().then((yes) => (seesInv = yes));
+      api.version().then((v) => (serverVersion = v));
     }
     ready = true;
   }
@@ -263,6 +264,17 @@
   // The planner. A view like the others, and only for a lead: planning is the
   // strategic layer's job, and a screen full of verbs somebody cannot use reads
   // as a broken screen rather than as one that is not theirs.
+  // Qué versión corre esto, para el pie de la columna.
+  //
+  // Sólo se enseña un número cuando ES un número. `git describe` en desarrollo
+  // da `v1.0.0-12-gabc1234-dirty`, que como versión no es cierto —el binario no
+  // es esa versión, es doce commits después de ella— así que ahí se dice `dev`,
+  // que es la respuesta exacta a «¿qué estoy mirando?».
+  let serverVersion = $state('');
+  const versionLabel = $derived(
+    /^v\d+\.\d+\.\d+$/.test(serverVersion) ? serverVersion : serverVersion ? 'dev' : '',
+  );
+
   const isLead = $derived(me?.role === 'lead');
 
   /** El papel AQUÍ, que no es el mismo que el global: enlazar un repositorio lo
@@ -541,6 +553,7 @@
     current={current?.id ?? ''}
     label="Workspaces"
     newLabel="Nuevo"
+    version={versionLabel}
     bind:pane={paneEl}
     onselect={(id) => {
       const w = workspaces.find((x) => x.id === id);

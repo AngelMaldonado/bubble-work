@@ -885,3 +885,99 @@ func Comment(app core.App, auth *core.Record, threadID, body string) (*core.Reco
 	record(app, th.GetString("workspace"), "thread", th.Id, EvComment, auth.Id, nil)
 	return r, nil
 }
+
+// ---- lo que sólo se lee por esta puerta -------------------------------------
+
+// Repo is where a workspace's code lives, as an agent needs to hear it.
+type Repo struct {
+	URL  string `json:"url"`
+	Name string `json:"name,omitempty"`
+}
+
+// Repos lists the repositories linked to a workspace.
+//
+// Read only, and deliberately: enlazar uno es una decisión del lead, es rara, y
+// una URL equivocada manda a la gente al código equivocado sin que nada falle.
+// Un agente que encuentre el repositorio lo propone con `capture`, que es el
+// camino de todo lo que se sugiere y no se decide.
+//
+// The boundary is already settled by the caller: `WorkspaceFor` refused if the
+// caller cannot see this workspace, and everybody who can see it can see these.
+func Repos(app core.App, ws *core.Record) ([]Repo, error) {
+	rows, err := app.FindAllRecords("workspace_repos", dbx.HashExp{"workspace": ws.Id})
+	if err != nil {
+		return nil, err
+	}
+	out := []Repo{}
+	for _, r := range rows {
+		out = append(out, Repo{URL: r.GetString("url"), Name: r.GetString("name")})
+	}
+	return out, nil
+}
+
+// InvThing is one thing in the inventory: a VPS, a domain, a contracted service.
+//
+// `Vault` is a LINK and never a secret — that is the rule the whole inventory is
+// built on, and it is repeated here because this door is the one where somebody
+// would be tempted to answer "¿cuál es la contraseña?".
+type InvThing struct {
+	Name     string `json:"name"`
+	Group    string `json:"group"`
+	Provider string `json:"provider,omitempty"`
+	URL      string `json:"url,omitempty"`
+	Vault    string `json:"vault,omitempty"`
+	Cost     string `json:"cost,omitempty"`
+	Renews   string `json:"renews_at,omitempty"`
+	Note     string `json:"note,omitempty"`
+}
+
+// Inventory reads the department's inventory, mirroring the rule the collections
+// carry: the global lead, or whoever was ASSIGNED a row of `inventory_access`.
+//
+// Reading only. El armario es del lead global y sus altas son deliberadas; lo
+// que hace falta a las tres de la mañana es saber en qué VPS corre esto, no
+// poder inventar uno nuevo.
+func Inventory(app core.App, auth *core.Record) ([]InvThing, error) {
+	if !SeesInventory(app, auth) {
+		return nil, ErrDenied
+	}
+	groups, err := app.FindAllRecords("inventory_groups")
+	if err != nil {
+		return nil, err
+	}
+	named := map[string]string{}
+	for _, g := range groups {
+		named[g.Id] = g.GetString("name")
+	}
+	rows, err := app.FindAllRecords("inventory_items")
+	if err != nil {
+		return nil, err
+	}
+	out := []InvThing{}
+	for _, i := range rows {
+		renews := ""
+		if at := i.GetDateTime("renews_at"); !at.IsZero() {
+			renews = at.String()[:10]
+		}
+		out = append(out, InvThing{
+			Name: i.GetString("name"), Group: named[i.GetString("group")],
+			Provider: i.GetString("provider"), URL: i.GetString("url"),
+			Vault: i.GetString("vault"), Cost: i.GetString("cost"),
+			Renews: renews, Note: i.GetString("note"),
+		})
+	}
+	return out, nil
+}
+
+// SeesInventory answers the same question `inventory_groups.ListRule` answers:
+// the global lead, or one row of `inventory_access` with your name on it.
+func SeesInventory(app core.App, auth *core.Record) bool {
+	if !isPersonAuth(auth) {
+		return false
+	}
+	if isGlobalLead(auth) {
+		return true
+	}
+	rows, err := app.FindAllRecords("inventory_access", dbx.HashExp{"user": auth.Id})
+	return err == nil && len(rows) > 0
+}

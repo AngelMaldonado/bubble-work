@@ -5,6 +5,11 @@
 // re-escaped into Go source stops getting edited. Here it can be read, diffed and
 // tuned like any other document.
 //
+// Tres documentos, y cada uno contesta algo distinto: `Guide` describe el
+// SISTEMA, `House` es lo que un agente se pega a sí mismo en sus instrucciones
+// del proyecto para que la próxima sesión no empiece a ciegas, y `Connect` es lo
+// que una persona copia para configurar su asistente.
+//
 // Embedded rather than read from disk, for a different one: this guide makes
 // PROMISES about the API — which shapes a PATCH takes, what a conflict looks like
 // — and a guide deployed separately from the binary drifts from it. Then it lies,
@@ -27,3 +32,26 @@ import (
 //
 //go:embed bubble-work.md
 var Guide string
+
+// House is what an agent installs into ITS OWN instructions file — `CLAUDE.md`,
+// `AGENTS.md`, `.cursorrules`, whichever it happens to read — so that the next
+// session starts knowing where the work is written down.
+//
+// Sin ella, cada conversación vuelve a inventarlo: abre un thread nuevo al lado
+// del que ya estaba a medias, o no anota nada y el board dice que aquí no pasó
+// nada. Lleva un hueco, `<SLUG>`, que quien la instala sustituye por el
+// workspace del proyecto — el documento no puede saber en cuál se está pegando.
+//
+//go:embed house-rules.md
+var House string
+
+// Connect is what a PERSON copies to configure their assistant. A template with
+// two holes, `{{url}}` and `{{token}}`, filled by the server that serves it.
+//
+// It lived as a string literal in the web app, which is exactly the shape prose
+// stops getting edited in: escaped into source, invisible in a diff of the
+// prompts, and impossible to tune without touching the client. It is the same
+// argument the rest of this package already made.
+//
+//go:embed connect.md
+var Connect string

@@ -218,7 +218,8 @@
   let copied = $state(false);
   async function copyPrompt() {
     try {
-      await navigator.clipboard.writeText(setupPrompt(`${location.origin}/mcp`, api.token));
+      const prompt = await setupPrompt(`${location.origin}/mcp`, api.token);
+      await navigator.clipboard.writeText(prompt);
       copied = true;
       setTimeout(() => (copied = false), 1800);
     } catch {
@@ -520,10 +521,11 @@
   <Shell
     items={workspaces.map((w) => ({ id: w.id, name: w.name, hint: w.slug }))}
     pins={[
-      // Todos primero: es el board entero, y los workspaces de abajo son sus
-      // partes. Debajo el planeador, que es la otra pantalla que no pertenece a
-      // ningún proyecto.
-      { id: 'all', name: 'Todos', face: '∗', href: allUrl },
+      // Todos ARRIBA DEL LISTADO: es el board entero, y los workspaces que
+      // siguen son sus partes — leerlo como el primero de ellos dice esa
+      // relación, y al pie decía que era otra clase de cosa. El planeador y el
+      // inventario sí lo son, y se quedan abajo.
+      { id: 'all', name: 'Todos', face: '∗', href: allUrl, top: true },
       { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
     ]}

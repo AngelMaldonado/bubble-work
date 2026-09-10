@@ -13,7 +13,7 @@
   import Confirm, { type Doom } from './Confirm.svelte';
   import Minimap, { type MapItem } from './Minimap.svelte';
   import { ago, cycleLeft } from '../lib/when';
-  import { filters, lastOpenBubble } from '../lib/filters.svelte';
+  import { lastOpenBubble } from '../lib/filters.svelte';
 
   let {
     workspace,
@@ -71,20 +71,12 @@
   });
   const nameOf = (id: string) => roster.find((p) => p.id === id)?.name ?? '';
 
-  // A qué proyectos te limitaste, en Todos.
-  //
-  // Se aplica aquí y no en el servidor: el board que llega es la verdad —qué
-  // flota y por qué— y limitar la vista es una elección de quien mira, que
-  // cambia al hacer clic y no debería costar una petición. El servidor sigue
-  // siendo el que clasifica; esto sólo decide qué se dibuja de lo clasificado.
-  const f = $derived(filters.current);
-
-  const visible = $derived(
-    (board?.bubbles ?? []).filter((b) => !f.projects.length || f.projects.includes(b.workspace)),
-  );
-
+  // Sin filtro por proyecto. Lo hubo —unas fichas sobre las bandas para
+  // limitarse a unos cuantos— y se quitó: en Todos, lo que se está pidiendo es
+  // ver TODO junto, y limitarlo es volver a mirar un proyecto, que es lo que
+  // hace la columna de la izquierda con un clic y sin esconder nada.
   const orbs = $derived<BoardBubble[]>(
-    visible.map((b) => ({
+    (board?.bubbles ?? []).map((b) => ({
       id: b.id,
       name: b.name,
       life: b.heat.lifecycle,
@@ -258,42 +250,6 @@
 </script>
 
 
-<!-- Los proyectos, en Todos: a cuáles quieres limitarte.
-     Sobre las bandas y no en una barra lateral, porque la respuesta a «¿por qué
-     falta esta burbuja?» tiene que estar donde se hizo la pregunta. Lo elegido
-     sobrevive irse a un thread y volver: vive en el navegador, no en la
-     dirección — un enlace lleva QUÉ miras, no a qué te limitaste.
-
-     Sólo aquí: dentro de un proyecto, elegir proyecto es decir dos veces lo
-     mismo. Y sólo las bandas se quedaron fuera de esto a propósito — una banda
-     no se filtra, se mira: esconderla cambia la forma del board, que es la única
-     cosa que el board tiene que decir. -->
-{#snippet controls()}
-  {#if all && (board?.workspaces ?? []).length > 1}
-    <div class="projects">
-      <div class="group" role="group" aria-label="Proyectos">
-        {#each board?.workspaces ?? [] as w (w.id)}
-          <button
-            class="chip"
-            class:on={f.projects.includes(w.id)}
-            aria-pressed={f.projects.includes(w.id)}
-            onclick={() => filters.toggle(w.id)}>
-            {w.name}
-          </button>
-        {/each}
-      </div>
-
-      {#if filters.on}
-        <!-- Cuántas quedaron fuera, y la salida. Un board limitado que no dice
-             que lo está es un board que miente sobre cuánto trabajo hay. -->
-        <button class="chip clear" onclick={() => filters.clear()}>
-          ✕ ver todos · {(board?.bubbles.length ?? 0) - visible.length} ocultas
-        </button>
-      {/if}
-    </div>
-  {/if}
-{/snippet}
-
 <Minimap items={mapItems} {scroller} />
 
 {#if error}
@@ -306,7 +262,6 @@
   <BubbleBoard
     title={workspace?.name ?? 'Todos los workspaces'}
     bubbles={orbs}
-    {controls}
     onnew={all ? undefined : onnew}
     onaction={act}
     onopen={(b) => {
@@ -426,55 +381,3 @@
     </Portal>
   </Dialog>
 {/if}
-
-<style>
-  /* Los proyectos son CROMO, no contenido: por debajo del título en peso, tamaño
-     y color, o compiten con el board que están describiendo. Ningún acento
-     inventado — el encendido se dice con el texto a plena opacidad sobre el
-     mismo `--hover` que usa el resto de la aplicación. */
-  .projects {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    align-items: center;
-    /* El hueco antes de «ver todos» es varias veces el de dentro del grupo:
-       quitar la limitación no es un proyecto más de la lista. */
-    gap: 0.4rem 1.4rem;
-    margin-top: 1rem;
-  }
-  .group {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
-    gap: 0.35rem;
-  }
-  .chip {
-    padding: 0.34rem 0.68rem;
-    border-radius: 999px;
-    border: 1px solid var(--line);
-    background: transparent;
-    color: var(--faint);
-    font-family: inherit;
-    font-size: 0.72rem;
-    font-weight: 600;
-    line-height: 1;
-    cursor: pointer;
-  }
-  .chip:hover {
-    color: var(--text);
-  }
-  .chip.on {
-    background: var(--hover);
-    color: var(--text);
-  }
-
-  /* Ver todos no es un proyecto más: sin borde hasta que se apunta, para que no
-     compita con los que sí dicen qué estás viendo. */
-  .clear {
-    border-color: transparent;
-    font-weight: 500;
-  }
-  .clear:hover {
-    border-color: var(--line);
-  }
-</style>

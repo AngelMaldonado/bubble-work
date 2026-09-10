@@ -36,13 +36,10 @@
     onopen,
     onaction,
     onnew,
-    controls,
     children,
   }: {
     title?: string;
     bubbles?: BoardBubble[];
-    /** los controles del board, sobre las bandas: a qué proyectos limitarse */
-    controls?: import('svelte').Snippet;
     onopen?: (bubble: BoardBubble) => void;
     onaction?: (what: string, bubble: BoardBubble) => void;
     /** right-click on the empty part of the board: what to make here */
@@ -85,10 +82,9 @@
   <Menu.ContextTrigger>
     {#snippet element(attributes: Record<string, unknown>)}
       <div class="board" bind:this={boardEl} {...attributes}>
-  {#if title || controls}
+  {#if title}
     <header class="board-head">
-      {#if title}<h1 class="display text-2xl">{title}</h1>{/if}
-      {#if controls}{@render controls()}{/if}
+      <h1 class="display text-2xl">{title}</h1>
     </header>
   {/if}
 

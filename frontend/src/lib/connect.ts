@@ -1,28 +1,28 @@
 // El prompt que configura al agente de quien lo pega.
 //
-// Portado de v0 (`McpConnect`), sin su ventana: allá era un diálogo con la URL,
-// el token enmascarado y tres formas de copiar. Casi todo eso era ceremonia —
-// lo que la gente usaba era el prompt, y una ventana para llegar a un botón es
-// una ventana de más.
+// El TEXTO ya no vive aquí: vive en `prompts/connect.md`, embebido en el
+// binario y servido en `/api/connect`. Estaba escrito como una cadena de
+// plantilla dentro de este archivo, que es exactamente la forma en la que la
+// prosa deja de editarse — escapada dentro de código, invisible en un diff de
+// los prompts, y imposible de afinar sin tocar el cliente. Es el mismo argumento
+// que el paquete `prompts` ya había hecho para la guía.
 //
-// Lleva el token dentro, y por eso dice explícitamente cómo tratarlo, y le pide
-// al asistente configurarse SÓLO a sí mismo: un agente entusiasta editando la
-// configuración de otros tres es la forma más rápida de dejar credenciales
-// tiradas por el disco.
-export function setupPrompt(url: string, token: string): string {
-  return `Agrega el servidor MCP de Bubble Work a tu propia configuración.
+// Lo que se queda aquí son los dos huecos. La URL la sabe el navegador con
+// certeza —es por donde llegó—; el servidor tendría que deducirla del `Host` y
+// de lo que ponga el proxy de enfrente, y un prompt con la URL equivocada
+// configura un servidor que no existe. Y el token es la sesión de quien mira: no
+// tiene por qué volver a viajar dentro de una respuesta.
+let template = '';
 
-Hazlo SÓLO PARA TI — el asistente con el que estoy hablando ahora. No configures ningún otro asistente, editor, CLI ni herramienta, y no edites archivos de configuración que pertenezcan a otro. Si no tienes claro qué cliente eres, pregúntame en vez de tocar varios.
-
-Protocolo: HTTP (streamable http)
-URL: ${url}
-Autenticación: envía la cabecera  Authorization: Bearer ${token}
-
-Averigua cuál es el archivo de configuración que tú mismo lees y sigue tu propio esquema para un servidor HTTP con cabeceras personalizadas, en vez de adivinar la ruta.
-
-Luego confirma que funcionó listando las herramientas. Deberías ver guide, board, read, edit, create_thread y timeline entre ellas. Si falla, dime el error exacto en vez de reintentar a ciegas.
-
-Antes de escribir nada en Bubble Work, lee la herramienta \`guide\`: dice qué cuenta como evidencia y qué no, dónde viven los archivos, y cómo funciona una escritura con hash. No valida la forma de un documento a propósito.
-
-Ese token es mi sesión: quien lo tenga trabaja como yo, y lo que escribas queda firmado con mi nombre. Ponlo en el archivo de configuración, no me lo repitas y no lo escribas en ningún otro lado.`;
+/** El prompt listo para pegar. Lleva el token dentro, y por eso el documento
+ *  dice explícitamente cómo tratarlo y le pide al asistente configurarse SÓLO a
+ *  sí mismo: un agente entusiasta editando la configuración de otros tres es la
+ *  forma más rápida de dejar credenciales tiradas por el disco. */
+export async function setupPrompt(url: string, token: string): Promise<string> {
+  if (!template) {
+    const r = await fetch('/api/connect');
+    if (!r.ok) throw new Error('no se pudo leer el prompt de conexión');
+    template = await r.text();
+  }
+  return template.replaceAll('{{url}}', url).replaceAll('{{token}}', token);
 }

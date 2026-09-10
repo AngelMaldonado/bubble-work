@@ -616,6 +616,46 @@ it is enforcing and why. The guide was updated in the same pass: it said
 `threads/` was FLAT, which stopped being true, and a guide that describes an API
 it no longer matches is worse than no guide.
 
+**Dos más, de sólo lectura, y ninguna de escritura al lado.** *(built)* `repos`
+dice dónde vive el CÓDIGO de un workspace, e `inventory` dónde viven las cosas
+que lo sostienen — servidor, dominio, servicio, con su proveedor y su
+renovación, y sólo si a quien pregunta le fue asignado el acceso.
+
+Las contrapartes de escritura se rechazaron a propósito. Enlazar un repositorio
+o dar de alta un servidor es una decisión de pertenencia que alguien toma en la
+aplicación: es rara, la toma un lead, y una URL inventada manda a la gente al
+código equivocado sin que nada falle. Un agente que encuentre uno que falta lo
+propone con `capture`, que es el camino de todo lo que se sugiere y no se
+decide, y deja rastro de quién lo propuso.
+
+Y una frase que la guía repite porque esta es la puerta donde alguien la pondría
+a prueba: `vault` es un ENLACE a dónde está la credencial, nunca la credencial.
+Este servidor no guarda secretos, así que no puede entregar uno por ninguna
+puerta — preguntarlo de otra forma tampoco produce uno.
+
+**Tres documentos, y todos en `prompts/` como markdown.** *(built)* `guide`
+describe el SISTEMA; `house_rules` es la sección que un agente se instala a sí
+mismo en el archivo de instrucciones que ya lee cada sesión —`CLAUDE.md`,
+`AGENTS.md`, `.cursorrules`, el que corresponda a lo que sea— y `connect.md` es
+lo que una persona copia para configurar su asistente.
+
+`house_rules` existe porque configurar el MCP no basta: un agente con las
+herramientas y sin la instrucción abre un thread nuevo al lado del que ya estaba
+a medias, o no anota nada y el board dice que aquí no pasó nada. La sección dice
+el orden — mirar lo que hay antes de empezar, escribir en el thread que
+corresponde, cerrar sólo lo que terminó — y lleva un hueco `<SLUG>` que quien la
+instala sustituye: el documento no puede saber en qué proyecto se está pegando.
+
+El prompt de conexión vivía como cadena dentro de `frontend/src/lib/connect.ts`,
+que es exactamente la forma en que la prosa deja de editarse: escapada dentro de
+código, invisible en un diff de los prompts, imposible de afinar sin tocar el
+cliente. Ahora se sirve en `/api/connect` SIN rellenar y los dos huecos —la URL y
+el token— los pone el navegador: él sabe con certeza por dónde llegó, mientras
+que el servidor tendría que deducirlo del `Host` y de lo que ponga el proxy de
+enfrente, y un prompt con la URL equivocada configura un servidor que no existe.
+De paso, el token no vuelve a viajar dentro de una respuesta que nadie
+necesitaba.
+
 **Done when:** an agent does a real piece of work end to end and the bubble warms
 because of it. — *it does: create by slug, write, tick, search, link, and the
 thread reads hot with its priority beside it.*

@@ -105,6 +105,24 @@ outcome and no evidence; turning every remark into a thread is how a backlog
 fills with rows nobody committed to. Capturing warms nothing, and that is
 correct.
 
+**Install `house_rules` in your own instructions file, once.** `CLAUDE.md`,
+`AGENTS.md`, `.cursorrules` — whichever one you read at the start of every
+session. It is the short version of this guide plus the workspace this project
+writes to, and without it the next session starts blind: it opens a second thread
+beside the one that was already half done, or writes nothing and the board says
+nothing happened here.
+
+`repos` says where the workspace's CODE lives — the repositories linked to it,
+which are not the markdown tree this server writes. `inventory` says where the
+things that keep it running live: servers, domains, services, with their provider
+and renewal date, and only if you were given access. Both are READ ONLY, and both
+have the same reason: linking a repository or buying a server is a decision
+somebody makes in the app. If one is missing, `capture` it and say so.
+
+**Neither hands you a credential.** The inventory's `vault` field is a link to
+where a secret is kept — this server never holds the secret itself, so asking
+again in another shape will not produce one.
+
 `plan` shows the department's objectives and its inbox. The objectives belong to
 the whole department rather than to a workspace — threads from any project hang
 from the same one, which is what makes stating it worth anything — and shaping

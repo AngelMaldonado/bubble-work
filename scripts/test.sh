@@ -776,7 +776,19 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,link,plan,read,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+# Los dos documentos que no describen el sistema sino qué hacer con él: el que un
+# agente se pega en SUS instrucciones, y la plantilla que una persona copia para
+# configurar su asistente. Markdown servido, no cadenas dentro del código.
+chk ">>> house_rules trae la sección que un agente se instala" \
+  "$(mcptext "$A" house_rules '{}' | grep -c '<SLUG>')" 1
+chk ">>> ...y es el mismo markdown que sirve la API" \
+  "$(curl -s "$API/api/house-rules" | grep -c '<SLUG>')" 1
+chk ">>> el prompt de conexión sale SIN rellenar: los huecos los pone el cliente" \
+  "$(curl -s "$API/api/connect" | grep -c '{{token}}')" 1
+chk ">>> ...y dice que hay que instalar la sección" \
+  "$(curl -s "$API/api/connect" | grep -c 'house_rules')" 1
+
 chk ">>> la guía es prompt Y tool (no todo cliente lista prompts)" \
   "$(mcp "$A" "prompts/list" "{}" | python3 -c 'import sys,json
 print(",".join(p["name"] for p in json.load(sys.stdin)["result"]["prompts"]))')" bubble-work
@@ -964,6 +976,20 @@ chk ">>> quien mira sólo ve SU propia asignación, para poder preguntarse si le
   "$(list inventory_access "$A" | j "['totalItems']")" 1
 chk ">>> y con acceso se LEE, pero no se escribe: el armario es del lead" \
   "$(pcode inventory_items "$A" "{\"group\":\"$GRP\",\"name\":\"mío\"}")" 400
+# Por MCP se LEE, con la misma llave: la fila de acceso. El armario sigue siendo
+# del lead, y `vault` es un enlace — este servidor no guarda secretos, así que no
+# puede entregar uno por ninguna puerta.
+chk ">>> un agente con acceso lee el inventario" \
+  "$(mcptext "$A" inventory '{}' | grep -c 'vps-01')" 1
+chk ">>> ...y trae dónde está la contraseña, nunca cuál es" \
+  "$(mcptext "$A" inventory '{}' | grep -c 'password')" 0
+# `ErrDenied` dice "not found", que es la misma respuesta que da la aplicación:
+# quien no alcanza algo no aprende que existe.
+chk ">>> sin asignación, el agente tampoco: bob no lo lee" \
+  "$(mcptext "$B" inventory '{}' | grep -c 'not found')" 1
+chk ">>> y no hay tool para escribirlo: el alta es de la aplicación" \
+  "$(mcp "$A" "tools/list" "{}" | grep -c 'inventory_item\|create_inventory')" 0
+
 curl -s -o /dev/null -X DELETE "$API/api/collections/inventory_groups/records/$GRP" -H "Authorization: $C"
 chk ">>> borrar un grupo se lleva lo que había dentro" \
   "$(list inventory_items "$C" | j "['totalItems']")" 0
@@ -992,6 +1018,14 @@ chk ">>> quien no es del workspace no ve dónde está el código" \
   "$(list workspace_repos "$ER" | j "['totalItems']")" 0
 chk ">>> anónimo tampoco" \
   "$(curl -s "$API/api/collections/workspace_repos/records" | j "['totalItems']")" 0
+ARG='{"workspace":"alpha"}'
+chk ">>> un agente pregunta dónde vive el código" \
+  "$(mcptext "$B" repos "$ARG" | grep -c 'cuby/bubble-work')" 1
+chk ">>> ...y no puede enlazar ninguno: no existe la tool" \
+  "$(mcp "$B" "tools/list" "{}" | grep -c 'add_repo\|link_repo')" 0
+chk ">>> erin no alcanza el workspace, tampoco por esa puerta" \
+  "$(mcptext "$ER" repos "$ARG" | grep -c 'not found')" 1
+
 chk ">>> quitar un repositorio es del lead, no del miembro" \
   "$(code -X DELETE "$API/api/collections/workspace_repos/records/$REPO" -H "Authorization: $A")" 404
 chk ">>> ...y el lead sí lo quita" \

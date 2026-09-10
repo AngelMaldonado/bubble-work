@@ -1,82 +1,47 @@
 /**
- * Lo que elegiste ver, y que sigue elegido cuando vuelves.
+ * Lo que eligió quien mira: una preferencia y un «dónde ibas».
  *
- * Una sola cosa: en Todos, a qué proyectos limitarte. Hubo tres ejes —de quién,
- * qué banda, qué proyecto— y los otros dos se quitaron: la banda ES el board (se
- * mira, no se filtra) y «de quién» respondía una pregunta que el orbe ya
- * contesta con las iniciales de quien responde por él.
+ * Aquí vivió también el filtro por proyecto del board de Todos —unas fichas
+ * sobre las bandas— y se quitó entero: en Todos, lo que se está pidiendo es ver
+ * TODO junto, y limitarlo a unos cuantos proyectos es volver a mirar un
+ * proyecto, que la columna de la izquierda hace con un clic y sin esconder
+ * nada.
  *
- * En `localStorage` y NO en la dirección, que es la misma decisión que tomó v0 y
- * por la misma razón: la dirección lleva QUÉ estás mirando —un board, un thread,
- * una página— y por eso se puede mandar a alguien. A qué proyectos te limitaste
- * es una preferencia tuya, y un enlace que arrastra la de quien lo mandó enseña
- * al que lo abre un board que no es el suyo.
- *
- * Y es exactamente lo que hace que volver de un thread devuelva el board como lo
- * dejaste: nunca estuvo en la dirección, así que navegar no lo toca.
+ * Ninguna de las dos cosas va en la dirección, que es la misma decisión que
+ * tomó v0 y por la misma razón: la dirección lleva QUÉ estás mirando —un board,
+ * un thread, una página— y por eso se puede mandar a alguien. Un enlace que
+ * arrastrara la columna colapsada de quien lo mandó enseñaría al que lo abre una
+ * aplicación que no es la suya.
  */
-const KEY = 'bw.filters';
 
-export type Filters = {
-  /** en Todos, a qué workspaces limitarse. Vacío es TODOS — el estado normal, y
-   *  el que hay que saber leer cuando la caja llega de una versión anterior */
-  projects: string[];
-};
+/**
+ * Si la columna de la izquierda está colapsada.
+ *
+ * En `localStorage` porque es una PREFERENCIA: quien trabaja con la columna
+ * estrecha la quiere estrecha mañana, y volver a colapsarla en cada recarga es
+ * pedirle que repita una decisión que ya tomó.
+ */
+const RAIL_KEY = 'bw.rail';
 
-const EMPTY: Filters = { projects: [] };
-
-function read(): Filters {
-  try {
-    const raw = JSON.parse(localStorage.getItem(KEY) ?? 'null');
-    if (!raw || typeof raw !== 'object') return { ...EMPTY };
-    // Con el tipo comprobado: una caja escrita por una versión anterior, o a
-    // mano, no puede dejar el board sin dibujar.
-    return {
-      projects: Array.isArray(raw.projects)
-        ? raw.projects.filter((p: unknown) => typeof p === 'string')
-        : [],
-    };
-  } catch {
-    return { ...EMPTY }; // una entrada corrupta no vale un board roto
-  }
-}
-
-class Store {
-  current = $state<Filters>(read());
-
-  /** Si hay algo puesto. Lo que decide si el board se anuncia como limitado: uno
-   *  sin limitar no debería llevar un cartel diciéndolo. */
-  get on(): boolean {
-    return this.current.projects.length > 0;
-  }
-
-  clear(): void {
-    this.current = { ...EMPTY };
-    this.save();
-  }
-
-  /** Enciende o apaga un proyecto. Vacío significa todos, así que quitar el
-   *  último equivale a no limitar — que es lo que una persona espera al
-   *  desmarcar la última casilla. */
-  toggle(id: string): void {
-    const list = this.current.projects;
-    this.current = {
-      projects: list.includes(id) ? list.filter((x) => x !== id) : [...list, id],
-    };
-    this.save();
-  }
-
-  private save(): void {
+export const rail = {
+  get(): boolean {
     try {
-      localStorage.setItem(KEY, JSON.stringify(this.current));
+      return localStorage.getItem(RAIL_KEY) === '1';
     } catch {
-      // Un navegador que no deja guardar deja la elección en memoria, que sirve
-      // durante la sesión. No es motivo para no poder elegir.
+      // Una pestaña privada, o un navegador que bloquea el almacenamiento, abre
+      // con la columna ancha — que es el valor por defecto, no un error.
+      return false;
     }
-  }
-}
-
-export const filters = new Store();
+  },
+  set(on: boolean): void {
+    try {
+      localStorage.setItem(RAIL_KEY, on ? '1' : '0');
+    } catch {
+      // Sin memoria, la elección vale para esta sesión. No es motivo para no
+      // poder colapsarla.
+    }
+  },
+};
 
 /**
  * Qué burbuja estaba abierta cuando te fuiste a un thread.

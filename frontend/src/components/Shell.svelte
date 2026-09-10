@@ -14,6 +14,7 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import MoreVerticalIcon from '@lucide/svelte/icons/more-vertical';
   import BrandOrb from './BrandOrb.svelte';
+  import { rail } from '../lib/filters.svelte';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Snippet } from 'svelte';
 
@@ -21,7 +22,16 @@
 
   /** Something in the column that is NOT a workspace: a screen the whole app
    *  has, reached the same way you reach a project. */
-  export type ShellPin = { id: string; name: string; face: string; href?: string };
+  export type ShellPin = {
+    id: string;
+    name: string;
+    face: string;
+    href?: string;
+    /** arriba del listado en vez de al pie. «Todos» es el board ENTERO y los
+     *  proyectos de abajo son sus partes, así que se lee como el primero de
+     *  ellos y no como un lugar aparte. */
+    top?: boolean;
+  };
 
   let {
     items = [],
@@ -67,7 +77,18 @@
     corner?: Snippet;
   } = $props();
 
-  let railed = $state(false);
+  /** Los fijados se reparten: arriba del listado o al pie de la columna. */
+  const head = $derived(pins.filter((p) => p.top));
+  const foot = $derived(pins.filter((p) => !p.top));
+
+  // Colapsada o no, como se dejó la última vez. La preferencia se lee al montar
+  // en vez de arrancar siempre ancha: quien trabaja con la columna estrecha no
+  // tendría por qué volver a colapsarla en cada recarga.
+  let railed = $state(rail.get());
+  function toggleRail() {
+    railed = !railed;
+    rail.set(railed);
+  }
   let editing = $state<string | null>(null);
   let draft = $state('');
 
@@ -90,6 +111,44 @@
   }
 </script>
 
+<!-- Una fila fijada: mismo alto, mismo resaltado y misma anatomía que la de un
+     proyecto, arriba del listado o al pie según a qué conteste. -->
+{#snippet pinRow(p: ShellPin)}
+  <div class="proj" class:on={pinned === p.id}>
+    <!-- Un ancla nuestra, no un `Navigation.Trigger`: es un LUGAR y tiene
+         dirección — se abre en otra pestaña, se copia, y si el manejador de la
+         aplicación no corriera, el navegador navega igual. Lleva a mano los
+         `data-part` de Skeleton para que la fila se vea exactamente como la de
+         un proyecto, que es lo único que se estaba pidiendo prestado del
+         componente. -->
+    <a
+      class="pin-row"
+      data-scope="navigation"
+      data-part="trigger"
+      data-layout={railed ? 'rail' : 'sidebar'}
+      href={p.href ?? '#'}
+      title={p.name}
+      onclick={(e) => {
+        if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
+        // Sin manejador no se cancela: anular el enlace y no navegar en su lugar
+        // es cómo se construye un control que no hace nada.
+        if (!onpin) return;
+        e.preventDefault();
+        onpin(p.id);
+      }}>
+      <span class="pin" aria-hidden="true">{p.face}</span>
+      <!-- `data-layout` también en el TEXTO, no sólo en la fila: Skeleton pone
+           el tamaño de fuente en `[data-part='trigger-text'][data-layout=…]`, y
+           sin el atributo la regla no aplicaba — el texto de una fila fijada
+           salía al tamaño del documento y el de un proyecto al del componente,
+           dos tamaños en la misma columna. -->
+      <span data-scope="navigation" data-part="trigger-text" data-layout={railed ? 'rail' : 'sidebar'}>
+        {p.name}
+      </span>
+    </a>
+  </div>
+{/snippet}
+
 <div class="shell">
   <!-- The workspaces live here. A workspace is the boundary for a body of work
        and the thing you switch between all day, so it gets the persistent
@@ -100,7 +159,7 @@
         <!-- The mark reads alone, which is exactly what the rail needs; the
              wordmark is what gets dropped when the column narrows, not the
              logo. -->
-        <Navigation.Trigger onclick={() => (railed = !railed)} title={railed ? 'expandir' : 'colapsar'}>
+        <Navigation.Trigger onclick={toggleRail} title={railed ? 'expandir' : 'colapsar'}>
           <BrandOrb size={railed ? 26 : 22} />
           {#if !railed}<span class="display text-base">bubble.work</span>{/if}
         </Navigation.Trigger>
@@ -112,6 +171,12 @@
 
       <Navigation.Group class="projects" style={listFade.style} {@attach listFade.attach}>
         <Navigation.Menu>
+          <!-- Los de arriba, antes que ningún proyecto. «Todos» es el board
+               entero y lo de abajo son sus partes: leerlo como el primero de la
+               lista dice esa relación; al pie decía que era otra cosa. -->
+          {#each head as p (p.id)}
+            {@render pinRow(p)}
+          {/each}
           {#each items as p (p.id)}
             {#if editing === p.id && !railed}
               <!-- Renaming happens IN PLACE. A dialog for one field is a dialog
@@ -165,7 +230,7 @@
            item of the list — it is the one action the column always offers, so
            it sits where the column ends rather than drifting down as the list
            grows. -->
-      {#if oncreate || pins.length || onsignout}
+      {#if oncreate || foot.length || onsignout}
         <Navigation.Footer class="new-foot">
           <Navigation.Menu>
             {#if oncreate}
@@ -177,34 +242,8 @@
             <!-- Debajo de "Nuevo": no es un proyecto —por eso no está en la
                  lista— pero sí es un LUGAR, y llegar a un lugar es para lo que
                  sirve esta columna. -->
-            {#each pins as p (p.id)}
-              <div class="proj" class:on={pinned === p.id}>
-                <!-- Un ancla nuestra, no un `Navigation.Trigger`: es un LUGAR y
-                     tiene dirección — se abre en otra pestaña, se copia, y si el
-                     manejador de la aplicación no corriera, el navegador navega
-                     igual. Lleva a mano los `data-part` de Skeleton para que la
-                     fila se vea exactamente como la de un proyecto, que es lo
-                     único que se estaba pidiendo prestado del componente. -->
-                <a
-                  class="pin-row"
-                  data-scope="navigation"
-                  data-part="trigger"
-                  data-layout={railed ? 'rail' : 'sidebar'}
-                  href={p.href ?? '#'}
-                  title={p.name}
-                  onclick={(e) => {
-                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0) return;
-                    // Sin manejador no se cancela: anular el enlace y no navegar
-                    // en su lugar es cómo se construye un control que no hace
-                    // nada.
-                    if (!onpin) return;
-                    e.preventDefault();
-                    onpin(p.id);
-                  }}>
-                  <span class="pin" aria-hidden="true">{p.face}</span>
-                  <span data-scope="navigation" data-part="trigger-text">{p.name}</span>
-                </a>
-              </div>
+            {#each foot as p (p.id)}
+              {@render pinRow(p)}
             {/each}
 
             <!-- Y al final, salir. Es un verbo raro y no debería estar junto a

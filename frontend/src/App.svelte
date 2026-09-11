@@ -1,7 +1,8 @@
 <script lang="ts">
-  import { api, type Board as BoardData, type Person, type ThreadHeat, type Workspace } from './lib/api';
+  import { api, type Board as BoardData, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
+  import Confirm, { type Doom } from './components/Confirm.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
   import Wiki from './components/Wiki.svelte';
@@ -206,6 +207,8 @@
   // What the server refused, said out loud. A rename that silently does nothing
   // is worse than one that fails.
   let error = $state('');
+  /** la pregunta de turno. Una sola forma de preguntar en todo el producto. */
+  let doom = $state<Doom>(null);
 
   // ---- making one -----------------------------------------------------------
   //
@@ -270,12 +273,70 @@
   // da `v1.0.0-12-gabc1234-dirty`, que como versión no es cierto —el binario no
   // es esa versión, es doce commits después de ella— así que ahí se dice `dev`,
   // que es la respuesta exacta a «¿qué estoy mirando?».
-  let serverVersion = $state('');
+  let serverVersion = $state<Version>({ version: '', latest: '', stale: false, boot: false });
   const versionLabel = $derived(
-    /^v\d+\.\d+\.\d+$/.test(serverVersion) ? serverVersion : serverVersion ? 'dev' : '',
+    /^v\d+\.\d+\.\d+$/.test(serverVersion.version)
+      ? serverVersion.version
+      : serverVersion.version
+        ? 'dev'
+        : '',
   );
 
+
   const isLead = $derived(me?.role === 'lead');
+
+  // Actualizar, desde la etiqueta.
+  //
+  // Se ofrece sólo si hay algo más nuevo Y esta instancia corre bajo el arranque
+  // vigilante: sin él nadie puede deshacer una versión que no levante, y un
+  // botón que no puede volver atrás es un botón que un día deja la instancia
+  // caída sin nadie mirando.
+  const canUpdate = $derived(serverVersion.stale && serverVersion.boot && isLead);
+  let updating = $state('');
+
+  function askUpdate() {
+    const to = serverVersion.latest;
+    doom = {
+      title: `¿Actualizar a ${to}?`,
+      body:
+        'Se descarga, se comprueba, se copia la base y el servidor se reinicia. ' +
+        'Si la versión nueva no llega a contestar, vuelve sola a la de ahora — ' +
+        'aunque volver devuelve el binario y no el esquema: una migración no se deshace.',
+      verb: 'Actualizar',
+      go: () => runUpdate(to),
+    };
+  }
+
+  async function runUpdate(to: string) {
+    updating = `actualizando a ${to}…`;
+    try {
+      await api.selfUpdate(to);
+    } catch (e) {
+      updating = '';
+      error = (e as Error).message;
+      return;
+    }
+    // Se espera a que el número cambie, que es la única señal honesta: el
+    // servidor se va sin despedirse, así que durante unos segundos no contesta
+    // nadie y eso NO es un fallo.
+    const was = serverVersion.version;
+    const until = Date.now() + 3 * 60 * 1000;
+    while (Date.now() < until) {
+      await new Promise((r) => setTimeout(r, 3000));
+      const v = await api.version();
+      if (v.version && v.version !== was) {
+        serverVersion = v;
+        updating = '';
+        // La aplicación embebida cambió con el binario: lo que está dibujado es
+        // de la versión anterior.
+        location.reload();
+        return;
+      }
+    }
+    updating = '';
+    error = `Pedí ${to}, y en tres minutos la instancia no cambió de versión. Mira el log del arranque.`;
+  }
+
 
   /** El papel AQUÍ, que no es el mismo que el global: enlazar un repositorio lo
    *  hace el lead del workspace. Se relee al cambiar de workspace. */
@@ -553,7 +614,9 @@
     current={current?.id ?? ''}
     label="Workspaces"
     newLabel="Nuevo"
-    version={versionLabel}
+    version={updating || versionLabel}
+    stale={canUpdate}
+    onversion={canUpdate ? askUpdate : undefined}
     bind:pane={paneEl}
     onselect={(id) => {
       const w = workspaces.find((x) => x.id === id);
@@ -703,6 +766,8 @@
     </div>
   {/snippet}
 </svelte:boundary>
+
+<Confirm bind:ask={doom} />
 
 {#if naming}
   <Dialog open onOpenChange={() => (naming = null)}>

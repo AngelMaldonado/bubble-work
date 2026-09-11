@@ -620,6 +620,16 @@ SUPBODY="{\"note\":\"suplantada\",\"captured_by\":\"$BID\"}"
 SUP=$(post inbox_items "$A" "$SUPBODY")
 chk "nadie puede firmar una nota como otro" "$(echo "$SUP" | j "['captured_by']")" "$AID"
 
+# Lo escrito en una nota se guarda. El panel dejaba editar el título y el texto,
+# los cambiaba en el objeto de la lista y nadie los mandaba al servidor: recargar
+# los borraba. Es de las peores formas de perder algo, porque mientras la
+# pantalla está abierta parece guardado.
+chk ">>> una nota se puede reescribir, y con cuerpo" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -H "$JS" \
+     -d '{"note":"revisar el rate limit del portal","body":"# Qué pidió\n\nQue no tire 429 en la hora pico."}')" 200
+chk ">>> ...y vuelve entero" \
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" | grep -c '429 en la hora pico')" 1
+
 # Triar: la nota se convierte en un thread —y ahí se decide de qué workspace es—
 # y se queda apuntando a lo que fue.
 T9=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Rate limit del portal\"}" | j "['id']")
@@ -797,6 +807,23 @@ print(c[0]["text"] if c else json.dumps(d))'; }
 # Qué está corriendo aquí. Sin sesión y sin tocar la base: es la comprobación de
 # salud del contenedor y lo que mira el actualizador antes y después de cambiar
 # la imagen.
+# Actualizarse sola. Lo que se prueba aquí son las FRONTERAS —quién puede
+# pedirlo y qué contesta cuando no se puede— no la descarga: bajar un release de
+# verdad haría de esta suite una que falla cuando GitHub tiene un mal día.
+#
+# El arranque vigilante se prueba en Go (`internal/boot`), que es donde vive la
+# tabla de qué hacer cuando el hijo se muere.
+chk ">>> actualizar es del lead del departamento, no de un miembro" \
+  "$(code -X POST "$API/api/update" -H "Authorization: $A" -H "$JS" -d '{}')" 403
+chk ">>> ...ni de un anónimo" \
+  "$(code -X POST "$API/api/update" -H "$JS" -d '{}')" 403
+# Esta suite arranca con `serve`, no con `boot`: no hay quién deshaga una
+# actualización, y el servidor tiene que DECIRLO en vez de aceptarla.
+chk ">>> sin arranque vigilante se rechaza, y se explica" \
+  "$(code -X POST "$API/api/update" -H "Authorization: $C" -H "$JS" -d '{}')" 409
+chk ">>> ...y /api/version lo dice, para que la UI no ofrezca un botón inerte" \
+  "$(curl -s "$API/api/version" | j "['boot']")" False
+
 chk ">>> /api/version contesta sin sesión" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/version")" 200
 chk ">>> ...y dice qué versión es" \

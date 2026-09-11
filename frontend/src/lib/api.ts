@@ -103,10 +103,19 @@ export type Objective = {
 export type InboxItem = {
   id: string;
   note: string;
+  /** lo que se entendió de la captura, en markdown. En la base y no en el árbol
+   *  de un workspace: una nota todavía no tiene workspace, y no tenerlo es
+   *  justo lo que la hace una nota y no trabajo. */
+  body?: string;
   captured_by: string;
   thread?: string;
   created: string;
 };
+/** Qué corre aquí, y si hay algo más nuevo. `boot` dice si esta instancia
+ *  puede actualizarse sola: una lanzada con `serve` a mano no tiene quién
+ *  deshaga una actualización que no arranca, y por eso no se le ofrece. */
+export type Version = { version: string; latest: string; stale: boolean; boot: boolean };
+
 export type Person = { id: string; email: string; display_name?: string; role?: string };
 
 /** One person's place in one workspace. `id` is the MEMBERSHIP's — that is what
@@ -420,13 +429,23 @@ class Api {
   /** Qué está corriendo. Sin sesión: es la misma respuesta que mira el
    *  healthcheck del contenedor, y una que necesitara sesión no serviría para
    *  eso. */
-  async version(): Promise<string> {
+  async version(): Promise<Version> {
     try {
-      const out = await this.call<{ version: string }>('/api/version');
-      return out.version ?? '';
+      const out = await this.call<Version>('/api/version');
+      return { version: out.version ?? '', latest: out.latest ?? '', stale: !!out.stale, boot: !!out.boot };
     } catch {
-      return '';
+      return { version: '', latest: '', stale: false, boot: false };
     }
+  }
+
+  /** Actualizar esta instancia. Contesta 202 y el servidor se va: quien cambia
+   *  la versión y sabe deshacerlo es el arranque, no él. Lo que sigue es
+   *  esperar a que `/api/version` diga otro número. */
+  selfUpdate(version?: string) {
+    return this.call<{ from: string; to: string; backup: string }>('/api/update', {
+      method: 'POST',
+      body: JSON.stringify(version ? { version } : {}),
+    });
   }
 
   // ---- dónde vive el código ----------------------------------------------

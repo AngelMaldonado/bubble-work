@@ -41,6 +41,7 @@
     onsearch,
     onopencard,
     onmovecard,
+    onautoorder,
     onmoveevent,
     onaddcard,
     ondeletecard,
@@ -84,7 +85,9 @@
      *  list —one optimistic here, one authoritative there— is the bug this
      *  avoids: the mock keeps its local behaviour precisely because it passes
      *  none of these. */
-    onmovecard?: (cardId: string, columnId: string) => void;
+    onmovecard?: (cardId: string, columnId: string, before: string | null) => void;
+    /** devolver una columna al orden que deriva la prioridad */
+    onautoorder?: (columnId: string) => void;
     /** an event dragged to another day — the thread's due date */
     onmoveevent?: (id: string, day: string) => void;
     onaddcard?: (columnId: string, title: string) => void;
@@ -201,10 +204,10 @@
     onopencard?.(card);
   }
 
-  function moveCard(cardId: string, to: string) {
+  function moveCard(cardId: string, to: string, before: string | null = null) {
     if (onmovecard) {
       openIn = to;
-      return onmovecard(cardId, to);
+      return onmovecard(cardId, to, before);
     }
     let card: Card | undefined;
     const next = columns.map((c) => ({
@@ -373,7 +376,8 @@
           }}
           onadd={addCard}
           ondeletecard={dropCard}
-          {onmovecard}
+          onmovecard={moveCard}
+          {onautoorder}
           {onaddcolumn}
           {onrenamecolumn}
           {ondeletecolumn} />

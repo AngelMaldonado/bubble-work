@@ -1242,6 +1242,34 @@ dropdown that writes nowhere is a control that lies.
 
 **Done when:** a lead triages an inbox item into a thread without leaving the view.
 
+## El orden de una columna: derivado por defecto, a mano cuando alguien lo dice
+
+*(built)* Una columna del planeador se ordena sola —por la prioridad que el
+servidor deriva de impacto × urgencia, luego la fecha, luego el nombre— y eso
+sigue siendo el valor por defecto. Es lo que dice el modelo: el orden se deriva,
+no se administra.
+
+Pero derivado no siempre es lo que una persona sabe. «Esto va primero porque el
+cliente llama el martes» no cabe en impacto × urgencia, y la salida que quedaba
+era **falsear la urgencia para colocar la tarjeta** — que corrompe el dato con el
+que se calcula todo lo demás, incluido el board. Entre un segundo orden explícito
+y un primer orden mentiroso, el explícito es menos malo y además se ve.
+
+Así que `threads.rank`: cero es «ninguno, ordéname tú». Con el primer arrastre la
+columna entera pasa a llevar rangos —mezclar tarjetas con rango y sin él sería
+tener dos órdenes a la vez sin saber cuál gana— y la columna **lo dice** con una
+etiqueta «a mano» y una salida en su menú. Un orden que no se sabe que está
+puesto es un orden que no se puede quitar.
+
+Lo que no cambia: ordenar NO es evidencia. Mover una tarjeta de sitio no es que
+la realidad haya cambiado, así que no calienta nada y hay una aserción que lo
+comprueba.
+
+Rechazado: que arrastrar dentro de una columna no hiciera nada, que es lo que
+había. La pantalla dibujaba el hueco igual, así que prometía un reordenado que
+al soltar no ocurría — y eso se lee como una pantalla rota, no como una función
+que no existe.
+
 ## Inventario — dónde vive lo que hace funcionar todo esto
 
 VPS, dominios, servicios contratados, licencias. No es trabajo y **no calienta

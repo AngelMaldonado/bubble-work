@@ -151,6 +151,7 @@
       .map((n) => ({
         id: n.id,
         text: n.note,
+        body: n.body ?? '',
         from: n.captured_by === api.me?.id ? 'tú' : 'alguien',
         when: new Date(n.created).toLocaleDateString(),
       })),
@@ -223,6 +224,20 @@
   };
 
   const capture = (text: string) => write(() => api.create('inbox_items', { note: text }));
+
+  /** Guardar lo escrito en una nota.
+   *
+   *  Faltaba entero: el panel dejaba editar el título y el texto, los cambiaba
+   *  en el objeto de la lista y nadie los mandaba al servidor — así que
+   *  recargar los borraba. Es de las peores formas de perder algo, porque
+   *  mientras la pantalla está abierta parece guardado. */
+  function saveNote(id: string, patch: { text: string; body: string }) {
+    const n = notes.find((x) => x.id === id);
+    if (!n) return;
+    const note = patch.text.trim();
+    if (!note || (note === n.note && patch.body === (n.body ?? ''))) return;
+    write(() => api.update('inbox_items', id, { note, body: patch.body }));
+  }
 
   const deleteNote = (id: string) => {
     const n = notes.find((x) => x.id === id);
@@ -388,6 +403,7 @@
   ondeletecard={deleteCard}
   oncapture={capture}
   onpromote={promote}
+  onsavenote={saveNote}
   ondeletenote={deleteNote}
   onpatchobjective={(n, fields) => {
     const row = objectiveAt(n);

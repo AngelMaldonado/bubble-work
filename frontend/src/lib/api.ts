@@ -88,6 +88,10 @@ export type ThreadRecord = {
   due_date?: string;
   impact?: string;
   urgency?: string;
+  /** el sitio que alguien le dio a mano dentro de su columna del planeador.
+   *  Cero —o ausente— es «ninguno»: entonces la columna se ordena sola, por la
+   *  prioridad que el servidor deriva. */
+  rank?: number;
   completed_at?: string;
 };
 

@@ -13,7 +13,15 @@
     /** where this work lives — the project, when the board spans several */
     where?: string;
   };
-  export type Column = { id: string; name: string; cards: Card[] };
+  export type Column = {
+    id: string;
+    name: string;
+    cards: Card[];
+    /** alguien ordenó esta columna a mano. Se dice en la pantalla, y con una
+     *  salida: un orden que no se sabe que está puesto es un orden que no se
+     *  puede quitar. */
+    manual?: boolean;
+  };
 </script>
 
 <script lang="ts">
@@ -40,6 +48,7 @@
     onrenamecolumn,
     ondeletecolumn,
     onmovecard,
+    onautoorder,
   }: {
     columns?: Column[];
     onopen?: (card: Card) => void;
@@ -56,7 +65,12 @@
      *  Without it the drop only rearranges this component's copy, which is
      *  right for the mock and, against a server, a move that looked like it
      *  happened until the next reload undid it. */
-    onmovecard?: (cardId: string, columnId: string) => void;
+    /** una tarjeta soltada: a qué columna, y delante de cuál (null = al final).
+     *  El `before` importa tanto como la columna — dentro de la misma, es lo
+     *  ÚNICO que cambia. */
+    onmovecard?: (cardId: string, columnId: string, before: string | null) => void;
+    /** devolver una columna al orden automático, el que deriva la prioridad */
+    onautoorder?: (columnId: string) => void;
   } = $props();
 
   // Columns are the board's own shape, and it belongs to whoever runs the
@@ -119,11 +133,11 @@
 
   function move(cardId: string, toCol: string, before: string | null) {
     if (onmovecard) {
-      // The owner decides — and the order inside a column is not ours to keep:
-      // this board groups by objective, and what orders it is the priority the
-      // server derives, not where somebody dropped a card.
-      const from = columns.find((c) => c.cards.some((x) => x.id === cardId));
-      if (from?.id !== toCol) onmovecard(cardId, toCol);
+      // El dueño decide, y también dentro de la misma columna: ahí no cambia el
+      // objetivo pero sí el sitio, y ese sitio se guarda. Antes esta rama se
+      // iba sin hacer nada mientras la pantalla dibujaba el hueco — un
+      // reordenado que se prometía y no ocurría.
+      onmovecard(cardId, toCol, before);
       return;
     }
     let card: Card | undefined;
@@ -264,7 +278,8 @@
     Promise.all([
       import('@atlaskit/pragmatic-drag-and-drop/element/adapter'),
       import('@atlaskit/pragmatic-drag-and-drop/combine'),
-    ]).then(([{ dropTargetForElements, monitorForElements }, { combine }]) => {
+      import('@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge'),
+    ]).then(([{ dropTargetForElements, monitorForElements }, { combine }, hitbox]) => {
       if (!live) return;
       stop = combine(
         dropTargetForElements({
@@ -285,7 +300,21 @@
             if (!target) return;
             const to = (target.data.col as string) ?? colId;
             if (to !== colId) return; // one monitor acts, not five
-            move(source.data.cardId as string, to, over?.col === to ? over.before : null);
+
+            // La posición sale del destino sobre el que se SOLTÓ, no del último
+            // `onDrag` que vimos pasar. Es el mismo bicho que ya estaba
+            // arreglado para las columnas y que a las tarjetas nunca se le
+            // aplicó: el puntero puede salir de una tarjeta camino del botón del
+            // ratón, `onDragLeave` deja `over` en nulo, y la tarjeta aterrizaba
+            // al final de la columna — o en ningún sitio— en vez de donde se
+            // apuntaba.
+            let before: string | null = null;
+            const onCard = target.data.cardId as string | undefined;
+            if (onCard) {
+              const edge = hitbox.extractClosestEdge(target.data);
+              before = edge === 'bottom' ? nextOf(to, onCard) : onCard;
+            }
+            move(source.data.cardId as string, to, before);
             over = null;
             dragging = null;
           },
@@ -319,9 +348,15 @@
             {col.name}
           </button>
           <span class="count">{col.cards.length}</span>
+          {#if col.manual}
+            <!-- Que se VEA que el orden es de alguien. La columna ordenada sola
+                 no dice nada: lo normal no necesita etiqueta. -->
+            <span class="by-hand" title="Ordenada a mano. Deshazlo desde el menú.">a mano</span>
+          {/if}
           <Menu
             onSelect={(e: { value: string }) => {
               if (e.value === 'rename') startRename(col);
+              if (e.value === 'auto') onautoorder?.(col.id);
               if (e.value === 'delete') dropColumn(col.id);
             }}>
             <Menu.Trigger>
@@ -331,6 +366,11 @@
               <Menu.Positioner>
                 <Menu.Content>
                   <Menu.Item value="rename"><Menu.ItemText>Renombrar</Menu.ItemText></Menu.Item>
+                  {#if col.manual && onautoorder}
+                    <Menu.Item value="auto">
+                      <Menu.ItemText>Volver al orden automático</Menu.ItemText>
+                    </Menu.Item>
+                  {/if}
                   <Menu.Item value="delete"><Menu.ItemText>Eliminar la columna</Menu.ItemText></Menu.Item>
                 </Menu.Content>
               </Menu.Positioner>
@@ -565,4 +605,15 @@
     font-size: 0.8rem;
   }
   .add:hover { background: var(--hover); color: var(--text); }
+
+  /* La etiqueta de «a mano». Discreta: es una nota al pie del nombre de la
+     columna, no un aviso — nada va mal por haber ordenado uno mismo. */
+  .by-hand {
+    padding: 0 0.3rem;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--faint);
+    font-size: 0.62rem;
+    letter-spacing: 0.02em;
+  }
 </style>

@@ -122,12 +122,45 @@
    *  are the two things this screen exists to show. */
   const UNFILED = '';
 
+  /** Cómo se ordena una columna.
+   *
+   *  Por defecto, sola: por la prioridad que el servidor deriva de impacto ×
+   *  urgencia, que es lo que el modelo dice — el orden se deriva, no se
+   *  administra. Empatan por fecha de vencimiento, y al final por nombre, para
+   *  que dos cargas iguales no bailen entre recargas.
+   *
+   *  Si alguien arrastró aquí, manda su orden. No es un segundo sistema: es una
+   *  excepción declarada, y la columna lo dice con un botón para deshacerla.
+   *  «Esto va primero porque el cliente llama el martes» no cabe en impacto ×
+   *  urgencia, y obligar a falsear la urgencia para colocar una tarjeta sería
+   *  peor — corrompe el dato con el que se calcula todo lo demás. */
+  function sortColumn(rows: ThreadRecord[]): ThreadRecord[] {
+    const manual = rows.some((t) => (t.rank ?? 0) > 0);
+    return [...rows].sort((a, b) => {
+      if (manual) {
+        // Sin rango va al final: una tarjeta recién llegada a una columna
+        // ordenada a mano no tiene sitio asignado, y ponerla arriba sería
+        // inventarle uno.
+        const ra = a.rank || Number.MAX_SAFE_INTEGER;
+        const rb = b.rank || Number.MAX_SAFE_INTEGER;
+        if (ra !== rb) return ra - rb;
+      }
+      const pa = prios[a.id] || 'P9';
+      const pb = prios[b.id] || 'P9';
+      if (pa !== pb) return pa < pb ? -1 : 1;
+      const da = a.due_date || '9999';
+      const db = b.due_date || '9999';
+      if (da !== db) return da < db ? -1 : 1;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
   const columns = $derived<Column[]>(
     [{ id: UNFILED, name: 'Sin objetivo' }, ...objectiveRows.map((o) => ({ id: o.id, name: o.name }))].map(
       (col) => ({
         ...col,
-        cards: threads
-          .filter((t) => (t.objective ?? '') === col.id)
+        manual: threads.some((t) => (t.objective ?? '') === col.id && (t.rank ?? 0) > 0),
+        cards: sortColumn(threads.filter((t) => (t.objective ?? '') === col.id))
           .map(
             (t): Card => ({
               id: t.id,
@@ -183,8 +216,43 @@
 
   // Moving a card says what the work is FOR. Not what state it is in: that is
   // the operative board's answer, and it belongs to the workspace that owns it.
-  const moveCard = (id: string, column: string) =>
-    write(() => api.update('threads', id, { objective: column }));
+  /** Soltar una tarjeta: a qué columna, y en qué sitio.
+   *
+   *  La columna es el objetivo. El sitio se guarda con `rank`, y se escribe
+   *  para TODA la columna de destino: mezclar tarjetas con rango y sin él
+   *  dentro de la misma columna es tener dos órdenes a la vez y no saber cuál
+   *  gana. Con el primer arrastre, la columna entera pasa a ser suya — lo que
+   *  se ve antes de soltar es exactamente lo que queda después.
+   *
+   *  Los rangos van de diez en diez sin más motivo que dejar hueco a la vista
+   *  cuando alguien mire la base a mano. */
+  function moveCard(id: string, column: string, before: string | null = null) {
+    const col = columns.find((c) => c.id === column);
+    if (!col) return;
+    const order = col.cards.map((c) => c.id).filter((x) => x !== id);
+    const at = before ? order.indexOf(before) : -1;
+    if (at < 0) order.push(id);
+    else order.splice(at, 0, id);
+
+    write(async () => {
+      // El objetivo primero: si algo falla después, la tarjeta ya está donde se
+      // la soltó y sólo queda mal el orden — el revés dejaría una tarjeta con
+      // sitio en una columna a la que no pertenece.
+      const was = threads.find((t) => t.id === id)?.objective ?? '';
+      if (was !== column) await api.update('threads', id, { objective: column });
+      await Promise.all(
+        order.map((tid, i) => api.update('threads', tid, { rank: (i + 1) * 10 })),
+      );
+    });
+  }
+
+  /** Devolver una columna a que se ordene sola. Cero es «ninguno»: la prioridad
+   *  derivada vuelve a mandar, que es el valor por defecto de todo esto. */
+  function autoOrder(column: string) {
+    const col = columns.find((c) => c.id === column);
+    if (!col) return;
+    write(() => Promise.all(col.cards.map((c) => api.update('threads', c.id, { rank: 0 }))));
+  }
 
   /** Ask where it is born — unless there is only one place it could be. */
   function ask(title: string, objective: string, note?: Note) {
@@ -399,6 +467,7 @@
   onpatchcard={patchCard}
   onmoveevent={(id, day) => patchCard(id, { due: day })}
   onmovecard={moveCard}
+  onautoorder={autoOrder}
   onaddcard={addCard}
   ondeletecard={deleteCard}
   oncapture={capture}

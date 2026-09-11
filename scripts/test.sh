@@ -1043,6 +1043,29 @@ chk ">>> pero el documento propio de un thread no se borra por esa puerta" \
   "$(mcptext "$A" delete_page "$ARG" | grep -c "goes when the thread does")" 1
 
 
+# ---------------------------------------------------------- orden a mano ----
+#
+# Una columna del planeador se ordena sola por la prioridad derivada. `rank` es
+# la excepción declarada: cero significa «ninguno, ordéname tú», y una columna
+# donde alguien arrastró lleva rangos en todas sus tarjetas.
+#
+# Sin esto, colocar una tarjeta obligaba a falsear su urgencia — y eso corrompe
+# el dato con el que se calcula todo lo demás.
+echo
+chk ">>> un thread nace sin rango: la columna se ordena sola" \
+  "$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" | j "['rank']")" 0
+chk ">>> quien trabaja aquí puede ordenar a mano" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" -d '{"rank":20}')" 200
+chk ">>> ...y vuelve" \
+  "$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" | j "['rank']")" 20
+chk ">>> volver al automático es poner cero, no borrar la fila" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" -d '{"rank":0}')" 200
+chk ">>> erin no ordena un tablero que no alcanza" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $ER" -H "$JS" -d '{"rank":5}')" 404
+# El orden es una preferencia de quien planea, no evidencia: mover una tarjeta
+# de sitio no es que la realidad haya cambiado.
+chk ">>> ordenar NO calienta nada" "$(evcount "(target='$T1ID'%26%26kind='thread-ranked')")" 0
+
 # ---------------------------------------------------------- inventario ----
 #
 # Dónde vive lo que hace funcionar todo esto. VERLO se asigna, y se asigna con

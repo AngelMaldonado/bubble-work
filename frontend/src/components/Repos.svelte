@@ -181,12 +181,19 @@
      FUERA del flujo: cerrado, el abanico seguía ocupando su alto en la columna
      —invisible pero presente— y el área que abría la caja era esa columna
      entera, media pantalla de alto. Anclado sobre la caja, lo que se puede
-     señalar es la caja. */
+     señalar es la caja.
+
+     El hueco hasta la caja es PADDING, no margen. Con margen, entre la caja y
+     la primera fila quedaba una banda muerta donde no se está sobre ninguna de
+     las dos: el cursor la cruzaba, el hover se apagaba y el abanico se cerraba
+     justo cuando ibas a pulsar. El padding pertenece al abanico, así que esa
+     banda ya es parte de él. El de la derecha hace lo mismo para el movimiento
+     en diagonal, que es como se mueve una mano de verdad. */
   .fan {
     position: absolute;
     left: 0;
     bottom: 100%;
-    margin-bottom: 0.4rem;
+    padding: 0.35rem 3rem 0.5rem 0;
     display: flex;
     flex-direction: column-reverse;
     align-items: flex-start;
@@ -281,14 +288,18 @@
     font-size: 0.75rem;
   }
 
+  /* Y la caja lleva su propio margen de puntería: 56px de dibujo dentro de un
+     blanco algo mayor, para que acercarse no exija precisión de pixel. */
   .box {
     position: relative;
+    margin: -0.4rem;
+    padding: 0.4rem;
     display: grid;
     grid-template-areas: 'art';
     place-items: center;
     width: 56px;
     height: 56px;
-    padding: 0;
+    box-sizing: content-box;
     border: none;
     background: transparent;
     cursor: pointer;

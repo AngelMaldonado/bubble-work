@@ -1336,6 +1336,38 @@ the number gets skipped, or the changelog is written from memory. `cocogitto`
 and `git-cliff` both do part of it well and still leave a human running a command
 on a laptop, which is the step that stops happening.
 
+**Una instancia se actualiza SOLA, y sabe deshacerlo.** *(built)* El binario
+instalado dejó de ser el servidor y pasó a ser quien lo arranca: `bubble boot`
+resuelve la versión vigente, la lanza como hijo y la vigila. Si esa versión no
+llega a contestar —no arranca, una migración explota, el puerto no abre— vuelve
+a la última que sí lo hizo y la relanza. **El que deshace nunca puede ser el que
+se actualizó**, y por eso son dos procesos.
+
+Los binarios viven en el VOLUMEN (`/data/bin/versions/<tag>`), no en la imagen.
+En la imagen, un `docker compose up` los borraría y la instancia «volvería» a la
+versión de la imagen sin que nadie entienda por qué. El volumen es el estado; la
+imagen es sólo el arranque — y eso hace que el bootloader, la pieza que nada
+puede revertir, sólo cambie cuando una persona cambia la imagen.
+
+`POST /api/update` (lead global) descarga el binario de su plataforma, comprueba
+su SHA256 contra el `SHA256SUMS` del release, **copia la base** y se va con
+`EX_TEMPFAIL`; el arranque lee `next` y hace el cambio. La copia no es opcional
+aquí, a diferencia de la de `update.sh`: volver atrás devuelve el binario y no el
+esquema, así que si la versión nueva migra y luego falla, esa copia es lo único
+que queda.
+
+Rechazado, y por qué: montar el socket de docker en el contenedor para que se
+recreara a sí mismo. Funciona, y convierte cualquier fallo de seguridad de la
+aplicación en root del host — un precio enorme por ahorrar el minuto que tardaba
+la alternativa. Rechazado también un actualizador externo con ese socket: menos
+superficie, pero una pieza más que mantener y el socket seguía ahí.
+
+**Lo que la comprobación NO hace, dicho en su sitio:** `SHA256SUMS` viaja en el
+mismo release que el binario, así que comprueba integridad —una descarga a
+medias, un proxy que mete basura— y no procedencia: quien pudiera publicar un
+release falso publicaría también sus sumas. Firmarlo (cosign o minisign, con la
+clave en el CI) es lo que lo convertiría en confianza, y está pendiente.
+
 **Actualizar una instancia: ella TIRA, el CI no empuja.** *(built)* Un despliegue
 por SSH desde Actions necesita una llave con acceso al servidor guardada en el
 repositorio, no alcanza una instancia detrás de NAT, y si la máquina estaba

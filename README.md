@@ -430,10 +430,52 @@ have run the process by hand enough to know which steps are actually stable.
 
 ## Running it
 
-Bubble Work ships as one Go binary (`bubble`): a **server** that holds the state,
-serves its own web UI, and is the only thing clients talk to — plus a thin
-**client**. That is v0, and it is archived — see [`PLAN.md`](./PLAN.md) for what
-replaces it and why.
+Bubble Work ships as **one Go binary** that carries everything: the database, the
+web UI (embedded), the API, the MCP door for agents, and PocketBase's admin
+dashboard. Its state is two directories — the database and one git repository per
+workspace — and they are backed up and restored **together**, because a commit
+without its row means nothing.
+
+### On your machine
+
+```sh
+just install     # the frontend toolchain, once
+just dev         # build, run, and open — creates ./pb_data and ./repos
+just check       # gofmt, vet, build, type-check and the whole suite
+```
+
+### On a server
+
+Two shapes, both in [`deploy/README.md`](./deploy/README.md): a container that
+updates itself, or the bare binary under a systemd unit. In outline:
+
+1. **Run it.** `docker compose up -d` with the published image, or install the
+   binary from a release (`SHA256SUMS` travels with it — check before you run
+   it, not after). Migrations apply themselves on start.
+2. **Make the accounts.** Two kinds, deliberately separate: `bubble superuser
+   upsert …` operates the box (the dashboard), and `bubble person <email>
+   <password> [lead|member]` is somebody who *works*. Signing in to the product
+   needs the second. Founding a workspace is not required to get in.
+3. **Put a proxy in front.** The server listens on `127.0.0.1`; whatever
+   terminates TLS forwards to it. An agent's token travels in a header, so
+   without TLS it travels in the clear.
+4. **Decide about `/_/`.** One binary, one port: the app, the API and the admin
+   dashboard share an origin, so publishing the app publishes the dashboard's
+   login too. Either block that path at the proxy and reach it through an SSH
+   tunnel, or accept it knowingly — it is full read/write over the database.
+5. **Let it update itself.** `scripts/update.sh` on a daily timer pulls, starts,
+   waits for `/api/version` and rolls back to the previous image if it does not
+   answer. A backup before each update is **opt-in** (`BUBBLE_BACKUP=1`).
+
+### Versions
+
+`v1.0.0` onward, cut automatically from Conventional Commits when `main` moves —
+see the versioning decision in [`PLAN.md`](./PLAN.md). A running instance says
+what it is at `/api/version` and under "Salir" in the sidebar; in development it
+says `dev`, because `v1.0.0-12-gabc1234` is not a version anybody released.
+
+v0 — a different program that mirrored Plane — is archived at the tag
+`v0-plane-as-record`.
 
 ## Documentation
 
@@ -442,6 +484,9 @@ replaces it and why.
 | this file | the model — the way of thinking |
 | [`PLAN.md`](./PLAN.md) | what is being built, what was decided and against what, in what order |
 | [`AGENTS.md`](./AGENTS.md) | the operating rules agents load (`CLAUDE.md` imports it) |
+| [`deploy/README.md`](./deploy/README.md) | running an instance, and what is left to do by hand |
+| [`deploy/CI.md`](./deploy/CI.md) | where the checks and the releases run |
+| [`prompts/`](./prompts/) | what an agent is told: the guide, the section it installs in its own instructions, and the prompt a person copies |
 
 v0's own documentation — its architecture, fourteen module files, the schema
 reference and the numbered decisions 0001–0007 — is in git rather than deleted:

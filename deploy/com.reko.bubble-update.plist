@@ -1,0 +1,57 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Actualizar la instancia, en macOS.
+
+    cp deploy/com.reko.bubble-update.plist ~/Library/LaunchAgents/
+    launchctl load ~/Library/LaunchAgents/com.reko.bubble-update.plist
+
+  El equivalente de `bubble-update.timer`, que es de systemd y aquí no sirve.
+  Mismo trabajo: tira, arranca, espera a /api/version y vuelve a la imagen
+  anterior si no contesta.
+
+  Cambia `WorkingDirectory` si la instancia no vive en ~/dev-angel/bubble.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.reko.bubble-update</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/bin/bash</string>
+    <string>-lc</string>
+    <string>scripts/update.sh</string>
+  </array>
+  <key>WorkingDirectory</key>
+  <string>/Users/reko/dev-angel/bubble</string>
+
+  <!-- launchd arranca con un PATH mínimo: sin esto no encuentra `docker`, y el
+       fallo se ve como "no hay actualizaciones" en vez de como un error. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
+
+  <!-- Una vez al día, a una hora rara a propósito: si algún día hay varias
+       instancias, todas pidiendo la misma imagen al mismo minuto es un pico que
+       no hace falta. Si la Mac estaba dormida, launchd lo dispara al despertar.
+
+       No pongas esto cada pocos minutos: cada corrida es un `pull` contra GHCR,
+       y una actualización que llega seis horas tarde no le ha costado nada a
+       nadie. -->
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Hour</key><integer>4</integer>
+    <key>Minute</key><integer>37</integer>
+  </dict>
+
+  <!-- El log importa: es lo único que dirá que una actualización volvió atrás. -->
+  <key>StandardOutPath</key>
+  <string>/tmp/bubble-update.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/bubble-update.log</string>
+</dict>
+</plist>

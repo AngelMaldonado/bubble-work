@@ -8,3 +8,8 @@
 # Generados desde `simple-icons` por `bun run logos`: una dependencia fijada
 # reproduce 3459 archivos, y versionarlos ensucia cada diff a cambio de nada.
 frontend/public/logos/
+
+# Copia TEMPORAL de la base de v0 de reko. NUNCA se commitea: son megabytes de
+# datos y, sobre todo, es una copia de la única copia — el repositorio no es su
+# sitio, y un `git add -A` distraído la subiría para siempre.
+/v0-reko/

@@ -24,12 +24,18 @@
     open = $bindable(false),
     note = $bindable(null),
     render,
+    onsave,
     onpromote,
     ondelete,
   }: {
     open?: boolean;
     note?: Note | null;
     render?: (md: string) => string | Promise<string>;
+    /** guardar lo escrito. El panel NO escribe en la API: quien hace la
+     *  escritura es quien sabe confirmar, reintentar y decir que falló — y aquí
+     *  faltaba del todo, así que el título y el texto vivían en el objeto de la
+     *  lista y desaparecían al recargar. */
+    onsave?: (patch: { text: string; body: string }) => void;
     /** send it to the board, where it acquires an objective and a priority */
     onpromote?: (note: Note) => void;
     ondelete?: (id: string) => void;
@@ -42,15 +48,48 @@
 
   let body = $state('');
   let seeded = $state<string | null>(null);
+  let watched = $state('');
   $effect(() => {
     if (note && note.id !== seeded) {
       seeded = note.id;
       body = note.body ?? '';
+      // Abrir una nota NO es editarla: sin esta línea, el simple hecho de
+      // mirarla dispararía una escritura que nadie pidió.
+      watched = body;
     }
   });
   $effect(() => {
     if (note) note.body = body;
   });
+
+  // Se guarda al dejar de escribir, no en cada tecla: una nota de dos párrafos
+  // serían doscientas peticiones, y la última es la única que importa.
+  //
+  // Y también al cerrar, sin esperar: cerrar es exactamente el momento en el que
+  // alguien da por hecho que lo suyo quedó guardado.
+  // `MarkdownField` no avisa de sus cambios, así que se observa el valor.
+  $effect(() => {
+    const v = body;
+    if (!note || seeded !== note.id || v === watched) return;
+    watched = v;
+    touched();
+  });
+
+  let pending: ReturnType<typeof setTimeout> | null = null;
+  function touched() {
+    if (!note) return;
+    if (pending) clearTimeout(pending);
+    pending = setTimeout(flush, 600);
+  }
+  function flush() {
+    if (pending) clearTimeout(pending);
+    pending = null;
+    if (note) onsave?.({ text: note.text, body });
+  }
+  function close() {
+    flush();
+    open = false;
+  }
 </script>
 
 <!-- Escape never closes this one either — same editor, same reason as the card
@@ -58,7 +97,10 @@
 <Dialog
   {open}
   closeOnEscape={false}
-  onOpenChange={(e: { open: boolean }) => (open = e.open)}>
+  onOpenChange={(e: { open: boolean }) => {
+    if (!e.open) flush();
+    open = e.open;
+  }}>
   <Portal>
     <Dialog.Backdrop
       class="scrim"
@@ -70,7 +112,7 @@
         {#if note}
           <header class="flex items-center justify-between gap-3">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">
-              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} aria-label="qué llegó" />
+              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} oninput={touched} onblur={flush} aria-label="qué llegó" />
             </Dialog.Title>
             <Dialog.CloseTrigger class="btn-icon hover:preset-tonal">
               <XIcon class="size-4" />
@@ -87,7 +129,7 @@
             placeholder="¿qué pidió exactamente? ¿a quién afecta? lo que sepas, aunque esté a medias…" />
 
           <footer>
-            <button class="promote" onclick={() => { onpromote?.(note); open = false; }}>
+            <button class="promote" onclick={() => { flush(); onpromote?.(note); open = false; }}>
               → al kanban
             </button>
             <button class="danger" onclick={() => { ondelete?.(note.id); open = false; }}>

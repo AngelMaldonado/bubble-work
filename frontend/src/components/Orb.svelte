@@ -95,6 +95,20 @@
     el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 0, clientY: 0 }));
     priming = false;
   });
+
+  // ¿El nombre cabía?
+  //
+  // CSS no puede decirlo, y sin saberlo la copia que se abre aparecería también
+  // sobre los nombres cortos: un panel con fondo y sombra para enseñar
+  // exactamente lo mismo que ya se estaba leyendo. Se mide el recorte real —lo
+  // que el navegador tuvo que esconder— y se vuelve a medir cuando el texto
+  // cambia, que es lo que el argumento del attach está diciendo.
+  let clipped = $state(false);
+  function measure(_key: string) {
+    return (el: HTMLElement) => {
+      clipped = el.scrollHeight - el.clientHeight > 1;
+    };
+  }
 </script>
 
 <!-- Right-click opens the actions. Zag's ContextTrigger, not a hand-rolled
@@ -154,13 +168,28 @@
   </button>
   {/snippet}
   </Menu.ContextTrigger>
-  <span class="caption">
-    <!-- El proyecto ENCIMA del nombre y en pequeño: en el board de todos hay que
-         poder barrer la columna y saber de dónde es cada burbuja sin leer, y un
-         nombre de proyecto del mismo tamaño que el de la burbuja compite con lo
-         que sí se está leyendo. -->
-    {#if project}<span class="project">{project}</span>{/if}
-    {name}
+  <!-- El nombre, dos veces.
+       La primera está en el flujo y decide cuánto sitio ocupa esta burbuja; la
+       segunda flota encima y es la que se abre al pasar por encima. Dos nodos
+       con el mismo texto y no uno que crece, porque `.orbs` es un flex que
+       envuelve: si el de abajo creciera, la fila entera se haría más alta y las
+       de abajo darían un salto — mover el board para leer un nombre es peor que
+       no leerlo. -->
+  <span class="cap-slot">
+    <span class="caption" {@attach measure(name + project)}>
+      <!-- El proyecto ENCIMA del nombre y en pequeño: en el board de todos hay
+           que poder barrer la columna y saber de dónde es cada burbuja sin
+           leer, y un nombre de proyecto del mismo tamaño que el de la burbuja
+           compite con lo que sí se está leyendo. -->
+      {#if project}<span class="project">{project}</span>{/if}
+      {name}
+    </span>
+    {#if clipped}
+    <span class="caption full" aria-hidden="true">
+      {#if project}<span class="project">{project}</span>{/if}
+      {name}
+    </span>
+    {/if}
   </span>
 </div>
   <Portal>
@@ -306,6 +335,12 @@
     font-size: 0.58rem;
   }
 
+  /* El sitio que el nombre ocupa, que lo fija la copia en el flujo. */
+  .cap-slot {
+    position: relative;
+    width: 108px;
+  }
+
   .caption {
     /* NOT the display face. A bubble's name is DATA — often a hostname, a
        ticket number, somebody's shorthand — and a display face turns data into
@@ -315,7 +350,6 @@
     line-height: 1.15;
     text-align: center;
     color: var(--text);
-    max-width: 108px;
     display: -webkit-box;
     -webkit-line-clamp: 2;
     line-clamp: 2;
@@ -325,6 +359,31 @@
        and clipped — wasting half the space it had already reserved. */
     overflow-wrap: anywhere;
   }
+  /* La copia que se abre. Encaja EXACTAMENTE sobre la otra —el desplazamiento
+     negativo compensa su propio relleno— así que las dos primeras líneas no se
+     mueven ni un pixel al aparecer: lo que se ve es que siguen más abajo, no
+     que el texto saltó a otro sitio.
+
+     Sigue recortada, sólo que a seis líneas. Un nombre puede ser una cadena sin
+     espacios de doscientos caracteres, y sin tope taparía media columna. */
+  .full {
+    position: absolute;
+    top: -0.3rem;
+    left: -0.4rem;
+    right: -0.4rem;
+    padding: 0.3rem 0.4rem 0.35rem;
+    border-radius: 9px;
+    background: var(--surface-solid);
+    box-shadow: 0 8px 22px rgb(0 0 0 / 0.16);
+    -webkit-line-clamp: 6;
+    line-clamp: 6;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 0.14s ease;
+  }
+  .wrap:hover .full,
+  .wrap.held .full { opacity: 1; }
+
   .project {
     display: block;
     font-size: 0.62rem;
@@ -337,6 +396,7 @@
   /* Somebody who asked not to be moved should not be. */
   @media (prefers-reduced-motion: reduce) {
     .wrap { animation: none; }
+    .full { transition: none; }
     .orb { transition: none; }
     .wrap:hover .orb,
   .wrap.held .orb { transform: none; }

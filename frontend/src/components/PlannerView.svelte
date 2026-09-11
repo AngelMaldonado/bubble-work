@@ -46,6 +46,7 @@
     ondeletecard,
     oncapture,
     onpromote,
+    onsavenote,
     ondeletenote,
     onaddobjective,
     ondeleteobjective,
@@ -90,6 +91,9 @@
     ondeletecard?: (cardId: string) => void;
     oncapture?: (text: string) => void;
     onpromote?: (note: Note) => void;
+    /** guardar lo escrito en una nota del inbox. Sin esto, el panel edita el
+     *  objeto de la lista y nadie lo manda al servidor. */
+    onsavenote?: (id: string, patch: { text: string; body: string }) => void;
     ondeletenote?: (id: string) => void;
     onaddobjective?: (name: string) => void;
     ondeleteobjective?: (n: number) => void;
@@ -448,6 +452,7 @@
   bind:note
   {render}
   onpromote={promote}
+  onsave={(patch) => note && onsavenote?.(note.id, patch)}
   ondelete={(id) => (ondeletenote ? ondeletenote(id) : (inbox = inbox.filter((x) => x.id !== id)))} />
 {/if}
 

@@ -25,8 +25,18 @@ sudo cp deploy/bubble-update.* /etc/systemd/system/
 sudo systemctl enable --now bubble-update.timer
 ```
 
-Tira una vez al día, arranca la versión nueva, espera a `/api/version` y vuelve
-a la imagen anterior si no contesta. La copia previa es opt-in
+En **macOS** no hay systemd; el equivalente es un LaunchAgent:
+
+```sh
+mkdir -p scripts && cp <repo>/scripts/update.sh scripts/   # `update.sh` espera
+                                                           # el compose.yml un
+                                                           # nivel por encima
+cp deploy/com.reko.bubble-update.plist ~/Library/LaunchAgents/
+launchctl load ~/Library/LaunchAgents/com.reko.bubble-update.plist
+```
+
+En los dos casos: tira una vez al día, arranca la versión nueva, espera a
+`/api/version` y vuelve a la imagen anterior si no contesta. La copia previa es opt-in
 (`BUBBLE_BACKUP=1`): la migración corre sola al arrancar y es la puerta de un
 solo sentido de toda actualización, así que enciéndela si en esa máquina no hay
 otra copia.
@@ -47,20 +57,35 @@ sudo systemctl enable --now bubble
 llamando al programa, que es el mismo con el que una persona puede clonarlo y
 leerlo.
 
-Actualizar es reemplazar el binario y reiniciar. Las migraciones corren al
-arrancar.
+La unidad corre `boot`, no `serve`: el binario instalado lanza la versión
+vigente —que vive en `/var/lib/bubble/bin`— y la vigila. Actualizar es pulsar la
+etiqueta de versión en la aplicación; reemplazar el binario a mano y reiniciar
+sigue funcionando, y es lo que actualiza al propio arranque.
 
 ## Lo que falta después, en los dos casos
 
-**El superuser.** Es otra cuenta que las personas del producto — `_superusers`
-frente a `users`.
+**Las dos cuentas.** Son distintas a propósito: `_superusers` **opera la caja**
+—el dashboard, las colecciones, las reglas— y `users` es quien **trabaja**. Con
+sólo la primera, el login de la aplicación te rechaza; es el paso que más se
+olvida.
 
 ```sh
 # docker
-docker compose exec bubble bubble superuser upsert tu@correo <contraseña> --dir /data/pb_data
+docker compose exec bubble bubble superuser upsert tu@correo '<contraseña>' --dir /data/pb_data
+docker compose exec bubble bubble person       tu@correo '<contraseña>' lead --dir /data/pb_data
+
 # binario
-sudo -u bubble bubble superuser upsert tu@correo <contraseña> --dir /var/lib/bubble/pb_data
+sudo -u bubble bubble superuser upsert tu@correo '<contraseña>' --dir /var/lib/bubble/pb_data
+sudo -u bubble bubble person       tu@correo '<contraseña>' lead --dir /var/lib/bubble/pb_data
 ```
+
+`--dir` va explícito porque `exec` no pasa por el `CMD` de la imagen. `lead` es
+el lead **global** —quien ve el planeador y reparte el acceso al inventario—;
+`member` es lo normal para el resto. El mismo correo puede existir en las dos
+colecciones sin chocar.
+
+Fundar un workspace **no** hace falta para entrar: una cuenta nueva ve el board
+vacío con las dos salidas a la vista, empezar uno o esperar una invitación.
 
 **El proxy.** El servidor escucha en `127.0.0.1` a propósito: delante va lo que
 termina TLS. El token de MCP viaja en una cabecera, así que sin TLS viaja en

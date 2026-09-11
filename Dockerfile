@@ -36,14 +36,23 @@ RUN apk add --no-cache git ca-certificates tzdata
 # sin compose tampoco pierda nada por descuido.
 ENV BUBBLE_DATA=/data/pb_data \
     BUBBLE_REPOS=/data/repos \
-    BUBBLE_HTTP=0.0.0.0:8090
+    BUBBLE_HTTP=0.0.0.0:8090 \
+    BUBBLE_BIN_DIR=/data/bin
 VOLUME ["/data"]
 
 COPY --from=build /out/bubble /usr/local/bin/bubble
 EXPOSE 8090
 
-# `serve` corre las migraciones pendientes al arrancar. Es la puerta de un solo
-# sentido de toda actualización, y por eso `scripts/update.sh` ofrece hacer una
-# copia justo antes.
+# `boot` y no `serve`: este proceso no sirve nada. Instala la versión que trae
+# dentro si el volumen no tiene ninguna, lanza la vigente como hijo y la vigila;
+# si una actualización no llega a contestar, vuelve a la última que sí lo hizo.
+#
+# Los binarios viven en /data/bin —el volumen— y no en la imagen. En la imagen,
+# un `docker compose up` los borraría y la instancia «volvería» a la versión de
+# la imagen sin que nadie entienda por qué.
+#
+# El hijo corre las migraciones pendientes al arrancar. Es la puerta de un solo
+# sentido: volver atrás devuelve el binario, no el esquema, y por eso
+# `POST /api/update` copia la base antes de reiniciar.
 ENTRYPOINT ["/usr/local/bin/bubble"]
-CMD ["serve", "--http", "0.0.0.0:8090", "--dir", "/data/pb_data"]
+CMD ["boot", "--http", "0.0.0.0:8090", "--dir", "/data/pb_data"]

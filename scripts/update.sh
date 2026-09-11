@@ -77,7 +77,12 @@ if [[ "$BACKUP" == "1" ]]; then
     tar czf "/backup/$stamp.tar.gz" -C /data .
   # Deja las últimas, borra el resto. Un directorio de copias que crece sin
   # límite acaba llenando el disco, y un disco lleno es una instancia caída.
-  ls -1t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -n "+$((KEEP + 1))" | xargs -r rm --
+  # Un bucle y no `xargs -r`: esa bandera es de GNU y en macOS —donde corre una
+  # de las instancias— xargs la rechaza, así que la rotación fallaba justo en la
+  # máquina que más la necesita.
+  ls -1t "$BACKUP_DIR"/*.tar.gz 2>/dev/null | tail -n "+$((KEEP + 1))" | while IFS= read -r old; do
+    rm -f -- "$old"
+  done
 fi
 
 say "arrancando la versión nueva"

@@ -40,6 +40,8 @@
     current = '',
     label = 'Proyectos',
     version = '',
+    stale = false,
+    onversion,
     newLabel = 'Nuevo',
     pane = $bindable<HTMLElement | null>(null),
     onselect,
@@ -61,6 +63,10 @@
     label?: string;
     /** qué versión corre el servidor, o el entorno cuando no es una versión */
     version?: string;
+    /** hay una más nueva, y esta instancia puede ponérsela */
+    stale?: boolean;
+    /** pulsar la etiqueta. Sólo se pasa cuando hay algo que hacer al pulsarla */
+    onversion?: () => void;
     newLabel?: string;
     pane?: HTMLElement | null;
     onselect?: (id: string) => void;
@@ -269,7 +275,16 @@
                  esconderlo justo ahí lo escondía de quien trabaja con la columna
                  estrecha, que es quien más tiempo pasa mirándola. -->
             {#if version}
-              <p class="ver" title={version}>{version}</p>
+              {#if onversion}
+                <!-- Pulsable SÓLO cuando hay algo más nuevo y esta instancia
+                     puede ponérselo. El resto del tiempo es un dato, y un dato
+                     que responde al clic promete algo que no va a pasar. -->
+                <button class="ver live" onclick={onversion} title="Hay una versión nueva">
+                  <span class="dot" aria-hidden="true"></span>{version}
+                </button>
+              {:else}
+                <p class="ver" class:stale title={version}>{version}</p>
+              {/if}
             {/if}
           </Navigation.Menu>
         </Navigation.Footer>
@@ -451,11 +466,35 @@
   .pane { min-width: 0; flex: 1; overflow-y: auto; }
 
   .ver {
+    width: 100%;
     padding: 0.15rem 0.35rem 0.1rem;
+    border: none;
+    background: transparent;
     color: var(--faint);
     font-size: 0.68rem;
     font-variant-numeric: tabular-nums;
     text-align: center;
     user-select: text;
+  }
+
+  /* Con algo nuevo esperando: el mismo sitio, el mismo tamaño, otro peso. No un
+     banner — nadie necesita que le interrumpan para decirle que hay una versión
+     nueva; necesita poder verlo cuando mire, y poder pulsarlo entonces. */
+  .ver.live,
+  .ver.stale {
+    color: var(--accent, var(--text));
+    font-weight: 600;
+    cursor: pointer;
+  }
+  .ver.stale { cursor: default; }
+  .ver.live:hover { background: var(--hover); border-radius: 7px; }
+  .dot {
+    display: inline-block;
+    width: 6px;
+    height: 6px;
+    margin-right: 0.3rem;
+    vertical-align: middle;
+    border-radius: 999px;
+    background: currentColor;
   }
 </style>

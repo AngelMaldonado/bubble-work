@@ -3,6 +3,11 @@
 #   sudo cp deploy/bubble.service /etc/systemd/system/
 #   sudo systemctl enable --now bubble
 #
+# `boot` y no `serve`: este proceso no sirve nada. Lanza la versión vigente como
+# hijo y la vigila, y si una actualización no llega a contestar vuelve a la
+# última que sí lo hizo. Los binarios se guardan en /var/lib/bubble/bin, dentro
+# del estado que ya se respalda.
+#
 # Las DOS rutas van explícitas, y no es ceremonia. Sin `--dir` y sin
 # `BUBBLE_REPOS`, el binario crea `pb_data/` y `repos/` en el directorio desde
 # el que se lanzó — que en una unidad de systemd sin `WorkingDirectory=` es `/`.
@@ -18,7 +23,7 @@ User=bubble
 Group=bubble
 WorkingDirectory=/var/lib/bubble
 Environment=BUBBLE_REPOS=/var/lib/bubble/repos
-ExecStart=/usr/local/bin/bubble serve --http 127.0.0.1:8090 --dir /var/lib/bubble/pb_data
+ExecStart=/usr/local/bin/bubble boot --http 127.0.0.1:8090 --dir /var/lib/bubble/pb_data
 Restart=on-failure
 RestartSec=5
 

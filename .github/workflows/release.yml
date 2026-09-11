@@ -145,5 +145,15 @@ jobs:
           tags: |
             ghcr.io/angelmaldonado/bubble-work:${{ steps.version.outputs.next }}
             ghcr.io/angelmaldonado/bubble-work:stable
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          # Sin caché de GitHub Actions.
+          #
+          # `type=gha` existe para runners EFÍMEROS, donde cada trabajo empieza
+          # con el disco vacío y la única forma de no recompilar es mandar la
+          # caché a GitHub. El nuestro es una VM que sigue ahí: buildx conserva
+          # su caché entre corridas, que es más rápido y no cruza la red.
+          #
+          # Y además fallaba: el primer `v1.1.0` empujó el release y la imagen, y
+          # murió DESPUÉS, exportando la caché
+          # («results-receiver … unexpected EOF»). Un trabajo en rojo que sí
+          # había publicado es la peor clase de rojo — enseña a desconfiar del
+          # color en vez de del fallo.

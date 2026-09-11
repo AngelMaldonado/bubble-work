@@ -94,6 +94,7 @@
       presence.start();
       api.seesInventory().then((yes) => (seesInv = yes));
       api.version().then((v) => (serverVersion = v));
+      loadHeat();
     }
     ready = true;
   }
@@ -118,6 +119,7 @@
       // función del tiempo: dos burbujas medidas contra dos «ahora» no se
       // pueden comparar, que es lo único que esta pantalla hace.
       board = isAll ? await api.allBoard() : await api.board(ws!.id);
+      loadHeat();
       error = '';
     } catch (e) {
       error = (e as Error).message;
@@ -131,6 +133,45 @@
     board = null;
     loadBoard();
   });
+
+  // Qué arde en cada proyecto, para la columna de la izquierda.
+  //
+  // Sale del board de TODOS, que lo compone el servidor en un solo instante:
+  // pedir el de cada workspace serían N respuestas calculadas en N «ahoras», y
+  // el calor es función del tiempo. Dos proyectos medidos contra dos relojes no
+  // se pueden ordenar entre sí, que es justo lo que esto hace.
+  //
+  // Se pide aparte del board de la pantalla porque la columna está siempre, se
+  // esté mirando lo que se esté mirando.
+  let burning = $state<Record<string, number>>({});
+  async function loadHeat() {
+    try {
+      const all = await api.allBoard();
+      const by: Record<string, number> = {};
+      for (const b of all.bubbles) {
+        if (b.heat.lifecycle === 'hot') by[b.workspace] = (by[b.workspace] ?? 0) + 1;
+      }
+      burning = by;
+    } catch {
+      // Sin esto la columna sigue funcionando: ordena por nombre y no pinta
+      // nada. Una lista que desaparece porque un cálculo falló es peor que una
+      // lista sin adornos.
+    }
+  }
+
+  /** Los proyectos, ordenados por lo que arde.
+   *
+   *  Es la misma idea que el board: lo que produce flota. Un proyecto con tres
+   *  burbujas calientes está por encima de uno con una, y los que no tienen
+   *  ninguna se ordenan por nombre — alfabético es el orden que no se mueve
+   *  solo, y una columna que se reordena sin motivo es una en la que se pulsa
+   *  la fila equivocada. */
+  const sorted = $derived(
+    [...workspaces].sort((a, b) => {
+      const d = (burning[b.id] ?? 0) - (burning[a.id] ?? 0);
+      return d !== 0 ? d : a.name.localeCompare(b.name);
+    }),
+  );
 
   // The thread being read, resolved from the seq in the address. Null while the
   // board is still on its way — which is what makes a pasted link work.
@@ -592,7 +633,7 @@
   <SignIn onDone={boot} />
 {:else}
   <Shell
-    items={workspaces.map((w) => ({ id: w.id, name: w.name, hint: w.slug }))}
+    items={sorted.map((w) => ({ id: w.id, name: w.name, hint: w.slug, hot: burning[w.id] ?? 0 }))}
     pins={[
       // Todos ARRIBA DEL LISTADO: es el board entero, y los workspaces que
       // siguen son sus partes — leerlo como el primero de ellos dice esa

@@ -18,7 +18,14 @@
   import { edgeFade } from '../lib/fade.svelte';
   import type { Snippet } from 'svelte';
 
-  export type ShellItem = { id: string; name: string; hint?: string };
+  export type ShellItem = {
+    id: string;
+    name: string;
+    hint?: string;
+    /** cuántas burbujas suyas están produciendo. Lo que hace que un proyecto
+     *  flote en esta columna, y lo único que la tiñe. */
+    hot?: number;
+  };
 
   /** Something in the column that is NOT a workspace: a screen the whole app
    *  has, reached the same way you reach a project. */
@@ -203,11 +210,15 @@
                   if (e.key === 'Escape') editing = null;
                 }} />
             {:else}
-              <div class="proj" class:on={current === p.id}>
+              <div class="proj" class:on={current === p.id} class:burning={!!p.hot}>
                 <Navigation.Trigger
                   onclick={() => onselect?.(p.id)}
                   ondblclick={() => startRename(p.id, p.name)}
-                  title={p.hint ? `${p.name} · ${p.hint}` : p.name}>
+                  title={p.hot
+                    ? `${p.name} · ${p.hot} ${p.hot === 1 ? 'burbuja produciendo' : 'burbujas produciendo'}`
+                    : p.hint
+                      ? `${p.name} · ${p.hint}`
+                      : p.name}>
                   <span class="pin" aria-hidden="true">{p.name.slice(0, 1)}</span>
                   <Navigation.TriggerText>{p.name}</Navigation.TriggerText>
                 </Navigation.Trigger>
@@ -391,6 +402,7 @@
      otra clase de cosa, y el espacio solo dice "hay un hueco". */
 
   .proj {
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.15rem;
@@ -418,8 +430,13 @@
     text-overflow: ellipsis;
     white-space: nowrap;
   }
+  /* La elegida lleva borde. El fondo dice «ésta es distinta» y el borde dice
+     dónde EMPIEZA y dónde acaba — que en una columna de filas sin separación es
+     la diferencia entre una fila resaltada y una mancha. Va por dentro
+     (`inset`), así que no mueve nada de sitio. */
   .proj.on :global([data-scope='navigation'][data-part='trigger']) {
     background: var(--hover);
+    box-shadow: inset 0 0 0 1px var(--line);
     font-weight: 600;
   }
   /* El ancla es la fila: sin subrayado y con el color de la columna, porque el
@@ -496,5 +513,46 @@
     vertical-align: middle;
     border-radius: 999px;
     background: currentColor;
+  }
+
+  /* Lo que arde, en la columna.
+
+     El MISMO color que la banda caliente del board —`--hot`— y no un rojo
+     nuevo: quien ya aprendió que ese naranja significa «está produciendo» no
+     tiene que aprenderlo otra vez aquí.
+
+     TRANSLÚCIDO sobre la columna, y ahí estuvo el error que costó tres vueltas.
+     Mezclarlo contra `--surface-solid` —que es casi blanco en claro— convertía
+     la fila en una TARJETA BLANCA sobre el degradado lila de la columna: parecía
+     elevada, no caliente, y el hover la dejaba del todo en blanco. Un baño
+     translúcido deja ver la columna debajo, así que lo que cambia es la
+     temperatura y no el material.
+
+     Y la selección se dice con MÁS del mismo baño, no con el gris de siempre:
+     dos señales en el mismo canal se estropean, y aquí el canal es el color de
+     la fila. Una fila caliente y elegida es la más cargada de todas.
+
+     Sin número. La columna contesta «¿dónde está pasando algo?», y cuántas
+     burbujas arden es una pregunta del board, que está a un clic. */
+  .proj.burning :global([data-scope='navigation'][data-part='trigger']) {
+    background: color-mix(in oklab, var(--hot) 12%, transparent);
+  }
+  /* El hover sube el mismo baño. El de Skeleton, en claro, es casi blanco, y
+     borraba la fila justo al señalarla. */
+  .proj.burning :global([data-scope='navigation'][data-part='trigger']:hover) {
+    background: color-mix(in oklab, var(--hot) 18%, transparent);
+  }
+  .proj.burning.on :global([data-scope='navigation'][data-part='trigger']) {
+    background: color-mix(in oklab, var(--hot) 26%, transparent);
+    /* El borde, del mismo naranja: un gris sobre el baño cálido se lee como
+       suciedad y no como un borde. */
+    box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--hot) 50%, transparent);
+  }
+  .proj.burning.on :global([data-scope='navigation'][data-part='trigger']:hover) {
+    background: color-mix(in oklab, var(--hot) 32%, transparent);
+  }
+  .proj.burning :global([data-scope='navigation'][data-part='trigger'] .pin) {
+    color: var(--hot);
+    background: color-mix(in oklab, var(--hot) 14%, transparent);
   }
 </style>

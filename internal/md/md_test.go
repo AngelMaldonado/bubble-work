@@ -188,3 +188,37 @@ func TestMD_RenderHTML(t *testing.T) {
 		}
 	}
 }
+
+func TestWindow(t *testing.T) {
+	doc := "uno\ndos\ntres\ncuatro\ncinco\n"
+
+	// Lo normal: un trozo, y la cuenta del ORIGINAL para saber que falta algo.
+	got, first, last, total := Window(doc, 2, 2)
+	if got != "dos\ntres" || first != 2 || last != 3 || total != 5 {
+		t.Errorf("Window(2,2) = %q [%d-%d de %d]", got, first, last, total)
+	}
+
+	// El salto final no es una línea: contarla haría que todo documento midiera
+	// uno de más, y «5 de 6» es una cuenta que nadie puede comprobar.
+	if _, _, _, n := Window(doc, 1, 0); n != 5 {
+		t.Errorf("total = %d, quería 5 — el salto final no es una línea", n)
+	}
+
+	// Pedir más de lo que hay devuelve lo que hay, no un error: es la pregunta
+	// razonable de quien no sabía cuánto medía.
+	got, first, last, _ = Window(doc, 4, 99)
+	if got != "cuatro\ncinco" || first != 4 || last != 5 {
+		t.Errorf("Window(4,99) = %q [%d-%d]", got, first, last)
+	}
+	if _, f, _, _ := Window(doc, 900, 3); f != 5 {
+		t.Errorf("una línea más allá del final se ajusta al final, y dio %d", f)
+	}
+	if _, f, l, _ := Window(doc, -3, 2); f != 1 || l != 2 {
+		t.Errorf("desde antes del principio empieza en 1, y dio %d-%d", f, l)
+	}
+
+	// Un documento vacío no tiene líneas, y decir «1 de 1» sería inventarse una.
+	if _, _, _, n := Window("", 1, 10); n != 0 {
+		t.Errorf("el vacío mide %d líneas", n)
+	}
+}

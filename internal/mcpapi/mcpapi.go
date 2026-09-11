@@ -11,12 +11,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/AngelMaldonado/bubble-work/internal/bubble"
+	"github.com/AngelMaldonado/bubble-work/internal/md"
 	"github.com/AngelMaldonado/bubble-work/internal/tree"
 	"github.com/AngelMaldonado/bubble-work/prompts"
 )
@@ -188,6 +190,7 @@ func build() *mcp.Server {
 		Workspace string `json:"workspace"`
 		Query     string `json:"query" jsonschema:"text to look for, case-insensitive"`
 		Limit     int    `json:"limit,omitempty"`
+		Around    int    `json:"around,omitempty" jsonschema:"lines of context on each side of a hit"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "repos",
@@ -211,8 +214,11 @@ func build() *mcp.Server {
 	})
 
 	mcp.AddTool(s, &mcp.Tool{
-		Name:        "search",
-		Description: "Find text inside a workspace's documents. Threads come first.",
+		Name: "search",
+		Description: "Find text inside a workspace's documents. Threads come first. " +
+			"`around` brings a few lines of context with each hit — enough to quote " +
+			"in an `edit` without reading the document, which is the whole point. " +
+			"Each hit carries its line number: `read` takes it as `from`.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in searchArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -222,7 +228,7 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		hits, err := c.tree.Search(repo, in.Query, in.Limit)
+		hits, err := c.tree.Search(repo, in.Query, in.Limit, in.Around)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -233,11 +239,17 @@ func build() *mcp.Server {
 		Workspace string `json:"workspace,omitempty" jsonschema:"required with path"`
 		Path      string `json:"path,omitempty" jsonschema:"a path like docs/onboarding.md"`
 		Thread    string `json:"thread,omitempty" jsonschema:"a thread id, instead of workspace+path"`
+		From      int    `json:"from,omitempty" jsonschema:"first line to read, counting from 1"`
+		Lines     int    `json:"lines,omitempty" jsonschema:"how many lines from there"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "read",
 		Description: "Read a document, by thread id or by workspace and path. " +
-			"KEEP THE HASH: every write must send it back as `base`.",
+			"Comes back as the markdown itself, with one header line before it. " +
+			"KEEP THE HASH from that line: every write must send it back as `base`. " +
+			"`from` and `lines` read a slice — a long document is not worth reading " +
+			"whole to change one line, and `search` tells you which line to ask for. " +
+			"Without them a long document arrives cut, and the header says so.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in readArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -251,7 +263,7 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonOut(doc), nil, nil
+		return text(docText(doc, in.From, in.Lines)), nil, nil
 	})
 
 	type editArg struct {
@@ -286,7 +298,10 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonOut(doc), nil, nil
+		// La misma forma que `read`, y con el hash NUEVO: encadenar dos cambios
+		// es lo normal, y obligar a releer entre uno y otro sería una petición
+		// de más para recuperar algo que ya está aquí.
+		return text(docText(doc, 0, 0)), nil, nil
 	})
 
 	type newThreadArg struct {
@@ -680,6 +695,72 @@ func locate(c *caller, threadID, workspace, path string) (ws *core.Record, repo,
 	}
 	return w, r, path, path, nil
 }
+
+// docText devuelve un documento como lo que es: markdown.
+//
+// Antes salía como JSON, y el markdown dentro iba ESCAPADO —`\n` en vez de
+// saltos de línea— envuelto en un objeto con `html` al lado. Medido sobre un
+// documento pequeño de verdad: 427 bytes, de los cuales 122 eran el texto. El
+// resto era ruido que un modelo tiene que des-escapar mentalmente para
+// recuperar la estructura que los encabezados y las casillas ya daban gratis.
+//
+// El `html` no viaja: existe para la aplicación web, que lo pide por la API. Por
+// esta puerta duplicaba el tamaño sin que nadie lo leyera.
+//
+// La cabecera va en TEXTO y no en un bloque aparte —ni en `structuredContent`,
+// ni en un `EmbeddedResource`— porque el hash no se puede perder: sin él no hay
+// escritura. Y esos canales se pierden: OpenCode descartaba entero el contenido
+// de tipo `resource` (su issue 7878), Claude Desktop lo consume sin mostrarlo, y
+// la propia especificación pide mandar un texto de respaldo junto a
+// `structuredContent` «por compatibilidad». Un canal del que el estándar
+// desconfía no es donde se pone lo que no puede faltar.
+func docText(d bubble.Doc, from, lines int) string {
+	asked := from > 0 || lines > 0
+	if lines < 1 {
+		// Sin pedir nada, se manda el principio y se DICE cuánto falta. Cortar en
+		// silencio es peor que no cortar: el agente edita creyendo que lo vio
+		// todo. El tope es holgado —un documento normal cabe entero— y existe
+		// para los que no lo son: uno de 38 KB son diez mil tokens cada vez que
+		// alguien quiere corregir una línea.
+		lines = wide
+	}
+	body, first, last, total := md.Window(d.Content, from, lines)
+
+	head := d.Path + " · hash " + d.Hash
+	if d.Done > 0 {
+		head += " · " + strconv.Itoa(d.Done) + " hechas"
+	}
+	if total == 0 {
+		// Un documento vacío EXISTE: se escribe con el hash del vacío. Devolver
+		// la cabecera sola parecería un error de lectura.
+		return head + "\n(manda ese hash como `base` al escribir)\n\n" +
+			"(vacío — todavía no se ha escrito nada aquí)\n"
+	}
+	if first > 1 || last < total {
+		head += " · líneas " + strconv.Itoa(first) + "–" + strconv.Itoa(last) +
+			" de " + strconv.Itoa(total)
+	} else {
+		head += " · " + strconv.Itoa(total) + " líneas"
+	}
+	head += "\n(manda ese hash como `base` al escribir"
+	if last < total {
+		// Cómo pedir lo que falta, en la misma línea en la que se entera de que
+		// falta. Tener que deducir la llamada siguiente es una lectura de más.
+		head += "; el resto, con from: " + strconv.Itoa(last+1)
+		if !asked {
+			head += " — o pide `lines` si quieres otro tamaño"
+		}
+	}
+	head += ")\n\n"
+	return head + body + "\n"
+}
+
+// wide es cuánto se manda de un documento que nadie acotó.
+//
+// Mil quinientas líneas: lo que un harness sobre disco trae por defecto es del
+// mismo orden, y por la misma razón — casi todo cabe, y lo que no cabe es
+// justamente lo que no se quiere entero.
+const wide = 1500
 
 func text(s string) *mcp.CallToolResult {
 	return &mcp.CallToolResult{Content: []mcp.Content{&mcp.TextContent{Text: s}}}

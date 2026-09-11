@@ -277,7 +277,9 @@ func registerDocuments(app core.App, t *tree.Tree) {
 				return err
 			}
 			q := e.Request.URL.Query()
-			hits, err := t.Search(repo, q.Get("q"), atoiOr(q.Get("limit"), 50))
+			// La aplicación web no pide contexto: su lista de resultados enseña la
+			// línea, y el documento entero está a un clic.
+			hits, err := t.Search(repo, q.Get("q"), atoiOr(q.Get("limit"), 50), 0)
 			if err != nil {
 				return e.BadRequestError(err.Error(), err)
 			}

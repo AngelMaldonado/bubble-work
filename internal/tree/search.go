@@ -15,6 +15,10 @@ type Hit struct {
 	Area  Area   `json:"area"`
 	Line  int    `json:"line"`
 	Text  string `json:"text"`
+	// Around son las líneas de alrededor, cuando se piden: el ciclo real de
+	// quien busca para editar es buscar → mirar el trozo → citar el contexto, y
+	// sin esto el paso del medio es una lectura entera del documento.
+	Around string `json:"around,omitempty"`
 }
 
 // Search greps a workspace's documents.
@@ -28,7 +32,9 @@ type Hit struct {
 // place that says X" is what actually gets asked. Not an index either — at this
 // size the walk is cheaper than anything that would have to be kept in step with
 // the files, and an index that can be stale is another source of truth.
-func (t *Tree) Search(repo, needle string, limit int) ([]Hit, error) {
+// `around` pide N líneas de contexto a cada lado de cada acierto. Cero es lo de
+// siempre: sólo la línea, recortada.
+func (t *Tree) Search(repo, needle string, limit, around int) ([]Hit, error) {
 	dir, err := t.repoDir(repo)
 	if err != nil {
 		return nil, err
@@ -70,14 +76,24 @@ func (t *Tree) Search(repo, needle string, limit int) ([]Hit, error) {
 			return nil
 		}
 		title := strings.TrimSuffix(d.Name(), filepath.Ext(d.Name()))
-		for i, line := range strings.Split(string(b), "\n") {
+		all := strings.Split(string(b), "\n")
+		for i, line := range all {
 			if !strings.Contains(strings.ToLower(line), lower) {
 				continue
 			}
-			hits = append(hits, Hit{
+			h := Hit{
 				Path: rel, Title: title, Area: area,
 				Line: i + 1, Text: clip(strings.TrimSpace(line)),
-			})
+			}
+			if around > 0 {
+				// Sin recortar cada línea: lo que se va a citar en un `edit`
+				// tiene que ser el texto EXACTO, y un «…» al final lo convierte
+				// en una cita que no encuentra nada.
+				lo := max(0, i-around)
+				hi := min(len(all), i+around+1)
+				h.Around = strings.Join(all[lo:hi], "\n")
+			}
+			hits = append(hits, h)
 			if len(hits) >= limit {
 				return filepath.SkipAll
 			}

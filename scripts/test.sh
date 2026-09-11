@@ -866,16 +866,58 @@ NTID=$(echo "$NT" | j "['id']")
 chk ">>> un agente crea un thread por SLUG, sin conocer ids" "$([ -n "$NTID" ] && echo si || echo no)" si
 chk "...y el server le puso número y ruta" "$(echo "$NT" | j "['doc_path']")" "threads/$(echo "$NT" | j "['seq']")-trabajo-del-agente.md"
 
+# `read` y `edit` contestan MARKDOWN, con una cabecera de dos líneas delante. El
+# hash se saca de ahí — que es exactamente lo que hará un agente.
+hashof(){ echo "$1" | sed -nE 's/.*· hash ([a-f0-9]+).*/\1/p' | head -1; }
+
 RD=$(mcptext "$A" read "{\"thread\":\"$NTID\"}")
-H=$(echo "$RD" | j "['hash']")
+H=$(hashof "$RD")
 chk "read devuelve el hash que la escritura necesita" "$([ -n "$H" ] && echo si || echo no)" si
+chk ">>> ...y dice que hay que devolverlo al escribir" \
+  "$(echo "$RD" | grep -c 'base')" 1
+chk ">>> un documento vacío se dice, no se calla" \
+  "$(echo "$RD" | grep -c 'vacío')" 1
+
 W1=$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"# Trabajo\\n\\n- [ ] investigar el rate limit\\n\"}")
-chk ">>> escribe el documento" "$(echo "$W1" | j "['done']")" 0
-H2=$(echo "$W1" | j "['hash']")
+chk ">>> escribe el documento" "$(echo "$W1" | grep -c 'investigar el rate limit')" 1
+chk ">>> ...y vuelve como markdown de verdad, sin \\n escapados" \
+  "$(echo "$W1" | grep -c '^# Trabajo$')" 1
+H2=$(hashof "$W1")
+chk ">>> ...con el hash NUEVO, para encadenar otro cambio sin releer" \
+  "$([ -n "$H2" ] && [ "$H2" != "$H" ] && echo si || echo no)" si
 chk ">>> escribir con el base viejo se rechaza también por MCP" \
   "$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"pisado\"}" | grep -c "changed since you read it")" 1
 W2=$(mcptext "$A" edit "{\"thread\":\"$NTID\",\"base\":\"$H2\",\"todo\":{\"index\":0,\"done\":true}}")
-chk ">>> marca la casilla y devuelve el conteo" "$(echo "$W2" | j "['done']")" 1
+chk ">>> marca la casilla y devuelve el conteo" "$(echo "$W2" | grep -c '1 hechas')" 1
+# El html existe para la aplicación web, que lo pide por la API. Por esta puerta
+# duplicaba el tamaño sin que ningún agente lo leyera.
+chk ">>> y el html NO viaja por MCP" "$(echo "$W2" | grep -c '<h1>')" 0
+
+# Leer un TROZO. Un documento de 38 KB son diez mil tokens cada vez que alguien
+# quiere corregir una línea; `search` dice en qué línea está y `read` la trae.
+#
+# En una página aparte, no en el documento del thread: una prueba que pisa lo que
+# escribió la anterior deja a las siguientes comprobando otra cosa.
+LONG=$(python3 -c "print('\\\\n'.join('linea %d' % i for i in range(1, 61)))")
+ARG="{\"workspace\":\"alpha\",\"path\":\"docs/largo.md\",\"base\":\"$E0\",\"content\":\"$LONG\"}"
+W3=$(mcptext "$A" edit "$ARG")
+H3=$(hashof "$W3")
+RD2=$(mcptext "$A" read '{"workspace":"alpha","path":"docs/largo.md","from":30,"lines":3}')
+chk ">>> read trae sólo el trozo que se pidió" "$(echo "$RD2" | grep -c '^linea 3[012]$')" 3
+chk ">>> ...y NO lo que está fuera de él" "$(echo "$RD2" | grep -c '^linea 29$')" 0
+chk ">>> ...diciendo qué trozo es y de cuántas líneas" \
+  "$(echo "$RD2" | grep -c 'líneas 30–32 de 60')" 1
+chk ">>> ...y cómo pedir el resto" "$(echo "$RD2" | grep -c 'from: 33')" 1
+chk ">>> el hash es el del documento ENTERO, o una escritura parcial sería falsa" \
+  "$(hashof "$RD2")" "$H3"
+chk ">>> pedir más allá del final devuelve lo que hay, no un error" \
+  "$(mcptext "$A" read '{"workspace":"alpha","path":"docs/largo.md","from":900,"lines":5}' | grep -c '^linea 60$')" 1
+chk ">>> search dice en qué línea, para poder leer sólo esa parte" \
+  "$(mcptext "$A" search '{"workspace":"alpha","query":"linea 42"}' | j "[0]['line']")" 42
+chk ">>> ...y con around trae el contexto para citarlo en un edit" \
+  "$(mcptext "$A" search '{"workspace":"alpha","query":"linea 42","around":1}' | j "[0]['around']" | grep -c 'linea 41')" 1
+chk ">>> ...y sin pedirlo no viene" \
+  "$(mcptext "$A" search '{"workspace":"alpha","query":"linea 42"}' | grep -c 'around')" 0
 
 chk ">>> search encuentra lo que acaba de escribir" \
   "$(mcptext "$A" search '{"workspace":"alpha","query":"rate limit"}' | python3 -c 'import sys,json
@@ -992,7 +1034,8 @@ chk ">>> erin no ve el timeline de un thread que no alcanza" \
   "$(mcptext "$ER" timeline "$ARG" | grep -c "not found")" 1
 
 ARG="{\"workspace\":\"alpha\",\"path\":\"docs/agente.md\",\"base\":\"$E0\",\"content\":\"# Del agente\\n\"}"
-chk ">>> un agente escribe una página de wiki" "$(mcptext "$A" edit "$ARG" | j "['path']")" docs/agente.md
+chk ">>> un agente escribe una página de wiki" \
+  "$(mcptext "$A" edit "$ARG" | grep -c '^docs/agente.md · hash ')" 1
 ARG="{\"workspace\":\"alpha\",\"path\":\"docs/agente.md\"}"
 chk "...y la borra" "$(mcptext "$A" delete_page "$ARG" | j "['deleted']")" True
 ARG="{\"workspace\":\"alpha\",\"path\":\"threads/1-renombrado.md\"}"

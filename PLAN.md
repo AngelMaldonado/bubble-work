@@ -1284,6 +1284,55 @@ una sesión anónima, y justo mientras estaba vacío, que es cuando nadie lo
 habría notado. Un armario que se abre solo hasta que alguien le pone la primera
 llave.
 
+## `read` devolvía markdown, escapado dentro de un JSON
+
+*(built)* Un documento salía por MCP como un objeto con el markdown en un campo,
+con los saltos de línea escapados y el `html` al lado. Medido sobre un documento
+pequeño de verdad: **427 bytes, de los cuales 122 eran el texto**. El resto,
+ruido que un modelo tiene que des-escapar mentalmente para recuperar la
+estructura que los encabezados y las casillas ya daban gratis — y el `html`
+existe para la aplicación web, que lo pide por la API; por esta puerta duplicaba
+el tamaño sin que nadie lo leyera.
+
+Ahora `read` y `edit` contestan el markdown tal cual, con dos líneas de cabecera
+delante: la ruta, el hash, cuántas casillas van hechas, y la frase que dice que
+ese hash se devuelve al escribir.
+
+**En TEXTO, y no en un canal más elegante.** El protocolo ofrece dos:
+`EmbeddedResource` —un bloque con su `mimeType`— y `structuredContent`. Los dos
+se pierden por el camino: OpenCode descartaba entero el contenido de tipo
+`resource` (su issue 7878; con el servidor oficial de GitHub el agente recibía
+«successfully downloaded…» y el archivo se tiraba), Claude Desktop lo consume
+sin mostrarlo, y la propia especificación pide mandar un texto de respaldo junto
+a `structuredContent` «por compatibilidad hacia atrás». Un canal del que el
+estándar desconfía no es donde se pone lo que no puede faltar — y aquí lo que no
+puede faltar es el hash: sin él no hay escritura.
+
+`tree`, `board` y `search` siguen devolviendo JSON: son listas, y ahí el JSON es
+la forma correcta.
+
+**Y se lee por trozos, como un harness lee un archivo del disco.** `read` acepta
+`from` y `lines`; sin ellos manda las primeras 1500 líneas y la cabecera DICE
+cuántas faltan y cómo pedirlas — cortar en silencio es peor que no cortar,
+porque el agente edita creyendo que lo vio todo. El hash es siempre el del
+documento entero: es lo que hace correcta una escritura parcial.
+
+La medida que lo justifica son los documentos que se importaron de v0: el de
+Clickhouse son 38 KB, unos **9 600 tokens cada vez que alguien quiere corregir
+una línea** — y otros 9 600 si tiene que releer tras un conflicto.
+
+`search` gana `around`, que trae unas líneas a cada lado del acierto **sin
+recortarlas**: lo que se va a citar en un `edit` tiene que ser el texto exacto, y
+un «…» al final lo convierte en una cita que no encuentra nada. Con eso el ciclo
+es el de un harness sobre disco —buscar, mirar el trozo, citar el contexto— y
+cuesta unos cientos de tokens en vez de diez mil.
+
+**Lo que NO se copió: numerar las líneas al leer.** Un harness las numera y
+luego tiene que advertir «quita el prefijo antes de buscar» — una trampa que él
+mismo crea. Aquí `edit` cita por contexto, así que numerar añadiría ese modo de
+fallo sin resolver nada: `search` ya dice la línea, y `read` la acepta como
+`from`.
+
 ## Dónde vive el código — la caja de repositorios
 
 Una caja 3D fija abajo a la izquierda, enfrente de la HUD. Cerrada es una caja;
@@ -1415,8 +1464,19 @@ empieza adivinando. En desarrollo dice `dev` en vez de un número: lo que sale d
 `git describe` ahí es `v1.0.0-12-gabc1234-dirty`, que como número de versión no
 es cierto — el binario no es esa versión, es doce commits después de ella.
 
-**What BREAKING means here is not the HTTP API.** This is a self-hosted binary,
-so the contract that can hurt somebody is their data and their agents:
+**What BREAKING means here is not the HTTP API, y tampoco la forma de una tool
+de MCP** — corrigiendo lo que esto decía. Decía «una tool de MCP que
+desapareció», y es demasiado ancho: un agente vuelve a leer la descripción de
+cada tool al empezar cada sesión, así que una salida que cambia de forma se
+absorbe sola. Nadie compila contra ella. Lo que no se relee es una base de
+datos.
+
+Lo que sí sería BREAKING por esa puerta es que la aplicación web dependiera del
+MCP — y no depende: la UI habla con la API HTTP, y el MCP es una puerta aparte
+para los agentes. Si algún día se cruzan, esta regla cambia con ellas.
+
+This is a self-hosted binary, so the contract that can hurt somebody is their
+data and their agents:
 
   · a migration that cannot be rolled back — the database belongs to whoever
     hosts it, and `just migrate down` has to remain an honest offer;

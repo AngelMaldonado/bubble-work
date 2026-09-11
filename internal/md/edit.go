@@ -148,3 +148,52 @@ var ErrTodoMoved = errors.New("that todo is no longer at that position")
 
 // ErrNoSuchTodo reports an index past the end of a section's checklist.
 var ErrNoSuchTodo = errors.New("no todo at that position")
+
+// Window devuelve un trozo de un documento, por líneas y contando desde 1.
+//
+// Existe porque leer para editar no debería costar el documento entero. El
+// `Read` de un harness sobre disco trae 2000 líneas por defecto y deja pedir el
+// resto; aquí un documento de 38 KB —los hay, y son los importantes— son diez
+// mil tokens cada vez que un agente quiere corregir una línea, y otros diez mil
+// si tiene que releer tras un conflicto.
+//
+// Cuenta las líneas del ORIGINAL, no del trozo: lo que devuelve `total` es lo
+// que hace falta para saber que falta algo, y una cuenta sobre el recorte diría
+// siempre que está completo.
+//
+// `from` fuera de rango no es un error: se ajusta. Pedir la línea 900 de un
+// documento de 500 es una pregunta razonable de alguien que no sabía cuánto
+// medía, y contestarla con un fallo le obliga a una lectura más para averiguar
+// lo que la respuesta ya podía decirle.
+func Window(markdown string, from, count int) (text string, first, last, total int) {
+	lines := strings.Split(markdown, "\n")
+	// Un archivo que termina en salto no tiene una última línea vacía: la tiene
+	// el `Split`, y contarla haría que todo documento midiera uno de más.
+	if n := len(lines); n > 1 && lines[n-1] == "" {
+		lines = lines[:n-1]
+	}
+	// Y un documento vacío no tiene UNA línea vacía: no tiene ninguna. Decir
+	// «1 de 1» sería inventarse una para que la cuenta cuadre.
+	if len(lines) == 1 && lines[0] == "" {
+		lines = nil
+	}
+	total = len(lines)
+	if total == 0 {
+		return "", 0, 0, 0
+	}
+	if from < 1 {
+		from = 1
+	}
+	if from > total {
+		from = total
+	}
+	if count < 1 {
+		count = total
+	}
+	first = from
+	last = from + count - 1
+	if last > total {
+		last = total
+	}
+	return strings.Join(lines[first-1:last], "\n"), first, last, total
+}

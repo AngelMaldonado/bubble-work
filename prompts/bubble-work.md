@@ -80,6 +80,11 @@ Two errors you will meet, and both are telling you something useful:
   Include a surrounding line so it matches once. Passing `all` replaces every
   occurrence, and only do that when you mean every one.
 
+**Read a slice, not the whole thing.** `read` takes `from` and `lines`, and
+`search` tells you which line to ask for — it also takes `around` for a few lines
+of context, which is usually all you need to quote in an `edit`. A long document
+arrives cut, and the header says how much is missing and how to ask for it.
+
 Checkboxes are counted anywhere in the document. Only real `- [ ]` boxes count; a
 plain bullet is a sentence.
 

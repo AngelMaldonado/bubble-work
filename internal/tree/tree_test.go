@@ -349,7 +349,7 @@ func TestTree_Search(t *testing.T) {
 	write("docs/onboarding.md", "# Onboarding\n\nnada que ver\n")
 	write("docs/guias/api.md", "# API\n\nhablar del PRESUPUESTO otra vez\n")
 
-	hits, err := tr.Search("alpha", "presupuesto", 50)
+	hits, err := tr.Search("alpha", "presupuesto", 50, 0)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -367,18 +367,37 @@ func TestTree_Search(t *testing.T) {
 	if hits[1].Path != "docs/guias/api.md" {
 		t.Errorf("second hit is %+v, want the nested doc", hits[1])
 	}
-	if got, _ := tr.Search("alpha", "no-existe-en-ningun-lado", 50); len(got) != 0 {
+	if got, _ := tr.Search("alpha", "no-existe-en-ningun-lado", 50, 0); len(got) != 0 {
 		t.Errorf("a miss returned %d hits", len(got))
 	}
-	if got, _ := tr.Search("alpha", "  ", 50); len(got) != 0 {
+	if got, _ := tr.Search("alpha", "  ", 50, 0); len(got) != 0 {
 		t.Errorf("an empty needle returned %d hits", len(got))
 	}
 	// The limit is a cap, not a suggestion.
-	if got, _ := tr.Search("alpha", "e", 1); len(got) != 1 {
+	if got, _ := tr.Search("alpha", "e", 1, 0); len(got) != 1 {
 		t.Errorf("limit 1 returned %d hits", len(got))
 	}
 	// git's own files are not documents.
-	if got, _ := tr.Search("alpha", "ref:", 50); len(got) != 0 {
+	// `around` trae el contexto de alrededor SIN recortar: lo que se va a citar
+	// en un `edit` tiene que ser el texto exacto, y un «…» al final lo
+	// convertiría en una cita que no encuentra nada.
+	if got, _ := tr.Search("alpha", "presupuesto", 50, 2); len(got) > 0 {
+		if got[0].Around == "" {
+			t.Error("around: 2 no trajo contexto")
+		}
+		if !strings.Contains(got[0].Around, strings.TrimSpace(got[0].Text)) {
+			t.Error("el contexto no contiene la propia línea que casó")
+		}
+		if strings.Count(got[0].Around, "\n") > 4 {
+			t.Errorf("around: 2 debía traer 5 líneas como mucho, y trajo %d",
+				strings.Count(got[0].Around, "\n")+1)
+		}
+	}
+	if got, _ := tr.Search("alpha", "presupuesto", 50, 0); len(got) > 0 && got[0].Around != "" {
+		t.Error("sin pedirlo, no debería venir contexto")
+	}
+
+	if got, _ := tr.Search("alpha", "ref:", 50, 0); len(got) != 0 {
 		t.Errorf(".git leaked into search: %+v", got)
 	}
 }

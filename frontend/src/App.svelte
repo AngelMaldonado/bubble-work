@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type Board as BoardData, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
+  import { isEditable } from './lib/keys';
   import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
@@ -529,15 +530,22 @@
   // ⌘K from anywhere, including inside a thread. Not bound in the editor: there
   // ⌘K is CodeMirror's, and stealing a key from the thing that has focus is how
   // a shortcut becomes a surprise.
+  //
+  // Se escucha en CAPTURA. En la fase de burbuja, cualquiera que esté en medio y
+  // llame a `stopPropagation` —un menú de Zag que quedó escuchando, una capa de
+  // diálogo que no se desmontó— apagaba el atajo en toda la aplicación sin
+  // dejar rastro: dejaba de funcionar y no había error que mirar. `isEditable`
+  // es lo que sigue devolviendo la tecla a quien de verdad la necesita.
   function hotkeys(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      if (isEditable(e.target)) return;
       e.preventDefault();
       omni = true;
     }
   }
 </script>
 
-<svelte:window onkeydown={hotkeys} />
+<svelte:window onkeydowncapture={hotkeys} />
 
 
 <ThemeToggle />

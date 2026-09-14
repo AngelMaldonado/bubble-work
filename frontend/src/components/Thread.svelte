@@ -38,10 +38,21 @@
   // is a copy that goes out of date.
   let states = $state<State[]>([]);
   let bubbles = $state<{ id: string; name: string }[]>([]);
+
+  // La prioridad que se enseña arriba es la de su BURBUJA. Un thread ya no tiene
+  // la suya: la decide quien orquesta, y repetirla por pieza diría que cada una
+  // vale distinto dentro del mismo cuerpo de trabajo. Vacía si el thread no está
+  // en ninguna burbuja, que es una respuesta y no un hueco.
+  let prios = $state<Record<string, string>>({});
+  const bubblePriority = $derived(thread.bubble ? (prios[thread.bubble] ?? '') : '');
   $effect(() => {
     workspace.id;
     api.states(workspace.id).then((x) => (states = x)).catch(() => {});
     api.bubbles(workspace.id).then((x) => (bubbles = x)).catch(() => {});
+    api
+      .priorities(workspace.id)
+      .then((rows) => (prios = Object.fromEntries(rows.map((r) => [r.id, r.priority]))))
+      .catch(() => {});
   });
 
   // Los comentarios. El conteo se lee al abrir el thread para poder ponerlo en
@@ -271,7 +282,7 @@
     title={thread.name}
     lifecycle={thread.heat.lifecycle}
     reason={thread.heat.reason}
-    priority={thread.priority ?? ''}
+    priority={bubblePriority}
     threadState={bandName(thread.heat.lifecycle)}
     markdown={doc.content}
     html={doc.html}

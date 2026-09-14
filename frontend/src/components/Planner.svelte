@@ -20,8 +20,10 @@
   // disagree by Thursday.
   import {
     api,
+    type BubbleRecord,
     type InboxItem,
     type Objective as ObjectiveRecord,
+    type Stage,
     type ThreadRecord,
   } from '../lib/api';
   import PlannerView, { type Objective } from './PlannerView.svelte';
@@ -31,6 +33,7 @@
   import type { Note } from './InboxSheet.svelte';
   import { priorityMap, priorityMeaning } from '../lib/priority';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
+  import { tooLong } from '../lib/limits.svelte';
 
   let {
     onback,
@@ -48,7 +51,7 @@
   // workspace's git repository, so something new has to be told where it lives —
   // and being asked once, out loud, is the honest version of a screen that used
   // to decide it for you.
-  let born = $state<{ title: string; objective: string; note?: Note } | null>(null);
+  let born = $state<{ title: string; stage: string; note?: Note } | null>(null);
   let bornIn = $state('');
   // No bubble is asked for here, and that is the difference between the two
   // screens rather than an oversight. The board is the OPERATIVE surface: work
@@ -57,6 +60,15 @@
   // this project" — which bubble carries it is a decision for the board, later,
   // by whoever runs it.
 
+  // Lo que este tablero organiza son BURBUJAS.
+  //
+  // Un thread es ejecución: lo escribe quien opera, y cómo se organiza por
+  // dentro es suyo. Un lead plantea actividades a corto, mediano y largo plazo,
+  // y eso es una burbuja — un cuerpo de trabajo con un outcome. Los threads
+  // siguen aquí para una sola cosa: sus fechas, que es lo que el calendario
+  // muestra. Las fechas son de la ejecución.
+  let bubbles = $state<BubbleRecord[]>([]);
+  let stageRows = $state<Stage[]>([]);
   let threads = $state<ThreadRecord[]>([]);
   let objectiveRows = $state<ObjectiveRecord[]>([]);
   let notes = $state<InboxItem[]>([]);
@@ -67,12 +79,6 @@
   // that spans the department, two cards called "Facturación" are two different
   // pieces of work.
   let places = $state<Record<string, string>>({});
-  // The documents of the cards that have been opened, with the hash each was
-  // READ at. A card's description IS the thread's document — the same markdown
-  // file the thread view edits — so it is fetched when a card is opened rather
-  // than for every thread on the board, and written with its base hash like
-  // every other write to that file.
-  let docs = $state<Record<string, { content: string; hash: string }>>({});
   let error = $state('');
   // Nothing is destroyed without being asked first, and the question is asked
   // HERE — the writer knows the name of what is about to go and what goes with
@@ -81,13 +87,17 @@
 
   async function load() {
     try {
-      const [th, ob, inb, pr, ws] = await Promise.all([
+      const [bu, st, th, ob, inb, pr, ws] = await Promise.all([
+        api.allBubbles(),
+        api.stages(),
         api.allThreads(),
         api.objectives(),
         api.inbox(),
         api.allPriorities(),
         api.workspaces(),
       ]);
+      bubbles = bu;
+      stageRows = st;
       threads = th;
       places = Object.fromEntries(ws.map((w) => [w.id, w.name]));
       objectiveRows = ob;
@@ -109,18 +119,20 @@
       n: i + 1,
       name: o.name,
       why: o.outcome ?? '',
-      // What share of the work is under it. Counted from the threads rather
-      // than stored: a number kept in two places is a number that drifts.
-      share: threads.length
-        ? Math.round((threads.filter((t) => t.objective === o.id).length / threads.length) * 100)
+      // Qué parte del trabajo cuelga de él. Contado sobre las BURBUJAS, que es
+      // lo que un objetivo agrupa — contar threads decía «catorce» donde lo que
+      // hay son tres cosas en marcha. Y contado, no guardado: un número que vive
+      // en dos sitios es un número que deriva.
+      share: bubbles.length
+        ? Math.round((bubbles.filter((b) => b.objective === o.id).length / bubbles.length) * 100)
         : 0,
     })),
   );
 
-  /** The first column: work nobody said what it is for. Named rather than
-   *  hidden — an objective with nothing under it and work under no objective
-   *  are the two things this screen exists to show. */
-  const UNFILED = '';
+  /** La primera columna: lo que nadie ha colocado en el plan todavía. Con
+   *  nombre y no escondida — una burbuja que existe y no está planeada es
+   *  justamente una de las dos cosas que esta pantalla sirve para ver. */
+  const UNSTAGED = '';
 
   /** Cómo se ordena una columna.
    *
@@ -134,7 +146,7 @@
    *  «Esto va primero porque el cliente llama el martes» no cabe en impacto ×
    *  urgencia, y obligar a falsear la urgencia para colocar una tarjeta sería
    *  peor — corrompe el dato con el que se calcula todo lo demás. */
-  function sortColumn(rows: ThreadRecord[]): ThreadRecord[] {
+  function sortColumn(rows: BubbleRecord[]): BubbleRecord[] {
     const manual = rows.some((t) => (t.rank ?? 0) > 0);
     return [...rows].sort((a, b) => {
       if (manual) {
@@ -148,39 +160,54 @@
       const pa = prios[a.id] || 'P9';
       const pb = prios[b.id] || 'P9';
       if (pa !== pb) return pa < pb ? -1 : 1;
-      const da = a.due_date || '9999';
-      const db = b.due_date || '9999';
-      if (da !== db) return da < db ? -1 : 1;
       return a.name.localeCompare(b.name);
     });
   }
 
+  /** Cuántos threads tiene cada burbuja: lo que una tarjeta dice sin abrirse.
+   *
+   *  No es el detalle —eso vive en los threads y es de quien opera— sino su
+   *  tamaño: «esto son ocho piezas» y «esto es una» se planean distinto. */
+  const pieces = $derived.by(() => {
+    const n: Record<string, number> = {};
+    for (const t of threads) if (t.bubble) n[t.bubble] = (n[t.bubble] ?? 0) + 1;
+    return n;
+  });
+
   const columns = $derived<Column[]>(
-    [{ id: UNFILED, name: 'Sin objetivo' }, ...objectiveRows.map((o) => ({ id: o.id, name: o.name }))].map(
+    [{ id: UNSTAGED, name: 'Sin planear' }, ...stageRows.map((st) => ({ id: st.id, name: st.name }))].map(
       (col) => ({
         ...col,
-        manual: threads.some((t) => (t.objective ?? '') === col.id && (t.rank ?? 0) > 0),
-        cards: sortColumn(threads.filter((t) => (t.objective ?? '') === col.id))
-          .map(
-            (t): Card => ({
-              id: t.id,
-              title: t.name,
-              obj: t.objective ? objectiveRows.findIndex((o) => o.id === t.objective) + 1 : undefined,
-              due: t.due_date ? t.due_date.slice(0, 10) : undefined,
-              impact: t.impact,
-              urgency: t.urgency,
-              prio: prios[t.id] || undefined,
-              notes: docs[t.id]?.content,
-              where: places[t.workspace],
-            }),
-          ),
+        manual: bubbles.some((b) => (b.stage ?? '') === col.id && (b.rank ?? 0) > 0),
+        cards: sortColumn(bubbles.filter((b) => (b.stage ?? '') === col.id)).map(
+          (b): Card => ({
+            id: b.id,
+            title: b.name,
+            obj: b.objective ? objectiveRows.findIndex((o) => o.id === b.objective) + 1 : undefined,
+            objName: b.objective ? objectiveRows.find((o) => o.id === b.objective)?.name : undefined,
+            impact: b.impact,
+            urgency: b.urgency,
+            prio: prios[b.id] || undefined,
+            // El BRIEF: lo que el lead escribe al planear, con diagramas e
+            // imágenes. No el outcome, que es el contrato de una frase — estirado
+            // hasta ser el cuaderno del plan dejaría de leerse de un vistazo en
+            // el board.
+            notes: b.brief,
+            pieces: pieces[b.id] ?? 0,
+            where: places[b.workspace],
+            ws: b.workspace,
+            born: b.created,
+          }),
+        ),
       }),
     ),
   );
 
   const inbox = $derived<Note[]>(
     notes
-      .filter((n) => !n.thread)
+      // Fuera las triadas, sea a un thread o a una burbuja: ya son de algún
+      // sitio, y el inbox es lo que todavía no lo es.
+      .filter((n) => !n.thread && !n.bubble)
       .map((n) => ({
         id: n.id,
         text: n.note,
@@ -235,13 +262,13 @@
     else order.splice(at, 0, id);
 
     write(async () => {
-      // El objetivo primero: si algo falla después, la tarjeta ya está donde se
-      // la soltó y sólo queda mal el orden — el revés dejaría una tarjeta con
-      // sitio en una columna a la que no pertenece.
-      const was = threads.find((t) => t.id === id)?.objective ?? '';
-      if (was !== column) await api.update('threads', id, { objective: column });
+      // La etapa primero: si algo falla después, la burbuja ya está donde se la
+      // soltó y sólo queda mal el orden — el revés dejaría una tarjeta con sitio
+      // en una columna a la que no pertenece.
+      const was = bubbles.find((b) => b.id === id)?.stage ?? '';
+      if (was !== column) await api.update('bubbles', id, { stage: column });
       await Promise.all(
-        order.map((tid, i) => api.update('threads', tid, { rank: (i + 1) * 10 })),
+        order.map((bid, i) => api.update('bubbles', bid, { rank: (i + 1) * 10 })),
       );
     });
   }
@@ -251,14 +278,14 @@
   function autoOrder(column: string) {
     const col = columns.find((c) => c.id === column);
     if (!col) return;
-    write(() => Promise.all(col.cards.map((c) => api.update('threads', c.id, { rank: 0 }))));
+    write(() => Promise.all(col.cards.map((c) => api.update('bubbles', c.id, { rank: 0 }))));
   }
 
   /** Ask where it is born — unless there is only one place it could be. */
-  function ask(title: string, objective: string, note?: Note) {
+  function ask(title: string, stage: string, note?: Note) {
     const only = Object.keys(places);
     bornIn = only.length === 1 ? only[0] : bornIn || only[0] || '';
-    born = { title, objective, note };
+    born = { title, stage, note };
     // With a single project there is nothing to choose, so nothing is asked.
     if (only.length === 1) create();
   }
@@ -266,28 +293,47 @@
   async function create() {
     const b = born;
     if (!b || !bornIn) return;
+    // El título de la nota pasa a ser el NOMBRE de la burbuja, que cabe menos
+    // que una nota. Se dice antes de intentarlo, no con un rechazo después.
+    const long = tooLong('bubbles.name', b.title);
+    if (long) {
+      born = null;
+      error = `No pasó al kanban: el título se vuelve el nombre de la burbuja. ${long}`;
+      return;
+    }
     born = null;
     await write(async () => {
-      const thread = await api.create<ThreadRecord>('threads', {
+      // Nace una BURBUJA: lo que se planea es un cuerpo de trabajo. Sus threads
+      // los abre quien la ejecute, y ahí es donde se documenta el detalle.
+      // Lo que se entendió de la nota viaja a la burbuja como su brief — con sus
+      // imágenes, que siguen citando la nota por URL y siguen cargando porque
+      // la nota NO se borra.
+      const bub = await api.create<BubbleRecord>('bubbles', {
         workspace: bornIn,
         name: b.title,
-        objective: b.objective || '',
+        stage: b.stage || '',
+        brief: b.note?.body ?? '',
       });
-      // A triaged note keeps a pointer to what it became. Two writes in this
-      // order: a note pointing at a thread that failed to be created is worse
-      // than a thread nobody linked.
-      if (b.note) await api.update('inbox_items', b.note.id, { thread: thread.id });
+      // Una nota triada guarda a qué se convirtió, y sale del inbox por eso —
+      // no porque se borre. Antes se borraba, y con ella se iban su cuerpo y
+      // sus imágenes: lo único que se había entendido de la captura. Dos
+      // escrituras en este orden: una nota que apunta a algo que no llegó a
+      // crearse es peor que algo que nadie enlazó.
+      if (b.note) await api.update('inbox_items', b.note.id, { bubble: bub.id });
     });
   }
 
   const addCard = (column: string, title: string) => ask(title, column);
 
   const deleteCard = (id: string) => {
-    const t = threads.find((x) => x.id === id);
+    const b = bubbles.find((x) => x.id === id);
+    const n = pieces[id] ?? 0;
     doom = {
-      title: `¿Borrar «${t?.name ?? 'este thread'}»?`,
-      body: 'El thread sale del planeador y del board de su proyecto. Su documento sigue en la historia de git, que es de donde se recupera si hacía falta.',
-      go: () => write(() => api.deleteThread(id)),
+      title: `¿Borrar la burbuja «${b?.name ?? id}»?`,
+      body: n
+        ? `Sus ${n} threads NO se borran: quedan sin burbuja en el board de su proyecto, que es exactamente lo que pasó.`
+        : 'Sale del plan y del board de su proyecto.',
+      go: () => write(() => api.remove('bubbles', id)),
     };
   };
 
@@ -322,57 +368,31 @@
    *  decided — which is the question an inbox exists to defer. */
   const promote = (note: Note) => ask(note.text, '', note);
 
-  /** Fetch the card's document the first time it is opened. */
-  async function openCard(card: Card) {
-    if (docs[card.id]) return;
-    try {
-      const d = await api.readThread(card.id);
-      docs = { ...docs, [card.id]: { content: d.content, hash: d.hash } };
-    } catch (e) {
-      error = (e as Error).message;
-    }
-  }
+  /** Abrir una tarjeta ya no pide nada: la descripción de una burbuja es su
+   *  outcome, y viene con la fila. Antes había que ir a buscar el documento del
+   *  thread — que es ejecución, y no es lo que se planea. */
+  function openCard(_card: Card) {}
 
-  /** A field edited in the card sheet, in the planner's words, translated into
-   *  the thread's. `prio` is not among them: a thread's priority is DERIVED
-   *  from impact × urgency by the server, and writing it here would be the one
-   *  place in the product where the two disagree on purpose. */
+  /** Un campo editado en el panel, dicho en palabras del planeador y traducido
+   *  a las de la burbuja.
+   *
+   *  `prio` no está: se DERIVA de impacto × urgencia en el servidor, y
+   *  escribirla aquí sería el único sitio del producto donde las dos se
+   *  contradicen a propósito. */
   function patchCard(id: string, fields: Record<string, unknown>) {
-    // The description is not a field on the record: it is the thread's
-    // document, and it goes through the same base-hash write the thread view
-    // uses. A 409 here means somebody else wrote it while the card was open.
-    if ('notes' in fields) {
-      const doc = docs[id];
-      const content = String(fields.notes ?? '');
-      if (doc && doc.content !== content) {
-        write(async () => {
-          const out = await api.patchThread(id, { base: doc.hash, content });
-          docs = { ...docs, [id]: { content: out.content, hash: out.hash } };
-        });
-      }
-    }
     const out: Record<string, unknown> = {};
     if ('title' in fields) out.name = fields.title;
-    // A date, in the shape PocketBase stores: the picker hands back a bare
-    // `2026-09-15`, and the field is a timestamp. Clearing it is an empty
-    // string, not null — null is "no opinion" and leaves the old date in place.
-    if ('due' in fields) {
-      const day = String(fields.due ?? '');
-      // Guarded, because this is where a wrongly formatted date used to leave
-      // silently and come back as a refusal nobody could see.
-      if (day && !/^\d{4}-\d{2}-\d{2}$/.test(day)) {
-        error = `Fecha en un formato que el servidor no acepta: «${day}»`;
-        return;
-      }
-      out.due_date = day ? `${day} 00:00:00.000Z` : '';
-    }
+    // El brief de la burbuja: el cuaderno del plan. No el outcome —ése es una
+    // frase, el contrato— ni un documento de git, que son de los threads y son
+    // la ejecución.
+    if ('notes' in fields) out.brief = String(fields.notes ?? '');
     if ('impact' in fields) out.impact = fields.impact || '';
     if ('urgency' in fields) out.urgency = fields.urgency || '';
     if ('obj' in fields) {
       const n = fields.obj as number | undefined;
       out.objective = n ? (objectiveAt(n)?.id ?? '') : '';
     }
-    if (Object.keys(out).length) write(() => api.update('threads', id, out));
+    if (Object.keys(out).length) write(() => api.update('bubbles', id, out));
   }
 
   const renameObjective = (id: string, name: string) => {
@@ -385,7 +405,7 @@
     const o = objectiveRows.find((x) => x.id === id);
     doom = {
       title: `¿Borrar el objetivo «${o?.name ?? id}»?`,
-      body: 'Los threads que colgaban de él no se borran: quedan en «Sin objetivo», que es exactamente lo que pasó.',
+      body: 'Las burbujas que colgaban de él no se borran: quedan sin objetivo, que es exactamente lo que pasó.',
       go: () => write(() => api.remove('objectives', id)),
     };
   };
@@ -459,7 +479,13 @@
   {objectives}
   priorities={priorityMeaning.map((p) => [...p] as [string, string, string, string])}
   {priorityMap}
-  render={(md) => api.renderMarkdown(md)}
+  render={(md, card) => api.renderMarkdown(md, card?.ws ?? '')}
+  onattachcard={(card, file) =>
+    // Al `assets/` del workspace de la burbuja, como una imagen de thread: la
+    // burbuja tiene workspace, así que su imagen tiene dónde vivir y se cita por
+    // la ruta corta, la que sobrevive a una mudanza.
+    card.ws ? api.uploadAsset(card.ws, file) : Promise.resolve(null)}
+  onattachnote={(id, file) => api.attachToNote(id, file)}
   choosePriority={false}
   {onback}
   {onsearch}

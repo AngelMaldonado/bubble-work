@@ -254,7 +254,7 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 // CreateThread makes a thread and stamps everything the server owns: its number,
 // its document path, and the evidence that defining a piece of work is production.
 func CreateThread(app core.App, auth *core.Record, ws *core.Record,
-	name, bubbleID, impact, urgency string) (*core.Record, error) {
+	name, bubbleID string) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
 	}
@@ -280,12 +280,6 @@ func CreateThread(app core.App, auth *core.Record, ws *core.Record,
 	if bubbleID != "" {
 		r.Set("bubble", bubbleID)
 	}
-	for k, v := range map[string]string{"impact": impact, "urgency": urgency} {
-		if v != "" {
-			r.Set(k, v)
-		}
-	}
-
 	var next int
 	if err := app.DB().NewQuery(
 		"SELECT COALESCE(MAX(seq), 0) + 1 FROM threads WHERE workspace = {:ws}").
@@ -449,11 +443,15 @@ func CreateBubble(app core.App, auth *core.Record, ws *core.Record, name, outcom
 // Pointers, so "not mentioned" and "set to empty" are different requests:
 // clearing an outcome and leaving it alone are not the same statement.
 type BubbleEdit struct {
-	Name    *string   `json:"name,omitempty"`
-	Outcome *string   `json:"outcome,omitempty"`
-	Owners  *[]string `json:"owners,omitempty" jsonschema:"user ids; empty means nobody is accountable"`
-	Closure *string   `json:"closure,omitempty" jsonschema:"how it ended, in your words"`
-	Closed  *bool     `json:"closed,omitempty" jsonschema:"true closes it, false reopens it"`
+	Name      *string   `json:"name,omitempty"`
+	Outcome   *string   `json:"outcome,omitempty"`
+	Owners    *[]string `json:"owners,omitempty" jsonschema:"user ids; empty means nobody is accountable"`
+	Closure   *string   `json:"closure,omitempty" jsonschema:"how it ended, in your words"`
+	Closed    *bool     `json:"closed,omitempty" jsonschema:"true closes it, false reopens it"`
+	Stage     *string   `json:"stage,omitempty" jsonschema:"a stage id — where the lead put it on the plan"`
+	Objective *string   `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
+	Impact    *string   `json:"impact,omitempty" jsonschema:"high, mid or low"`
+	Urgency   *string   `json:"urgency,omitempty" jsonschema:"high, mid or low"`
 }
 
 // SetBubble edits one. Mirrors `bubbles.UpdateRule` — any member.
@@ -483,6 +481,34 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 	if in.Closure != nil {
 		b.Set("closure", *in.Closure)
 	}
+	if in.Stage != nil {
+		if *in.Stage != "" {
+			if _, err := app.FindRecordById("stages", *in.Stage); err != nil {
+				return nil, fmt.Errorf("no stage %q", *in.Stage)
+			}
+		}
+		b.Set("stage", *in.Stage)
+	}
+	if in.Objective != nil {
+		if *in.Objective != "" {
+			if _, err := app.FindRecordById("objectives", *in.Objective); err != nil {
+				return nil, fmt.Errorf("no objective %q", *in.Objective)
+			}
+		}
+		// Un objetivo es del DEPARTAMENTO, así que una burbuja de cualquier
+		// proyecto puede colgar de cualquiera. Eso es la capa estratégica, no una
+		// fuga: lo que la hace valer es que cruce proyectos.
+		b.Set("objective", *in.Objective)
+	}
+	for field, v := range map[string]*string{"impact": in.Impact, "urgency": in.Urgency} {
+		if v == nil {
+			continue
+		}
+		if *v != "" && *v != "high" && *v != "mid" && *v != "low" {
+			return nil, fmt.Errorf("%s is high, mid or low — not %q", field, *v)
+		}
+		b.Set(field, *v)
+	}
 	if in.Closed != nil {
 		if *in.Closed {
 			b.Set("closed_at", time.Now().UTC())
@@ -500,13 +526,15 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 }
 
 // ThreadEdit is what may be said about a thread that is not its document.
+//
+// Ni objetivo ni prioridad: los dos subieron a la burbuja. Un objetivo dice para
+// qué sirve un cuerpo de trabajo, y el cuerpo de trabajo es la burbuja; la
+// prioridad la decide quien orquesta, no quien ejecuta. Lo que queda aquí es la
+// ejecución: cómo se llama, de qué burbuja es, cuándo vence.
 type ThreadEdit struct {
-	Name      *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
-	Bubble    *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
-	Objective *string `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
-	Due       *string `json:"due,omitempty" jsonschema:"a day, 2026-09-15; empty clears it"`
-	Impact    *string `json:"impact,omitempty" jsonschema:"high, mid or low"`
-	Urgency   *string `json:"urgency,omitempty" jsonschema:"high, mid or low"`
+	Name   *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
+	Bubble *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+	Due    *string `json:"due,omitempty" jsonschema:"a day, 2026-09-15; empty clears it"`
 }
 
 var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -514,8 +542,9 @@ var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
 // SetThread edits the record around the document. Mirrors `threads.UpdateRule`
 // — any member of its workspace.
 //
-// Priority is NOT here, and cannot be: it is derived from impact × urgency by
-// the server, and a second way to write it would be a second answer.
+// La prioridad NO está aquí y tampoco en la burbuja como campo escribible: se
+// deriva de impacto × urgencia, y una segunda forma de escribirla sería una
+// segunda respuesta.
 func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
@@ -539,17 +568,6 @@ func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core
 		}
 		th.Set("bubble", *in.Bubble)
 	}
-	if in.Objective != nil {
-		if *in.Objective != "" {
-			if _, err := app.FindRecordById("objectives", *in.Objective); err != nil {
-				return nil, fmt.Errorf("no objective %q", *in.Objective)
-			}
-		}
-		// An objective belongs to the DEPARTMENT, so a thread from any project
-		// may hang from any of them. That is the point of the strategic layer,
-		// not a leak.
-		th.Set("objective", *in.Objective)
-	}
 	if in.Due != nil {
 		day := strings.TrimSpace(*in.Due)
 		if day != "" && !dayOnly.MatchString(day) {
@@ -560,15 +578,6 @@ func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core
 		} else {
 			th.Set("due_date", day+" 00:00:00.000Z")
 		}
-	}
-	for field, v := range map[string]*string{"impact": in.Impact, "urgency": in.Urgency} {
-		if v == nil {
-			continue
-		}
-		if *v != "" && *v != "high" && *v != "mid" && *v != "low" {
-			return nil, fmt.Errorf("%s is high, mid or low — not %q", field, *v)
-		}
-		th.Set(field, *v)
 	}
 	// Renaming moves the file: the hook on the record request does it for the
 	// web, and this door goes through the same app, so it happens here too.
@@ -590,7 +599,7 @@ type PlanObjective struct {
 	Name    string `json:"name"`
 	Outcome string `json:"outcome,omitempty"`
 	Due     string `json:"due_date,omitempty"`
-	Threads int    `json:"threads"`
+	Bubbles int    `json:"bubbles"`
 }
 
 type PlanNote struct {
@@ -616,11 +625,14 @@ func ReadPlan(app core.App, auth *core.Record) (Plan, error) {
 		}
 		for _, o := range rows {
 			var n int
-			_ = app.DB().NewQuery("SELECT COUNT(*) FROM threads WHERE objective = {:o}").
+			// Burbujas, no threads: un objetivo se sirve con cuerpos de trabajo, y
+			// contar piezas de ejecución decía «catorce» donde lo que hay son tres
+			// cosas en marcha.
+			_ = app.DB().NewQuery("SELECT COUNT(*) FROM bubbles WHERE objective = {:o}").
 				Bind(dbx.Params{"o": o.Id}).Row(&n)
 			out.Objectives = append(out.Objectives, PlanObjective{
 				ID: o.Id, Name: o.GetString("name"), Outcome: o.GetString("outcome"),
-				Due: o.GetDateTime("due_date").String(), Threads: n,
+				Due: o.GetDateTime("due_date").String(), Bubbles: n,
 			})
 		}
 	}

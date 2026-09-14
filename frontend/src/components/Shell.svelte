@@ -17,6 +17,7 @@
   import { rail } from '../lib/filters.svelte';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Snippet } from 'svelte';
+  import { limited } from '../lib/limits.svelte';
 
   export type ShellItem = {
     id: string;
@@ -203,7 +204,7 @@
               <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                 class="rename"
                 {@attach (el: HTMLInputElement) => { el.focus(); el.select(); }}
-                bind:value={draft}
+                bind:value={draft} {@attach limited('workspaces.name')}
                 onblur={commitRename}
                 onkeydown={(e) => {
                   if (e.key === 'Enter') commitRename();

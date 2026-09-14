@@ -16,6 +16,7 @@
   import { live } from '../lib/live.svelte';
   import { ago } from '../lib/when';
   import Prose from './Prose.svelte';
+  import { limited } from '../lib/limits.svelte';
 
   let {
     open = $bindable(false),
@@ -156,7 +157,7 @@
           <textarea
             rows="2"
             placeholder="Escribe… (⌘↵ para enviar)"
-            bind:value={draft}
+            bind:value={draft} {@attach limited('comments.body')}
             onkeydown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
                 e.preventDefault();

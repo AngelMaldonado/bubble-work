@@ -19,6 +19,7 @@
   import { ago } from '../lib/when';
   import Prose from './Prose.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
+  import { limited } from '../lib/limits.svelte';
 
   let {
     onback,
@@ -415,13 +416,13 @@
               class="input"
               placeholder="¿Cómo se llama? (Dominios, VPS, Licencias…)"
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-              bind:value={fresh.name}
+              bind:value={fresh.name} {@attach limited('inventory_groups.name')}
               {@attach (el: HTMLInputElement) => el.focus()} />
             <input
               class="input"
               placeholder="Una línea sobre qué guarda (opcional)"
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-              bind:value={fresh.note} />
+              bind:value={fresh.note} {@attach limited('inventory_groups.note')} />
 
             <div class="picker">
               <div class="picker-head">
@@ -490,15 +491,15 @@
             <div class="pair">
               <input class="input" placeholder="¿Cómo se llama? (vps-01, cuby.mx…)"
                 autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                bind:value={thing.name} {@attach (el: HTMLInputElement) => el.focus()} />
+                bind:value={thing.name} {@attach limited('inventory_items.name')} {@attach (el: HTMLInputElement) => el.focus()} />
               <input class="input" placeholder="Proveedor (Hetzner, Cloudflare…)"
                 autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                bind:value={thing.provider} />
+                bind:value={thing.provider} {@attach limited('inventory_items.provider')} />
             </div>
             <div class="pair">
               <input class="input" placeholder="Costo (6 EUR/mes)"
                 autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                bind:value={thing.cost} />
+                bind:value={thing.cost} {@attach limited('inventory_items.cost')} />
               <!-- El mismo calendario que el planeador. Un `<input type=date>`
                    se dibuja distinto en cada navegador y en ninguno se parece a
                    esta aplicación; y sobre todo, dos formas de elegir una fecha
@@ -563,7 +564,7 @@
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
               bind:value={thing.vault} />
             <textarea class="input" rows="3" placeholder="Notas (markdown): qué corre aquí, qué depende de esto…"
-              bind:value={thing.notes}></textarea>
+              bind:value={thing.notes} {@attach limited('inventory_items.notes')}></textarea>
 
             <!-- Sólo marcas. Una COSA es de alguien —un VPS está en Hetzner, un
                  dominio en Namecheap— y su logo dice eso más rápido que

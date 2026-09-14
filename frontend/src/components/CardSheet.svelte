@@ -22,6 +22,7 @@
   import AlignLeftIcon from '@lucide/svelte/icons/align-left';
   import ListIcon from '@lucide/svelte/icons/list';
   import MarkdownField from './MarkdownField.svelte';
+  import { limited, tooLong } from '../lib/limits.svelte';
   import type { Card } from './Kanban.svelte';
 
   // Skeleton ships NO css for Dialog — its parts are styled with utilities, and
@@ -39,9 +40,11 @@
   let {
     open = $bindable(false),
     card = $bindable(null),
+    dated = true,
     objectives = [],
     priorityMap,
     render,
+    onattach,
     columns = [],
     columnId = '',
     onmove,
@@ -52,10 +55,18 @@
   }: {
     open?: boolean;
     card?: Card | null;
+    /** si esta tarjeta tiene fecha propia. Una burbuja no: las fechas son de
+     *  sus threads, que es donde vive la ejecución. */
+    dated?: boolean;
     objectives?: Objective[];
     priorityMap?: { cols: string[]; rows: string[][] };
     /** markdown → html; the server in the real app */
-    render?: (md: string) => string | Promise<string>;
+    /** markdown → html. Recibe la tarjeta para que quien llama resuelva sus
+     *  imágenes contra el sitio donde viven: `assets/x.png` sólo existe dentro de
+     *  un workspace. */
+    render?: (md: string, card?: Card | null) => string | Promise<string>;
+    /** guardar una imagen pegada en esta tarjeta y decir cómo se la cita */
+    onattach?: (card: Card, file: File) => Promise<{ path: string } | null | void>;
     /** where the card can go, and where it is */
     columns?: { id: string; name: string }[];
     columnId?: string;
@@ -123,6 +134,36 @@
   // Trello does it: reading is the default and "Editar" is a decision.
   let editingNotes = $state(false);
 
+  // Guardar la descripción es «Listo», pero no SÓLO «Listo»: la edición también
+  // termina con Escape dentro del campo o cerrando la tarjeta, y en esos dos
+  // caminos lo escrito se quedaba en la pantalla sin llegar nunca al servidor
+  // — hasta recargar, que es cuando alguien descubre que no estaba.
+  //
+  // Lo que no cabe no se manda (el servidor rechazaría la escritura entera), y
+  // la tarjeta no se cierra con ello dentro: cerrarla sería perderlo callando.
+  const notesBlocked = $derived(tooLong('bubbles.brief', notes));
+  const titleBlocked = $derived(card ? tooLong('bubbles.name', card.title) : null);
+  const blocked = $derived(titleBlocked ?? notesBlocked);
+  let refused = $state(false);
+  $effect(() => {
+    if (!blocked) refused = false;
+  });
+
+  /** Manda la descripción si cambió y cabe. `false` si hay algo sin guardar. */
+  function commitNotes(): boolean {
+    if (!card) return true;
+    if (notes === (card.notes ?? '')) return true;
+    if (notesBlocked) return false;
+    set({ notes });
+    return true;
+  }
+  /** Cerrar, o decir por qué no. */
+  function leave(): boolean {
+    if (commitNotes() && !titleBlocked) return true;
+    refused = true;
+    return false;
+  }
+
   let title = $state<HTMLInputElement | null>(null);
   let titleFocused = $state(false);
   $effect(() => {
@@ -143,7 +184,10 @@
   // covers the second one.
   let wasEditing = false;
   $effect(() => {
-    if (wasEditing && !editingNotes) keepFocus();
+    if (wasEditing && !editingNotes) {
+      commitNotes();
+      keepFocus();
+    }
     wasEditing = editingNotes;
   });
 
@@ -240,7 +284,10 @@
 <Dialog
   {open}
   closeOnEscape={false}
-  onOpenChange={(e: { open: boolean }) => (open = e.open)}>
+  onOpenChange={(e: { open: boolean }) => {
+    if (!e.open && !leave()) return;
+    open = e.open;
+  }}>
   <Portal>
     <Dialog.Backdrop
       class="scrim"
@@ -251,6 +298,9 @@
       <Dialog.Content
         class="card bg-surface-100-900 w-full max-w-3xl space-y-4 p-4 shadow-xl {anim}">
         {#if card}
+          {#if refused && blocked}
+            <p class="unsaved" role="alert">No se guardó ni se cerró: {blocked}</p>
+          {/if}
           <!-- Where it is, first — Trello puts the list above the title because
                a card's column is the loudest thing about it. -->
           {#if column}
@@ -282,6 +332,7 @@
                 value={card.title}
                 oninput={(e) => (card.title = e.currentTarget.value)}
                 onchange={(e) => set({ title: e.currentTarget.value })}
+                {@attach limited('bubbles.name')}
                 aria-label="título" />
             </Dialog.Title>
             <Dialog.CloseTrigger class="btn-icon hover:preset-tonal">
@@ -373,6 +424,11 @@
                    exactly what it looked like: the calendar opened, a day did
                    nothing. Zag owns the selection while the sheet is open; the
                    key re-seeds it when a different card is opened. -->
+              <!-- Sólo cuando la tarjeta puede tener fecha. En el planeador las
+                   tarjetas son BURBUJAS y las fechas viven en sus threads: un
+                   calendario que se abre y no guarda nada es peor que no
+                   ofrecerlo. -->
+              {#if dated}
               {#key card.id}
               <DatePicker
                 defaultValue={due}
@@ -430,6 +486,7 @@
                   </DatePicker.Positioner>
               </DatePicker>
               {/key}
+              {/if}
             </div>
           </div>
 
@@ -443,10 +500,15 @@
               <button
                 class="edit"
                 onclick={() => {
-                  if (editingNotes) set({ notes });
-                  else touched = true;
+                  // «Listo» con algo que no cabe se queda editando: el aviso
+                  // debajo del campo dice por cuánto se pasa.
+                  if (editingNotes && notesBlocked) {
+                    refused = true;
+                    return;
+                  }
+                  if (!editingNotes) touched = true;
+                  // Terminar la edición guarda (ver el efecto de `wasEditing`).
                   editingNotes = !editingNotes;
-                  if (!editingNotes) keepFocus();
                 }}>
                 {editingNotes ? 'Listo' : 'Editar'}
               </button>
@@ -455,9 +517,11 @@
               bind:value={notes}
               bind:editing={editingNotes}
               chrome={false}
-              {render}
+              limit="bubbles.brief"
+              render={render ? (md) => render(md, card) : undefined}
+              onattach={onattach && card ? (f) => onattach(card!, f) : undefined}
               minHeight="22rem"
-              placeholder="por qué existe, qué es verdad cuando esté hecho, el siguiente paso…" />
+              placeholder="el plan de esto: por qué, qué incluye, lo que se sabe — pega imágenes o escribe /mermaid" />
           </section>
 
           {#if priorityMap}
@@ -526,6 +590,16 @@
 </Dialog>
 
 <style>
+  .unsaved {
+    margin: 0;
+    padding: 0.45rem 0.7rem;
+    border-radius: 8px;
+    font-size: 0.82rem;
+    color: var(--color-error-500);
+    background: color-mix(in oklab, var(--color-error-500) 10%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-error-500) 40%, transparent);
+    animation: limit-nudge 0.32s ease;
+  }
   /* The same box as the two fields beside it. It is read-only, not absent: a
      bare line of text next to two boxed fields reads as something that failed
      to render, and the wrapping made the row three different heights. */

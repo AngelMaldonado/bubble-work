@@ -25,6 +25,7 @@
   import ThemePage from './components/ThemePage.svelte';
   import MockPage from './components/MockPage.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
+  import { limited } from './lib/limits.svelte';
 
   // The address IS the screen. `lib/routes.ts` says what each one looks like;
   // here it is only read, and every navigation goes through `go`.
@@ -855,7 +856,7 @@
                 class="input"
                 placeholder="¿Cómo se llama?"
                 autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                bind:value={fresh}
+                bind:value={fresh} {@attach limited(naming === 'thread' ? 'threads.name' : 'bubbles.name')}
                 {@attach (el: HTMLInputElement) => el.focus()} />
 
               {#if naming === 'thread'}

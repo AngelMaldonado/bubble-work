@@ -1242,6 +1242,102 @@ dropdown that writes nowhere is a control that lies.
 
 **Done when:** a lead triages an inbox item into a thread without leaving the view.
 
+## El planeador orquesta BURBUJAS, en ETAPAS del departamento
+
+*(built)* Era un tablero de threads con una columna por objetivo, y estaba una
+altura por debajo de lo que hace un lead. Un thread es ejecución: lo escribe
+quien opera, y cómo se organiza por dentro es suyo. Lo que se planea a corto,
+mediano y largo plazo es un cuerpo de trabajo con un outcome — una burbuja.
+
+**Las columnas son `stages`, del departamento.** No los `states` de un
+workspace, y la diferencia cabe en una frase: **los estados son de quien
+ejecuta; las etapas, de quien orquesta.** Un lead que mira seis proyectos
+necesita un vocabulario común, y el de cada proyecto no lo es — se siembran
+cuatro por horizonte (corto, mediano, largo, hecho) y el lead las renombra.
+
+Se rechazó usar el `group` de los estados (`backlog`/`started`/…) como columnas
+compartidas: no inventaba vocabulario, pero le quitaba al lead la columna suya
+—«Esperando al cliente»— que es justo lo que hace de un tablero el suyo. Y se
+rechazó un kanban por workspace: el planeador no tiene workspace a propósito,
+porque orquestar es ver todo junto.
+
+**Una burbuja pasa a tener dos ciclos de vida**, y son preguntas distintas: la
+banda (🔥😴🪦🏆) dice si la realidad está cambiando y la deriva el servidor; la
+etapa dice qué decidimos que es y la pone el lead. Verlas juntas es el valor —
+«En curso» y 😴 dos ciclos seguidos es exactamente la fila que hay que mirar.
+
+**El objetivo y la prioridad suben a la burbuja.** Un objetivo dice para qué
+sirve un cuerpo de trabajo; colgado de cada thread obligaba a repetir la misma
+respuesta en cada pieza y dejaba que dos piezas de lo mismo se contradijeran. La
+prioridad es lo mismo por el otro lado: la decide quien orquesta. La tabla no
+cambia —impacto × urgencia— sólo cambia de dueño, y sigue siendo una vista
+(`bubble_priority`): un veredicto guardado es uno que alguien puede escribir en
+contra del mapa.
+
+El thread se queda con lo suyo: nombre, burbuja, estado del flujo del proyecto,
+responsables, fecha y documento. Las FECHAS no suben — el calendario del
+planeador sigue leyéndolas de los threads, porque vencer es de la ejecución.
+
+**Por la regla de este plan sería el primer cambio mayor de verdad, y sale como
+menor a propósito.** El backfill sube el objetivo más repetido entre los threads
+de cada burbuja y el máximo de sus impactos y urgencias; después se quitan las
+columnas, y `down` devuelve el esquema pero no lo que decía. Las dos reglas del
+backfill eligen no inventar: la mayoría cuando hay conflicto —anotado en el log,
+que es donde una persona puede mirarlo— y el máximo por eje, porque bajar la nota
+sería decir que lo urgente de dentro no cuenta.
+
+Menor y no mayor porque hoy quien usa Bubble es un solo equipo, en una etapa
+temprana: un salto a v2 anunciaría una ruptura a instancias ajenas que no
+existen, y gastaría el número que sí la anunciará cuando las haya. Se rechazó
+publicarlo como v2.0.0 por esa razón, no porque el cambio sea reversible — no lo
+es, y quien actualice debe saber que el plan viejo por thread no vuelve. La
+regla (base de datos que no se puede bajar ⇒ mayor) sigue en pie para cuando
+haya alguien más a quien avisar.
+
+## El inbox y el plan escriben con el motor de los threads
+
+*(built)* Los paneles de una nota del inbox y de una tarjeta del plan ya usaban
+el mismo editor (CodeMirror, el menú `/`) y el mismo renderizado (`Prose`, que
+dibuja mermaid y excalidraw) que el documento de un thread. Les faltaba lo único
+que no se hereda: **dónde guardar una imagen pegada**, porque eso depende de
+quién es dueño de lo que se escribe.
+
+- **Una burbuja tiene workspace**, así que su imagen va a `assets/` de ese
+  workspace —commiteada, como la de un thread— y se cita por la ruta corta. El
+  render del panel se pide con el workspace de la tarjeta, que es lo único que
+  hace resolver `assets/x.png`.
+- **Una nota no tiene workspace** —no tenerlo es lo que la hace una nota— así
+  que sus imágenes van como archivos del propio registro, como las del
+  inventario, y se citan por URL. En un registro de la base la URL no tiene el
+  problema que tendría en un documento de git: nadie lo va a leer desde un clon.
+  Sin SVG: servido desde nuestro origen podría ejecutar código con la sesión de
+  quien lo mira.
+
+La inserción (`![nombre](ruta)` en el cursor) vive una sola vez en
+`lib/attach.ts` y la usan los tres editores; tres copias de «qué es una imagen
+pegada» se habrían separado.
+
+**Una burbuja gana `brief`, que no es el outcome.** El outcome es el contrato:
+una frase de 500 caracteres, «qué es cierto cuando esto esté hecho», que se lee
+de un vistazo en el board. Convertirlo en el cuaderno del plan —con diagramas e
+imágenes— lo habría estirado hasta dejar de ser eso. Lo largo va aparte.
+
+**Y una nota triada ya no se borra.** Se convertía en burbuja y desaparecía, y
+con ella su cuerpo y sus imágenes — lo único que se había entendido de la
+captura. Ahora su cuerpo pasa al brief de la burbuja, la nota queda apuntando a
+ella (`inbox_items.bubble`) y sale del inbox por eso. Sus imágenes siguen
+cargando porque el registro que las guarda sigue existiendo.
+
+**Cuerpo y brief caben un diagrama: tope de 2 millones de caracteres.** Se
+empezó con 20000, pensando en prosa. Pero el motor compartido dibuja, y un
+bloque ```excalidraw es la escena entera en JSON: una docena de cajas pasa de
+30000 caracteres. Pegar un diagrama —justo lo que el motor prometía— era un PATCH
+rechazado entero, título incluido. Sin tope no es opción: un campo de texto sin
+`Max` en PocketBase es 5000, no ilimitado. Se rechazó sacar el diagrama a un
+archivo aparte: el documento de un thread lo lleva dentro, y dos formas de
+guardar lo mismo según dónde se escriba es la separación que el motor compartido
+venía a quitar. El editor avisa si se pasa, en vez de dejar que falle la red.
+
 ## El orden de una columna: derivado por defecto, a mano cuando alguien lo dice
 
 *(built)* Una columna del planeador se ordena sola —por la prioridad que el

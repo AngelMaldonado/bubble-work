@@ -24,7 +24,6 @@ export type ThreadHeat = {
   workspace: string;
   name: string;
   bubble?: string;
-  priority?: string;
   heat: Heat;
   pulse: boolean;
   /** who has it */
@@ -37,6 +36,13 @@ export type BubbleHeat = {
   id: string;
   workspace: string;
   name: string;
+  /** en qué punto del plan la puso el lead */
+  stage?: string;
+  /** para qué sirve este cuerpo de trabajo */
+  objective?: string;
+  /** derivada de impacto × urgencia. Nunca mezclada con la banda: una dice si
+   *  la realidad está cambiando, la otra cuánto importa que cambie. */
+  priority?: string;
   /** who is accountable. Plural: the 🪦 band asks whether ANYBODY is. */
   owners?: string[];
   outcome?: string;
@@ -67,6 +73,36 @@ export type BoardWorkspace = { id: string; slug: string; name: string };
 
 export type Workspace = { id: string; name: string; slug: string };
 
+/** Una etapa del plan: en qué punto está una burbuja, según quien orquesta.
+ *
+ *  No es un `State`: los estados son del workspace y los pone quien ejecuta;
+ *  las etapas son del departamento y son el vocabulario común que permite mirar
+ *  seis proyectos en el mismo tablero. */
+export type Stage = { id: string; name: string; position?: number; done?: boolean };
+
+/** Una burbuja como fila: lo que el planeador organiza. */
+export type BubbleRecord = {
+  id: string;
+  workspace: string;
+  name: string;
+  outcome?: string;
+  owners?: string[];
+  stage?: string;
+  objective?: string;
+  impact?: string;
+  urgency?: string;
+  /** el sitio que el lead le dio a mano dentro de su columna. Cero —o ausente—
+   *  es «ninguno»: entonces la columna se ordena sola, por prioridad. */
+  rank?: number;
+  closed_at?: string;
+  closure?: string;
+  /** cuándo nació. Lo pone el servidor, y es lo que la tarjeta cuenta como edad */
+  created?: string;
+  /** el cuaderno del plan, en markdown. El outcome es el contrato de una frase;
+   *  esto es lo largo, con sus diagramas e imágenes. */
+  brief?: string;
+};
+
 /** A column of the planner's board: the workflow the workspace defined. */
 export type State = {
   id: string;
@@ -84,10 +120,7 @@ export type ThreadRecord = {
   workspace: string;
   bubble?: string;
   state?: string;
-  objective?: string;
   due_date?: string;
-  impact?: string;
-  urgency?: string;
   /** el sitio que alguien le dio a mano dentro de su columna del planeador.
    *  Cero —o ausente— es «ninguno»: entonces la columna se ordena sola, por la
    *  prioridad que el servidor deriva. */
@@ -113,6 +146,9 @@ export type InboxItem = {
   body?: string;
   captured_by: string;
   thread?: string;
+  /** la burbuja en la que se convirtió al triarse. Queda apuntando en vez de
+   *  borrarse: su cuerpo y sus imágenes siguen siendo de algún sitio. */
+  bubble?: string;
   created: string;
 };
 /** Qué corre aquí, y si hay algo más nuevo. `boot` dice si esta instancia
@@ -252,7 +288,17 @@ class Api {
     if (!res.ok) {
       // The server's own sentence is almost always the useful one — "quote more
       // of it", "the document changed since you read it". Do not replace it.
-      const err = new ApiError(body?.message || res.statusText || `HTTP ${res.status}`, res.status);
+      //
+      // Pero en un rechazo de validación esa frase es sólo «Failed to update
+      // record.», y lo que dice QUÉ campo y POR QUÉ viene aparte, en `data`. Sin
+      // ello, un texto que no cabía se leía como un fallo sin causa.
+      const fields = body?.data && typeof body.data === 'object'
+        ? Object.entries(body.data as Record<string, { message?: string }>)
+            .filter(([, v]) => v && typeof v === 'object' && v.message)
+            .map(([k, v]) => `${k}: ${v.message}`)
+        : [];
+      const said = body?.message || res.statusText || `HTTP ${res.status}`;
+      const err = new ApiError(fields.length ? `${said} ${fields.join('; ')}` : said, res.status);
       throw err;
     }
     return body as T;
@@ -366,10 +412,32 @@ class Api {
     return out.items;
   }
 
-  /** …and their derived priorities, same scope. */
+  /** …y las prioridades derivadas de sus BURBUJAS, del mismo alcance.
+   *
+   *  De la burbuja y no del thread: un objetivo y una prioridad describen un
+   *  cuerpo de trabajo, y quien los decide es quien orquesta. El operador ya
+   *  tiene su forma de ordenarse el día dentro de una burbuja. */
   async allPriorities() {
     const out = await this.call<{ items: { id: string; priority: string }[] }>(
-      '/api/collections/thread_priority/records?perPage=500',
+      '/api/collections/bubble_priority/records?perPage=500',
+    );
+    return out.items;
+  }
+
+  /** Las etapas del plan, en su orden. Del departamento: son el vocabulario
+   *  común que permite mirar seis proyectos en el mismo tablero. */
+  async stages() {
+    const out = await this.call<{ items: Stage[] }>(
+      '/api/collections/stages/records?perPage=200&sort=position,created',
+    );
+    return out.items;
+  }
+
+  /** Las burbujas que alcanzas, de todos tus workspaces: es lo que el planeador
+   *  organiza. */
+  async allBubbles() {
+    const out = await this.call<{ items: BubbleRecord[] }>(
+      '/api/collections/bubbles/records?perPage=500&sort=name',
     );
     return out.items;
   }
@@ -428,6 +496,12 @@ class Api {
       '/api/collections/users/records?perPage=500&sort=display_name,email',
     );
     return out.items;
+  }
+
+  /** Cuánto cabe en cada campo de texto, `colección.campo` → caracteres. Lo
+   *  dice el esquema del servidor; ver `lib/limits`. */
+  limits(): Promise<Record<string, number>> {
+    return this.call<Record<string, number>>('/api/limits');
   }
 
   /** Qué está corriendo. Sin sesión: es la misma respuesta que mira el
@@ -646,10 +720,10 @@ class Api {
     return this.list<{ id: string; name: string; closed_at?: string }>('bubbles', workspace, 'name');
   }
 
-  /** The derived priorities, by thread. A VIEW collection: the server computes
+  /** The derived priorities, by BUBBLE. A VIEW collection: the server computes
    *  it from impact × urgency, and nothing writes to it. */
   priorities(workspace: string) {
-    return this.list<{ id: string; priority: string }>('thread_priority', workspace, 'id');
+    return this.list<{ id: string; priority: string }>('bubble_priority', workspace, 'id');
   }
 
   /** The department's inbox: captured before anybody knows whose it is. */
@@ -739,6 +813,30 @@ class Api {
       body: JSON.stringify({ content, workspace }),
     });
     return out.html;
+  }
+
+  /** Una imagen para una nota del inbox.
+   *
+   *  No va a ningún `assets/`: una nota no tiene workspace, que es justo lo que
+   *  la hace una nota. Se guarda como archivo del propio registro —como las
+   *  imágenes del inventario— y la nota la cita por su URL completa, que en un
+   *  registro de la base no tiene el problema que tendría en un documento de
+   *  git: aquí nadie la va a leer desde un clon.
+   *
+   *  `files+` AÑADE al campo en vez de reemplazarlo; sin el `+` cada pegado
+   *  borraría la imagen anterior, y la nota citaría archivos que ya no
+   *  existen. */
+  async attachToNote(note: string, file: File): Promise<{ path: string }> {
+    const form = new FormData();
+    form.append('files+', file);
+    const rec = await this.call<{ files?: string[] }>(
+      `/api/collections/inbox_items/records/${note}`,
+      { method: 'PATCH', body: form },
+    );
+    const names = rec.files ?? [];
+    const name = names[names.length - 1];
+    if (!name) throw new Error('la imagen no se guardó');
+    return { path: this.fileUrl('inbox_items', note, name) };
   }
 
   /** Attach an image. It lands in `assets/`, is committed like every other

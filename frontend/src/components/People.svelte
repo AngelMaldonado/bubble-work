@@ -14,6 +14,7 @@
   import { Combobox, Dialog, Portal, useListCollection } from '@skeletonlabs/skeleton-svelte';
   import { api, type Member, type Person, type Workspace } from '../lib/api';
   import Confirm, { type Doom } from './Confirm.svelte';
+  import { limited } from '../lib/limits.svelte';
 
   let {
     open = $bindable(false),
@@ -143,7 +144,7 @@
                   class="mine"
                   placeholder="¿Cómo te llamas?"
                   autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                  bind:value={myName}
+                  bind:value={myName} {@attach limited('users.name')}
                   {@attach (el: HTMLInputElement) => { el.focus(); el.select(); }}
                   onblur={() => { renamingMe = false; }}
                   onkeydown={(e) => {

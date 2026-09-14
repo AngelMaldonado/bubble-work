@@ -70,7 +70,6 @@ type ThreadHeat struct {
 	Workspace string      `json:"workspace"`
 	Name      string      `json:"name"`
 	Bubble    string      `json:"bubble,omitempty"`
-	Priority  string      `json:"priority,omitempty"`
 	Heat      heat.Result `json:"heat"`
 	Pulse     bool        `json:"pulse"`
 	// Who has it, and when anything last happened to it. Both are for the row a
@@ -91,7 +90,15 @@ type BubbleHeat struct {
 	// and an empty list answers that exactly as a missing name did.
 	Owners  []string `json:"owners,omitempty"`
 	Outcome string   `json:"outcome,omitempty"`
-	Closed  bool     `json:"closed"`
+	// Para qué sirve, y cuánto importa. Las dos subieron del thread a la
+	// burbuja: un objetivo describe un cuerpo de trabajo, y la prioridad la
+	// decide quien orquesta. `Priority` se deriva —impacto × urgencia— y por eso
+	// llega junto a la banda y nunca mezclada con ella: una dice si la realidad
+	// está cambiando, la otra cuánto importa que cambie.
+	Objective string `json:"objective,omitempty"`
+	Stage     string `json:"stage,omitempty"`
+	Priority  string `json:"priority,omitempty"`
+	Closed    bool   `json:"closed"`
 	// How it ended, in the words of whoever closed it. Carried on the board so
 	// a closed bubble can say why without a second fetch — and so reopening one
 	// knows what sentence it is clearing.
@@ -173,7 +180,7 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 		threads = append(threads, ThreadHeat{
 			ID: r.Id, Seq: r.GetInt("seq"), Workspace: ws.Id,
 			Name:   r.GetString("name"),
-			Bubble: b, Priority: prio[r.Id], Heat: res,
+			Bubble: b, Heat: res,
 			Pulse:     heat.HasPulse(ev, tun, now),
 			Assignees: r.GetStringSlice("assignees"),
 			At:        at.UTC().Format(time.RFC3339),
@@ -198,7 +205,9 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 		out = append(out, BubbleHeat{
 			ID: b.Id, Workspace: ws.Id, Name: b.GetString("name"), Owners: owners,
 			Outcome: b.GetString("outcome"), Closed: closed,
-			Closure: b.GetString("closure"), WarmAt: stamp(warmest[b.Id]), Heat: res,
+			Objective: b.GetString("objective"), Stage: b.GetString("stage"),
+			Priority: prio[b.Id],
+			Closure:  b.GetString("closure"), WarmAt: stamp(warmest[b.Id]), Heat: res,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return floats(out[i].Heat) > floats(out[j].Heat) })
@@ -238,7 +247,7 @@ func tuningOf(app core.App) (heat.Tuning, error) {
 
 func priorityOf(app core.App, workspace string) map[string]string {
 	out := map[string]string{}
-	rows, err := app.FindAllRecords("thread_priority", dbx.HashExp{"workspace": workspace})
+	rows, err := app.FindAllRecords("bubble_priority", dbx.HashExp{"workspace": workspace})
 	if err != nil {
 		return out
 	}

@@ -14,6 +14,7 @@
   import { ago } from '../lib/when';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Lifecycle } from '../lib/api';
+  import { limited } from '../lib/limits.svelte';
 
   let {
     open = $bindable(false),
@@ -143,7 +144,7 @@
           class="outcome-edit mt-1"
           rows="2"
           placeholder="¿Qué es cierto cuando esto termine?"
-          bind:value={said}
+          bind:value={said} {@attach limited('bubbles.outcome')}
           {@attach (el: HTMLTextAreaElement) => el.focus()}
           onblur={() => { saying = false; if (said.trim() !== outcome) onoutcome?.(said.trim()); }}
           onkeydown={(e) => {
@@ -304,7 +305,7 @@
             class="new-name"
             placeholder="¿Cómo se llama?"
             {@attach (el: HTMLInputElement) => el.focus()}
-            bind:value={fresh}
+            bind:value={fresh} {@attach limited('threads.name')}
             onblur={() => (naming = false)}
             onkeydown={(e) => {
               if (e.key === 'Enter' && fresh.trim()) {

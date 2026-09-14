@@ -175,7 +175,10 @@
   });
 
   const columns = $derived<Column[]>(
-    [{ id: UNSTAGED, name: 'Sin planear' }, ...stageRows.map((st) => ({ id: st.id, name: st.name }))].map(
+    [
+      { id: UNSTAGED, name: 'Sin planear', locked: true },
+      ...stageRows.map((st) => ({ id: st.id, name: st.name })),
+    ].map(
       (col) => ({
         ...col,
         manual: bubbles.some((b) => (b.stage ?? '') === col.id && (b.rank ?? 0) > 0),
@@ -395,9 +398,70 @@
     if (Object.keys(out).length) write(() => api.update('bubbles', id, out));
   }
 
-  const renameObjective = (id: string, name: string) => {
-    if (!id) return; // "Sin objetivo" is not a row and cannot be renamed
-    write(() => api.update('objectives', id, { name }));
+  // Las columnas del kanban son ETAPAS. Estos tres verbos seguían escribiendo
+  // en `objectives` desde cuando las columnas eran objetivos: renombrar una
+  // etapa pedía un objetivo con el id de la etapa, y el servidor contestaba que
+  // no existía.
+  //
+  // «Sin planear» no es una fila (es `UNSTAGED`, la burbuja sin etapa), así que
+  // no se renombra ni se borra.
+
+  /** Una etapa nueva entra ANTES de la de terminado: «Hecho» es el final del
+   *  tablero, y una columna añadida detrás de él sería trabajo después de
+   *  acabado. Sin columna de terminado, al final. */
+  const addStage = () =>
+    write(async () => {
+      const rows = [...stageRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      const end = rows.findIndex((r) => r.done);
+      const at = end < 0 ? rows.length : end;
+      // Los de detrás se corren uno, del último al primero.
+      for (const r of rows.slice(at).reverse()) {
+        await api.update('stages', r.id, { position: (r.position ?? 0) + 1 });
+      }
+      await api.create('stages', {
+        name: 'Etapa nueva',
+        position: at < rows.length ? (rows[at].position ?? at) : (rows.at(-1)?.position ?? -1) + 1,
+      });
+    });
+
+  /** Arrastrar una columna es reordenar las etapas, y se guarda: antes el
+   *  tablero movía su propia copia y al recargar volvía todo a su sitio. Se
+   *  reescriben las posiciones que cambiaron, de 0 en adelante. */
+  const moveStage = (id: string, before: string | null) => {
+    if (id === UNSTAGED) return;
+    const rows = [...stageRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const moving = rows.find((r) => r.id === id);
+    if (!moving) return;
+    const rest = rows.filter((r) => r.id !== id);
+    const at = before && before !== UNSTAGED ? rest.findIndex((r) => r.id === before) : -1;
+    // Delante de «Sin planear» es lo mismo que el principio: esa columna no es
+    // una etapa y siempre va primero.
+    if (before === UNSTAGED) rest.unshift(moving);
+    else if (at < 0) rest.push(moving);
+    else rest.splice(at, 0, moving);
+    write(async () => {
+      for (const [i, r] of rest.entries()) {
+        if ((r.position ?? -1) !== i) await api.update('stages', r.id, { position: i });
+      }
+    });
+  };
+
+  const renameStage = (id: string, name: string) => {
+    if (id === UNSTAGED) return;
+    write(() => api.update('stages', id, { name }));
+  };
+
+  const deleteStage = (id: string) => {
+    if (id === UNSTAGED) return;
+    const st = stageRows.find((x) => x.id === id);
+    const n = bubbles.filter((b) => b.stage === id).length;
+    doom = {
+      title: `¿Borrar la etapa «${st?.name ?? id}»?`,
+      body: n
+        ? `Sus ${n} burbujas NO se borran: vuelven a «Sin planear», que es exactamente lo que pasó.`
+        : 'Sale del tablero. No hay burbujas en ella.',
+      go: () => write(() => api.remove('stages', id)),
+    };
   };
 
   const deleteObjectiveById = (id: string) => {
@@ -506,9 +570,10 @@
   }}
   onaddobjective={addObjective}
   ondeleteobjective={deleteObjective}
-  onaddcolumn={() => addObjective('Objetivo nuevo')}
-  onrenamecolumn={renameObjective}
-  ondeletecolumn={deleteObjectiveById} />
+  onaddcolumn={addStage}
+  onrenamecolumn={renameStage}
+  ondeletecolumn={deleteStage}
+  onmovecolumn={moveStage} />
 
 <style>
   .places {

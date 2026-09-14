@@ -33,6 +33,10 @@
      *  salida: un orden que no se sabe que está puesto es un orden que no se
      *  puede quitar. */
     manual?: boolean;
+    /** no es una fila, sino lo que queda sin ninguna (en el planeador, «Sin
+     *  planear»): no se renombra, no se borra y no se mueve. Ofrecerlo sería un
+     *  menú que no hace nada, o un arrastre que al recargar vuelve atrás. */
+    locked?: boolean;
   };
 </script>
 
@@ -65,6 +69,7 @@
     ondeletecolumn,
     onmovecard,
     onautoorder,
+    onmovecolumn,
   }: {
     columns?: Column[];
     onopen?: (card: Card) => void;
@@ -77,6 +82,8 @@
     onaddcolumn?: () => void;
     onrenamecolumn?: (id: string, name: string) => void;
     ondeletecolumn?: (id: string) => void;
+    /** una columna arrastrada a otro sitio: delante de `before`, o al final */
+    onmovecolumn?: (id: string, before: string | null) => void;
     /** Where a DRAGGED card lands, when the columns are rows on a server.
      *  Without it the drop only rearranges this component's copy, which is
      *  right for the mock and, against a server, a move that looked like it
@@ -96,6 +103,7 @@
   let draft = $state('');
 
   function startRename(c: Column) {
+    if (c.locked) return;
     renaming = c.id;
     draft = c.name;
   }
@@ -127,6 +135,7 @@
     if (at < 0) rest.push(col);
     else rest.splice(at, 0, col);
     columns = rest;
+    onmovecolumn?.(id, before);
   }
 
   /** Where a dragged COLUMN would land. Separate from the card one because a
@@ -247,6 +256,7 @@
       stop = combine(
         draggable({
           element: el,
+          canDrag: () => !col.locked,
           getInitialData: () => ({ colId: col.id }),
           onDragStart: () => (liftingCol = col.id),
           onDrop: () => {
@@ -256,7 +266,7 @@
         }),
         dropTargetForElements({
           element: el,
-          canDrop: ({ source }) => !!source.data.colId && source.data.colId !== col.id,
+          canDrop: ({ source }) => !!source.data.colId && source.data.colId !== col.id && !col.locked,
           getData: ({ input, element }) =>
             hitbox.attachClosestEdge({ colTarget: col.id }, {
               input,
@@ -368,7 +378,7 @@
             }}
             {@attach (el: HTMLInputElement) => { el.focus(); el.select(); }} />
         {:else}
-          <button class="name" ondblclick={() => startRename(col)} title="doble clic para renombrar">
+          <button class="name" ondblclick={() => startRename(col)} title={col.locked ? col.name : 'doble clic para renombrar'}>
             {col.name}
           </button>
           <span class="count">{col.cards.length}</span>
@@ -377,6 +387,7 @@
                  no dice nada: lo normal no necesita etiqueta. -->
             <span class="by-hand" title="Ordenada a mano. Deshazlo desde el menú.">a mano</span>
           {/if}
+          {#if !col.locked || (col.manual && onautoorder)}
           <Menu
             onSelect={(e: { value: string }) => {
               if (e.value === 'rename') startRename(col);
@@ -389,17 +400,22 @@
             <Portal>
               <Menu.Positioner>
                 <Menu.Content>
-                  <Menu.Item value="rename"><Menu.ItemText>Renombrar</Menu.ItemText></Menu.Item>
+                  {#if !col.locked}
+                    <Menu.Item value="rename"><Menu.ItemText>Renombrar</Menu.ItemText></Menu.Item>
+                  {/if}
                   {#if col.manual && onautoorder}
                     <Menu.Item value="auto">
                       <Menu.ItemText>Volver al orden automático</Menu.ItemText>
                     </Menu.Item>
                   {/if}
-                  <Menu.Item value="delete"><Menu.ItemText>Eliminar la columna</Menu.ItemText></Menu.Item>
+                  {#if !col.locked}
+                    <Menu.Item value="delete"><Menu.ItemText>Eliminar la columna</Menu.ItemText></Menu.Item>
+                  {/if}
                 </Menu.Content>
               </Menu.Positioner>
             </Portal>
           </Menu>
+          {/if}
         {/if}
       </header>
 

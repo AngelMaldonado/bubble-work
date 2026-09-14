@@ -1148,6 +1148,20 @@ d=json.load(sys.stdin)
 b=next(b for b in d["bubbles"] if b["id"]=="'"$BU_P"'")
 print("si" if b["stage"]=="'"$STAGE"'" and b["heat"]["lifecycle"] else b)')" si
 
+# Las columnas del kanban SON las etapas. Sus verbos escribían en `objectives`
+# desde cuando las columnas eran objetivos: renombrar pedía un objetivo con el
+# id de una etapa y el servidor contestaba que no existía.
+chk ">>> el lead global renombra una etapa" \
+  "$(code -X PATCH "$API/api/collections/stages/records/$STAGE" -H "Authorization: $C" -H "$JS" -d '{"name":"Esta semana"}')" 200
+chk ">>> ...y la reordena" \
+  "$(code -X PATCH "$API/api/collections/stages/records/$STAGE" -H "Authorization: $C" -H "$JS" -d '{"position":7}')" 200
+chk ">>> ...y un lead de workspace no la toca" \
+  "$(code -X PATCH "$API/api/collections/stages/records/$STAGE" -H "Authorization: $A" -H "$JS" -d '{"name":"Mía"}')" 404
+chk ">>> borrar la etapa NO borra la burbuja que estaba en ella" \
+  "$(code -X DELETE "$API/api/collections/stages/records/$STAGE" -H "Authorization: $C")" 204
+chk ">>> ...que vuelve a «Sin planear»" \
+  "$(curl -s "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" | j "['stage']")" ""
+
 # ------------------------------------------------------ brief de burbuja ----
 #
 # Lo largo del plan va en `brief`, no en el outcome: el outcome es el contrato

@@ -1033,7 +1033,7 @@ chk ">>> cerrar es una decisión con frase, no un borrado" \
 ARG="{\"bubble\":\"$NBUB\",\"closed\":false}"
 chk ">>> ...y se reabre" "$(mcptext "$A" set_bubble "$ARG" | j "['closed']")" False
 
-ARG="{\"thread\":\"$NTID\",\"bubble\":\"$NBUB\",\"due\":\"2026-12-31\"}"
+ARG="{\"thread\":\"$NTID\",\"bubble\":\"$NBUB\"}"
 chk ">>> el thread se mueve a esa burbuja" "$(mcptext "$A" set_thread "$ARG" | j "['bubble']")" "$NBUB"
 # La prioridad es de la BURBUJA: la decide quien orquesta, y el operador ya tiene
 # su propia forma de ordenarse el día.
@@ -1042,9 +1042,18 @@ chk ">>> la prioridad se le pone a la burbuja" \
   "$(mcptext "$A" set_bubble "$ARG" | j "['impact']")" high
 chk ">>> ...y la deriva el servidor de impacto x urgencia" \
   "$(curl -s "$API/api/collections/bubble_priority/records/$NBUB" -H "Authorization: $A" | j "['priority']")" P2
-ARG="{\"thread\":\"$NTID\",\"due\":\"31/12/2026\"}"
+# La fecha también es de la burbuja: cuándo tiene que estar ese cuerpo de
+# trabajo. Cómo lo reparte entre sus threads es de quien ejecuta.
+ARG="{\"bubble\":\"$NBUB\",\"due\":\"2026-12-31\"}"
+chk ">>> la fecha se le pone a la burbuja" \
+  "$(mcptext "$A" set_bubble "$ARG" | j "['due_date'][:10]")" 2026-12-31
+chk ">>> ...y el calendario la lee de ahí" \
+  "$(curl -s "$API/api/collections/bubbles/records/$NBUB" -H "Authorization: $A" | j "['due_date'][:10]")" 2026-12-31
+ARG="{\"bubble\":\"$NBUB\",\"due\":\"31/12/2026\"}"
 chk ">>> una fecha mal formada se rechaza en vez de guardarse rara" \
-  "$(mcptext "$A" set_thread "$ARG" | grep -c "a due date is a day")" 1
+  "$(mcptext "$A" set_bubble "$ARG" | grep -c "a due date is a day")" 1
+chk ">>> un thread ya no tiene fecha propia" \
+  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | python3 -c 'import sys,json;print("due_date" in json.load(sys.stdin))')" False
 
 ARG="{\"note\":\"el portal tarda en cargar\"}"
 chk ">>> capturar en el inbox por MCP" \

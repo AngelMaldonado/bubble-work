@@ -451,7 +451,6 @@
 <CardSheet
   bind:open={cardOpen}
   bind:card={open}
-  dated={false}
   objectives={objectives}
   {priorityMap}
   {render}

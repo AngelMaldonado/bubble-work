@@ -1275,8 +1275,21 @@ cambia —impacto × urgencia— sólo cambia de dueño, y sigue siendo una vist
 contra del mapa.
 
 El thread se queda con lo suyo: nombre, burbuja, estado del flujo del proyecto,
-responsables, fecha y documento. Las FECHAS no suben — el calendario del
-planeador sigue leyéndolas de los threads, porque vencer es de la ejecución.
+responsables y documento.
+
+**La fecha también sube.** Primero se quedó abajo, con el argumento de que
+vencer es de la ejecución. No se sostuvo: lo que el lead pone en el calendario
+es cuándo tiene que estar un cuerpo de trabajo —«la facturación, para el 30»—,
+la misma decisión que ponerlo en corto o en largo plazo. Con la fecha en cada
+thread, la tarjeta del plan no tenía fecha, el calendario enseñaba piezas en vez
+de lo planeado, y cada thread nuevo obligaba a reescribir un plazo ya decidido.
+Cómo se reparte ese plazo entre las piezas es de quien ejecuta, y no necesita un
+campo. Se rechazó tener fecha en los dos niveles: dos fechas para lo mismo es
+decidir cuál manda cada vez que no coinciden. El traspaso (`dates_move_up`) toma
+la fecha más tardía entre los threads ABIERTOS —el cuerpo de trabajo no está
+hecho hasta su última pieza; la de un thread cerrado es historia, y sólo cuenta
+si no queda ninguno abierto—, anota en el log las burbujas con fechas distintas
+y quita el campo de los threads. Tampoco se deshace.
 
 **Por la regla de este plan sería el primer cambio mayor de verdad, y sale como
 menor a propósito.** El backfill sube el objetivo más repetido entre los threads

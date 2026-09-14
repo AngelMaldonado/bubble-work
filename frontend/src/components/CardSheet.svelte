@@ -40,7 +40,6 @@
   let {
     open = $bindable(false),
     card = $bindable(null),
-    dated = true,
     objectives = [],
     priorityMap,
     render,
@@ -55,9 +54,6 @@
   }: {
     open?: boolean;
     card?: Card | null;
-    /** si esta tarjeta tiene fecha propia. Una burbuja no: las fechas son de
-     *  sus threads, que es donde vive la ejecución. */
-    dated?: boolean;
     objectives?: Objective[];
     priorityMap?: { cols: string[]; rows: string[][] };
     /** markdown → html; the server in the real app */
@@ -424,11 +420,9 @@
                    exactly what it looked like: the calendar opened, a day did
                    nothing. Zag owns the selection while the sheet is open; the
                    key re-seeds it when a different card is opened. -->
-              <!-- Sólo cuando la tarjeta puede tener fecha. En el planeador las
-                   tarjetas son BURBUJAS y las fechas viven en sus threads: un
-                   calendario que se abre y no guarda nada es peor que no
-                   ofrecerlo. -->
-              {#if dated}
+              <!-- La fecha es de la BURBUJA: cuándo tiene que estar este cuerpo
+                   de trabajo. Cómo se reparte entre sus threads es de quien
+                   ejecuta. -->
               {#key card.id}
               <DatePicker
                 defaultValue={due}
@@ -486,7 +480,6 @@
                   </DatePicker.Positioner>
               </DatePicker>
               {/key}
-              {/if}
             </div>
           </div>
 

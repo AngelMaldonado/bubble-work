@@ -59,6 +59,7 @@
     onaddcolumn,
     onrenamecolumn,
     ondeletecolumn,
+    onmovecolumn,
     choosePriority = true,
     readonly = false,
     title = 'Planeador',
@@ -117,6 +118,7 @@
     onaddcolumn?: () => void;
     onrenamecolumn?: (id: string, name: string) => void;
     ondeletecolumn?: (id: string) => void;
+    onmovecolumn?: (id: string, before: string | null) => void;
     /** passed through to the card sheet — see there */
     choosePriority?: boolean;
     /** The same screen for somebody who does not run the plan: only the
@@ -390,7 +392,8 @@
           {onautoorder}
           {onaddcolumn}
           {onrenamecolumn}
-          {ondeletecolumn} />
+          {ondeletecolumn}
+          {onmovecolumn} />
       </section>
     {/if}
 

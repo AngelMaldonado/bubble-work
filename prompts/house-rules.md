@@ -12,9 +12,10 @@ contexto, y cómo el board acaba diciendo que hay el doble de trabajo del que ha
 
 **Trabaja en el thread que corresponde.** Si existe, escribe ahí: `edit` sobre su
 documento, `toggle_todo` para las casillas, `set_thread` para lo que no es texto
-—la burbuja que lo lleva, el objetivo para el que es, la fecha, impacto y
-urgencia. Si de verdad no existe, `create_thread` dentro de la burbuja que
-corresponde, y dile para qué es.
+—su nombre y la burbuja que lo lleva—. Para qué es, cuándo vence, impacto y
+urgencia son de la BURBUJA (`set_bubble`): los decide quien orquesta. Si de
+verdad no existe, `create_thread` dentro de la burbuja que corresponde, y dile
+para qué es.
 
 **Escribir el documento ES el trabajo.** No es un informe que se redacta al
 final: es dónde vive por qué existe esto, qué es cierto cuando esté hecho, y cuál

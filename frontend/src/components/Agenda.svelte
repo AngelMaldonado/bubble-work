@@ -7,9 +7,10 @@
   // two shapes is how they start disagreeing about what a date looks like.
   //
   // The objectives, the inbox and the kanban of the whole department stay the
-  // lead's. The DATES are not strategy: a thread with a due date is somebody's
-  // week, and the person whose week it is should be able to look at it.
-  import { api, type ThreadRecord, type Workspace } from '../lib/api';
+  // lead's. The DATES are not strategy: a bubble due on the 30th is somebody's
+  // month, and the people doing it should be able to look at it.
+  import { api, type BubbleRecord, type Workspace } from '../lib/api';
+  import { lastOpenBubble } from '../lib/filters.svelte';
   import PlannerView from './PlannerView.svelte';
   import type { CalEvent } from './PlannerCalendar.svelte';
 
@@ -20,21 +21,21 @@
   }: {
     onback?: () => void;
     onsearch?: () => void;
-    /** go to the thread behind an event, by workspace slug and seq */
-    onopen?: (workspace: string, seq: number) => void;
+    /** go to the bubble behind an event: its workspace's board, with it open */
+    onopen?: (workspace: string) => void;
   } = $props();
 
-  let threads = $state<ThreadRecord[]>([]);
+  let bubbles = $state<BubbleRecord[]>([]);
   let places = $state<Workspace[]>([]);
   let error = $state('');
 
   async function load() {
     try {
       // The same call the planner makes. What comes back is what the RULES
-      // allow: a member sees the threads of the workspaces they are in, so this
+      // allow: a member sees the bubbles of the workspaces they are in, so this
       // is their agenda without a single filter written here.
-      const [th, ws] = await Promise.all([api.allThreads(), api.workspaces()]);
-      threads = th;
+      const [bs, ws] = await Promise.all([api.allBubbles(), api.workspaces()]);
+      bubbles = bs;
       places = ws;
       error = '';
     } catch (e) {
@@ -44,22 +45,25 @@
   load();
 
   const events = $derived<CalEvent[]>(
-    threads
-      .filter((t) => t.due_date)
-      .map((t) => ({
-        id: t.id,
-        title: t.name,
-        start: t.due_date!.slice(0, 10),
+    bubbles
+      .filter((b) => b.due_date && !b.closed_at)
+      .map((b) => ({
+        id: b.id,
+        title: b.name,
+        start: b.due_date!.slice(0, 10),
         allDay: true,
       })),
   );
 
-  /** A day is a thread. Clicking one goes there, which is where the work is —
-   *  the card sheet is the planner's, and it writes. */
+  /** A day is a bubble. Clicking one goes to its board with it open — the
+   *  card sheet is the planner's, and it writes. The board opens whatever
+   *  bubble was left open, so that is how this one is handed over. */
   function open(id: string) {
-    const t = threads.find((x) => x.id === id);
-    const ws = places.find((w) => w.id === t?.workspace);
-    if (t && ws) onopen?.(ws.slug, t.seq);
+    const b = bubbles.find((x) => x.id === id);
+    const ws = places.find((w) => w.id === b?.workspace);
+    if (!b || !ws) return;
+    lastOpenBubble.set(b.id);
+    onopen?.(ws.slug);
   }
 </script>
 

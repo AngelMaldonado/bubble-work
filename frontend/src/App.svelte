@@ -600,7 +600,7 @@
   <Agenda
     onback={back}
     onsearch={() => (omni = true)}
-    onopen={(slug, seq) => go(threadUrl(slug, seq))} />
+    onopen={(slug) => go(boardUrl(slug))} />
 {:else if route.kind === 'inventory' && signedIn}
   <!-- Guardado en la DIRECCIÓN y no sólo en la fila del sidebar: esconder un
        lugar no es cerrarlo, y un enlace pegado en un chat es exactamente cómo se

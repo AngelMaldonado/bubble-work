@@ -95,9 +95,11 @@ made it warm and when. Starting without it is how you redo something that was
 finished on Tuesday.
 
 Everything about a thread that is not its document goes through `set_thread`:
-the bubble that carries it and when it is due. What the work is FOR and how much
-it matters belong to the BUBBLE (`set_bubble`): an objective describes a body of
-work, and priority is decided by whoever orchestrates, not by whoever executes.
+its name and the bubble that carries it. What the work is FOR, how much it
+matters and when it is due belong to the BUBBLE (`set_bubble`): they describe a
+body of work, and they are decided by whoever orchestrates, not by whoever
+executes. How a deadline is split among the pieces is the executor's business,
+and needs no field.
 **Priority itself is never written** — the server derives it from the bubble's
 impact × urgency, and there is no second way to say it.
 

@@ -444,12 +444,13 @@ func build() *mcp.Server {
 		Objective *string   `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
 		Impact    *string   `json:"impact,omitempty" jsonschema:"high, mid or low"`
 		Urgency   *string   `json:"urgency,omitempty" jsonschema:"high, mid or low"`
+		Due       *string   `json:"due,omitempty" jsonschema:"a day, 2026-09-15 — when this body of work has to be done; empty clears it"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "set_bubble",
 		Description: "Say something about a bubble: its outcome, who is accountable, " +
-			"what it is FOR (`objective`), where it sits on the plan (`stage`), its " +
-			"impact and urgency, or that it is closed. Closing is a decision with a " +
+			"what it is FOR (`objective`), where it sits on the plan (`stage`), when it " +
+			"is due (`due`), its impact and urgency, or that it is closed. Closing is a decision with a " +
 			"date, not a delete — say how it ended in `closure`, and `closed: false` " +
 			"reopens it. Nobody accountable is a real answer, and it has a cost: a " +
 			"quiet bubble with no owner is a grave, not a nap. Priority is NOT here: " +
@@ -463,6 +464,7 @@ func build() *mcp.Server {
 			Name: in.Name, Outcome: in.Outcome, Owners: in.Owners,
 			Closure: in.Closure, Closed: in.Closed, Stage: in.Stage,
 			Objective: in.Objective, Impact: in.Impact, Urgency: in.Urgency,
+			Due: in.Due,
 		})
 		if err != nil {
 			return nil, nil, err
@@ -472,7 +474,8 @@ func build() *mcp.Server {
 			"owners": b.GetStringSlice("owners"),
 			"stage":  b.GetString("stage"), "objective": b.GetString("objective"),
 			"impact": b.GetString("impact"), "urgency": b.GetString("urgency"),
-			"closed": !b.GetDateTime("closed_at").IsZero(),
+			"due_date": b.GetDateTime("due_date").String(),
+			"closed":   !b.GetDateTime("closed_at").IsZero(),
 		}), nil, nil
 	})
 
@@ -480,22 +483,21 @@ func build() *mcp.Server {
 		Thread string  `json:"thread"`
 		Name   *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
 		Bubble *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
-		Due    *string `json:"due,omitempty" jsonschema:"a day, 2026-09-15; empty clears it"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "set_thread",
-		Description: "Everything about a thread that is not its document: its name, " +
-			"which bubble carries it, and when it is due. What the work is FOR and how " +
-			"much it matters belong to the BUBBLE — see `set_bubble`: an objective " +
-			"describes a body of work, and priority is decided by whoever orchestrates, " +
-			"not by whoever executes.",
+		Description: "Everything about a thread that is not its document: its name " +
+			"and which bubble carries it. What the work is FOR, how much it matters and " +
+			"when it is due belong to the BUBBLE — see `set_bubble`: they describe a " +
+			"body of work, and they are decided by whoever orchestrates, not by " +
+			"whoever executes.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setThreadArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
 		th, err := bubble.SetThread(c.app, c.auth, in.Thread, bubble.ThreadEdit{
-			Name: in.Name, Bubble: in.Bubble, Due: in.Due,
+			Name: in.Name, Bubble: in.Bubble,
 		})
 		if err != nil {
 			return nil, nil, err
@@ -503,8 +505,6 @@ func build() *mcp.Server {
 		return jsonOut(map[string]any{
 			"id": th.Id, "seq": th.GetInt("seq"), "name": th.GetString("name"),
 			"doc_path": th.GetString("doc_path"), "bubble": th.GetString("bubble"),
-			"objective": th.GetString("objective"),
-			"due_date":  th.GetDateTime("due_date").String(),
 		}), nil, nil
 	})
 

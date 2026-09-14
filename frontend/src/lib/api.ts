@@ -91,6 +91,9 @@ export type BubbleRecord = {
   objective?: string;
   impact?: string;
   urgency?: string;
+  /** cuándo tiene que estar este cuerpo de trabajo. Es de la burbuja y no de sus
+   *  threads: el plazo lo decide quien orquesta. */
+  due_date?: string;
   /** el sitio que el lead le dio a mano dentro de su columna. Cero —o ausente—
    *  es «ninguno»: entonces la columna se ordena sola, por prioridad. */
   rank?: number;
@@ -120,7 +123,6 @@ export type ThreadRecord = {
   workspace: string;
   bubble?: string;
   state?: string;
-  due_date?: string;
   /** el sitio que alguien le dio a mano dentro de su columna del planeador.
    *  Cero —o ausente— es «ninguno»: entonces la columna se ordena sola, por la
    *  prioridad que el servidor deriva. */

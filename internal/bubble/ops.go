@@ -452,6 +452,7 @@ type BubbleEdit struct {
 	Objective *string   `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
 	Impact    *string   `json:"impact,omitempty" jsonschema:"high, mid or low"`
 	Urgency   *string   `json:"urgency,omitempty" jsonschema:"high, mid or low"`
+	Due       *string   `json:"due,omitempty" jsonschema:"a day, 2026-09-15 — when this body of work has to be done; empty clears it"`
 }
 
 // SetBubble edits one. Mirrors `bubbles.UpdateRule` — any member.
@@ -509,6 +510,13 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 		}
 		b.Set(field, *v)
 	}
+	if in.Due != nil {
+		day, err := dueDay(*in.Due)
+		if err != nil {
+			return nil, err
+		}
+		b.Set("due_date", day)
+	}
 	if in.Closed != nil {
 		if *in.Closed {
 			b.Set("closed_at", time.Now().UTC())
@@ -527,17 +535,30 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 
 // ThreadEdit is what may be said about a thread that is not its document.
 //
-// Ni objetivo ni prioridad: los dos subieron a la burbuja. Un objetivo dice para
-// qué sirve un cuerpo de trabajo, y el cuerpo de trabajo es la burbuja; la
-// prioridad la decide quien orquesta, no quien ejecuta. Lo que queda aquí es la
-// ejecución: cómo se llama, de qué burbuja es, cuándo vence.
+// Ni objetivo, ni prioridad, ni fecha: los tres subieron a la burbuja. Un
+// objetivo dice para qué sirve un cuerpo de trabajo, y el cuerpo de trabajo es
+// la burbuja; la prioridad y el plazo los decide quien orquesta, no quien
+// ejecuta. Lo que queda aquí es la ejecución: cómo se llama y de qué burbuja es.
 type ThreadEdit struct {
 	Name   *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
 	Bubble *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
-	Due    *string `json:"due,omitempty" jsonschema:"a day, 2026-09-15; empty clears it"`
 }
 
 var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
+
+// dueDay: un día tal como lo guarda un campo de fecha, o vacío para quitarlo.
+// Un día y no un instante: «para el 30» no tiene hora, y con hora cambiaría de
+// día según la zona de quien lo mire.
+func dueDay(in string) (string, error) {
+	day := strings.TrimSpace(in)
+	if day == "" {
+		return "", nil
+	}
+	if !dayOnly.MatchString(day) {
+		return "", fmt.Errorf("a due date is a day: 2026-09-15, not %q", day)
+	}
+	return day + " 00:00:00.000Z", nil
+}
 
 // SetThread edits the record around the document. Mirrors `threads.UpdateRule`
 // — any member of its workspace.
@@ -567,17 +588,6 @@ func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core
 			}
 		}
 		th.Set("bubble", *in.Bubble)
-	}
-	if in.Due != nil {
-		day := strings.TrimSpace(*in.Due)
-		if day != "" && !dayOnly.MatchString(day) {
-			return nil, fmt.Errorf("a due date is a day: 2026-09-15, not %q", day)
-		}
-		if day == "" {
-			th.Set("due_date", "")
-		} else {
-			th.Set("due_date", day+" 00:00:00.000Z")
-		}
 	}
 	// Renaming moves the file: the hook on the record request does it for the
 	// web, and this door goes through the same app, so it happens here too.

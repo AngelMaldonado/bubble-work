@@ -5,15 +5,14 @@
   // whole of it, and it is worth stating because the planner's vocabulary and
   // the model's are not the same words:
   //
-  //     column  →  a `state` the workspace defined
-  //     card    →  a THREAD, the model's one executable unit
-  //     due     →  threads.due_date, which the calendar reads
+  //     column  →  a `stage` the department's lead defined
+  //     card    →  a BUBBLE, a body of work; its threads are how it is executed
+  //     due     →  bubbles.due_date, which the calendar reads
+  //     label   →  an objective, what the work is FOR
   //     inbox   →  inbox_items, what is captured and not yet work
   //
-  // Two of those are the DEPARTMENT's and not this workspace's: the objectives
-  // and the inbox. The board below them is this workspace's, so the screen is
-  // the department's plan with one project's work under it — which is what a
-  // department head is looking at when they open it.
+  // All of it is the DEPARTMENT's: stages, objectives and inbox are the lead's,
+  // and the cards come from every project the viewer can see.
   //
   // There is no card collection, and that is the point: a planner with cards of
   // its own is a second inventory of the work, and two lists of the same work
@@ -200,6 +199,7 @@
             where: places[b.workspace],
             ws: b.workspace,
             born: b.created,
+            due: b.due_date?.slice(0, 10) || undefined,
           }),
         ),
       }),
@@ -220,14 +220,16 @@
       })),
   );
 
-  // The calendar reads the same threads the board does — anything with a date.
+  // El calendario enseña lo PLANEADO: cada burbuja con fecha, el día que tiene
+  // que estar. Leía las fechas de los threads, y enseñaba piezas sueltas en vez
+  // de los cuerpos de trabajo que el kanban de al lado organiza.
   const events = $derived<CalEvent[]>(
-    threads
-      .filter((t) => t.due_date)
-      .map((t) => ({
-        id: t.id,
-        title: t.name,
-        start: t.due_date!.slice(0, 10),
+    bubbles
+      .filter((b) => b.due_date && !b.closed_at)
+      .map((b) => ({
+        id: b.id,
+        title: b.name,
+        start: b.due_date!.slice(0, 10),
         allDay: true,
       })),
   );
@@ -391,6 +393,8 @@
     if ('notes' in fields) out.brief = String(fields.notes ?? '');
     if ('impact' in fields) out.impact = fields.impact || '';
     if ('urgency' in fields) out.urgency = fields.urgency || '';
+    // Un día, o nada: lo que la tarjeta y el calendario dicen es «para el 30».
+    if ('due' in fields) out.due_date = fields.due ? `${fields.due} 00:00:00.000Z` : '';
     if ('obj' in fields) {
       const n = fields.obj as number | undefined;
       out.objective = n ? (objectiveAt(n)?.id ?? '') : '';

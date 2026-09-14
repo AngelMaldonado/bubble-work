@@ -473,3 +473,41 @@ body::before {
     font-weight: 700;
   }
   .dp-content [data-part='table-cell-trigger'][data-outside-range] { opacity: 0.35; }
+
+/* El aviso de tope de un campo (lib/limits). Global porque vive en la capa
+   superior, fuera de cualquier componente. `popover` trae márgenes y un
+   `inset: 0` que lo centraría en la pantalla; aquí se coloca bajo su campo. */
+.limit-hint {
+  position: fixed;
+  inset: auto;
+  margin: 0;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-solid);
+  color: var(--muted);
+  font-size: 0.75rem;
+  line-height: 1.3;
+  box-shadow: 0 6px 18px rgb(0 0 0 / 0.14);
+  pointer-events: none;
+}
+.limit-hint.over {
+  color: var(--color-error-500);
+  border-color: color-mix(in oklab, var(--color-error-500) 45%, transparent);
+  background: color-mix(in oklab, var(--color-error-500) 10%, var(--surface-solid));
+}
+.limit-hint.nudge { animation: limit-nudge 0.32s ease; }
+@keyframes limit-nudge {
+  25% { transform: translateX(-4px); }
+  50% { transform: translateX(4px); }
+  75% { transform: translateX(-2px); }
+}
+[aria-invalid='true'].input,
+input[aria-invalid='true'],
+textarea[aria-invalid='true'] {
+  outline: 1px solid var(--color-error-500);
+  outline-offset: 1px;
+}
+@media (prefers-reduced-motion: reduce) {
+  .limit-hint.nudge { animation: none; }
+}

@@ -17,6 +17,7 @@
   import PlannerCalendar, { type CalEvent } from './PlannerCalendar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import { edgeFade } from '../lib/fade.svelte';
+  import { limited } from '../lib/limits.svelte';
 
   // Skeleton ships no CSS for Dialog; its parts are styled with utilities, and
   // this is the shape its own documentation uses.
@@ -37,6 +38,8 @@
     priorities = $bindable([]),
     priorityMap,
     render,
+    onattachcard,
+    onattachnote,
     onback,
     onsearch,
     onopencard,
@@ -74,7 +77,14 @@
     priorities?: Priority[];
     priorityMap?: { cols: string[]; rows: string[][] };
     /** markdown → html; the server in the real app */
-    render?: (md: string) => string | Promise<string>;
+    /** markdown → html. Con la tarjeta, cuando la hay: sus imágenes viven en
+     *  el workspace de la burbuja y sólo allí se resuelven. */
+    render?: (md: string, card?: Card | null) => string | Promise<string>;
+    /** guardar una imagen pegada en una tarjeta — al `assets/` de su workspace */
+    onattachcard?: (card: Card, file: File) => Promise<{ path: string } | null | void>;
+    /** guardar una imagen pegada en una nota — en la propia nota, que no tiene
+     *  workspace */
+    onattachnote?: (noteId: string, file: File) => Promise<{ path: string } | null | void>;
     onback?: () => void;
     onsearch?: () => void;
     onopencard?: (card: Card) => void;
@@ -338,7 +348,7 @@
              into; asking somebody to press "+" before they can type is asking
              them to decide they are capturing something. -->
         <form onsubmit={capture}>
-          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={draft} placeholder="Escribe y Enter…" />
+          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={draft} {@attach limited('inbox_items.note')} placeholder="Escribe y Enter…" />
         </form>
         <ul class="items" style={inboxFade.style} {@attach inboxFade.attach}>
           {#each inbox as it (it.id)}
@@ -438,9 +448,11 @@
 <CardSheet
   bind:open={cardOpen}
   bind:card={open}
+  dated={false}
   objectives={objectives}
   {priorityMap}
   {render}
+  onattach={onattachcard}
   columns={columns.map((c) => ({ id: c.id, name: c.name }))}
   columnId={openIn}
   onmove={moveCard}
@@ -454,7 +466,8 @@
 <InboxSheet
   bind:open={noteOpen}
   bind:note
-  {render}
+  render={render ? (md) => render(md) : undefined}
+  onattach={onattachnote}
   onpromote={promote}
   onsave={(patch) => note && onsavenote?.(note.id, patch)}
   ondelete={(id) => (ondeletenote ? ondeletenote(id) : (inbox = inbox.filter((x) => x.id !== id)))} />
@@ -493,13 +506,13 @@
               <span class="fields">
                 <input
                   autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                  bind:value={o.name}
+                  bind:value={o.name} {@attach limited('objectives.name')}
                   onchange={() => onpatchobjective?.(o.n, { name: o.name })}
                   placeholder="nombre" />
                 <input
                   autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                   class="why"
-                  bind:value={o.why}
+                  bind:value={o.why} {@attach limited('objectives.outcome')}
                   onchange={() => onpatchobjective?.(o.n, { outcome: o.why })}
                   placeholder="qué es verdad cuando esté cumplido" />
               </span>

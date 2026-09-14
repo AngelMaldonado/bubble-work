@@ -12,6 +12,7 @@
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import XIcon from '@lucide/svelte/icons/x';
   import MarkdownField from './MarkdownField.svelte';
+  import { limited, tooLong } from '../lib/limits.svelte';
 
   export type Note = { id: string; text: string; from: string; when: string; body?: string };
 
@@ -24,6 +25,7 @@
     open = $bindable(false),
     note = $bindable(null),
     render,
+    onattach,
     onsave,
     onpromote,
     ondelete,
@@ -31,6 +33,8 @@
     open?: boolean;
     note?: Note | null;
     render?: (md: string) => string | Promise<string>;
+    /** guardar una imagen pegada en la nota y decir cómo se la cita */
+    onattach?: (noteId: string, file: File) => Promise<{ path: string } | null | void>;
     /** guardar lo escrito. El panel NO escribe en la API: quien hace la
      *  escritura es quien sabe confirmar, reintentar y decir que falló — y aquí
      *  faltaba del todo, así que el título y el texto vivían en el objeto de la
@@ -81,14 +85,32 @@
     if (pending) clearTimeout(pending);
     pending = setTimeout(flush, 600);
   }
-  function flush() {
+  // Lo que no cabe NO se manda: el servidor rechazaría el PATCH entero —título
+  // incluido— y la pantalla, que guarda sola, no tendría dónde decirlo. Se
+  // queda en el campo, con el aviso de por cuánto se pasa, y la nota no se
+  // cierra hasta que quepa: cerrarla sería perderlo sin que nadie lo dijera.
+  const blocked = $derived(
+    note ? (tooLong('inbox_items.note', note.text) ?? tooLong('inbox_items.body', body)) : null,
+  );
+  let refused = $state(false);
+  $effect(() => {
+    if (!blocked) refused = false;
+  });
+
+  /** Guarda si cabe. `false` si no: nada se mandó. */
+  function flush(): boolean {
     if (pending) clearTimeout(pending);
     pending = null;
-    if (note) onsave?.({ text: note.text, body });
+    if (!note) return true;
+    if (blocked) return false;
+    onsave?.({ text: note.text, body });
+    return true;
   }
-  function close() {
-    flush();
-    open = false;
+  /** Cerrar, o decir por qué no. */
+  function leave(): boolean {
+    if (flush()) return true;
+    refused = true;
+    return false;
   }
 </script>
 
@@ -98,7 +120,7 @@
   {open}
   closeOnEscape={false}
   onOpenChange={(e: { open: boolean }) => {
-    if (!e.open) flush();
+    if (!e.open && !leave()) return;
     open = e.open;
   }}>
   <Portal>
@@ -112,7 +134,7 @@
         {#if note}
           <header class="flex items-center justify-between gap-3">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">
-              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} oninput={touched} onblur={flush} aria-label="qué llegó" />
+              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} oninput={touched} onblur={flush} {@attach limited('inbox_items.note')} aria-label="qué llegó" />
             </Dialog.Title>
             <Dialog.CloseTrigger class="btn-icon hover:preset-tonal">
               <XIcon class="size-4" />
@@ -123,13 +145,20 @@
 
           <MarkdownField
             bind:value={body}
+            onattach={onattach && note ? (f) => onattach(note!.id, f) : undefined}
             bind:editing={editingBody}
+            limit="inbox_items.body"
             {render}
             minHeight="22rem"
             placeholder="¿qué pidió exactamente? ¿a quién afecta? lo que sepas, aunque esté a medias…" />
 
           <footer>
-            <button class="promote" onclick={() => { flush(); onpromote?.(note); open = false; }}>
+            {#if blocked}
+              <p class="unsaved" class:nudge={refused} role="alert">
+                Esta nota no se está guardando. {blocked}
+              </p>
+            {/if}
+            <button class="promote" disabled={!!blocked} onclick={() => { if (!leave()) return; onpromote?.(note); open = false; }}>
               → al kanban
             </button>
             <button class="danger" onclick={() => { ondelete?.(note.id); open = false; }}>
@@ -143,6 +172,18 @@
 </Dialog>
 
 <style>
+  .unsaved {
+    flex: 1 1 100%;
+    margin: 0;
+    padding: 0.4rem 0.65rem;
+    border-radius: 8px;
+    font-size: 0.8rem;
+    color: var(--color-error-500);
+    background: color-mix(in oklab, var(--color-error-500) 10%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-error-500) 40%, transparent);
+  }
+  .unsaved.nudge { animation: limit-nudge 0.32s ease; }
+  .promote:disabled { opacity: 0.5; cursor: not-allowed; }
   .ttl {
     width: 100%;
     padding: 0.2rem 0;
@@ -153,7 +194,7 @@
     font-weight: 700;
   }
   .who { margin: 0; color: var(--faint); font-size: 0.75rem; }
-  footer { display: flex; align-items: center; gap: 0.5rem; }
+  footer { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
   .promote {
     padding: 0.35rem 0.7rem;
     border: 1px solid color-mix(in oklab, var(--accent) 45%, transparent);

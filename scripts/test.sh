@@ -553,21 +553,23 @@ chk "un miembro sí la ve" \
 
 # --------------------------------------- los dos ejes derivados (fase 2) ----
 echo
-PRI(){ curl -s "$API/api/collections/thread_priority/records?perPage=100&filter=$1" -H "Authorization: $2"; }
-T5=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Critico\",\"impact\":\"high\",\"urgency\":\"high\"}" | j "['id']")
-T6=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Backlog\",\"impact\":\"low\",\"urgency\":\"low\"}" | j "['id']")
-T7=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Medio\",\"impact\":\"mid\",\"urgency\":\"high\"}" | j "['id']")
-chk ">>> prioridad derivada: alto x alto = P1" "$(PRI "(id='$T5')" "$A" | j "['items'][0]['priority']")" P1
-chk ">>> bajo x bajo = P4" "$(PRI "(id='$T6')" "$A" | j "['items'][0]['priority']")" P4
-chk ">>> medio x alto = P2" "$(PRI "(id='$T7')" "$A" | j "['items'][0]['priority']")" P2
-# T2 nació sin impact ni urgency; T1 sí los trae desde arriba.
-T2ID=$(echo "$T2" | j "['id']")
-chk ">>> sin impacto ni urgencia, sin prioridad" "$(PRI "(id='$T2ID')" "$A" | j "['items'][0]['priority']")" ""
-chk ">>> priority NO es una columna de threads" \
-  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | python3 -c 'import sys,json;print("si" if "priority" not in json.load(sys.stdin) else "NO, es columna")')" si
-# dos: el "Primer thread" del principio y el "Critico" de aquí.
+# La prioridad es de la BURBUJA. La decide quien orquesta, y quien ejecuta ya
+# tiene su forma de ordenarse el día dentro de un cuerpo de trabajo.
+PRI(){ curl -s "$API/api/collections/bubble_priority/records?perPage=100&filter=$1" -H "Authorization: $2"; }
+B5=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Critica\",\"impact\":\"high\",\"urgency\":\"high\"}" | j "['id']")
+B6=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Backlog\",\"impact\":\"low\",\"urgency\":\"low\"}" | j "['id']")
+B7=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Media\",\"impact\":\"mid\",\"urgency\":\"high\"}" | j "['id']")
+T5=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"bubble\":\"$B5\",\"name\":\"Critico\"}" | j "['id']")
+chk ">>> prioridad derivada: alto x alto = P1" "$(PRI "(id='$B5')" "$A" | j "['items'][0]['priority']")" P1
+chk ">>> bajo x bajo = P4" "$(PRI "(id='$B6')" "$A" | j "['items'][0]['priority']")" P4
+chk ">>> medio x alto = P2" "$(PRI "(id='$B7')" "$A" | j "['items'][0]['priority']")" P2
+chk ">>> sin impacto ni urgencia, sin prioridad" "$(PRI "(id='$BU_B')" "$B" | j "['items'][0]['priority']")" ""
+chk ">>> priority NO es una columna de bubbles" \
+  "$(curl -s "$API/api/collections/bubbles/records/$B5" -H "Authorization: $SU" | python3 -c 'import sys,json;print("si" if "priority" not in json.load(sys.stdin) else "NO, es columna")')" si
+chk ">>> ...ni un thread la lleva ya: no es suya" \
+  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("si" if not any(k in d for k in ("priority","impact","urgency","objective")) else sorted(d))')" si
 chk "se puede filtrar por prioridad como cualquier campo" \
-  "$(PRI "(priority='P1')" "$A" | j "['totalItems']")" 2
+  "$(PRI "(priority='P1')" "$A" | j "['totalItems']")" 1
 chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
 
 # ----------------------------------------- el planeador: fase 5 (server) ----
@@ -597,14 +599,16 @@ chk "...ni erin, que no es de ningún workspace" \
 chk "anónimo tampoco" \
   "$(curl -s "$API/api/collections/objectives/records" | j "['totalItems']")" 0
 
-T8=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Bajo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
-T8B=$(post threads "$B" "{\"workspace\":\"$BETA\",\"name\":\"Beta bajo el mismo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
-chk ">>> threads de DOS workspaces cuelgan del mismo objetivo" \
-  "$([ -n "$T8" ] && [ -n "$T8B" ] && echo si || echo no)" si
+# Un objetivo cruza proyectos, y es lo que lo hace valer la pena. Ahora con
+# burbujas: una burbuja es de un workspace, y el objetivo las junta.
+BU_O1=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Bajo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
+BU_O2=$(post bubbles "$B" "{\"workspace\":\"$BETA\",\"name\":\"Beta bajo el mismo objetivo\",\"objective\":\"$OBJ\"}" | j "['id']")
+chk ">>> burbujas de DOS workspaces cuelgan del mismo objetivo" \
+  "$([ -n "$BU_O1" ] && [ -n "$BU_O2" ] && echo si || echo no)" si
 chk "borrar el objetivo NO se lleva el trabajo hecho bajo él" \
   "$(code -X DELETE "$API/api/collections/objectives/records/$OBJ" -H "Authorization: $C")" 204
-chk "...y el thread sigue ahí, sin objetivo" \
-  "$(curl -s "$API/api/collections/threads/records/$T8" -H "Authorization: $A" | j "['id']")" "$T8"
+chk "...y la burbuja sigue ahí, sin objetivo" \
+  "$(curl -s "$API/api/collections/bubbles/records/$BU_O1" -H "Authorization: $A" | j "['objective']")" ""
 
 echo
 IN1=$(post inbox_items "$B" "{\"note\":\"revisar el rate limit del portal\"}")
@@ -629,6 +633,46 @@ chk ">>> una nota se puede reescribir, y con cuerpo" \
      -d '{"note":"revisar el rate limit del portal","body":"# Qué pidió\n\nQue no tire 429 en la hora pico."}')" 200
 chk ">>> ...y vuelve entero" \
   "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" | grep -c '429 en la hora pico')" 1
+
+# El motor de los threads dibuja, y un bloque ```excalidraw es la escena entera
+# en JSON: una docena de cajas ya pasa de 30000 caracteres. El tope viejo (20000)
+# rechazaba el PATCH entero — título incluido — justo al pegar un diagrama.
+BIGBODY=${TMPDIR:-/tmp}/nota-grande.json
+python3 -c "import json,sys;json.dump({'body':'# Diagrama\n\n\u0060\u0060\u0060excalidraw\n'+('{\"type\":\"rectangle\"},'*3000)+'\n\u0060\u0060\u0060\n'},open(sys.argv[1],'w'))" "$BIGBODY"
+chk ">>> un diagrama largo cabe en el cuerpo de una nota" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -H "$JS" -d @"$BIGBODY")" 200
+chk "...y vuelve entero" \
+  "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" | python3 -c "import json,sys;print(len(json.load(sys.stdin)['body'])>60000)")" True
+
+# Los topes, dichos ANTES de guardar. La pantalla guarda sola —al dejar de
+# escribir, al salir de un campo— y un 400 en ese momento no tenía dónde
+# aparecer: lo escrito se perdía al recargar. Salen del esquema, no de una copia.
+LIM=$(curl -s "$API/api/limits" -H "Authorization: $B")
+chk ">>> los topes de cada campo se pueden preguntar" \
+  "$(echo "$LIM" | j "['inbox_items.body']")" 2000000
+chk "...cada uno el suyo" \
+  "$(echo "$LIM" | j "['workspaces.name']")" 100
+chk "...y el de un comentario, que se mide en bytes (5 MB)" \
+  "$(echo "$LIM" | j "['comments.body']")" 5242880
+chk "...con sesión" "$(code "$API/api/limits")" 401
+
+# Una nota lleva imágenes, y como no tiene workspace van en el propio registro.
+# `files+` AÑADE: sin el `+` cada pegado borraría la imagen anterior y la nota
+# citaría archivos que ya no existen.
+PNG1=${TMPDIR:-/tmp}/nota-1.png; PNG2=${TMPDIR:-/tmp}/nota-2.png
+python3 -c "import base64,sys;open(sys.argv[1],'wb').write(base64.b64decode('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='))" "$PNG1"
+cp "$PNG1" "$PNG2"
+curl -s -o /dev/null -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -F "files+=@$PNG1"
+UP2=$(curl -s -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -F "files+=@$PNG2")
+chk ">>> una nota guarda las imágenes que se le pegan" \
+  "$(echo "$UP2" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("files",[])))')" 2
+chk ">>> ...y otra persona no le pega nada" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $A" -F "files+=@$PNG1")" 404
+# Un SVG es un documento que puede ejecutar código, y servido desde nuestro
+# propio origen lo haría con la sesión de quien lo mira.
+printf '<svg xmlns="http://www.w3.org/2000/svg"><script>alert(1)</script></svg>' > ${TMPDIR:-/tmp}/nota.svg
+chk ">>> un SVG no entra: podría ejecutar código en nuestro origen" \
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $B" -F "files+=@${TMPDIR:-/tmp}/nota.svg;type=image/svg+xml")" 400
 
 # Triar: la nota se convierte en un thread —y ahí se decide de qué workspace es—
 # y se queda apuntando a lo que fue.
@@ -673,11 +717,19 @@ chk ">>> un thread recién nacido sin evidencia NO está dormant" \
   "$(echo "$BOARD" | python3 -c 'import sys,json
 d=json.load(sys.stdin)
 print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$T5"'"))')" hot
+# Las dos escalas conviven en la BURBUJA, y nunca mezcladas: la banda la deriva
+# la evidencia de sus threads, la prioridad la decide quien orquesta.
+BU_P=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Con prioridad\",\"impact\":\"high\",\"urgency\":\"high\"}" | j "['id']")
 chk ">>> el board trae las dos escalas por separado" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+b=next(b for b in d["bubbles"] if b["id"]=="'"$BU_P"'")
+print("si" if b["priority"]=="P1" and b["heat"]["lifecycle"] in ("hot","dormant","rip") else b)')" si
+chk ">>> ...y un thread ya no lleva prioridad: no es suya" \
   "$(echo "$BOARD" | python3 -c 'import sys,json
 d=json.load(sys.stdin)
 t=next(t for t in d["threads"] if t["id"]=="'"$T5"'")
-print("si" if t["priority"]=="P1" and t["heat"]["lifecycle"]=="hot" else t)')" si
+print("priority" in t)')" False
 chk "el board dice contra qué calibración clasificó" \
   "$(echo "$BOARD" | python3 -c 'import sys,json;print(int(json.load(sys.stdin)["tuning"]["cycle_hours"]))')" 168
 chk "erin no ve el board" \
@@ -861,7 +913,7 @@ except Exception: print(0)')" 0
 
 # ---- el bucle completo de un agente, por slug ----
 echo
-NT=$(mcptext "$A" create_thread '{"workspace":"alpha","name":"Trabajo del agente","impact":"high","urgency":"high"}')
+NT=$(mcptext "$A" create_thread '{"workspace":"alpha","name":"Trabajo del agente"}')
 NTID=$(echo "$NT" | j "['id']")
 chk ">>> un agente crea un thread por SLUG, sin conocer ids" "$([ -n "$NTID" ] && echo si || echo no)" si
 chk "...y el server le puso número y ruta" "$(echo "$NT" | j "['doc_path']")" "threads/$(echo "$NT" | j "['seq']")-trabajo-del-agente.md"
@@ -930,10 +982,10 @@ chk ">>> y la burbuja se calienta por eso: el thread sale hot" \
   "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
 d=json.loads(sys.stdin.read())
 print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" hot
-chk "...con su prioridad derivada al lado, sin mezclarse" \
+chk "...y la prioridad vive en su burbuja, no en él" \
   "$(mcptext "$A" board '{"workspace":"alpha"}' | python3 -c 'import sys,json
 d=json.loads(sys.stdin.read())
-print(next(t["priority"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" P1
+print(next(b["priority"] for b in d["bubbles"] if b["id"]=="'"$BU_P"'"))')" P1
 chk ">>> completar es un cambio de estado, no un examen" \
   "$(mcptext "$A" complete_thread "{\"thread\":\"$NTID\"}" | j "['id']")" "$NTID"
 chk "...y el board lo refleja" \
@@ -981,10 +1033,15 @@ chk ">>> cerrar es una decisión con frase, no un borrado" \
 ARG="{\"bubble\":\"$NBUB\",\"closed\":false}"
 chk ">>> ...y se reabre" "$(mcptext "$A" set_bubble "$ARG" | j "['closed']")" False
 
-ARG="{\"thread\":\"$NTID\",\"bubble\":\"$NBUB\",\"due\":\"2026-12-31\",\"impact\":\"high\",\"urgency\":\"mid\"}"
+ARG="{\"thread\":\"$NTID\",\"bubble\":\"$NBUB\",\"due\":\"2026-12-31\"}"
 chk ">>> el thread se mueve a esa burbuja" "$(mcptext "$A" set_thread "$ARG" | j "['bubble']")" "$NBUB"
-chk ">>> ...y la prioridad la deriva el servidor de impacto x urgencia" \
-  "$(curl -s "$API/api/collections/thread_priority/records/$NTID" -H "Authorization: $A" | j "['priority']")" P2
+# La prioridad es de la BURBUJA: la decide quien orquesta, y el operador ya tiene
+# su propia forma de ordenarse el día.
+ARG="{\"bubble\":\"$NBUB\",\"impact\":\"high\",\"urgency\":\"mid\"}"
+chk ">>> la prioridad se le pone a la burbuja" \
+  "$(mcptext "$A" set_bubble "$ARG" | j "['impact']")" high
+chk ">>> ...y la deriva el servidor de impacto x urgencia" \
+  "$(curl -s "$API/api/collections/bubble_priority/records/$NBUB" -H "Authorization: $A" | j "['priority']")" P2
 ARG="{\"thread\":\"$NTID\",\"due\":\"31/12/2026\"}"
 chk ">>> una fecha mal formada se rechaza en vez de guardarse rara" \
   "$(mcptext "$A" set_thread "$ARG" | grep -c "a due date is a day")" 1
@@ -1049,22 +1106,75 @@ chk ">>> pero el documento propio de un thread no se borra por esa puerta" \
 # la excepción declarada: cero significa «ninguno, ordéname tú», y una columna
 # donde alguien arrastró lleva rangos en todas sus tarjetas.
 #
-# Sin esto, colocar una tarjeta obligaba a falsear su urgencia — y eso corrompe
-# el dato con el que se calcula todo lo demás.
+# Sobre BURBUJAS, que es lo que un lead coloca en el tablero. Sin esto, situar
+# una burbuja obligaba a falsear su urgencia — y eso corrompe el dato con el que
+# se calcula todo lo demás.
 echo
-chk ">>> un thread nace sin rango: la columna se ordena sola" \
-  "$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" | j "['rank']")" 0
+chk ">>> una burbuja nace sin rango: la columna se ordena sola" \
+  "$(curl -s "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" | j "['rank']")" 0
 chk ">>> quien trabaja aquí puede ordenar a mano" \
-  "$(code -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" -d '{"rank":20}')" 200
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d '{"rank":20}')" 200
 chk ">>> ...y vuelve" \
-  "$(curl -s "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" | j "['rank']")" 20
+  "$(curl -s "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" | j "['rank']")" 20
 chk ">>> volver al automático es poner cero, no borrar la fila" \
-  "$(code -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $A" -H "$JS" -d '{"rank":0}')" 200
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d '{"rank":0}')" 200
 chk ">>> erin no ordena un tablero que no alcanza" \
-  "$(code -X PATCH "$API/api/collections/threads/records/$T1ID" -H "Authorization: $ER" -H "$JS" -d '{"rank":5}')" 404
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $ER" -H "$JS" -d '{"rank":5}')" 404
 # El orden es una preferencia de quien planea, no evidencia: mover una tarjeta
 # de sitio no es que la realidad haya cambiado.
-chk ">>> ordenar NO calienta nada" "$(evcount "(target='$T1ID'%26%26kind='thread-ranked')")" 0
+chk ">>> ordenar NO calienta nada" "$(evcount "(target='$BU_P'%26%26kind='bubble-ranked')")" 0
+
+# ------------------------------------------------------------- etapas ----
+#
+# El tablero del lead: en qué punto está cada burbuja. No son los `states` de un
+# workspace —esos son de quien ejecuta— sino el vocabulario común que permite
+# mirar seis proyectos en el mismo sitio.
+echo
+chk ">>> un departamento nace con etapas por horizonte" \
+  "$(list stages "$A" | j "['totalItems']")" 4
+chk ">>> las lee cualquiera que trabaje aquí" \
+  "$(list stages "$ER" | j "['totalItems']")" 4
+chk ">>> anónimo no" "$(curl -s "$API/api/collections/stages/records" | j "['totalItems']")" 0
+STAGE=$(list stages "$C" | python3 -c 'import sys,json;print(json.load(sys.stdin)["items"][0]["id"])')
+chk ">>> el lead global añade una etapa" \
+  "$(pcode stages "$C" '{"name":"Esperando al cliente","position":9}')" 200
+chk ">>> ...y un lead de workspace NO: el tablero es del departamento" \
+  "$(pcode stages "$A" '{"name":"Mía"}')" 400
+chk ">>> una burbuja se coloca en una etapa" \
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"stage\":\"$STAGE\"}")" 200
+chk ">>> ...y el board la devuelve, junto a su banda y sin mezclarlas" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+b=next(b for b in d["bubbles"] if b["id"]=="'"$BU_P"'")
+print("si" if b["stage"]=="'"$STAGE"'" and b["heat"]["lifecycle"] else b)')" si
+
+# ------------------------------------------------------ brief de burbuja ----
+#
+# Lo largo del plan va en `brief`, no en el outcome: el outcome es el contrato
+# de una frase, y estirarlo hasta ser el cuaderno del plan lo habría vuelto
+# ilegible en el board.
+echo
+LONGBRIEF=$(python3 -c "print('# Plan\\\\n\\\\n' + 'contexto. ' * 120)")
+chk ">>> una burbuja lleva un brief largo, con markdown" \
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"brief\":\"$LONGBRIEF\"}")" 200
+chk ">>> ...y el outcome sigue siendo una frase: 500 como mucho" \
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"outcome\":\"$LONGBRIEF\"}")" 400
+
+# --------------------------------------------------- objetivo de burbuja ----
+#
+# Un objetivo dice PARA QUÉ sirve un cuerpo de trabajo, y el cuerpo de trabajo
+# es la burbuja. Colgado de cada thread obligaba a repetir la misma respuesta en
+# cada pieza y dejaba que dos piezas de lo mismo se contradijeran.
+echo
+OBJ2=$(post objectives "$C" '{"name":"Que el portal aguante la hora pico"}' | j "['id']")
+chk ">>> una burbuja cuelga de un objetivo del departamento" \
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"objective\":\"$OBJ2\"}")" 200
+chk ">>> ...y el plan las cuenta por objetivo, no por thread" \
+  "$(mcptext "$C" plan '{}' | python3 -c 'import sys,json
+d=json.loads(sys.stdin.read())
+print(sum(o["bubbles"] for o in d["objectives"]))')" 1
+chk ">>> un thread ya no tiene objetivo propio" \
+  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $A" | grep -c '"objective"')" 0
 
 # ---------------------------------------------------------- inventario ----
 #

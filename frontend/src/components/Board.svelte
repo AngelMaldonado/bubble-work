@@ -14,6 +14,7 @@
   import Minimap, { type MapItem } from './Minimap.svelte';
   import { ago, cycleLeft } from '../lib/when';
   import { lastOpenBubble } from '../lib/filters.svelte';
+  import { limited } from '../lib/limits.svelte';
 
   let {
     workspace,
@@ -284,7 +285,6 @@
       seq: t.seq,
       title: t.name,
       lifecycle: t.heat.lifecycle,
-      priority: t.priority,
       // The second line of the row, which is what the mock drew and the real
       // drawer had nothing to fill: who has it, and how long since anything
       // happened to it.
@@ -337,7 +337,7 @@
               class="input"
               placeholder="¿Cómo terminó? (opcional)"
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-              bind:value={closure}
+              bind:value={closure} {@attach limited('bubbles.closure')}
               {@attach (el: HTMLInputElement) => el.focus()} />
             <div class="mt-4 flex justify-end gap-2">
               <button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (closing = null)}>
@@ -367,7 +367,7 @@
             <input
               class="input"
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-              bind:value={fresh}
+              bind:value={fresh} {@attach limited('bubbles.name')}
               {@attach (el: HTMLInputElement) => el.select()} />
             <div class="mt-4 flex justify-end gap-2">
               <button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (renaming = null)}>

@@ -94,10 +94,16 @@ plain bullet is a sentence.
 made it warm and when. Starting without it is how you redo something that was
 finished on Tuesday.
 
-Everything about a thread that is not its document goes through `set_thread`: the
-bubble that carries it, the objective it is FOR, when it is due, its impact and
-urgency. **Priority is not among them** — the server derives it from impact ×
-urgency, and there is no second way to write it.
+Everything about a thread that is not its document goes through `set_thread`:
+the bubble that carries it and when it is due. What the work is FOR and how much
+it matters belong to the BUBBLE (`set_bubble`): an objective describes a body of
+work, and priority is decided by whoever orchestrates, not by whoever executes.
+**Priority itself is never written** — the server derives it from the bubble's
+impact × urgency, and there is no second way to say it.
+
+A bubble also carries a `stage`: where the lead put it on the department's plan.
+That is a different question from its band — the band says whether reality is
+changing, the stage says what somebody decided this is.
 
 A bubble is created with an outcome and can be closed with a sentence
 (`set_bubble`). Closing is a decision with a date, not a delete: it says the work

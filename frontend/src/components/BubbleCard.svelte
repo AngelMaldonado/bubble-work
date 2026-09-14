@@ -41,9 +41,6 @@
             <span class="dot"></span>
             <span class="faint tabular-nums">#{t.seq}</span>
             <span class="min-w-0 flex-1 truncate">{t.name}</span>
-            {#if t.priority}
-              <span class="faint text-xs">{t.priority}</span>
-            {/if}
             {#if t.pulse}<span class="faint text-xs" title="somebody commented recently">💬</span>{/if}
           </button>
         </li>

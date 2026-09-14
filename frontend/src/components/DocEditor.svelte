@@ -11,6 +11,7 @@
   // editor itself, the slash menu, and saving. What it does NOT own is where
   // the text comes from or where it goes — that is the caller's, because one
   // writes a thread's document and the other a page.
+  import { droppedFile, insertImage, pastedImage } from '../lib/attach';
   import { untrack } from 'svelte';
   import Prose from './Prose.svelte';
   import SlashMenu from './SlashMenu.svelte';
@@ -106,14 +107,10 @@
     if (!file || !onattach || attaching) return;
     attaching = true;
     try {
-      const out = await onattach(file);
-      const path = out?.path;
-      if (!path || !editor) return;
-      const label = file.name.replace(/\.[^.]+$/, '');
-      const at = editor.cursor();
-      const text = `![${label}](${path})`;
-      editor.replace(at, at, text, text.length);
-      draft = editor.value();
+      // La misma inserción que el brief de una burbuja y el cuerpo de una nota:
+      // una sola definición de «qué es una imagen pegada».
+      const next = await insertImage(editor, file, onattach);
+      if (next !== null) draft = next;
     } finally {
       attaching = false;
     }
@@ -123,15 +120,19 @@
    *  first. The clipboard carries the image as a file with no name worth using;
    *  the caller's slug decides what it is called on disk. */
   function pasted(e: ClipboardEvent) {
-    const file = [...(e.clipboardData?.files ?? [])][0];
-    if (file && file.type.startsWith('image/')) {
+    const file = onattach ? pastedImage(e) : null;
+    if (file) {
+      // Antes que CodeMirror, y sin dejarle seguir: si la imagen viene como URL
+      // base64, pegarla como texto es escribir la imagen entera dentro del
+      // documento.
       e.preventDefault();
+      e.stopPropagation();
       attach(file);
     }
   }
 
   function dropped(e: DragEvent) {
-    const file = [...(e.dataTransfer?.files ?? [])][0];
+    const file = droppedFile(e);
     if (file) {
       e.preventDefault();
       attach(file);
@@ -320,7 +321,7 @@
       class="editors"
       role="group"
       bind:this={editorBox}
-      onpaste={pasted}
+      onpastecapture={pasted}
       ondrop={dropped}
       ondragover={(e) => onattach && e.preventDefault()}
       {@attach mountEditor}></div>

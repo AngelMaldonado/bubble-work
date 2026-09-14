@@ -3,6 +3,10 @@
     id: string;
     title: string;
     obj?: number;
+    /** el NOMBRE del objetivo. El número (`obj`) es su posición en la lista, y
+     *  cambia si alguien la reordena: una tarjeta que pasa a decir «O2» sin que
+     *  nada de ella haya cambiado no dice qué objetivo es. */
+    objName?: string;
     /** DERIVED from impact × urgency — see CardSheet. Stored so the board can
      *  show it without recomputing, never typed in by hand. */
     prio?: string;
@@ -10,8 +14,16 @@
     impact?: string;
     urgency?: string;
     notes?: string;
+    /** cuántos threads lleva dentro. No el detalle —eso es de quien opera— sino
+     *  el tamaño: «esto son ocho piezas» y «esto es una» se planean distinto. */
+    pieces?: number;
     /** where this work lives — the project, when the board spans several */
     where?: string;
+    /** cuándo nació, ISO. La tarjeta lo dice como edad: «hace 3 meses» */
+    born?: string;
+    /** el id del workspace de la tarjeta. `where` es su NOMBRE, para leerlo;
+     *  esto es lo que hace falta para guardar y resolver sus imágenes. */
+    ws?: string;
   };
   export type Column = {
     id: string;
@@ -37,7 +49,11 @@
   // drag engine.
   import PlusIcon from '@lucide/svelte/icons/plus';
   import MoreIcon from '@lucide/svelte/icons/more-horizontal';
+  import SpoolIcon from '@lucide/svelte/icons/spool';
+  import SproutIcon from '@lucide/svelte/icons/sprout';
+  import { ago, when } from '../lib/when';
   import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
+  import { limited } from '../lib/limits.svelte';
 
   let {
     columns = $bindable([]),
@@ -117,6 +133,14 @@
    *  column and a card are different things being moved. */
   let overCol = $state<string | null>(null);
   let liftingCol = $state<string | null>(null);
+
+  /** El día en que nació, dicho como lo dice una persona — para el tooltip,
+   *  donde «hace 3 meses» ya no basta y hace falta la fecha. */
+  const bornFmt = new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
+  function bornOn(iso: string): string {
+    const t = when(iso);
+    return Number.isNaN(t) ? iso : bornFmt.format(new Date(t));
+  }
 
   /** The card shows a date the way a person says it; the value stays ISO. */
   const fmt = new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short' });
@@ -336,7 +360,7 @@
         {#if renaming === col.id}
           <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
             class="rename"
-            bind:value={draft}
+            bind:value={draft} {@attach limited('stages.name')}
             onblur={commitRename}
             onkeydown={(e) => {
               if (e.key === 'Enter') commitRename();
@@ -396,10 +420,42 @@
               <span class="ttl">{c.title}</span>
               <span class="meta">
                 {#if c.prio}<span class="prio-chip prio-{c.prio}">{c.prio}</span>{/if}
-                {#if c.obj}<span class="obj">O{c.obj}</span>{/if}
+                {#if c.objName}
+                  <span class="obj" title="Objetivo: {c.objName}">{c.objName}</span>
+                {:else if c.obj}
+                  <span class="obj">O{c.obj}</span>
+                {/if}
                 {#if c.due}<span class="due">{shortDate(c.due)}</span>{/if}
-                {#if c.where}<span class="where">{c.where}</span>{/if}
               </span>
+              <!-- El pie de la tarjeta: cuánto lleva viva a la izquierda, de qué
+                   proyecto es a la derecha. Las dos son contexto, no lo que la
+                   tarjeta ES — por eso van debajo y en pequeño. -->
+              {#if c.pieces || c.born || c.where}
+                <span class="foot">
+                  <!-- Cuántas piezas lleva dentro. El lead no necesita verlas: le
+                       basta saber si esto son ocho o una, que es lo que cambia
+                       cómo se planea. Una bobina: son HILOS, y el número solo no
+                       decía de qué. Al pie, junto a la edad: las dos dicen el
+                       TAMAÑO de esto — cuánto abarca y cuánto lleva. -->
+                  {#if c.pieces}
+                    <span class="pieces" title="{c.pieces} {c.pieces === 1 ? 'thread' : 'threads'} dentro">
+                      <SpoolIcon class="size-3" aria-hidden="true" />{c.pieces}
+                    </span>
+                  {/if}
+                  {#if c.born}
+                    <!-- Desde que nació, no desde la última evidencia: eso es el
+                         calor del board, y aquí se pregunta otra cosa — cuánto
+                         lleva este cuerpo de trabajo en el plan. -->
+                    <span class="age" title="Creada el {bornOn(c.born)}">
+                      <SproutIcon class="size-3" aria-hidden="true" />{ago(c.born)}
+                    </span>
+                  {/if}
+                  <!-- De qué proyecto es, como insignia: en un tablero que cruza
+                       el departamento distingue dos tarjetas con el mismo
+                       nombre, y no compite con lo que dice qué es. -->
+                  {#if c.where}<span class="where">{c.where}</span>{/if}
+                </span>
+              {/if}
             </button>
             {#if ondeletecard}
               <!-- OUTSIDE the card's own button: a delete that can be hit while
@@ -581,14 +637,61 @@
   }
   .card:hover { border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
   .ttl { display: block; padding-right: 1.4rem; font-size: 0.86rem; line-height: 1.3; color: var(--text); }
-  .meta { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.35rem; font-size: 0.7rem; }
-  .obj, .due, .where { color: var(--faint); }
+  .meta {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    min-width: 0;
+    margin-top: 0.35rem;
+    font-size: 0.7rem;
+  }
+  .obj, .due { color: var(--faint); }
   .due { margin-left: auto; }
-  /* Which project it is from. Last, and quiet: on a board that spans the
-     department it is what tells two identically named cards apart, and on one
-     that does not it never appears at all. */
+  /* El objetivo se recorta y no empuja: es texto libre y los de verdad son
+     frases, así que sin `min-width: 0` en el flex se comía la fila y echaba
+     fuera la prioridad. Completo en el tooltip. */
+  .obj {
+    flex: 0 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .pieces {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    color: var(--faint);
+  }
+  /* El pie: edad a la izquierda, proyecto a la derecha, en la misma línea. */
+  .foot {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    margin-top: 0.4rem;
+    font-size: 0.64rem;
+  }
+  .age {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.2rem;
+    color: var(--faint);
+  }
+  /* Which project it is from: a badge, bottom right. On a board that spans the
+     department it tells two identically named cards apart; it never competes
+     with what says what the card IS. */
   .where {
-    max-width: 9rem;
+    display: block;
+    width: fit-content;
+    max-width: 70%;
+    margin-left: auto;
+    padding: 0.05rem 0.45rem;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--muted);
+    font-size: 0.64rem;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
@@ -615,5 +718,11 @@
     color: var(--faint);
     font-size: 0.62rem;
     letter-spacing: 0.02em;
+  }
+
+  .pieces {
+    color: var(--faint);
+    font-size: 0.64rem;
+    font-variant-numeric: tabular-nums;
   }
 </style>

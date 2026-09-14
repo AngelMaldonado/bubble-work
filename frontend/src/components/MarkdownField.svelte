@@ -17,6 +17,8 @@
   import SlashMenu from './SlashMenu.svelte';
   import { SlashMenu as SlashMenuState } from '../lib/slashmenu.svelte';
   import { vimPref } from '../lib/vim.svelte';
+  import { droppedFile, insertImage, pastedImage } from '../lib/attach';
+  import { fit, overText } from '../lib/limits.svelte';
 
   let {
     value = $bindable(''),
@@ -27,6 +29,8 @@
         section header — the way a card's "Editar" button does */
     chrome = true,
     render,
+    onattach,
+    limit = '',
   }: {
     value?: string;
     editing?: boolean;
@@ -35,7 +39,30 @@
     chrome?: boolean;
     /** markdown → html. The server in the real app; anything in a mock. */
     render?: (md: string) => string | Promise<string>;
+    /** guardar una imagen pegada o soltada y decir cómo se la cita. Lo decide
+     *  quien llama, porque es quien sabe de quién es lo que se escribe: un
+     *  workspace tiene `assets/`, una nota del inbox no. Sin esto, pegar una
+     *  imagen hace lo que haría el navegador — nada. */
+    onattach?: (file: File) => Promise<{ path: string } | null | void>;
+    /** `colección.campo` donde se guarda esto, para saber su tope (ver
+     *  `lib/limits`). Pasado, el servidor rechaza la escritura entera: se avisa
+     *  aquí, mientras se escribe, en vez de con un guardado que no ocurre. */
+    limit?: string;
   } = $props();
+
+  const room = $derived(limit ? fit(limit, value) : null);
+
+  let attaching = $state(false);
+  async function attach(file: File | null) {
+    if (!file || !onattach || attaching) return;
+    attaching = true;
+    try {
+      const next = await insertImage(editor, file, onattach);
+      if (next !== null) value = next;
+    } finally {
+      attaching = false;
+    }
+  }
   let html = $state('');
 
   // The slash menu, at the caret. Same class and same list as the thread's
@@ -119,8 +146,36 @@
     <!-- The menu is positioned against the EDITOR's rectangle, because that is
          what the caret's coordinates are relative to. Against the whole field
          it would be off by the toolbar above it. -->
-    <div class="editor-wrap">
+    <!-- `role="group"`: la caja recibe pegados y soltados, y CodeMirror pone
+         dentro su propio `textbox`. Es el mismo arreglo que el editor de un
+         thread, y por la misma razón: una imagen se pega encima de lo que se
+         está escribiendo. -->
+    <div
+      class="editor-wrap"
+      class:attaching
+      role="group"
+      onpastecapture={(e) => {
+        // En CAPTURA, antes que CodeMirror: en burbuja el editor ya había
+        // pegado el texto del portapapeles —y cuando la imagen viene como URL
+        // base64, eso es la imagen entera escrita dentro del markdown—.
+        const f = onattach ? pastedImage(e) : null;
+        if (f) {
+          e.preventDefault();
+          e.stopPropagation();
+          attach(f);
+        }
+      }}
+      ondragover={(e) => onattach && e.preventDefault()}
+      ondrop={(e) => {
+        const f = droppedFile(e);
+        if (f && onattach) {
+          e.preventDefault();
+          attach(f);
+        }
+      }}>
       <div class="editor" bind:this={fieldEl} {@attach mount}></div>
+      {#if attaching}<span class="uploading">subiendo imagen…</span>{/if}
+
       <SlashMenu menu={slash} field={fieldEl} onpick={(c) => slash.run(editor, value, c)} />
     </div>
   {:else if value.trim()}
@@ -131,6 +186,14 @@
     </div>
   {:else}
     <button class="empty" onclick={() => (editing = true)}>{placeholder}</button>
+  {/if}
+
+  <!-- Debajo del campo y en los dos modos: lo que no cabe sigue sin caber
+       cuando se deja de editar, y ahí es cuando más importa saberlo. -->
+  {#if room?.over}
+    <p class="room over" role="alert">{overText(room)}</p>
+  {:else if room?.near && editing}
+    <p class="room">{room.used.toLocaleString('es')} / {room.max.toLocaleString('es')} caracteres</p>
   {/if}
 </div>
 
@@ -209,4 +272,28 @@
     text-align: left;
   }
   .empty:hover { background: var(--hover); }
+
+  .uploading {
+    position: absolute;
+    right: 0.5rem;
+    bottom: 0.4rem;
+    padding: 0.1rem 0.45rem;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--faint);
+    font-size: 0.7rem;
+  }
+  .editor-wrap.attaching .editor { opacity: 0.85; }
+  .room {
+    margin: 0;
+    font-size: 0.75rem;
+    color: var(--muted);
+  }
+  .room.over {
+    padding: 0.35rem 0.6rem;
+    border-radius: 8px;
+    color: var(--color-error-500);
+    background: color-mix(in oklab, var(--color-error-500) 10%, transparent);
+    border: 1px solid color-mix(in oklab, var(--color-error-500) 40%, transparent);
+  }
 </style>

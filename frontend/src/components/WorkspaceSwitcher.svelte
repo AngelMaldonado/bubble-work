@@ -11,6 +11,7 @@
   // foco está en el board: dentro de un campo, un editor o un menú se lo queda el
   // navegador.
   import { api } from '../lib/api';
+  import { isEditable } from '../lib/keys';
   import { allUrl, boardUrl } from '../lib/routes';
 
   let {
@@ -121,17 +122,6 @@
   let idx = $state(0);
   /** qué se miraba cuando esto se abrió — lo que Escape devuelve */
   let before = $state('');
-
-  function isEditable(el: EventTarget | null): boolean {
-    if (!(el instanceof HTMLElement)) return false;
-    if (el.isContentEditable) return true;
-    return (
-      ['INPUT', 'TEXTAREA', 'SELECT'].includes(el.tagName) ||
-      el.closest('[role="menu"]') !== null ||
-      el.closest('[role="dialog"]') !== null ||
-      el.closest('.cm-editor') !== null
-    );
-  }
 
   function show(): void {
     before = current;
@@ -252,7 +242,14 @@
   }
 </script>
 
-<svelte:window onkeydown={onKeyDown} onkeyup={onKeyUp} onblur={onBlur} />
+<!-- En fase de CAPTURA.
+
+     En la de burbuja, cualquiera que esté en medio y llame a `stopPropagation`
+     —un menú de Zag que quedó escuchando, una capa de diálogo que no se
+     desmontó— apaga el atajo en toda la aplicación sin dejar rastro: deja de
+     funcionar y no hay error que mirar. En captura llega antes que nadie, y
+     quien de verdad es dueño del teclado ya está cubierto por `isEditable`. -->
+<svelte:window onkeydowncapture={onKeyDown} onkeyup={onKeyUp} onblur={onBlur} />
 
 {#if open}
   <!-- svelte-ignore a11y_click_events_have_key_events -->

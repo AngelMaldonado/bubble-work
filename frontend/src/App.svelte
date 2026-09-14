@@ -1,5 +1,6 @@
 <script lang="ts">
   import { api, type Board as BoardData, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
+  import { isEditable } from './lib/keys';
   import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
@@ -24,6 +25,7 @@
   import ThemePage from './components/ThemePage.svelte';
   import MockPage from './components/MockPage.svelte';
   import ThemeToggle from './components/ThemeToggle.svelte';
+  import { limited } from './lib/limits.svelte';
 
   // The address IS the screen. `lib/routes.ts` says what each one looks like;
   // here it is only read, and every navigation goes through `go`.
@@ -529,15 +531,22 @@
   // ⌘K from anywhere, including inside a thread. Not bound in the editor: there
   // ⌘K is CodeMirror's, and stealing a key from the thing that has focus is how
   // a shortcut becomes a surprise.
+  //
+  // Se escucha en CAPTURA. En la fase de burbuja, cualquiera que esté en medio y
+  // llame a `stopPropagation` —un menú de Zag que quedó escuchando, una capa de
+  // diálogo que no se desmontó— apagaba el atajo en toda la aplicación sin
+  // dejar rastro: dejaba de funcionar y no había error que mirar. `isEditable`
+  // es lo que sigue devolviendo la tecla a quien de verdad la necesita.
   function hotkeys(e: KeyboardEvent) {
     if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+      if (isEditable(e.target)) return;
       e.preventDefault();
       omni = true;
     }
   }
 </script>
 
-<svelte:window onkeydown={hotkeys} />
+<svelte:window onkeydowncapture={hotkeys} />
 
 
 <ThemeToggle />
@@ -847,7 +856,7 @@
                 class="input"
                 placeholder="¿Cómo se llama?"
                 autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-                bind:value={fresh}
+                bind:value={fresh} {@attach limited(naming === 'thread' ? 'threads.name' : 'bubbles.name')}
                 {@attach (el: HTMLInputElement) => el.focus()} />
 
               {#if naming === 'thread'}

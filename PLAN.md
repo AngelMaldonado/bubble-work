@@ -1498,6 +1498,38 @@ La marca vive en `frontend/public/marks/` y no en `public/logos/`, que se GENERA
 desde `simple-icons` y está ignorado: un archivo que la interfaz necesita
 siempre no puede vivir donde `npm run logos` lo borra y lo rehace.
 
+## El token del agente duraba cinco días
+
+El agente se conecta con el token de la sesión de quien copió el prompt: el
+botón «Copiar el prompt que conecta tu IA» mete `api.token` en la cabecera
+`Authorization`. El navegador renueva el suyo solo con `auth-refresh`; la copia
+pegada en la configuración del agente no se renueva nunca. Con el valor de
+PocketBase —432000 s— el MCP respondía 401 a los cinco días, y el cliente no
+podía recuperarse: con la cabecera puesta no hay OAuth al que caer.
+
+**`users.authToken.duration` sube a 94670856 s, unos tres años** (migración
+`1788509000_long_tokens`). Es el tope que PocketBase acepta para ese ajuste. Sube
+también la sesión del navegador, que ya se renovaba sola. Revocar no cambia:
+cambiar la contraseña rota el `tokenKey` y mata todos los tokens de esa persona,
+agentes incluidos. Un token ya emitido lleva la caducidad dentro, así que el
+agente sólo gana los tres años al volver a copiar el prompt.
+
+Lo que se descartó:
+
+- **Un JWT estático sin tope** (`NewStaticAuthToken` con cien años). Nunca
+  caduca, pero sólo se revoca rotando el `tokenKey`: si se filtra uno, no hay
+  forma de matar ése sin cerrar todas las sesiones de la persona. Tres años
+  tienen el mismo problema de revocación, pero al menos se acaban.
+- **Keys propias por agente** (una colección con el hash, `last_used` y
+  `revoked`, y un middleware en `/mcp`). Es la respuesta correcta cuando haga
+  falta revocar un agente sin tocar a su persona, o saber qué agente sigue vivo.
+  Hoy no hace falta, y el cambio de una línea resuelve el síntoma.
+- **OAuth en el MCP.** El cliente renovaría solo, pero es un servidor de
+  autorización entero para una sola puerta.
+
+**Hecho cuando:** un prompt copiado después del despliegue lleva un token cuyo
+`exp` cae tres años más tarde, y el MCP sigue respondiendo pasados cinco días.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

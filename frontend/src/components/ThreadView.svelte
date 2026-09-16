@@ -143,7 +143,7 @@
     { k: 'move', face: '↔', label: 'Mover de burbuja', go: onmove },
     { k: 'talk', face: '💬', label: talk ? `Comentarios (${talk})` : 'Comentarios', go: ontalk },
     { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
-    { k: 'delete', face: '🗑', label: 'Borrar el thread', tone: 'danger', go: ondelete },
+    { k: 'delete', face: '🗑', label: 'Borrar el hilo', tone: 'danger', go: ondelete },
     // A verb nobody gave a handler is not drawn. The alternative is a button
     // that swallows the click, which reads as broken rather than as absent —
     // and the real view wires these one at a time.
@@ -184,7 +184,7 @@
   ]);
 </script>
 
-<div class="screen band-{lifecycle}" aria-label="thread">
+<div class="screen band-{lifecycle}" aria-label="hilo">
   <div class="topbar">
     <button class="back" onclick={onback} aria-label="volver al board">
       <span aria-hidden="true">←</span> board

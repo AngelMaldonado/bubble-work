@@ -36,7 +36,7 @@
 </script>
 
 <form class="card glass p-4" onsubmit={submit}>
-  <h2 class="mb-1 font-medium">Nuevo workspace</h2>
+  <h2 class="mb-1 font-medium">Nuevo proyecto</h2>
   <p class="faint mb-4 text-sm">
     Quien lo crea queda como su <b>lead</b>: puede invitar, definir el flujo de
     trabajo y cerrarlo.

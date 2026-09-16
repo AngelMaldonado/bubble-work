@@ -95,7 +95,7 @@
       // presence is about people, and there is nobody yet.
       presence.start();
       api.seesInventory().then((yes) => (seesInv = yes));
-      api.version().then((v) => (serverVersion = v));
+      api.version().then((v) => (serverVersion = devLatest(v)));
       loadHeat();
     }
     ready = true;
@@ -199,7 +199,7 @@
   // git repository's directory — so it is derived once here and never follows a
   // rename. A name changes on a Tuesday; a repository must not move with it.
   async function createWorkspace() {
-    const name = 'Workspace nuevo';
+    const name = 'Proyecto nuevo';
     const slug = 'ws-' + Math.random().toString(36).slice(2, 8);
     try {
       const made = await api.createWorkspace(name, slug);
@@ -317,6 +317,16 @@
   // es esa versión, es doce commits después de ella— así que ahí se dice `dev`,
   // que es la respuesta exacta a «¿qué estoy mirando?».
   let serverVersion = $state<Version>({ version: '', latest: '', stale: false, boot: false });
+
+  /** En desarrollo, una versión nueva de mentira. Un servidor local nunca tiene
+   *  una más nueva que él mismo, así que sin esto el badge coloreado y su
+   *  tooltip sólo se verían en producción, el día que salga una. `?latest=off`
+   *  enseña el badge normal. Sólo en `vite dev`: el build lo elimina. */
+  function devLatest(v: Version): Version {
+    if (!import.meta.env.DEV || v.stale) return v;
+    if (new URLSearchParams(location.search).get('latest') === 'off') return v;
+    return { ...v, latest: 'v9.9.9', stale: true };
+  }
   const versionLabel = $derived(
     /^v\d+\.\d+\.\d+$/.test(serverVersion.version)
       ? serverVersion.version
@@ -335,6 +345,15 @@
   // botón que no puede volver atrás es un botón que un día deja la instancia
   // caída sin nadie mirando.
   const canUpdate = $derived(serverVersion.stale && serverVersion.boot && isLead);
+  // Por qué no se ofrece, cuando hay una más nueva y no se puede. El tooltip lo
+  // dice en vez de callarlo: un aviso de versión nueva sin salida parece roto.
+  const updateNote = $derived(
+    !isLead
+      ? 'la actualiza el lead del departamento'
+      : !serverVersion.boot
+        ? 'esta instancia no corre bajo el arranque vigilante'
+        : '',
+  );
   let updating = $state('');
 
   function askUpdate() {
@@ -426,11 +445,11 @@
   const items = $derived<Hit[]>([
     ...(board?.threads ?? []).map((t) => ({
       id: 't:' + t.id,
-      kind: 'thread',
+      kind: 'hilo',
       icon: bandFace(t.heat.lifecycle),
       title: t.name,
       hint: '#' + t.seq,
-      group: 'Threads',
+      group: 'Hilos',
     })),
     ...(board?.bubbles ?? []).map((b) => ({
       id: 'b:' + b.id,
@@ -453,15 +472,15 @@
     ...(current
       ? [
           { id: 'new-bubble', icon: '🫧', title: 'Nueva burbuja', hint: 'una agrupación de trabajo', run: () => (naming = 'bubble') },
-          { id: 'new-thread', icon: '🧵', title: 'Nuevo thread', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
+          { id: 'new-thread', icon: '🧵', title: 'Nuevo hilo', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
           { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
-          { id: 'people', icon: '👥', title: 'Personas de este workspace', hint: 'invitar · roles', run: () => (crew = true) },
+          { id: 'people', icon: '👥', title: 'Personas de este proyecto', hint: 'invitar · roles', run: () => (crew = true) },
     ...(seesInv
       ? [{ id: 'inventory', icon: '🗄', title: 'Abrir el inventario', hint: 'VPS · dominios · servicios', run: () => go(inventoryUrl) }]
       : []),
         ]
       : []),
-    { id: 'all', icon: '∗', title: 'Todos los workspaces', hint: 'un board · Shift+Tab', run: () => go(allUrl) },
+    { id: 'all', icon: '∗', title: 'Todos los proyectos', hint: 'un board · Shift+Tab', run: () => go(allUrl) },
     isLead
       ? { id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }
       : { id: 'planner', icon: '🗓', title: 'Abrir el calendario', hint: 'lo que tiene fecha', run: openPlanner },
@@ -491,7 +510,7 @@
       if (mine !== asked) return;
       found = out.hits.map((h: { path: string; title: string; line: number; text: string }) => ({
         id: `p:${h.path}:${h.line}`,
-        kind: h.path.startsWith('threads/') ? 'thread' : 'página',
+        kind: h.path.startsWith('threads/') ? 'hilo' : 'página',
         icon: '¶',
         title: h.text,
         hint: `${h.path}:${h.line}`,
@@ -624,7 +643,7 @@
     <p class="faint p-6 text-sm">…</p>
   {:else}
     <p class="card glass m-6 p-4 text-sm">
-      No hay un thread #{route.seq} en {current?.name ?? 'este workspace'}.
+      No hay un hilo #{route.seq} en {current?.name ?? 'este proyecto'}.
       <button class="link" onclick={back}>volver al board</button>
     </p>
   {/if}
@@ -662,10 +681,11 @@
     onpin={(id) => go(id === 'all' ? allUrl : id === 'inventory' ? inventoryUrl : plannerUrl)}
     onsignout={signOut}
     current={current?.id ?? ''}
-    label="Workspaces"
-    newLabel="Nuevo"
+    label="Proyectos"
+    newLabel="Nuevo proyecto"
     version={updating || versionLabel}
-    stale={canUpdate}
+    latest={serverVersion.stale && !updating ? serverVersion.latest : ''}
+    {updateNote}
     onversion={canUpdate ? askUpdate : undefined}
     bind:pane={paneEl}
     onselect={(id) => {
@@ -690,9 +710,9 @@
            into. So the shell stays, the column is empty, and both moves are on
            the table — start one, or wait to be let into somebody else's. -->
       <div class="mx-auto max-w-md p-6 sm:pt-16">
-        <h1 class="display mb-2 text-2xl">Todavía no estás en ningún workspace</h1>
+        <h1 class="display mb-2 text-2xl">Todavía no estás en ningún proyecto</h1>
         <p class="muted mb-5 text-sm">
-          Un workspace es un cuerpo de trabajo: sus burbujas, sus threads y su wiki. Puedes
+          Un proyecto es un cuerpo de trabajo: sus burbujas, sus hilos y su wiki. Puedes
           empezar uno — quien lo funda queda como su lead — o pedirle a alguien que ya tenga el
           suyo que te invite desde 👥.
         </p>
@@ -828,7 +848,7 @@
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
           <Dialog.Title class="text-lg font-bold">
-            {naming === 'bubble' ? 'Nueva burbuja' : 'Nuevo thread'}
+            {naming === 'bubble' ? 'Nueva burbuja' : 'Nuevo hilo'}
           </Dialog.Title>
           <Dialog.Description class="muted text-sm">
             {naming === 'bubble'
@@ -841,7 +861,7 @@
                  can say the purpose of, and it would not even appear on the
                  board — which draws bubbles, not loose threads. -->
             <p class="muted text-sm">
-              No hay ninguna burbuja abierta en {current?.name ?? 'este workspace'}, y un thread vive
+              No hay ninguna burbuja abierta en {current?.name ?? 'este proyecto'}, y un hilo vive
               dentro de una. Crea la burbuja primero: es la que dice para qué es el trabajo.
             </p>
             <div class="flex justify-end gap-2">
@@ -903,7 +923,7 @@
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
           <Dialog.Title class="text-lg font-bold">¿Eliminar «{doomed.name}»?</Dialog.Title>
           <Dialog.Description class="muted text-sm">
-            Se van con él sus burbujas, sus threads y su evidencia. Los documentos
+            Se van con él sus burbujas, sus hilos y su evidencia. Los documentos
             siguen en el repositorio en disco — para eso están ahí —, pero el
             tablero que los ordenaba no vuelve.
           </Dialog.Description>

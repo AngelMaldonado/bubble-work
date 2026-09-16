@@ -196,7 +196,7 @@
     <Menu.Positioner>
     <Menu.Content>
       <Menu.Item value="open"><Menu.ItemText>Abrir</Menu.ItemText></Menu.Item>
-      <Menu.Item value="thread"><Menu.ItemText>+ thread</Menu.ItemText></Menu.Item>
+      <Menu.Item value="thread"><Menu.ItemText>+ hilo</Menu.ItemText></Menu.Item>
       <Menu.Separator />
       <Menu.Item value="rename"><Menu.ItemText>Renombrar</Menu.ItemText></Menu.Item>
       <Menu.Separator />

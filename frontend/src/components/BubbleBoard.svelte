@@ -58,7 +58,11 @@
     const el = boardEl;
     if (!el || !onnew) return;
     priming = true;
-    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: false, clientX: 0, clientY: 0 }));
+    // `bubbles: true`, como en el orbe. Svelte no escucha `contextmenu` en cada
+    // elemento: lo delega a la raíz de la aplicación, y un evento que no sube
+    // nunca llega a ella. Con `false` este cebado no hacía nada, y el primer
+    // clic derecho seguía saliendo arriba a la izquierda.
+    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 0, clientY: 0 }));
     priming = false;
   });
 </script>
@@ -131,7 +135,7 @@
       <Menu.Positioner>
         <Menu.Content>
           <Menu.Item value="bubble"><Menu.ItemText>Nueva burbuja</Menu.ItemText></Menu.Item>
-          <Menu.Item value="thread"><Menu.ItemText>Nuevo thread</Menu.ItemText></Menu.Item>
+          <Menu.Item value="thread"><Menu.ItemText>Nuevo hilo</Menu.ItemText></Menu.Item>
         </Menu.Content>
       </Menu.Positioner>
     </Portal>

@@ -10,11 +10,14 @@
   // Skeleton's Dialog underneath, so the focus trap, the escape key and the aria
   // wiring are somebody else's problem — the part that is easy to do almost
   // right and hard to do correctly.
+  import { untrack } from 'svelte';
   import { Combobox, Dialog, Portal, Progress, useListCollection } from '@skeletonlabs/skeleton-svelte';
   import { ago } from '../lib/when';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Lifecycle } from '../lib/api';
   import { limited } from '../lib/limits.svelte';
+  import Prose from './Prose.svelte';
+  import MarkdownField from './MarkdownField.svelte';
 
   let {
     open = $bindable(false),
@@ -23,7 +26,7 @@
     // two ways in, rather than a second place to name a thread.
     naming = $bindable(false),
     name,
-    outcome = '',
+    bubble = '',
     lifecycle,
     reason = '',
     owners = [],
@@ -36,15 +39,19 @@
     onopenthread,
     onnewthread,
     ondeletethread,
-    onoutcome,
     onowners,
     onclose,
     onreopen,
+    loadBrief,
+    renderBrief,
+    saveBrief,
+    attachBrief,
   }: {
     open?: boolean;
     naming?: boolean;
     name: string;
-    outcome?: string;
+    /** su id: a qué burbuja pertenece lo que se lee y se guarda aquí */
+    bubble?: string;
     lifecycle: Lifecycle;
     reason?: string;
     /** who is accountable, by id. Plural because the work is. */
@@ -65,13 +72,20 @@
     /** create one with the name typed here */
     onnewthread?: (name: string) => void;
     ondeletethread?: (seq: number) => void;
-    /** what is true when this is done, rewritten */
-    onoutcome?: (text: string) => void;
     /** An empty list hands it back to nobody, which is a real answer and has a
      *  cost: a quiet bubble with nobody accountable is 🪦, not 😴. */
     onowners?: (ids: string[]) => void;
     onclose?: () => void;
     onreopen?: () => void;
+    /** El brief que el planeador escribió, en markdown; vacío si no hay. Se
+     *  pide al abrirlo y no antes: es largo y casi nunca se lee. */
+    loadBrief?: (bubble: string) => Promise<string>;
+    /** markdown → html, con el workspace de la burbuja para sus imágenes */
+    renderBrief?: (md: string) => Promise<string>;
+    /** guardarlo. Sólo se pasa a quien puede editar el plan: el lead global */
+    saveBrief?: (bubble: string, md: string) => Promise<void>;
+    /** subir una imagen pegada mientras se edita */
+    attachBrief?: (file: File) => Promise<{ path: string }>;
     threads?: {
       seq: number;
       title: string;
@@ -88,11 +102,6 @@
   const fade = edgeFade();
 
   let fresh = $state('');
-  // The outcome is read most of the time and written rarely, so it is text
-  // until you click it. An always-on textarea in the header would turn the
-  // first thing you read about a bubble into a form.
-  let saying = $state(false);
-  let said = $state('');
   const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? id;
 
   // Skeleton's Combobox, multiple. Not a native `<select multiple>`, which on a
@@ -104,6 +113,102 @@
   const shortlist = $derived(
     people.filter((p) => p.name.toLowerCase().includes(hunting.trim().toLowerCase())),
   );
+  // «¿De qué trata?»: el brief del planeador, leído aquí mismo.
+  //
+  // El brief es lo que el planeador escribe —por qué, qué incluye, lo que se
+  // sabe— y hasta ahora sólo se veía desde el planeador, así que quien ejecuta
+  // no leía lo que se planeó. Sustituye al outcome que iba bajo el nombre.
+  // Ocupa el sitio de la lista de threads en vez de abrir otra pantalla, y se
+  // vuelve con ←.
+  let reading = $state(false);
+  /** el brief como está guardado; `null` mientras no se ha leído */
+  let md = $state<string | null>(null);
+  let html = $state('');
+  let failed = $state('');
+
+  // Editar el plan: sólo el lead global, que es quien da forma a esa capa.
+  // Termina guardando por cualquier salida —«Listo», «← threads» o cerrar el
+  // cajón—; sólo «Cancelar» descarta. Es la misma regla que la tarjeta del
+  // planeador: lo escrito no se pierde por la forma de salir.
+  let editingPlan = $state(false);
+  // De QUIÉN es lo que se está escribiendo, fijado al empezar. Al cambiar de
+  // burbuja se guarda lo pendiente, y guardarlo en la burbuja que acaba de
+  // abrirse sería escribir un plan en otra.
+  let editingOf = '';
+  let draft = $state('');
+  let writing = $state(false);
+  let saving = $state(false);
+
+  async function fetchBrief() {
+    if (!loadBrief) return;
+    failed = '';
+    md = null;
+    const of = bubble;
+    try {
+      const got = await loadBrief(of);
+      const out = got.trim() && renderBrief ? await renderBrief(got) : '';
+      // Llegó tarde, para una burbuja que ya no está abierta.
+      if (of !== bubble) return;
+      html = out;
+      md = got;
+    } catch (e) {
+      failed = (e as Error).message;
+    }
+  }
+
+  async function readBrief() {
+    reading = true;
+    editingPlan = false;
+    await fetchBrief();
+  }
+
+  async function editBrief() {
+    reading = true;
+    if (md === null) await fetchBrief();
+    if (md === null) return;
+    draft = md;
+    editingOf = bubble;
+    writing = true;
+    editingPlan = true;
+  }
+
+  /** Guarda si cambió y vuelve a leerlo. `false` si no se pudo guardar. */
+  async function finishEdit(): Promise<boolean> {
+    if (!editingPlan) return true;
+    if (md !== null && draft !== md && saveBrief) {
+      saving = true;
+      try {
+        await saveBrief(editingOf, draft);
+        md = draft;
+        html = draft.trim() && renderBrief ? await renderBrief(draft) : '';
+      } catch (e) {
+        failed = `No se guardó: ${(e as Error).message}`;
+        return false;
+      } finally {
+        saving = false;
+      }
+    }
+    editingPlan = false;
+    return true;
+  }
+
+  async function backToThreads() {
+    if (await finishEdit()) reading = false;
+  }
+
+  // Otra burbuja, o el cajón cerrado: se vuelve a la lista, guardando antes lo
+  // que se estuviera escribiendo. Abrir una burbuja y encontrarse leyendo el
+  // plan de la anterior sería leer lo que no es.
+  $effect(() => {
+    void bubble;
+    void open;
+    return () => {
+      untrack(() => void finishEdit());
+      reading = false;
+      md = null;
+    };
+  });
+
   const roster = $derived(
     useListCollection({
       items: shortlist,
@@ -134,36 +239,59 @@
         <Dialog.CloseTrigger class="btn btn-sm preset-tonal-surface">✕</Dialog.CloseTrigger>
       </header>
 
-      <!-- The outcome starts where the EMOJI starts, not where the name does.
-           Indenting it under the title made it look like a caption on the name;
-           it is a claim about the bubble, and it reads as one from the margin. -->
-      {#if saying}
-        <!-- ⌘/Ctrl+Enter guarda y Escape cancela; salir del campo también
-             guarda, como en el editor del documento. -->
-        <textarea
-          class="outcome-edit mt-1"
-          rows="2"
-          placeholder="¿Qué es cierto cuando esto termine?"
-          bind:value={said} {@attach limited('bubbles.outcome')}
-          {@attach (el: HTMLTextAreaElement) => el.focus()}
-          onblur={() => { saying = false; if (said.trim() !== outcome) onoutcome?.(said.trim()); }}
-          onkeydown={(e) => {
-            if (e.key === 'Escape') { said = outcome; saying = false; }
-            if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) (e.currentTarget as HTMLTextAreaElement).blur();
-          }}></textarea>
-      {:else if onoutcome}
-        <!-- Editable en su sitio, no en un diálogo aparte: el outcome ES la
-             burbuja — sin él es una carpeta con nombre bonito — y mandarlo a
-             otra pantalla es cómo se queda vacío para siempre. -->
-        <button class="outcome mt-1" onclick={() => { said = outcome; saying = true; }}>
-          {#if outcome}{outcome}{:else}<span class="faint">+ ¿qué es cierto cuando esto termine?</span>{/if}
-        </button>
-      {:else if outcome}
-        <Dialog.Description class="faint mt-1 text-sm">{outcome}</Dialog.Description>
-      {/if}
-
       {#if closed && closure}
         <p class="closed-note mt-2">🏆 {closure}</p>
+      {/if}
+
+      {#if reading}
+        <div class="mt-3 flex items-center gap-2">
+          <button class="back" onclick={backToThreads} disabled={saving}>← hilos</button>
+          <span class="flex-1"></span>
+          {#if editingPlan}
+            <button class="back" onclick={() => (editingPlan = false)} disabled={saving}>Cancelar</button>
+            <button class="btn btn-sm preset-filled-primary-500" onclick={finishEdit} disabled={saving}>
+              {saving ? 'guardando…' : 'Listo'}
+            </button>
+          {:else if saveBrief && md !== null}
+            <button class="back" onclick={editBrief}>editar plan</button>
+          {/if}
+        </div>
+        {#if failed}<p class="failed mt-2" role="alert">{failed}</p>{/if}
+        <div class="brief mt-2" class:editing={editingPlan}>
+          {#if editingPlan}
+            <MarkdownField
+              bind:value={draft}
+              bind:editing={writing}
+              limit="bubbles.brief"
+              render={renderBrief}
+              onattach={attachBrief}
+              fill
+              placeholder="el plan de esto: por qué, qué incluye, lo que se sabe — pega imágenes o escribe /mermaid" />
+          {:else if md === null && !failed}
+            <p class="faint text-sm">leyendo…</p>
+          {:else if html}
+            <Prose compact {html} />
+          {:else if md !== null}
+            <p class="faint text-sm">
+              {saveBrief
+                ? 'Todavía no hay plan escrito. «editar plan» lo empieza aquí mismo.'
+                : 'El planeador todavía no escribió de qué trata. Se escribe en la tarjeta de esta burbuja, en «Descripción».'}
+            </p>
+          {/if}
+        </div>
+      {:else}
+
+      {#if loadBrief}
+        <!-- Juntos, sin hueco en medio: la pregunta y sus respuestas se leen
+             como una frase. -->
+        <div class="about mt-2">
+          <span class="faint">¿de qué trata?</span>
+          <button class="about-go" onclick={readBrief}>leer el plan →</button>
+          {#if saveBrief}
+            <span class="faint" aria-hidden="true">·</span>
+            <button class="about-go" onclick={editBrief}>editar plan</button>
+          {/if}
+        </div>
       {/if}
 
       {#if onowners}
@@ -238,7 +366,7 @@
         </div>
       {/if}
 
-      <p class="faint mt-4 shrink-0 text-xs">{threads.length} threads · el más reciente primero</p>
+      <p class="faint mt-4 shrink-0 text-xs">{threads.length} hilos · el más reciente primero</p>
       <ul class="threads mt-1 space-y-0.5" style={fade.style} {@attach fade.attach}>
         {#each threads as t (t.seq)}
           <!-- Two lines, because one was hiding the half that answers "should I
@@ -273,7 +401,7 @@
             {#if ondeletethread}
               <button
                 class="tile-x"
-                aria-label="eliminar thread #{t.seq}"
+                aria-label="eliminar hilo #{t.seq}"
                 onclick={() => ondeletethread?.(t.seq)}>×</button>
             {/if}
 
@@ -285,13 +413,6 @@
            panel always offers, so it sits where the panel ends rather than
            drifting down as threads are added. -->
       <div class="new-thread">
-        {#if closed && onreopen}
-          <!-- Una burbuja cerrada se reabre: cerrarla fue una decisión, no un
-               borrado, y el modelo dice que se puede redefinir. -->
-          <button class="verb mb-2" onclick={() => onreopen?.()}>Reabrir la burbuja</button>
-        {:else if onclose}
-          <button class="verb mb-2" onclick={() => onclose?.()}>Cerrar la burbuja</button>
-        {/if}
         <!-- A thread needs a NAME, and it is the only thing it needs. Asking
              for it here — rather than creating "Thread nuevo" and hoping
              somebody renames it — is the difference between a list of work and
@@ -317,43 +438,26 @@
             }} />
         {:else}
           <button class="btn btn-sm w-full preset-tonal-surface" onclick={() => (naming = true)}>
-            + thread
+            + hilo
           </button>
         {/if}
+        <!-- Debajo de "+ thread": crear es lo de todos los días y va primero;
+             cerrar o reabrir la burbuja es una decisión de vez en cuando. -->
+        {#if closed && onreopen}
+          <!-- Una burbuja cerrada se reabre: cerrarla fue una decisión, no un
+               borrado, y el modelo dice que se puede redefinir. -->
+          <button class="verb mt-2" onclick={() => onreopen?.()}>Reabrir la burbuja</button>
+        {:else if onclose}
+          <button class="verb mt-2" onclick={() => onclose?.()}>Cerrar la burbuja</button>
+        {/if}
       </div>
+      {/if}
     </Dialog.Content>
     </Dialog.Positioner>
   </Portal>
 </Dialog>
 
 <style>
-  /* El outcome se lee como texto y se escribe donde se lee: mismo tamaño y
-     mismo color en los dos estados, para que entrar a editarlo no mueva nada. */
-  .outcome {
-    display: block;
-    width: 100%;
-    padding: 0.15rem 0.3rem;
-    margin-left: -0.3rem;
-    border-radius: 7px;
-    background: transparent;
-    color: var(--muted);
-    text-align: left;
-    font-size: 0.875rem;
-    line-height: 1.4;
-  }
-  .outcome:hover { background: var(--hover); }
-  .outcome-edit {
-    display: block;
-    width: 100%;
-    padding: 0.3rem 0.4rem;
-    border: 1px solid var(--accent, var(--line));
-    border-radius: 8px;
-    background: var(--surface);
-    color: var(--text);
-    font: inherit;
-    font-size: 0.875rem;
-    resize: vertical;
-  }
 
   .closed-note {
     margin: 0;
@@ -466,6 +570,54 @@
     display: flex;
     flex-direction: column;
   }
+  /* Una fila como la de «a cargo»: etiqueta tenue a la izquierda, lo que se
+     puede hacer a la derecha. */
+  /* Una fila como la de «a cargo»: la pregunta, y justo a su lado lo que se
+     puede hacer con ella. */
+  .about {
+    display: flex;
+    align-items: center;
+    gap: 0.45rem;
+    width: 100%;
+    padding: 0.3rem 0;
+    font-size: 0.85rem;
+  }
+  .about-go { color: var(--muted); }
+  .about-go:hover { color: var(--text); text-decoration: underline; }
+  .failed {
+    margin: 0;
+    padding: 0.4rem 0.6rem;
+    border-radius: 8px;
+    background: color-mix(in oklab, var(--color-error-500) 12%, transparent);
+    color: var(--text);
+    font-size: 0.8rem;
+  }
+  .back {
+    align-self: flex-start;
+    padding: 0.2rem 0.5rem;
+    border-radius: 8px;
+    color: var(--muted);
+    font-size: 0.82rem;
+  }
+  .back:hover { background: var(--hover); color: var(--text); }
+  /* Editando, el campo se estira hasta abajo y desplaza por dentro: el
+     contenedor no desplaza, sólo le da el alto. */
+  .brief.editing {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    padding-bottom: 0.25rem;
+  }
+  /* El brief ocupa lo que ocupaba la lista, y se desplaza igual que ella. */
+  .brief {
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-y: auto;
+    margin-inline: -1.25rem;
+    padding-inline: 1.25rem;
+    scrollbar-width: thin;
+  }
+
   .threads {
     flex: 1 1 auto;
     min-height: 0;

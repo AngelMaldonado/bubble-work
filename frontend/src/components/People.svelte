@@ -111,7 +111,7 @@
   function drop(m: Member) {
     doom = {
       title: `¿Sacar a ${m.name} de ${workspace.name}?`,
-      body: 'Deja de ver este proyecto: su board, sus threads y su wiki. Lo que escribió se queda, y volver a entrar es otra invitación.',
+      body: 'Deja de ver este proyecto: su board, sus hilos y su wiki. Lo que escribió se queda, y volver a entrar es otra invitación.',
       verb: 'Sacar',
       go: () => write(() => api.remove('memberships', m.id)),
     };
@@ -233,7 +233,7 @@
           </p>
         {:else}
           <p class="faint text-xs">
-            Solo un lead de este workspace puede invitar o sacar a alguien.
+            Solo un lead de este proyecto puede invitar o sacar a alguien.
           </p>
         {/if}
       </Dialog.Content>

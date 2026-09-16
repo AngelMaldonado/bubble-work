@@ -454,7 +454,7 @@
                        decía de qué. Al pie, junto a la edad: las dos dicen el
                        TAMAÑO de esto — cuánto abarca y cuánto lleva. -->
                   {#if c.pieces}
-                    <span class="pieces" title="{c.pieces} {c.pieces === 1 ? 'thread' : 'threads'} dentro">
+                    <span class="pieces" title="{c.pieces} {c.pieces === 1 ? 'hilo' : 'hilos'} dentro">
                       <SpoolIcon class="size-3" aria-hidden="true" />{c.pieces}
                     </span>
                   {/if}

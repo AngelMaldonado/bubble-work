@@ -336,7 +336,7 @@
     doom = {
       title: `¿Borrar la burbuja «${b?.name ?? id}»?`,
       body: n
-        ? `Sus ${n} threads NO se borran: quedan sin burbuja en el board de su proyecto, que es exactamente lo que pasó.`
+        ? `Sus ${n} hilos NO se borran: quedan sin burbuja en el board de su proyecto, que es exactamente lo que pasó.`
         : 'Sale del plan y del board de su proyecto.',
       go: () => write(() => api.remove('bubbles', id)),
     };

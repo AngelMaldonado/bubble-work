@@ -10,8 +10,9 @@
   // The shell does NOT scroll; the pane does. The sidebar and the floating
   // buttons stay put because they are outside the scrolling box, not because
   // they are pinned on top of one.
-  import { Navigation, Portal, Menu } from '@skeletonlabs/skeleton-svelte';
+  import { Navigation, Portal, Menu, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import PlusIcon from '@lucide/svelte/icons/plus';
+  import MenuIcon from '@lucide/svelte/icons/menu';
   import MoreVerticalIcon from '@lucide/svelte/icons/more-vertical';
   import BrandOrb from './BrandOrb.svelte';
   import { rail } from '../lib/filters.svelte';
@@ -48,7 +49,8 @@
     current = '',
     label = 'Proyectos',
     version = '',
-    stale = false,
+    latest = '',
+    updateNote = '',
     onversion,
     newLabel = 'Nuevo',
     pane = $bindable<HTMLElement | null>(null),
@@ -71,8 +73,10 @@
     label?: string;
     /** qué versión corre el servidor, o el entorno cuando no es una versión */
     version?: string;
-    /** hay una más nueva, y esta instancia puede ponérsela */
-    stale?: boolean;
+    /** la versión más nueva, cuando hay una más nueva que la que corre */
+    latest?: string;
+    /** por qué pulsar no actualiza, cuando no puede */
+    updateNote?: string;
     /** pulsar la etiqueta. Sólo se pasa cuando hay algo que hacer al pulsarla */
     onversion?: () => void;
     newLabel?: string;
@@ -166,6 +170,27 @@
   </div>
 {/snippet}
 
+{#snippet versionBadge()}
+  {#if latest}
+    <Tooltip positioning={{ placement: railed ? 'right' : 'bottom' }} openDelay={120} closeDelay={60}>
+      <!-- Pulsable SÓLO cuando esta instancia puede ponérsela. Si no, el
+           tooltip dice por qué, y el clic no promete nada. -->
+      <Tooltip.Trigger class={onversion ? 'ver new live' : 'ver new'} onclick={onversion}>
+        <span class="dot" aria-hidden="true"></span>{version}
+      </Tooltip.Trigger>
+      <Portal>
+        <Tooltip.Positioner>
+          <Tooltip.Content>
+            {latest} disponible — {onversion ? 'pulsa para actualizar' : updateNote}
+          </Tooltip.Content>
+        </Tooltip.Positioner>
+      </Portal>
+    </Tooltip>
+  {:else}
+    <span class="ver" title={version}>{version}</span>
+  {/if}
+{/snippet}
+
 <div class="shell">
   <!-- The workspaces live here. A workspace is the boundary for a body of work
        and the thing you switch between all day, so it gets the persistent
@@ -176,10 +201,19 @@
         <!-- The mark reads alone, which is exactly what the rail needs; the
              wordmark is what gets dropped when the column narrows, not the
              logo. -->
-        <Navigation.Trigger onclick={toggleRail} title={railed ? 'expandir' : 'colapsar'}>
-          <BrandOrb size={railed ? 26 : 22} />
-          {#if !railed}<span class="display text-base">bubble.work</span>{/if}
-        </Navigation.Trigger>
+        <div class="brand" class:railed>
+          <Navigation.Trigger onclick={toggleRail} title={railed ? 'expandir' : 'colapsar'}>
+            <BrandOrb size={railed ? 26 : 22} />
+            {#if !railed}<span class="display text-base">bubble.work</span>{/if}
+          </Navigation.Trigger>
+          <!-- Qué versión es esto, pegado al nombre: es de qué producto se
+               habla. Chico y apagado mientras no hay nada que decir; con color
+               cuando hay una más nueva, y el tooltip dice cuál y qué hacer.
+               También en el rail, debajo del orbe: `v1.4.3` cabe en esa
+               anchura, y quien trabaja con la columna estrecha es quien más
+               tiempo pasa mirándola. -->
+          {#if version}{@render versionBadge()}{/if}
+        </div>
       </Navigation.Header>
 
       <!-- The label sits OUTSIDE the scrolling list: a heading that scrolls
@@ -247,57 +281,69 @@
         </Navigation.Menu>
       </Navigation.Group>
 
-      <!-- Pinned to the bottom in both layouts. Creating one is not the last
-           item of the list — it is the one action the column always offers, so
-           it sits where the column ends rather than drifting down as the list
-           grows. -->
+      <!-- Pinned to the bottom in both layouts. Crear un proyecto, los lugares
+           que no son un proyecto (planeador, inventario) y salir van juntos en
+           UN menú: cuatro filas sueltas le robaban a la lista de proyectos el
+           alto que es suyo, y ninguna de ellas se pulsa todos los días. -->
       {#if oncreate || foot.length || onsignout}
         <Navigation.Footer class="new-foot">
           <Navigation.Menu>
-            {#if oncreate}
-              <Navigation.Trigger onclick={create} title={newLabel}>
-                <PlusIcon class={railed ? 'size-5' : 'size-4'} />
-                <Navigation.TriggerText>{newLabel}</Navigation.TriggerText>
-              </Navigation.Trigger>
-            {/if}
-            <!-- Debajo de "Nuevo": no es un proyecto —por eso no está en la
-                 lista— pero sí es un LUGAR, y llegar a un lugar es para lo que
-                 sirve esta columna. -->
-            {#each foot as p (p.id)}
-              {@render pinRow(p)}
-            {/each}
-
-            <!-- Y al final, salir. Es un verbo raro y no debería estar junto a
-                 lo que se pulsa todos los días, pero VISIBLE: escondido en el
-                 omnibar sólo lo encontraba quien ya sabía que estaba ahí.
-                 Conectar un agente vive con los otros verbos, abajo a la
-                 derecha; irse es de la SESIÓN, y la sesión es esta columna. -->
-            {#if onsignout}
-              <Navigation.Trigger onclick={onsignout} title="salir de la sesión">
-                <span class="pin" aria-hidden="true">🚪</span>
-                <Navigation.TriggerText>Salir</Navigation.TriggerText>
-              </Navigation.Trigger>
-            {/if}
-
-            <!-- Y debajo de todo, qué versión es esto. Chico y apagado: no es
-                 un control, es una respuesta a una pregunta que sólo se hace
-                 cuando algo va mal — y un producto autoalojado donde nadie sabe
-                 qué versión tiene es uno que nunca se actualiza.
-                 También en el rail: `v1.0.0` y `dev` caben en esa anchura, y
-                 esconderlo justo ahí lo escondía de quien trabaja con la columna
-                 estrecha, que es quien más tiempo pasa mirándola. -->
-            {#if version}
-              {#if onversion}
-                <!-- Pulsable SÓLO cuando hay algo más nuevo y esta instancia
-                     puede ponérselo. El resto del tiempo es un dato, y un dato
-                     que responde al clic promete algo que no va a pasar. -->
-                <button class="ver live" onclick={onversion} title="Hay una versión nueva">
-                  <span class="dot" aria-hidden="true"></span>{version}
-                </button>
-              {:else}
-                <p class="ver" class:stale title={version}>{version}</p>
-              {/if}
-            {/if}
+            <Menu
+              positioning={{ placement: railed ? 'right-end' : 'top-start' }}
+              onSelect={(e: { value: string }) => {
+                if (e.value === 'create') create();
+                else if (e.value === 'signout') onsignout?.();
+                else onpin?.(e.value);
+              }}>
+              <div class="proj" class:on={foot.some((p) => p.id === pinned)}>
+              <Menu.Trigger>
+                {#snippet element(attributes: Record<string, unknown>)}
+                  <!-- La fila se ve como las demás de la columna: lleva a mano
+                       los `data-part` de Skeleton, como las fijadas. Marcada
+                       cuando lo que hay en pantalla es uno de sus lugares, para
+                       que la columna siga diciendo dónde estás. -->
+                  <button
+                    {...attributes}
+                    class="pin-row menu-row"
+                    data-scope="navigation"
+                    data-part="trigger"
+                    data-layout={railed ? 'rail' : 'sidebar'}
+                    title="Menú">
+                    <MenuIcon class={railed ? 'size-5' : 'size-4'} />
+                    <span data-scope="navigation" data-part="trigger-text" data-layout={railed ? 'rail' : 'sidebar'}>
+                      {foot.find((p) => p.id === pinned)?.name ?? 'Menú'}
+                    </span>
+                  </button>
+                {/snippet}
+              </Menu.Trigger>
+              </div>
+              <Portal>
+                <Menu.Positioner>
+                  <Menu.Content class="shell-menu">
+                    {#if oncreate}
+                      <Menu.Item value="create">
+                        <PlusIcon class="size-4" />
+                        <Menu.ItemText>{newLabel}</Menu.ItemText>
+                      </Menu.Item>
+                    {/if}
+                    {#each foot as p (p.id)}
+                      <Menu.Item value={p.id}>
+                        <span class="face" aria-hidden="true">{p.face}</span>
+                        <Menu.ItemText>{p.name}</Menu.ItemText>
+                      </Menu.Item>
+                    {/each}
+                    {#if onsignout}
+                      <!-- Al final y separado: es de la SESIÓN, no un lugar. -->
+                      <Menu.Separator />
+                      <Menu.Item value="signout">
+                        <span class="face" aria-hidden="true">🚪</span>
+                        <Menu.ItemText>Salir</Menu.ItemText>
+                      </Menu.Item>
+                    {/if}
+                  </Menu.Content>
+                </Menu.Positioner>
+              </Portal>
+            </Menu>
           </Navigation.Menu>
         </Navigation.Footer>
       {/if}
@@ -378,6 +424,12 @@
      scrolls; it just stops drawing. */
   .shell :global(.shell-nav[data-layout='rail'] .projects) { scrollbar-width: none; }
   .shell :global(.shell-nav[data-layout='rail'] .projects::-webkit-scrollbar) { display: none; }
+
+  .menu-row { border: none; background: transparent; text-align: left; cursor: pointer; }
+  /* El menú está portado a <body>: se estiliza por su clase. */
+  :global(.shell-menu) { min-width: 13rem; }
+  :global(.shell-menu [data-part='item']) { display: flex; align-items: center; gap: 0.55rem; justify-content: flex-start; }
+  :global(.shell-menu .face) { width: 1rem; text-align: center; }
 
   /* `margin-top: auto` is what pins it in both layouts. */
   .shell :global(.shell-nav [data-part='footer']) {
@@ -483,29 +535,42 @@
 
   .pane { min-width: 0; flex: 1; overflow-y: auto; }
 
-  .ver {
-    width: 100%;
-    padding: 0.15rem 0.35rem 0.1rem;
+  /* El nombre y la versión, en la misma fila. El disparador no se estira: si
+     ocupara toda la fila, la versión quedaría en el borde y no junto al nombre. */
+  .brand { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+  .brand.railed { flex-direction: column; gap: 0.2rem; }
+  .brand > :global(button:first-child) { flex: 0 1 auto; width: auto; min-width: 0; }
+
+  .shell :global(.ver) {
+    flex: none;
+    max-width: 9rem;
+    overflow: hidden;
+    padding: 0.05rem 0.4rem;
     border: none;
-    background: transparent;
+    border-radius: 999px;
+    background: var(--hover);
     color: var(--faint);
-    font-size: 0.68rem;
+    font-size: 0.66rem;
+    font-weight: 600;
     font-variant-numeric: tabular-nums;
-    text-align: center;
+    line-height: 1.5;
+    text-overflow: ellipsis;
+    white-space: nowrap;
     user-select: text;
   }
 
-  /* Con algo nuevo esperando: el mismo sitio, el mismo tamaño, otro peso. No un
-     banner — nadie necesita que le interrumpan para decirle que hay una versión
-     nueva; necesita poder verlo cuando mire, y poder pulsarlo entonces. */
-  .ver.live,
-  .ver.stale {
+  /* Con algo nuevo esperando: el mismo sitio, el mismo tamaño, otro color. No
+     un banner — nadie necesita que le interrumpan para decirle que hay una
+     versión nueva; necesita poder verlo cuando mire. */
+  .shell :global(.ver.new) {
+    background: color-mix(in oklab, var(--accent, var(--text)) 18%, transparent);
     color: var(--accent, var(--text));
-    font-weight: 600;
-    cursor: pointer;
+    cursor: default;
   }
-  .ver.stale { cursor: default; }
-  .ver.live:hover { background: var(--hover); border-radius: 7px; }
+  .shell :global(.ver.new.live) { cursor: pointer; }
+  .shell :global(.ver.new.live:hover) {
+    background: color-mix(in oklab, var(--accent, var(--text)) 30%, transparent);
+  }
   .dot {
     display: inline-block;
     width: 6px;

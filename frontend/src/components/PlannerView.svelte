@@ -548,7 +548,7 @@
           </Dialog.CloseTrigger>
         </header>
         <p class="lead">
-          Qué significa cada una y qué pasa cuando llega. La prioridad de un thread
+          Qué significa cada una y qué pasa cuando llega. La prioridad de un hilo
           no se teclea: sale del mapa de abajo.
         </p>
         <ul class="rows">

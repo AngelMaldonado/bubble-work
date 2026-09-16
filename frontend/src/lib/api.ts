@@ -435,6 +435,16 @@ class Api {
     return out.items;
   }
 
+  /** El brief de una burbuja: lo que el planeador escribió de qué trata. El
+   *  board no lo trae —es largo, con diagramas, y el board se pide entero en
+   *  cada cambio— así que se lee cuando alguien lo abre. */
+  async bubbleBrief(id: string) {
+    const out = await this.call<{ brief?: string }>(
+      `/api/collections/bubbles/records/${id}?fields=brief`,
+    );
+    return out.brief ?? '';
+  }
+
   /** Las burbujas que alcanzas, de todos tus workspaces: es lo que el planeador
    *  organiza. */
   async allBubbles() {

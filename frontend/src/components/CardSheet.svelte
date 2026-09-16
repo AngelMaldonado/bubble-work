@@ -129,6 +129,14 @@
   // The description edits in place, driven from its section header the way
   // Trello does it: reading is the default and "Editar" is a decision.
   let editingNotes = $state(false);
+  // Empezar a editar es empezar a escribir, entre por donde entre: «Editar», un
+  // clic en el campo vacío o un doble clic en lo renderizado. Sólo lo marcaba
+  // «Editar», y entrando por el campo, al terminar, el efecto de arriba tomaba
+  // lo escrito por un documento que llegaba tarde y lo pisaba con el vacío del
+  // servidor — así que no había nada que guardar.
+  $effect(() => {
+    if (editingNotes) touched = true;
+  });
 
   // Guardar la descripción es «Listo», pero no SÓLO «Listo»: la edición también
   // termina con Escape dentro del campo o cerrando la tarjeta, y en esos dos
@@ -292,7 +300,7 @@
       class="fixed inset-0 flex items-center justify-center p-4"
       style="z-index: var(--z-drawer)">
       <Dialog.Content
-        class="card bg-surface-100-900 w-full max-w-3xl space-y-4 p-4 shadow-xl {anim}">
+        class="card bg-surface-100-900 w-full max-w-3xl max-h-[calc(100dvh-2rem)] space-y-4 overflow-y-auto p-4 shadow-xl {anim}">
         {#if card}
           {#if refused && blocked}
             <p class="unsaved" role="alert">No se guardó ni se cerró: {blocked}</p>
@@ -499,7 +507,6 @@
                     refused = true;
                     return;
                   }
-                  if (!editingNotes) touched = true;
                   // Terminar la edición guarda (ver el efecto de `wasEditing`).
                   editingNotes = !editingNotes;
                 }}>

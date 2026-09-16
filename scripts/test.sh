@@ -1325,6 +1325,19 @@ chk "...y con nosniff" \
 chk ">>> los bytes vuelven idénticos" \
   "$(curl -s "$FILEURL" -H "Authorization: $A" | cmp -s - "$PNG" && echo si || echo no)" si
 
+# Todo lo que se pega del portapapeles llega como `image.png`. Pisar el archivo
+# cambiaba la imagen en cada documento que ya la citaba.
+chk ">>> los mismos bytes con el mismo nombre reusan la ruta, sin copia" \
+  "$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+     -F "file=@$PNG" -F "name=Mi Diagrama.png" | j "['path']")" "assets/mi-diagrama.png"
+PNG2=/tmp/bubble-test-2.png
+printf '\x89PNG\r\n\x1a\n' > "$PNG2"; head -c 300 /dev/urandom >> "$PNG2"
+chk ">>> otra imagen con el mismo nombre NO pisa la anterior" \
+  "$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+     -F "file=@$PNG2" -F "name=Mi Diagrama.png" | j "['path']")" "assets/mi-diagrama-2.png"
+chk "...y la primera sigue con sus bytes" \
+  "$(curl -s "$FILEURL" -H "Authorization: $A" | cmp -s - "$PNG" && echo si || echo no)" si
+
 chk ">>> una imagen es tan privada como la escritura: erin no la ve" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$FILEURL" -H "Authorization: $ER")" 404
 chk "anónimo tampoco" "$(curl -s -o /dev/null -w '%{http_code}' "$FILEURL")" 401

@@ -164,6 +164,19 @@ export type InboxItem = {
    *  borrarse: su cuerpo y sus imágenes siguen siendo de algún sitio. */
   bubble?: string;
   created: string;
+  /** por qué canal entró (`whatsapp`), si no se escribió en la app */
+  source?: string;
+  /** quién la mandó por ese canal, como lo dice el canal */
+  source_from?: string;
+};
+
+/** Cómo está un canal del inbox. `extra` es lo propio de cada canal. */
+export type ChannelStatus = {
+  kind: string;
+  enabled: boolean;
+  state: 'disabled' | 'unlinked' | 'pairing' | 'connecting' | 'connected' | 'error';
+  detail?: string;
+  extra?: Record<string, unknown>;
 };
 /** Qué corre aquí, y si hay algo más nuevo. `boot` dice si esta instancia
  *  puede actualizarse sola: una lanzada con `serve` a mano no tiene quién
@@ -592,6 +605,30 @@ class Api {
 
   setTuning(id: string, fields: Partial<Omit<Tuning, 'id' | 'updated'>>) {
     return this.update<Tuning>('tuning', id, fields);
+  }
+
+  // ---- canales del inbox (lead global) ----
+
+  channels() {
+    return this.call<ChannelStatus[]>('/api/channels');
+  }
+
+  setChannel(kind: string, on: boolean) {
+    return this.call<ChannelStatus>(`/api/channels/${kind}/${on ? 'enable' : 'disable'}`, { method: 'POST' });
+  }
+
+  /** Lo propio de un canal: vincular, elegir grupo, desvincular… */
+  channelAction<T = ChannelStatus>(kind: string, action: string, body: Record<string, unknown> = {}) {
+    return this.call<T>(`/api/channels/${kind}/${action}`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  /** El QR vigente de un canal que se está vinculando, como URL de blob. La
+   *  ruta exige sesión y un `<img>` no manda cabeceras. Vacío si no hay. */
+  async channelQR(kind: string): Promise<string> {
+    const res = await fetch(`/api/channels/${kind}/qr.png?t=${Date.now()}`, {
+      headers: this.token ? { Authorization: this.token } : {},
+    });
+    return res.ok ? URL.createObjectURL(await res.blob()) : '';
   }
 
   /** Las funciones encendidas. Sin fila, todo apagado: una pantalla que enseña

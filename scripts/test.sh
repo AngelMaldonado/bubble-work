@@ -1503,6 +1503,21 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
 
+# ------------------------------------------------ canales del inbox ----
+echo
+chk ">>> un member no ve los canales" "$(code "$API/api/channels" -H "Authorization: $A")" 403
+chk ">>> el lead global sí, y WhatsApp viene apagado" \
+  "$(curl -s "$API/api/channels" -H "Authorization: $C" | python3 -c 'import sys,json;d={x["kind"]:x for x in json.load(sys.stdin)};print(d["whatsapp"]["state"])')" disabled
+chk ">>> un member no lo enciende" "$(code -X POST "$API/api/channels/whatsapp/enable" -H "Authorization: $A")" 403
+chk ">>> encendido sin cuenta vinculada, pide vincular" \
+  "$(curl -s -X POST "$API/api/channels/whatsapp/enable" -H "Authorization: $C" | j "['state']")" unlinked
+chk "...sin QR que escanear todavía" "$(code "$API/api/channels/whatsapp/qr.png" -H "Authorization: $C")" 404
+chk "...y sin cuenta no hay grupos que elegir" \
+  "$(curl -s -X POST "$API/api/channels/whatsapp/groups" -H "Authorization: $C" | j "['message']" | grep -ci 'vincula')" 1
+chk ">>> un canal que el binario no trae no existe" "$(code -X POST "$API/api/channels/telegrama/enable" -H "Authorization: $C")" 404
+chk ">>> nadie lee la tabla de canales por la API" "$(code "$API/api/collections/channels/records" -H "Authorization: $C")" 403
+chk ">>> apagarlo" "$(curl -s -X POST "$API/api/channels/whatsapp/disable" -H "Authorization: $C" | j "['state']")" disabled
+
 
 # --------------------------------- el superuser: opera la caja, no trabaja ----
 echo

@@ -9,6 +9,7 @@
   import { Tabs } from '@skeletonlabs/skeleton-svelte';
   import type { Features, Person } from '../lib/api';
   import SettingsFeatures from './SettingsFeatures.svelte';
+  import SettingsChannels from './SettingsChannels.svelte';
   import SettingsBuoyancy from './SettingsBuoyancy.svelte';
   import SettingsPeople from './SettingsPeople.svelte';
   import SettingsMe from './SettingsMe.svelte';
@@ -45,6 +46,7 @@
           { id: 'flotabilidad', label: 'Flotabilidad' },
           { id: 'usuarios', label: 'Usuarios' },
           { id: 'funciones', label: 'Funciones' },
+          { id: 'canales', label: 'Canales' },
         ]
       : []),
     { id: 'mi-usuario', label: 'Mi usuario' },
@@ -84,6 +86,9 @@
         </Tabs.Content>
         <Tabs.Content value="funciones">
           <SettingsFeatures {features} {onfeatures} />
+        </Tabs.Content>
+        <Tabs.Content value="canales">
+          <SettingsChannels />
         </Tabs.Content>
       {/if}
       <Tabs.Content value="mi-usuario">

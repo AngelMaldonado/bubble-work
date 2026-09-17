@@ -40,12 +40,16 @@
     onopen,
     readonly = false,
     title = '🧭 Secuencia',
+    headless = false,
   }: {
     threads?: SeqThread[];
     /** sólo mirar: sin arrastre, sin «Terminar» y sin la bandeja de lo que no
      *  está secuenciado. Es la secuencia de la columna, no la del planeador. */
     readonly?: boolean;
     title?: string;
+    /** sin cabecera propia: quien lo contiene pone la suya (la columna del
+     *  kanban, que es además el asa para moverla) */
+    headless?: boolean;
     /** sólo los hilos cuyo `sequence` cambió: el resto no hay que tocarlo */
     onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
     oncomplete?: (id: string) => void | Promise<void>;
@@ -297,10 +301,12 @@
 {/snippet}
 
 <div class="pane" {@attach monitor}>
-  <header class="head">
-    <span class="pane-name">{title}</span>
-    <span class="count" title="pasos en la secuencia">{steps.length}</span>
-  </header>
+  {#if !headless}
+    <header class="head">
+      <span class="pane-name">{title}</span>
+      <span class="count" title="pasos en la secuencia">{steps.length}</span>
+    </header>
+  {/if}
 
   <div class="scroll">
     {#if doneSteps.length}

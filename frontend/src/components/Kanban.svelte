@@ -60,6 +60,8 @@
   import { ago, when } from '../lib/when';
   import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
   import { limited } from '../lib/limits.svelte';
+  import { tick } from 'svelte';
+  import SequencePane, { type SeqThread } from './SequencePane.svelte';
 
   let {
     columns = $bindable([]),
@@ -72,6 +74,8 @@
     onmovecard,
     onautoorder,
     onmovecolumn,
+    sequence,
+    orderKey = '',
   }: {
     columns?: Column[];
     onopen?: (card: Card) => void;
@@ -96,7 +100,118 @@
     onmovecard?: (cardId: string, columnId: string, before: string | null) => void;
     /** devolver una columna al orden automático, el que deriva la prioridad */
     onautoorder?: (columnId: string) => void;
+    /** La columna de la secuencia de ejecución, cuando la función está
+     *  encendida. No es una etapa: ordena HILOS, no burbujas, y es fija. */
+    sequence?: {
+      threads: SeqThread[];
+      onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
+      oncomplete?: (id: string) => void | Promise<void>;
+      onopen?: (t: SeqThread) => void;
+      /** soltar la tarjeta de una burbuja: sus hilos abiertos al final */
+      ondropbubble?: (cardId: string) => void;
+    };
+    /** dónde recordar, en este navegador, el orden en que se ven las columnas.
+     *  Vacío: el orden es el de `columns`. */
+    orderKey?: string;
   } = $props();
+
+  // ---- el orden de las columnas, por navegador ----
+  //
+  // Cada quien acomoda el tablero a su manera: mover una columna —también «Sin
+  // planear» y la de la secuencia, que no se renombran ni se borran— cambia el
+  // orden sólo en este navegador. No toca el orden de las etapas en el servidor,
+  // que es el de todo el departamento: acomodar mi vista no es reordenar la de
+  // los demás. Una columna nueva aparece donde le toca por su orden natural.
+  const SEQ = '__sequence';
+  /** ¿Lo que se arrastra es una columna? Por su marca, no por su id: «Sin
+   *  planear» se llama `''`, y un id vacío leído como falso la dejaba sin
+   *  poder soltarse en ningún sitio. */
+  const isCol = (source: { data: Record<string | symbol, unknown> }) => source.data.isCol === true;
+  // svelte-ignore state_referenced_locally
+  let order = $state<string[]>(
+    (() => {
+      if (!orderKey) return [];
+      try {
+        const got = JSON.parse(localStorage.getItem(orderKey) ?? '[]');
+        return Array.isArray(got) ? got.filter((x) => typeof x === 'string') : [];
+      } catch {
+        return [];
+      }
+    })(),
+  );
+  function saveOrder(ids: string[]) {
+    order = ids;
+    if (!orderKey) return;
+    try {
+      localStorage.setItem(orderKey, JSON.stringify(ids));
+    } catch {
+      // sin memoria, el orden dura lo que la pestaña
+    }
+  }
+  /** El orden natural: las columnas como llegan, con la secuencia tras la primera. */
+  const natural = $derived([
+    ...columns.slice(0, 1).map((c) => c.id),
+    ...(sequence ? [SEQ] : []),
+    ...columns.slice(1).map((c) => c.id),
+  ]);
+  /** Lo guardado primero; lo que no estaba, detrás de su vecino natural anterior. */
+  const slots = $derived.by(() => {
+    const exists = new Set(natural);
+    const out = order.filter((id) => exists.has(id));
+    for (let i = 0; i < natural.length; i++) {
+      const id = natural[i];
+      if (out.includes(id)) continue;
+      let at = 0;
+      for (let j = i - 1; j >= 0; j--) {
+        const k = out.indexOf(natural[j]);
+        if (k >= 0) {
+          at = k + 1;
+          break;
+        }
+      }
+      out.splice(at, 0, id);
+    }
+    return out;
+  });
+  const colById = (id: string) => columns.find((c) => c.id === id);
+
+  /** La columna de la secuencia recibe tarjetas de burbuja. Cuando se sueltan
+   *  ahí, las columnas de etapas no deben tratar la caída como suya. */
+  let overSeq = $state(false);
+  function sequenceColumn(el: HTMLElement) {
+    let stop: (() => void) | undefined;
+    let live = true;
+    Promise.all([
+      import('@atlaskit/pragmatic-drag-and-drop/element/adapter'),
+      import('@atlaskit/pragmatic-drag-and-drop/combine'),
+    ]).then(([{ dropTargetForElements, monitorForElements }, { combine }]) => {
+      if (!live) return;
+      stop = combine(
+        dropTargetForElements({
+          element: el,
+          // Una columna arrastrada la recibe el tablero, no ésta.
+          canDrop: ({ source }) => !!source.data.cardId,
+          getData: () => ({ seqcol: true }),
+          onDragEnter: () => (overSeq = true),
+          onDragLeave: () => (overSeq = false),
+          onDrop: () => (overSeq = false),
+        }),
+        monitorForElements({
+          canMonitor: ({ source }) => !!source.data.cardId,
+          onDrop: ({ source, location }) => {
+            if (!location.current.dropTargets.some((t) => t.data.seqcol)) return;
+            sequence?.ondropbubble?.(source.data.cardId as string);
+            dragging = null;
+            over = null;
+          },
+        }),
+      );
+    });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }
 
   // Columns are the board's own shape, and it belongs to whoever runs the
   // board. "Por decidir / Planeado / En curso" is a good default and a terrible
@@ -129,21 +244,14 @@
     if (ondeletecolumn) return ondeletecolumn(id);
     columns = columns.filter((c) => c.id !== id);
   }
-  function moveColumn(id: string, before: string | null) {
-    const col = columns.find((c) => c.id === id);
-    if (!col) return;
-    const rest = columns.filter((c) => c.id !== id);
-    const at = before ? rest.findIndex((c) => c.id === before) : -1;
-    if (at < 0) rest.push(col);
-    else rest.splice(at, 0, col);
-    columns = rest;
-    onmovecolumn?.(id, before);
-  }
 
-  /** Where a dragged COLUMN would land. Separate from the card one because a
-   *  column and a card are different things being moved. */
-  let overCol = $state<string | null>(null);
+  /** La columna que se arrastra, y el orden que tendría el tablero si se
+   *  soltara ahora. La columna levantada se queda en ese sitio como hueco del
+   *  mismo ancho: el tablero se abre para recibirla en vez de pedir que se
+   *  apunte a una raya de 3px. */
   let liftingCol = $state<string | null>(null);
+  let preview = $state<string[] | null>(null);
+  const shown = $derived(preview ?? slots);
 
   /** El día en que nació, dicho como lo dice una persona — para el tooltip,
    *  donde «hace 3 meses» ya no basta y hace falta la fecha. */
@@ -215,7 +323,9 @@
         }),
         dropTargetForElements({
           element: el,
-          canDrop: ({ source }) => source.data.cardId !== c.id,
+          // Sólo tarjetas: una COLUMNA arrastrada encima tiene que pasar de
+          // largo hasta la columna, que es quien la recibe.
+          canDrop: ({ source }) => !!source.data.cardId && source.data.cardId !== c.id,
           getData: ({ input, element }) =>
             // The hitbox says which edge the pointer is nearest, which is what
             // turns "over this card" into "before it" or "after it".
@@ -246,55 +356,49 @@
 
   /** The header is the column's handle: dragging a column by its whole body
    *  would fight the cards inside it for the pointer. */
-  function head(el: HTMLElement, col: Column) {
+  function head(el: HTMLElement, id: string) {
+    let stop: (() => void) | undefined;
+    let live = true;
+    import('@atlaskit/pragmatic-drag-and-drop/element/adapter').then(({ draggable }) => {
+      if (!live) return;
+      stop = draggable({
+        element: el,
+        getInitialData: () => ({ colId: id, isCol: true }),
+      });
+    });
+    return () => {
+      live = false;
+      stop?.();
+    };
+  }
+
+  /** El tablero entero recibe columnas: el hueco entre dos columnas no es de
+   *  ninguna, y soltar justo ahí —donde se dibuja la barra— no hacía nada. */
+  function board(el: HTMLElement) {
     let stop: (() => void) | undefined;
     let live = true;
     Promise.all([
       import('@atlaskit/pragmatic-drag-and-drop/element/adapter'),
       import('@atlaskit/pragmatic-drag-and-drop/combine'),
-      import('@atlaskit/pragmatic-drag-and-drop-hitbox/closest-edge'),
-    ]).then(([{ draggable, dropTargetForElements, monitorForElements }, { combine }, hitbox]) => {
+    ]).then(([{ dropTargetForElements, monitorForElements }, { combine }]) => {
       if (!live) return;
       stop = combine(
-        draggable({
-          element: el,
-          canDrag: () => !col.locked,
-          getInitialData: () => ({ colId: col.id }),
-          onDragStart: () => (liftingCol = col.id),
-          onDrop: () => {
-            liftingCol = null;
-            overCol = null;
-          },
-        }),
         dropTargetForElements({
           element: el,
-          canDrop: ({ source }) => !!source.data.colId && source.data.colId !== col.id && !col.locked,
-          getData: ({ input, element }) =>
-            hitbox.attachClosestEdge({ colTarget: col.id }, {
-              input,
-              element,
-              allowedEdges: ['left', 'right'],
-            }),
-          onDrag: ({ self }) => {
-            const edge = hitbox.extractClosestEdge(self.data);
-            const i = columns.findIndex((c) => c.id === col.id);
-            overCol = edge === 'right' ? (columns[i + 1]?.id ?? null) : col.id;
-          },
+          canDrop: ({ source }) => isCol(source),
+          getData: () => ({ board: true }),
         }),
         monitorForElements({
-          canMonitor: ({ source }) => source.data.colId === col.id,
+          canMonitor: ({ source }) => isCol(source),
+          onDragStart: ({ source }) => {
+            liftingCol = source.data.colId as string;
+            preview = [...slots];
+          },
+          onDrag: ({ location }) => aim(el, location.current.input.clientX),
           onDrop: ({ location }) => {
-            // Read the edge from the target being dropped ON, not from the last
-            // `onDrag` we happened to see: the pointer can leave a header on its
-            // way to mouse-up, and then the column lands wherever the stale
-            // value pointed — which was always the end.
-            const target = location.current.dropTargets.find((t) => t.data.colTarget);
-            if (target) {
-              const edge = hitbox.extractClosestEdge(target.data);
-              const i = columns.findIndex((c) => c.id === target.data.colTarget);
-              moveColumn(col.id, edge === 'right' ? (columns[i + 1]?.id ?? null) : columns[i].id);
-            }
-            overCol = null;
+            // Fuera del tablero no cuenta: la columna vuelve a su sitio.
+            if (preview && location.current.dropTargets.some((t) => t.data.board)) saveOrder(preview);
+            reflow(el, null);
             liftingCol = null;
           },
         }),
@@ -304,6 +408,44 @@
       live = false;
       stop?.();
     };
+  }
+
+  /** Coloca el hueco según el puntero: va detrás de cada columna cuyo centro ya
+   *  quedó a la izquierda. Se mide con `offsetLeft`, que no lleva la animación
+   *  en curso, y sobre la disposición CON el hueco puesto: al cruzar el centro
+   *  de una vecina, ésta salta al otro lado y su centro queda más allá del
+   *  puntero, así que el hueco no tiembla entre dos sitios. */
+  function aim(el: HTMLElement, x: number) {
+    // `''` es «Sin planear»: sólo `null` es «nada levantado».
+    const lifted = liftingCol;
+    if (lifted === null || !preview) return;
+    const base = el.getBoundingClientRect().left - el.scrollLeft;
+    const others = preview.filter((id) => id !== liftingCol);
+    let at = 0;
+    for (const id of others) {
+      const k = el.querySelector<HTMLElement>(`:scope > [data-slot="${CSS.escape(id)}"]`);
+      if (k && base + k.offsetLeft + k.offsetWidth / 2 < x) at++;
+    }
+    const next = [...others.slice(0, at), lifted, ...others.slice(at)];
+    if (next.some((id, i) => id !== preview![i])) reflow(el, next);
+  }
+
+  /** Cambia el orden visible y anima el salto (FLIP): cada columna parte de
+   *  donde se veía y se desliza a su sitio nuevo. */
+  async function reflow(el: HTMLElement, next: string[] | null) {
+    const kids = [...el.querySelectorAll<HTMLElement>(':scope > [data-slot]')];
+    const from = new Map(kids.map((k) => [k, k.getBoundingClientRect().left]));
+    preview = next;
+    await tick();
+    const base = el.getBoundingClientRect().left - el.scrollLeft;
+    for (const k of kids) {
+      const dx = from.get(k)! - (base + k.offsetLeft);
+      if (Math.abs(dx) < 1) continue;
+      k.animate([{ transform: `translateX(${dx}px)` }, { transform: 'none' }], {
+        duration: 200,
+        easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)',
+      });
+    }
   }
 
   /** The column itself takes a drop, which is what makes an EMPTY column
@@ -320,11 +462,13 @@
       stop = combine(
         dropTargetForElements({
           element: el,
+          // Una columna arrastrada la recibe el tablero, no ésta.
+          canDrop: ({ source }) => !!source.data.cardId,
           getData: () => ({ col: colId }),
           // A card sitting over a CARD has already said where it goes; the
           // column only answers for the empty space around them.
-          onDragEnter: ({ location }) => {
-            if (location.current.dropTargets.length === 1) over = { col: colId, before: null };
+          onDragEnter: ({ location, source }) => {
+            if (source.data.cardId && location.current.dropTargets.length === 1) over = { col: colId, before: null };
           },
           onDragLeave: () => (over = null),
         }),
@@ -334,6 +478,9 @@
           onDrop: ({ source, location }) => {
             const target = location.current.dropTargets[0];
             if (!target) return;
+            // Soltada en la columna de la secuencia: no es una etapa, y la
+            // tarjeta no cambia de columna (ver `sequenceColumn`).
+            if (location.current.dropTargets.some((t) => t.data.seqcol)) return;
             const to = (target.data.col as string) ?? colId;
             if (to !== colId) return; // one monitor acts, not five
 
@@ -364,11 +511,41 @@
   }
 </script>
 
-<div class="board">
-  {#each columns as col (col.id)}
-    <section class="col" class:over={over?.col === col.id} {@attach (el) => column(el, col.id)}>
-      {#if overCol === col.id}<div class="col-gap" aria-hidden="true"></div>{/if}
-      <header {@attach (el) => head(el, col)} class:lifting={liftingCol === col.id}>
+<div class="board" {@attach board}>
+  {#each slots as slot (slot)}
+    {#if slot === SEQ && sequence}
+      <!-- La secuencia: no se renombra ni se borra, pero se mueve como las
+           demás (por su cabecera). Soltar aquí la tarjeta de una burbuja mete
+           sus hilos abiertos al final de la línea. -->
+      <section
+        class="col seqcol"
+        class:over={overSeq}
+        class:lifting={liftingCol === SEQ}
+        data-slot={SEQ}
+        style:order={shown.indexOf(SEQ)}
+        aria-label="secuencia de ejecución"
+        {@attach sequenceColumn}>
+        <header class="seqhead" {@attach (el) => head(el, SEQ)}>
+          <span class="name">🧭 Secuencia</span>
+          <span class="count" title="hilos en la secuencia">{sequence.threads.filter((t) => t.sequence > 0).length}</span>
+        </header>
+        <SequencePane
+          threads={sequence.threads}
+          onreorder={sequence.onreorder}
+          oncomplete={sequence.oncomplete}
+          onopen={sequence.onopen}
+          headless />
+      </section>
+    {:else if colById(slot)}
+    {@const col = colById(slot)!}
+    <section
+      class="col"
+      class:over={over?.col === col.id}
+      class:lifting={liftingCol === col.id}
+      data-slot={col.id}
+      style:order={shown.indexOf(col.id)}
+      {@attach (el) => column(el, col.id)}>
+      <header {@attach (el) => head(el, col.id)}>
         {#if renaming === col.id}
           <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
             class="rename"
@@ -498,9 +675,9 @@
         <PlusIcon class="size-4" /> tarjeta
       </button>
     </section>
+    {/if}
   {/each}
 
-  {#if overCol === null && liftingCol}<div class="col-gap" aria-hidden="true"></div>{/if}
 
   <!-- Adding a column is the one action the board always offers, so it sits at
        the end of the columns rather than hiding in a menu. -->
@@ -511,6 +688,8 @@
 
 <style>
   .board {
+    /* referencia de `offsetLeft` para medir dónde cae una columna */
+    position: relative;
     display: flex;
     gap: 0.85rem;
     height: 100%;
@@ -531,6 +710,22 @@
   /* The column you are over lights up as a whole, so the target is legible even
      when the gap is off screen. */
   .col.over { border-color: color-mix(in oklab, var(--accent) 55%, transparent); }
+  /* Más ancha que una etapa: una línea con pasos en paralelo necesita sitio, y
+     alta del todo para que su propio scroll trabaje. */
+  .seqcol { flex-basis: 340px; height: 100%; padding: 0.45rem; }
+  /* Su cabecera es el asa para mover la columna, como la de una etapa. */
+  .seqhead {
+    display: flex;
+    flex: none;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.1rem 0.35rem 0.4rem;
+    cursor: grab;
+    font-weight: 700;
+    font-size: 0.85rem;
+  }
+  .seqcol { display: flex; flex-direction: column; }
+  .seqcol > :global(.pane) { flex: 1; min-height: 0; }
 
   .col > header {
     display: flex;
@@ -539,7 +734,6 @@
     padding: 0.1rem 0.35rem 0.55rem;
     cursor: grab;
   }
-  .col > header.lifting { opacity: 0.4; }
   .col > header .name { text-align: left; }
   .more {
     display: grid;
@@ -564,15 +758,15 @@
     font-size: 0.78rem;
   }
 
-  /* Where a dragged COLUMN would land. Vertical, because columns move
-     sideways — the same idea as the card gap, turned ninety degrees. */
-  .col-gap {
-    flex: none;
-    align-self: stretch;
-    width: 3px;
-    border-radius: 999px;
-    background: var(--accent);
+  /* La columna levantada ES el hueco donde caerá: del mismo ancho, con borde
+     de trazos y su contenido apagado. Moverse con `order` en vez de mover el
+     DOM deja en paz al elemento que el navegador está arrastrando. */
+  .add-col { order: 9999; }
+  .col.lifting {
+    border: 2px dashed color-mix(in oklab, var(--accent) 70%, transparent);
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
   }
+  .col.lifting > :global(*) { opacity: 0.2; }
 
   .add-col {
     flex: 0 0 auto;

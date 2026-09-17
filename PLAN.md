@@ -1622,8 +1622,14 @@ que terminar un hilo —desde la secuencia, desde su pantalla o por MCP— la re
 sola. Los agentes la leen con la tool `next` (ahora, luego, y lo primero asignado
 a quien pregunta).
 
-El planeador enseña tres paneles como mucho: encender un cuarto apaga el que
-lleva más tiempo encendido.
+**La secuencia vive como una columna del kanban, no como un panel.** Primero fue
+un cuarto panel del planeador (con un tope de tres paneles a la vez); probándolo,
+se vio que el kanban ya es donde el lead ordena, y que otro panel sólo quitaba
+ancho. «🧭 Secuencia» es una columna FIJA —no se renombra, no se borra, no se
+mueve— justo a la derecha de «Sin planear»; lo que se edita es su contenido.
+Soltar ahí la tarjeta de una burbuja mete sus hilos abiertos al final de la
+línea, uno por paso en su orden. Se descartó el panel aparte (y con él el tope
+de tres paneles, que ya no hace falta).
 
 **La secuencia es una función que se enciende** (`features.sequence`, una fila
 como `tuning`, que sólo cambia el lead global en Ajustes → Funciones). Nace
@@ -1645,6 +1651,50 @@ Lo que se descartó:
 
 **Hecho cuando:** los tests en vivo de prioridad y secuencia pasan, y el usuario
 lo valida en el planeador.
+
+## Canales del inbox: plugins compilados, y WhatsApp el primero
+
+Lo que llega por fuera de la app entra al inbox sin copiarlo a mano. Un **canal**
+es un plugin COMPILADO (`internal/channels`): un paquete que se registra desde su
+`init` con la interfaz `Channel` (`Start`, `Stop`, `Status`, `Action`) y entrega
+mensajes normalizados (`Inbound`) a un `Sink`. El canal no conoce el inbox y el
+inbox no conoce WhatsApp. Las rutas son genéricas (`/api/channels/{kind}/…`, sólo
+el lead global) y lo propio de cada canal va por `Action`. Un canal se deja fuera
+del binario con una etiqueta de build (`-tags nowhatsapp`).
+
+`channels` guarda una fila por tipo: si está encendido, su configuración no
+secreta y a nombre de quién se captura (`inbox_items.captured_by` exige una
+persona: quien enciende el canal). Las notas ganan `source`, `source_ref` (índice
+único: un mensaje que llega dos veces entra una) y `source_from` (quién lo mandó
+allí, que no tiene por qué tener cuenta).
+
+**WhatsApp escucha UN grupo** con whatsmeow (go.mau.fi/whatsmeow, MPL-2.0), que
+habla el protocolo de WhatsApp Web multidispositivo — el de Baileys, en Go. Se
+vincula por QR o por código de teléfono, se elige el grupo por nombre, y cada
+mensaje del grupo entra al inbox (texto; las imágenes como archivos de la nota;
+audio, video y documentos se nombran sin adjuntarse) y recibe la reacción 📥; si
+reaccionar falla, se contesta «📥 Recibido en el inbox». La sesión (llaves de la
+cuenta) vive aparte, en `pb_data/channels/whatsapp.db`, con el driver SQLite sin
+CGO que ya usa PocketBase: el binario sigue siendo uno.
+
+Lo que se descartó:
+
+- **El paquete `plugin` de Go.** Sólo funciona en Linux y se rompe entre
+  versiones.
+- **Baileys o WAHA como servicio aparte.** El mismo riesgo que whatsmeow, con otro
+  runtime que desplegar y vigilar.
+- **La WhatsApp Cloud API oficial, por ahora.** Sin riesgo de bloqueo, pero exige
+  un endpoint HTTPS público (las instancias viven en una LAN) y, desde octubre de
+  2026, cobra cada mensaje del negocio. Cabe como otro canal con esta interfaz.
+- **Capturar mensajes directos de cualquiera.** Un grupo decide quién puede
+  mandar al inbox sin inventar una lista de números.
+
+El riesgo asumido: whatsmeow no es oficial, y WhatsApp bloquea cuentas que
+automatizan envíos. Se mitiga con un número dedicado y con un canal que sólo
+escucha y reacciona, nunca escribe primero.
+
+**Hecho cuando:** un mensaje en el grupo aparece en el inbox con quién lo mandó y
+recibe 📥, una sola vez, y el usuario lo valida con un grupo real.
 
 ## Versioning and release
 

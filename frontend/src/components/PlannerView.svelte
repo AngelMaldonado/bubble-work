@@ -68,6 +68,7 @@
     sequenceThreads,
     onreorder,
     oncompletethread,
+    ondropbubble,
     onaddcolumn,
     onrenamecolumn,
     ondeletecolumn,
@@ -136,10 +137,12 @@
     /** abrir un hilo a pantalla completa. Antes, esta pantalla anota a dónde
      *  volver: la tarjeta, por su cara de hilos, y el scroll de la lista. */
     onopenthread?: (threadId: string) => void;
-    /** los hilos para el panel de secuencia; sin esto no se ofrece el panel */
+    /** los hilos para la columna de la secuencia del kanban; sin esto no se ofrece */
     sequenceThreads?: SeqThread[];
     onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
     oncompletethread?: (threadId: string) => void | Promise<void>;
+    /** una burbuja soltada en la columna de la secuencia: sus hilos abiertos al final */
+    ondropbubble?: (cardId: string) => void;
     /** the columns, when they are rows somebody owns — see Kanban */
     onaddcolumn?: () => void;
     onrenamecolumn?: (id: string, name: string) => void;
@@ -169,7 +172,7 @@
   const kept = (() => {
     try {
       return JSON.parse(localStorage.getItem(PANES) ?? 'null') as
-        | { inbox: boolean; cal: boolean; board: boolean; seq?: boolean }
+        | { inbox: boolean; cal: boolean; board: boolean }
         | null;
     } catch {
       return null; // private mode, or something else wrote nonsense there
@@ -184,44 +187,6 @@
   let showCal = $state(readonly ? true : (kept?.cal ?? false));
   // svelte-ignore state_referenced_locally
   let showBoard = $state(readonly ? false : (kept?.board ?? true));
-  // svelte-ignore state_referenced_locally
-  let showSeq = $state(readonly ? false : (kept?.seq ?? false));
-
-  // Tres paneles como mucho a la vez: cuatro columnas en una pantalla de
-  // portátil son cuatro columnas que no caben. Encender un cuarto apaga el que
-  // lleva más tiempo encendido — el que menos se está mirando ahora.
-  const MAX_PANES = 3;
-  // svelte-ignore state_referenced_locally
-  let lit = $state<Pane[]>(
-    ([['inbox', showInbox], ['cal', showCal], ['board', showBoard], ['seq', showSeq]] as [Pane, boolean][])
-      .filter(([, on]) => on)
-      .map(([k]) => k),
-  );
-  // Guardado de antes de que existiera el tope, con los cuatro encendidos.
-  // svelte-ignore state_referenced_locally
-  while (lit.length > MAX_PANES) setPane(lit.shift()!, false);
-  function setPane(k: Pane, on: boolean) {
-    if (k === 'inbox') showInbox = on;
-    else if (k === 'cal') showCal = on;
-    else if (k === 'board') showBoard = on;
-    else showSeq = on;
-  }
-  function toggle(k: Pane) {
-    const on = !lit.includes(k);
-    lit = lit.filter((x) => x !== k);
-    if (on) {
-      // Cuenta lo que se VE: una secuencia recordada como encendida pero con la
-      // función apagada no ocupa sitio, y no debe ser la que se apague.
-      const seen = lit.filter((x) => x !== 'seq' || !!sequenceThreads);
-      if (seen.length >= MAX_PANES) {
-        const oldest = seen[0];
-        lit = lit.filter((x) => x !== oldest);
-        setPane(oldest, false);
-      }
-      lit.push(k);
-    }
-    setPane(k, on);
-  }
   // ---- ancho de cada panel ----
   //
   // Arrastrables por el borde que los separa, y recordados igual que qué
@@ -229,7 +194,7 @@
   // mañana. Un ancho sin fijar (0) deja el reparto por defecto del CSS; el
   // último panel visible nunca lleva ancho: se queda con lo que sobra, que es lo
   // que hace que la fila llene la pantalla sea cual sea la ventana.
-  type Pane = 'inbox' | 'cal' | 'board' | 'seq';
+  type Pane = 'inbox' | 'cal' | 'board';
   const SIZES = 'bubble.planner.sizes';
   const MIN = 200;
   // svelte-ignore state_referenced_locally
@@ -241,10 +206,9 @@
           inbox: Number(got?.inbox) || 0,
           cal: Number(got?.cal) || 0,
           board: Number(got?.board) || 0,
-          seq: Number(got?.seq) || 0,
         };
       } catch {
-        return { inbox: 0, cal: 0, board: 0, seq: 0 };
+        return { inbox: 0, cal: 0, board: 0 };
       }
     })(),
   );
@@ -258,9 +222,9 @@
   });
 
   let panesEl = $state<HTMLElement | null>(null);
-  const els: Record<Pane, HTMLElement | null> = $state({ inbox: null, cal: null, board: null, seq: null });
+  const els: Record<Pane, HTMLElement | null> = $state({ inbox: null, cal: null, board: null });
   const visible = $derived(
-    ([['inbox', showInbox], ['cal', showCal], ['seq', showSeq && !!sequenceThreads], ['board', showBoard]] as [Pane, boolean][])
+    ([['inbox', showInbox], ['cal', showCal], ['board', showBoard]] as [Pane, boolean][])
       .filter(([, on]) => on)
       .map(([k]) => k),
   );
@@ -320,7 +284,7 @@
     try {
       localStorage.setItem(
         PANES,
-        JSON.stringify({ inbox: showInbox, cal: showCal, board: showBoard, seq: showSeq }),
+        JSON.stringify({ inbox: showInbox, cal: showCal, board: showBoard }),
       );
     } catch {
       // not being able to remember it is not a reason to refuse the change
@@ -471,12 +435,9 @@
     readonly
       ? []
       : [
-          { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => toggle('inbox') },
-          { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => toggle('cal') },
-          ...(sequenceThreads
-            ? [{ k: 'seq', face: '🧭', label: 'Secuencia', on: showSeq, go: () => toggle('seq') }]
-            : []),
-          { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => toggle('board') },
+          { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => (showInbox = !showInbox) },
+          { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => (showCal = !showCal) },
+          { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => (showBoard = !showBoard) },
         ],
   );
   const opens = $derived(
@@ -586,28 +547,6 @@
         ondblclick={() => (sizes.cal = 0)}></div>
     {/if}
 
-    {#if showSeq && sequenceThreads}
-      <section class="pane seq" bind:this={els.seq} style={paneStyle('seq')}>
-        <SequencePane
-          threads={sequenceThreads}
-          {onreorder}
-          oncomplete={oncompletethread}
-          onopen={(t) => onopenthread?.(t.id)} />
-      </section>
-    {/if}
-    {#if visible.indexOf('seq') > -1 && visible.indexOf('seq') < visible.length - 1}
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div
-        class="resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="ancho de la secuencia"
-        tabindex="0"
-        onpointerdown={(e) => drag('seq', e)}
-        onkeydown={(e) => nudge('seq', e)}
-        ondblclick={() => (sizes.seq = 0)}></div>
-    {/if}
 
     {#if showBoard}
       <section class="pane board" bind:this={els.board} style={paneStyle('board')}>
@@ -628,7 +567,17 @@
           {onaddcolumn}
           {onrenamecolumn}
           {ondeletecolumn}
-          {onmovecolumn} />
+          {onmovecolumn}
+          orderKey="bubble.planner.columns"
+          sequence={sequenceThreads
+            ? {
+                threads: sequenceThreads,
+                onreorder,
+                oncomplete: oncompletethread,
+                onopen: (t) => onopenthread?.(t.id),
+                ondropbubble,
+              }
+            : undefined} />
       </section>
     {/if}
 
@@ -922,7 +871,6 @@
   .inbox { flex: 0 0 288px; padding: 0.75rem; }
   .cal { flex: 3 1 0; }
   .board { flex: 2 1 0; }
-  .seq { flex: 0 0 340px; padding: 0.75rem; }
   .empty { margin: auto; color: var(--faint); font-size: 0.85rem; }
 
   .inbox > header { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }

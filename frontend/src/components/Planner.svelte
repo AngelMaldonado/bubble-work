@@ -188,6 +188,30 @@
     await loadHeat();
   }
 
+  /** Una burbuja soltada en la columna de la secuencia: sus hilos abiertos que
+   *  aún no están en la línea entran al final, uno por paso, en su orden (#). */
+  function dropBubble(cardId: string) {
+    const name = bubbleName(cardId) || 'La burbuja';
+    const mine = heated.filter((t) => t.bubble === cardId);
+    const last = Math.max(0, ...heated.map((t) => t.sequence ?? 0));
+    const fresh = mine
+      .filter((t) => t.heat.lifecycle !== 'closed' && !(t.sequence ?? 0))
+      .sort((a, b) => a.seq - b.seq);
+    // Soltar y que no pase nada parece una caída que no llegó. Se dice por qué.
+    if (!fresh.length) {
+      const open = mine.filter((t) => t.heat.lifecycle !== 'closed').length;
+      error = !mine.length
+        ? `«${name}» no tiene hilos: créalos desde su tarjeta (🧵 Hilos) y vuelve a soltarla.`
+        : open
+          ? `Los hilos abiertos de «${name}» ya están todos en la secuencia.`
+          : `«${name}» no tiene hilos abiertos: todos están terminados.`;
+      return;
+    }
+    heatWrite(() =>
+      Promise.all(fresh.map((t, i) => api.setSequence(t.id, last + (i + 1) * 10))),
+    );
+  }
+
   function openThreadById(id: string) {
     const t = heated.find((x) => x.id === id);
     const slug = t ? slugs[t.workspace] : '';
@@ -301,7 +325,9 @@
         id: n.id,
         text: n.note,
         body: n.body ?? '',
-        from: n.captured_by === api.me?.id ? 'tú' : 'alguien',
+        // Lo que entró por un canal dice quién lo mandó por ahí; lo escrito en
+        // la app, quién lo capturó.
+        from: n.source_from || (n.captured_by === api.me?.id ? 'tú' : 'alguien'),
         when: new Date(n.created).toLocaleDateString(),
       })),
   );
@@ -659,6 +685,7 @@
   onreorder={(changes) =>
     heatWrite(() => Promise.all(changes.map((c) => api.setSequence(c.id, c.sequence))))}
   oncompletethread={(id) => heatWrite(() => api.completeThread(id))}
+  ondropbubble={dropBubble}
   onmoveevent={(id, day) => patchCard(id, { due: day })}
   onmovecard={moveCard}
   onautoorder={autoOrder}

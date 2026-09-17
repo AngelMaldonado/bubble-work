@@ -1,7 +1,7 @@
 <script lang="ts">
   import { api, type Board as BoardData, type Features, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { isEditable } from './lib/keys';
-  import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, sequenceUrl, settingsUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { agentsUrl, allUrl, boardUrl, inventoryUrl, parse, plannerUrl, sequenceUrl, settingsUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
   import Board from './components/Board.svelte';
@@ -10,6 +10,7 @@
   import Planner from './components/Planner.svelte';
   import Agenda from './components/Agenda.svelte';
   import Inventory from './components/Inventory.svelte';
+  import AgentsDoc from './components/AgentsDoc.svelte';
   import Repos from './components/Repos.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
@@ -681,6 +682,18 @@
        galería vacía porque el servidor no le manda nada — así que además se lo
        decimos. -->
   <Inventory onback={back} onsearch={() => (omni = true)} canWrite={isLead} />
+{:else if route.kind === 'agents' && signedIn && (isLead || route.role === 'operators')}
+  <!-- La forma de trabajar del departamento. El lead edita los dos; quien opera
+       LEE el suyo — el mismo que su agente recibe por MCP. Guardado en la
+       DIRECCIÓN además de en el menú: la regla de la colección ya rechaza la
+       versión de otro, pero una pantalla de edición que no se puede guardar es
+       una pantalla que miente. -->
+  <AgentsDoc role={route.role} canWrite={isLead} onback={back} onsearch={() => (omni = true)} />
+{:else if route.kind === 'agents' && signedIn && me}
+  <p class="card glass m-6 p-4 text-sm">
+    El AGENTS.md de quien planea es del lead. El tuyo es el de operadores.
+    <button class="link" onclick={() => go(agentsUrl('operators'), true)}>abrir AGENTS.md (operators)</button>
+  </p>
 {:else if route.kind === 'thread'}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. It is resolved from the address, so this is also
@@ -727,6 +740,10 @@
       ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
       { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
+      // La forma de trabajar que leen los agentes: el lead edita la de cada rol.
+      // Quien opera ve sólo el suyo, para leerlo.
+      ...(isLead ? [{ id: 'agents-planner', name: 'AGENTS.md (planner)', face: '🗺', href: agentsUrl('planner') }] : []),
+      { id: 'agents-operators', name: 'AGENTS.md (operators)', face: '🛠', href: agentsUrl('operators') },
       { id: 'settings', name: 'Ajustes', face: '⚙', href: settingsUrl() },
     ]}
     pinned={route.kind === 'planner'
@@ -735,6 +752,8 @@
         ? 'sequence'
         : route.kind === 'inventory'
         ? 'inventory'
+        : route.kind === 'agents'
+        ? `agents-${route.role}`
         : isAll
           ? 'all'
           : ''}
@@ -746,6 +765,8 @@
             ? sequenceUrl
             : id === 'inventory'
               ? inventoryUrl
+              : id === 'agents-planner' || id === 'agents-operators'
+              ? agentsUrl(id === 'agents-planner' ? 'planner' : 'operators')
               : id === 'settings'
                 ? settingsUrl()
                 : plannerUrl,

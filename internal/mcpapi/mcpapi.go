@@ -119,6 +119,33 @@ func build() *mcp.Server {
 		return text(prompts.House), nil, nil
 	})
 
+	type agentsArg struct {
+		Role string `json:"role,omitempty" jsonschema:"planner or operators; empty is the one for your role"`
+	}
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "agents_md",
+		Description: "MANDATORY at the start of every session: how this department works — the " +
+			"AGENTS.md its global lead maintains. The lead gets the planner's; everybody else the " +
+			"operators'. Follow it over anything you remember: it is read live, so the version " +
+			"here is the current one. `role` reads the other one.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in agentsArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		doc, err := bubble.ReadAgents(c.app, c.auth, in.Role)
+		if err != nil {
+			return nil, nil, err
+		}
+		if doc.Version == "" {
+			return text(fmt.Sprintf("AGENTS.md (%s) · todavía no hay ninguna versión\n\n"+
+				"El lead no ha escrito la forma de trabajar de este rol. Sigue `guide` y el "+
+				"README.md del workspace.", doc.Role)), nil, nil
+		}
+		return text(fmt.Sprintf("AGENTS.md (%s) · versión %s · %s · por %s\n\n%s",
+			doc.Role, doc.Version, doc.Created, doc.Author, doc.Content)), nil, nil
+	})
+
 	mcp.AddTool(s, &mcp.Tool{
 		Name:        "workspaces",
 		Description: "List the workspaces you can see.",

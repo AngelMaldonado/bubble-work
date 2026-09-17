@@ -62,6 +62,15 @@ func personCommand(app *pocketbase.PocketBase) *cobra.Command {
 				r.Set("role", role)
 				changed = true
 			}
+			// Nombrable, como una persona creada por la API (ver `nameable`). Ese
+			// hook sólo corre en peticiones HTTP, y este comando guarda directo:
+			// sin esto la persona salía sin correo para sus colegas y, sin
+			// `display_name`, sin nada con qué nombrarla — la lista de Ajustes se
+			// rompía leyendo la inicial de nada.
+			if !r.GetBool("emailVisibility") {
+				r.SetEmailVisibility(true)
+				changed = true
+			}
 			// Verified, because this is somebody an operator is vouching for from
 			// the command line; an unverified account cannot sign in.
 			if !r.Verified() {

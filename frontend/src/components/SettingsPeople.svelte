@@ -55,7 +55,8 @@
     await load();
   }
 
-  const nameOf = (p: PersonAdmin) => p.display_name || p.email;
+  // `email` puede no venir: PocketBase lo oculta si la cuenta no lo hizo visible.
+  const nameOf = (p: PersonAdmin) => p.display_name || p.email || 'sin nombre';
 
   function setRole(p: PersonAdmin, role: 'lead' | 'member') {
     if (role === p.role) return;

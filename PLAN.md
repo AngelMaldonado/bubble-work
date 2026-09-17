@@ -1696,6 +1696,42 @@ escucha y reacciona, nunca escribe primero.
 **Hecho cuando:** un mensaje en el grupo aparece en el inbox con quién lo mandó y
 recibe 📥, una sola vez, y el usuario lo valida con un grupo real.
 
+## La forma de trabajar la escribe el lead, y los agentes la leen en vivo
+
+Dos documentos del departamento, **AGENTS.md (planner)** y **AGENTS.md
+(operators)**, que el lead global edita desde el menú del pie de la columna
+(`/agentes/<rol>`); quien opera ve en el mismo menú sólo el suyo, de sólo
+lectura — lo mismo que recibe su agente. Viven en la colección `agents_md`, una fila por VERSIÓN
+(rol, contenido, autor, fecha): guardar crea una fila, la vigente es la más
+reciente, y ninguna se edita ni se borra. La herramienta MCP `agents_md` le da a
+cada agente la vigente de su rol —el lead recibe la de planner, los demás la de
+operators— con versión, fecha y autor en la cabecera; `role` lee la otra.
+
+`house_rules` deja de ser un resumen de las reglas y pasa a ser una sección
+breve: el framework en un párrafo, la **obligación** de leer `agents_md` al
+empezar cada sesión, y `guide` antes de la primera escritura. Lo que cambia
+cómo trabaja el equipo ya no pide un commit: pide que el lead guarde una versión
+y avise de qué cambió.
+
+En la pantalla, lo que entrega el editor al perder el foco es un borrador; la
+versión la crea un botón. En un hilo escribir más es mejor; aquí cada guardado
+llega a todos los agentes del departamento.
+
+Lo que se descartó:
+
+- **Copiar el documento al CLAUDE.md/AGENTS.md de cada quien.** Cada copia se
+  queda vieja en silencio, y actualizarla dependería de que cada operador vuelva
+  a correr el prompt. Leído en vivo, la siguiente sesión ya trae el cambio.
+- **Dejar la sección fija de `house_rules` junto al documento del lead.** Dos
+  fuentes de reglas que pueden contradecirse, y una la edita quien programa.
+- **Un archivo markdown bajo git.** El árbol es por workspace, y esto es del
+  departamento, como los objetivos. La historia la dan las filas.
+- **Una fila por rol que se sobrescribe.** Se pierde qué leyó un agente un
+  martes, que es justo la trazabilidad que se quiere para ISO 9001.
+
+**Hecho cuando:** los tests en vivo de `agents_md` pasan, y el lead guarda una
+versión de cada documento desde la app y la ve leída por un agente.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

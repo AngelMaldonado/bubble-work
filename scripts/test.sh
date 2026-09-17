@@ -887,7 +887,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,next,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+  "agents_md,board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,next,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
 # Los dos documentos que no describen el sistema sino qué hacer con él: el que un
 # agente se pega en SUS instrucciones, y la plantilla que una persona copia para
 # configurar su asistente. Markdown servido, no cadenas dentro del código.
@@ -899,6 +899,33 @@ chk ">>> el prompt de conexión sale SIN rellenar: los huecos los pone el client
   "$(curl -s "$API/api/connect" | grep -c '{{token}}')" 1
 chk ">>> ...y dice que hay que instalar la sección" \
   "$(curl -s "$API/api/connect" | grep -c 'house_rules')" 1
+chk ">>> ...y la sección obliga a leer agents_md" \
+  "$(mcptext "$A" house_rules '{}' | grep -c 'agents_md')" 1
+
+# ---- AGENTS.md del departamento: lo escribe el lead, lo lee cada agente ----
+chk ">>> sin versiones, agents_md lo dice en vez de fallar" \
+  "$(mcptext "$A" agents_md '{}' | head -1)" "AGENTS.md (operators) · todavía no hay ninguna versión"
+chk ">>> un member NO crea una versión" \
+  "$(pcode agents_md "$A" "{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}")" 400
+chk ">>> el lead global NO firma una versión a nombre de otro" \
+  "$(pcode agents_md "$C" "{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}")" 400
+chk ">>> el lead global sí crea la suya" \
+  "$(pcode agents_md "$C" "{\"role\":\"operators\",\"content\":\"# WoW v1\",\"author\":\"$CID\"}")" 200
+post agents_md "$C" "{\"role\":\"operators\",\"content\":\"# WoW v2\",\"author\":\"$CID\"}" >/dev/null
+post agents_md "$C" "{\"role\":\"planner\",\"content\":\"# Plan v1\",\"author\":\"$CID\"}" >/dev/null
+chk ">>> un member recibe la VIGENTE de operadores" \
+  "$(mcptext "$A" agents_md '{}' | sed -n 3p)" "# WoW v2"
+chk "...con autor en la cabecera" \
+  "$(mcptext "$A" agents_md '{}' | head -1 | grep -c 'por Carol')" 1
+chk ">>> el lead recibe la de planner" \
+  "$(mcptext "$C" agents_md '{}' | sed -n 3p)" "# Plan v1"
+chk "...y puede leer la de operadores" \
+  "$(mcptext "$C" agents_md '{"role":"operators"}' | sed -n 3p)" "# WoW v2"
+AGV=$(list agents_md "$C" | j "['items'][0]['id']")
+chk ">>> una versión no se edita" \
+  "$(code -X PATCH "$API/api/collections/agents_md/records/$AGV" -H "Authorization: $C" -H "$JS" -d '{"content":"otra"}')" 403
+chk ">>> ni se borra" \
+  "$(code -X DELETE "$API/api/collections/agents_md/records/$AGV" -H "Authorization: $C")" 403
 
 chk ">>> la guía es prompt Y tool (no todo cliente lista prompts)" \
   "$(mcp "$A" "prompts/list" "{}" | python3 -c 'import sys,json

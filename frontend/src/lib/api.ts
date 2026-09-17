@@ -196,6 +196,19 @@ export type Person = {
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
 export type Features = { id: string; sequence: boolean; updated?: string };
 
+/** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */
+export type AgentsRole = 'planner' | 'operators';
+
+/** Una versión de un AGENTS.md. Cada guardado es una fila nueva. */
+export type AgentsVersion = {
+  id: string;
+  role: AgentsRole;
+  content: string;
+  author: string;
+  authorName?: string;
+  created: string;
+};
+
 /** La calibración de la flotabilidad: una sola fila para todo el departamento. */
 export type Tuning = {
   id: string;
@@ -644,6 +657,23 @@ class Api {
 
   setFeatures(id: string, fields: Partial<Omit<Features, 'id' | 'updated'>>) {
     return this.update<Features>('features', id, fields);
+  }
+
+  // ---- AGENTS.md del departamento ----
+
+  /** La versión vigente de un rol: la más reciente. `null` si todavía no hay. */
+  async agentsDoc(role: AgentsRole): Promise<AgentsVersion | null> {
+    const out = await this.call<{ items: (AgentsVersion & { expand?: { author?: Person } })[] }>(
+      `/api/collections/agents_md/records?perPage=1&sort=-created&expand=author` +
+        `&filter=${encodeURIComponent(`role='${role}'`)}`,
+    );
+    const r = out.items[0];
+    return r ? { ...r, authorName: named(r.expand?.author, '') } : null;
+  }
+
+  /** Guardar es crear una versión nueva: las anteriores no se tocan. */
+  saveAgentsDoc(role: AgentsRole, content: string) {
+    return this.create<AgentsVersion>('agents_md', { role, content, author: this.me?.id });
   }
 
   // ---- tokens de agente ----

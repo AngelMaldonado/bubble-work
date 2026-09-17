@@ -14,6 +14,7 @@
  *     /w/alpha/wiki/docs/adr.md    a page in its wiki
  *     /planeador                   the department's planner — no workspace
  *     /secuencia                   the execution sequence, as the viewer sees it
+ *     /agentes/operators           an AGENTS.md of the department, the lead's to edit
  *     /ajustes/tokens              settings, one tab per address
  *     /theme, /theme/mock          the design system, and the whole product mocked
  *
@@ -29,6 +30,7 @@ export type Route =
   | { kind: 'planner' }
   | { kind: 'inventory' }
   | { kind: 'sequence' }
+  | { kind: 'agents'; role: 'planner' | 'operators' }
   | { kind: 'settings'; tab: string }
   | { kind: 'theme' }
   | { kind: 'mock' };
@@ -40,6 +42,9 @@ export function parse(pathname: string): Route {
   if (p === '/planeador') return { kind: 'planner' };
   if (p === '/inventario') return { kind: 'inventory' };
   if (p === '/secuencia') return { kind: 'sequence' };
+  // Los dos AGENTS.md del departamento, uno por rol.
+  const agents = p.match(/^\/agentes\/(planner|operators)$/);
+  if (agents) return { kind: 'agents', role: agents[1] as 'planner' | 'operators' };
   // La tab va en la dirección: «mira tus tokens» es un enlace, no unas
   // instrucciones. Vacía, la pantalla elige la primera que te corresponde.
   const set = p.match(/^\/ajustes(?:\/([a-z-]+))?$/);
@@ -67,4 +72,5 @@ export const wikiUrl = (slug: string, page: string) =>
 export const plannerUrl = '/planeador';
 export const inventoryUrl = '/inventario';
 export const sequenceUrl = '/secuencia';
+export const agentsUrl = (role: 'planner' | 'operators') => `/agentes/${role}`;
 export const settingsUrl = (tab = '') => (tab ? `/ajustes/${tab}` : '/ajustes');

@@ -134,6 +134,11 @@ writes to, and without it the next session starts blind: it opens a second threa
 beside the one that was already half done, or writes nothing and the board says
 nothing happened here.
 
+**Read `agents_md` at the start of every session.** It is how this department
+works — the AGENTS.md its global lead writes and keeps current: the planner's if
+you are the lead, the operators' otherwise. It is read live on purpose, so do not
+copy it into your instructions file: the version it returns is the one in force.
+
 `repos` says where the workspace's CODE lives — the repositories linked to it,
 which are not the markdown tree this server writes. `inventory` says where the
 things that keep it running live: servers, domains, services, with their provider

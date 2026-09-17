@@ -60,6 +60,11 @@ func (s *Supervisor) Run() error {
 			_ = s.Store.ClearNext()
 		}
 		if d.Rollback {
+			// Se anota, para que reiniciar el contenedor con la misma imagen no
+			// vuelva a intentarla (ver `Seed`).
+			if err := s.Store.SetFailed(tag); err != nil {
+				log.Printf("boot: no pude anotar %s como fallida: %v", tag, err)
+			}
 			// Un respiro antes de relanzar, para no gastar el disco en logs si
 			// lo que falla es el entorno y no la versión.
 			select {

@@ -1784,6 +1784,22 @@ Rechazado: Watchtower. Reinicia con cualquier digest nuevo, sin sitio donde
 meter la copia ni la vuelta atrás, y «se actualizó solo y ahora no arranca» es
 exactamente el caso que hay que cubrir.
 
+**Una imagen más nueva que la vigente es una actualización.** *(built)* En
+Coolify quien actualiza es el orquestador: tira de `:stable` y recrea el
+contenedor. Con `boot` tal cual, eso no hacía nada —la imagen sólo sembraba el
+volumen la primera vez, y la versión vigente seguía siendo la del volumen—. Ahora
+`boot` compara al arrancar: si la imagen trae una versión MÁS NUEVA, copia la
+base en frío (`pb_data/backups/antes-de-<tag>.zip`, con la forma de un respaldo
+de PocketBase), la instala y la lanza con la vigente como red. Una más vieja o
+igual no toca nada, y una que no llegó a contestar queda en `bin/failed` para
+que reiniciar el contenedor no la reintente cada vez — un minuto sin servicio
+por reinicio. Así valen los dos caminos, el botón y el orquestador, y el más
+nuevo gana. Montarlo está en `deploy/coolify.md`.
+
+Rechazado: `serve` en vez de `boot` bajo Coolify. Deja que mande la imagen, que
+es lo más simple, y mata el botón de actualizar y la vuelta atrás — la versión
+que no contesta se queda sin contestar hasta que alguien redespliega a mano.
+
 **La serie arranca en `v1.0.0`.** No en 0.x: esto ya sostiene trabajo de verdad
 en instancias de verdad, y un 0.x le dice a quien lo aloja que puede romperse sin
 aviso, que es lo contrario de lo que promete el resto de este modelo. Y no en v2:

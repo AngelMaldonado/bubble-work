@@ -10,20 +10,31 @@
 //	<dir>/current            qué versión se está sirviendo
 //	<dir>/last-good          la última que llegó a contestar de verdad
 //	<dir>/next               lo que el servidor dejó pedido al actualizarse
+//	<dir>/failed             la última versión que no llegó a contestar
 //
 // Los binarios viven en el DIRECTORIO DE DATOS y no en la imagen a propósito.
 // En la imagen, un `docker compose up` los borraría y la instancia «volvería» a
 // la versión de la imagen sin que nadie entienda por qué. El volumen es el
 // estado; la imagen es sólo el arranque.
+//
+// Salvo cuando la imagen trae una versión MÁS NUEVA que la vigente: entonces es
+// una actualización que llega por el otro camino —un orquestador que cambia la
+// imagen, como Coolify— y se adopta igual que la del botón, con la vigente como
+// red. Una imagen más vieja nunca pisa nada: quien actualizó con el botón no
+// retrocede porque alguien reinició el contenedor.
 package boot
 
 import (
+	"archive/zip"
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/AngelMaldonado/bubble-work/internal/release"
 )
 
 const (
@@ -40,6 +51,7 @@ const (
 	current  = "current"
 	lastGood = "last-good"
 	next     = "next"
+	failed   = "failed"
 	versions = "versions"
 )
 
@@ -91,19 +103,34 @@ func (s Store) SetCurrent(tag string) error  { return s.write(current, tag) }
 func (s Store) SetLastGood(tag string) error { return s.write(lastGood, tag) }
 func (s Store) SetNext(tag string) error     { return s.write(next, tag) }
 func (s Store) ClearNext() error             { return os.Remove(s.path(next)) }
+func (s Store) Failed() string               { return s.read(failed) }
+func (s Store) SetFailed(tag string) error   { return s.write(failed, tag) }
 
-// Seed deja instalada la versión que trae este binario, si no había ninguna.
+// Seed deja instalada la versión que trae este binario, si no había ninguna o
+// si la que trae es más nueva que la vigente.
 //
 // Es lo que hace que una instancia nueva arranque sin descargar nada: la
 // primera versión vigente es, literalmente, una copia del ejecutable que la
 // imagen trae dentro.
+//
+// Con una versión vigente, sólo la reemplaza una MÁS NUEVA, y sin tocar
+// `last-good`: si la de la imagen no contesta, el arranque vuelve a la que
+// servía. Y una que ya falló no se reintenta en cada reinicio del contenedor
+// —cada intento es un minuto sin servicio—; la siguiente imagen, o el botón,
+// sí.
 func (s Store) Seed(exe, tag string) error {
 	if tag == "" {
 		return errors.New("un binario sin versión no se puede instalar: no habría cómo nombrarlo")
 	}
-	if s.Current() != "" {
-		if _, err := os.Stat(s.Binary(s.Current())); err == nil {
-			return nil
+	if cur := s.Current(); cur != "" {
+		if _, err := os.Stat(s.Binary(cur)); err == nil {
+			if !s.Adopts(tag) {
+				return nil
+			}
+			if err := s.Install(exe, tag); err != nil {
+				return err
+			}
+			return s.SetCurrent(tag)
 		}
 		// El puntero apunta a algo que no está. Pasa si alguien limpió el
 		// volumen a mano; se reinstala en vez de morir.
@@ -115,6 +142,74 @@ func (s Store) Seed(exe, tag string) error {
 		return err
 	}
 	return s.SetLastGood(tag)
+}
+
+// Adopts dice si sembrar `tag` reemplazaría una versión vigente que funciona:
+// es más nueva y no es la que ya falló. Quien arranca lo pregunta ANTES de
+// sembrar, para copiar la base mientras nadie la está escribiendo.
+func (s Store) Adopts(tag string) bool {
+	cur := s.Current()
+	if cur == "" {
+		return false
+	}
+	if _, err := os.Stat(s.Binary(cur)); err != nil {
+		return false
+	}
+	return release.Newer(cur, tag) && s.Failed() != tag
+}
+
+// Snapshot copia el directorio de datos en `<data>/backups/<name>`, con la
+// forma de un respaldo de PocketBase —un zip del directorio sin `backups/`—
+// para poder restaurarlo desde el dashboard como cualquier otro.
+//
+// Es la copia que `POST /api/update` hace con el servidor vivo, hecha aquí en
+// frío: se llama antes de lanzar al hijo, así que SQLite no está a medio
+// escribir.
+func Snapshot(data, name string) error {
+	dir := filepath.Join(data, "backups")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	tmp := filepath.Join(dir, name+".partial")
+	f, err := os.Create(tmp)
+	if err != nil {
+		return err
+	}
+	zw := zip.NewWriter(f)
+	walk := filepath.WalkDir(data, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(data, path)
+		if err != nil {
+			return err
+		}
+		if d.IsDir() {
+			if rel == "backups" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !d.Type().IsRegular() {
+			return nil
+		}
+		w, err := zw.Create(filepath.ToSlash(rel))
+		if err != nil {
+			return err
+		}
+		in, err := os.Open(path)
+		if err != nil {
+			return err
+		}
+		defer in.Close()
+		_, err = io.Copy(w, in)
+		return err
+	})
+	if err := errors.Join(walk, zw.Close(), f.Close()); err != nil {
+		os.Remove(tmp)
+		return err
+	}
+	return os.Rename(tmp, filepath.Join(dir, name))
 }
 
 // Install copia un binario a su sitio con su nombre. Copiar y renombrar, nunca

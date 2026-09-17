@@ -1,6 +1,8 @@
 package main
 
 import (
+	"fmt"
+	"log"
 	"os"
 	"strings"
 	"time"
@@ -16,7 +18,9 @@ import (
 //	bubble boot --http 0.0.0.0:8090 --dir /data/pb_data
 //
 // Es lo que corre el servicio. Este proceso no sirve nada: instala la versión
-// que trae dentro si no había ninguna, lanza la vigente como hijo y la vigila.
+// que trae dentro si no había ninguna —o si es más nueva que la vigente, que es
+// como llega una actualización cuando un orquestador cambia la imagen—, lanza la
+// vigente como hijo y la vigila.
 // Si la versión nueva no llega a contestar, vuelve a la última que sí lo hizo.
 //
 // El que deshace nunca puede ser el que se actualizó — por eso son dos
@@ -38,6 +42,20 @@ func bootCommand(version string) *cobra.Command {
 			exe, err := os.Executable()
 			if err != nil {
 				return err
+			}
+			// Una imagen más nueva que la vigente es una actualización, y se trata
+			// como la del botón: la base se copia antes, porque la migración
+			// corre al arrancar y volver atrás devuelve el binario, no el esquema.
+			if store.Adopts(version) {
+				if data == "" {
+					data = "pb_data" // el mismo valor por defecto que `serve`
+				}
+				name := fmt.Sprintf("antes-de-%s.zip", version)
+				if err := boot.Snapshot(data, name); err != nil {
+					return fmt.Errorf("no pude copiar la base antes de adoptar %s, así que no la adopto: %w", version, err)
+				}
+				log.Printf("boot: la imagen trae %s, más nueva que %s; base copiada en backups/%s",
+					version, store.Current(), name)
 			}
 			if err := store.Seed(exe, version); err != nil {
 				return err

@@ -84,7 +84,9 @@
     const node = el;
     if (!node || !actions.length) return;
     priming = true;
-    node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: false, clientX: 0, clientY: 0 }));
+    // Tiene que subir: Svelte delega `contextmenu` a la raíz, y un evento que
+    // no sube no llega a ningún manejador (ver BubbleBoard).
+    node.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 0, clientY: 0 }));
     priming = false;
   });
 </script>

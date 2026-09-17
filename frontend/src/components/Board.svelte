@@ -64,7 +64,7 @@
   //  En Todos no se pide: serían N peticiones para dibujar iniciales, y en un
   //  board de varios proyectos lo que hace falta saber de un orbe no es quién
   //  responde sino de dónde es. La insignia del proyecto ocupa ese sitio.
-  let roster = $state<{ id: string; name: string }[]>([]);
+  let roster = $state<{ id: string; name: string; avatar?: string }[]>([]);
   $effect(() => {
     const id = workspace?.id;
     roster = [];
@@ -88,10 +88,16 @@
       // avatar sin nombre no dice nada que valga la pena dibujar.
       owner: all ? '' : nameOf((b.owners ?? [])[0] ?? ''),
       people: all ? [] : (b.owners ?? []).map(nameOf).filter(Boolean),
+      faces: all
+        ? {}
+        : Object.fromEntries(
+            roster.filter((p) => p.avatar && (b.owners ?? []).includes(p.id)).map((p) => [p.name, p.avatar!]),
+          ),
       project: all ? projectOf(b.workspace) : '',
       // The flame counts what is PRODUCING inside it, which is the one number
       // an orb can carry without becoming a card.
       burning: threadsOf(b.id).filter((t) => t.heat.lifecycle === 'hot').length,
+      priority: b.priority ?? '',
     })),
   );
 
@@ -192,7 +198,7 @@
     if (!t) return;
     doom = {
       title: `¿Borrar «${t.name}»?`,
-      body: 'El thread #' + t.seq + ' sale de la burbuja y del planeador. Su documento sigue en la historia de git, que es de donde se recupera si hacía falta.',
+      body: 'El hilo #' + t.seq + ' sale de la burbuja y del planeador. Su documento sigue en la historia de git, que es de donde se recupera si hacía falta.',
       go: () => write(() => api.deleteThread(t.id)),
     };
   }
@@ -261,7 +267,7 @@
   <p class="faint p-6 text-sm">…</p>
 {:else}
   <BubbleBoard
-    title={workspace?.name ?? 'Todos los workspaces'}
+    title={workspace?.name ?? 'Todos los proyectos'}
     bubbles={orbs}
     onnew={all ? undefined : onnew}
     onaction={act}
@@ -274,7 +280,6 @@
   <BubbleDrawer
     bind:open={drawer}
     name={shown?.name ?? ''}
-    outcome={shown?.outcome ?? ''}
     lifecycle={shown?.heat.lifecycle ?? 'hot'}
     reason={shown?.heat.reason ?? ''}
     owners={shown?.owners ?? []}
@@ -290,6 +295,8 @@
       // happened to it.
       owner: (t.assignees ?? []).map(nameOf).filter(Boolean).join(', '),
       age: ago(t.at ?? ''),
+      priority: t.priority ?? '',
+      step: t.step ?? 0,
     }))}
     cyclePct={cycle?.pct ?? null}
     cycleLeft={cycle?.words ?? ''}
@@ -302,9 +309,12 @@
     }}
     onnewthread={all ? undefined : newThread}
     ondeletethread={all ? undefined : removeThread}
-    onoutcome={all
-      ? undefined
-      : (text) => shown && write(() => api.update('bubbles', shown.id, { outcome: text }))}
+    onpriority={api.me?.role === 'lead'
+      ? (seq, p) => {
+          const t = threadsOf(shown?.id ?? '').find((x) => x.seq === seq);
+          if (t) write(() => api.setThreadPriority(t.id, p));
+        }
+      : undefined}
     onowners={all
       ? undefined
       : (ids: string[]) => shown && write(() => api.update('bubbles', shown.id, { owners: ids }))}
@@ -312,6 +322,20 @@
       ? undefined
       : () => shown && act('close', { id: shown.id, name: shown.name, life: shown.heat.lifecycle })}
     onreopen={all ? undefined : () => shown && reopen(shown)}
+    bubble={shown?.id ?? ''}
+    loadBrief={(id) => api.bubbleBrief(id)}
+    // Con su workspace, para que las imágenes de `assets/` se resuelvan.
+    renderBrief={(md) => api.renderMarkdown(md, shown?.workspace ?? '')}
+    // Editar el plan es del lead global: es quien da forma a esa capa, y el
+    // planeador ya se lo reserva a él.
+    saveBrief={api.me?.role === 'lead'
+      ? async (id, md) => {
+          await api.update('bubbles', id, { brief: md });
+        }
+      : undefined}
+    attachBrief={shown?.workspace
+      ? (file) => api.uploadAsset(shown!.workspace, file)
+      : undefined}
     bind:naming />
 {/if}
 
@@ -329,7 +353,7 @@
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
           <Dialog.Title class="text-lg font-bold">¿Cerrar «{closing.name}»?</Dialog.Title>
           <Dialog.Description class="muted text-sm">
-            Baja a la banda de cerradas con sus threads. No se borra nada, y se
+            Baja a la banda de cerradas con sus hilos. No se borra nada, y se
             puede reabrir desde el mismo cajón.
           </Dialog.Description>
           <form onsubmit={(e) => { e.preventDefault(); closeBubble(); }}>

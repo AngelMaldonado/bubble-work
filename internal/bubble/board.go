@@ -79,6 +79,17 @@ type ThreadHeat struct {
 	// and the server does not have one.
 	Assignees []string `json:"assignees,omitempty"`
 	At        string   `json:"at,omitempty"`
+	// La prioridad de ESTA pieza (P1…P4), separada de la de su burbuja: la
+	// escribe el lead, no se deriva.
+	Priority string `json:"priority,omitempty"`
+	// Su paso en la secuencia del departamento; 0 es «no está en ella». Dos
+	// hilos con el mismo paso van en paralelo.
+	Sequence int `json:"sequence,omitempty"`
+	// Su lugar en la línea VIVA de todo el departamento: 1 es «ahora», 2 el
+	// siguiente… Cero si no está en la secuencia o ya terminó. Se calcula contra
+	// todos los proyectos a la vez —una línea es una—, así que un cajón que sólo
+	// ve una burbuja puede decir igual en qué paso va cada hilo.
+	Step int `json:"step,omitempty"`
 }
 
 // BubbleHeat is one bubble, banded by its hottest OPEN thread.
@@ -137,6 +148,34 @@ type BoardWorkspace struct {
 	Name string `json:"name"`
 }
 
+// liveSteps: los pasos de la secuencia que tienen algo abierto, en orden, de
+// todo el departamento. Sólo números: no dice de qué hilos, así que no enseña
+// nada de un proyecto que quien mira no alcanza.
+func liveSteps(app core.App) map[int]int {
+	// Apagada, ningún hilo está en ningún paso: los datos se quedan, la línea
+	// no se enseña.
+	if !SequenceOn(app) {
+		return map[int]int{}
+	}
+	var seqs []int
+	_ = app.DB().NewQuery(
+		"SELECT DISTINCT t.sequence FROM threads t LEFT JOIN states s ON s.id = t.state " +
+			"WHERE t.sequence > 0 AND (s.[[group]] IS NULL OR s.[[group]] != 'completed') ORDER BY t.sequence",
+	).Column(&seqs)
+	out := make(map[int]int, len(seqs))
+	for i, v := range seqs {
+		out[v] = i + 1
+	}
+	return out
+}
+
+func stepOf(steps map[int]int, sequence int, done bool) int {
+	if sequence <= 0 || done {
+		return 0
+	}
+	return steps[sequence]
+}
+
 // BoardFor computes both axes for a workspace, storing nothing.
 func BoardFor(app core.App, ws *core.Record) (Board, error) {
 	tun, err := tuningOf(app)
@@ -151,6 +190,20 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 	}
 
 	prio := priorityOf(app, ws.Id)
+	// Lo que el lead decidió de cada hilo —su prioridad y su paso en la
+	// secuencia— vive en la tabla de hilos, no en la vista de evidencia: la vista
+	// cuenta lo que pasó, y esto no es algo que pasó.
+	type plan struct {
+		priority string
+		sequence int
+	}
+	planned := map[string]plan{}
+	steps := liveSteps(app)
+	if recs, err := app.FindAllRecords("threads", dbx.HashExp{"workspace": ws.Id}); err == nil {
+		for _, t := range recs {
+			planned[t.Id] = plan{t.GetString("priority"), t.GetInt("sequence")}
+		}
+	}
 	byBubble := map[string][]heat.Result{}
 	// The most recent warm evidence per bubble, which is not derivable from the
 	// roll-up: the roll-up keeps a BAND, and the bar needs an instant.
@@ -184,6 +237,9 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 			Pulse:     heat.HasPulse(ev, tun, now),
 			Assignees: r.GetStringSlice("assignees"),
 			At:        at.UTC().Format(time.RFC3339),
+			Priority:  planned[r.Id].priority,
+			Sequence:  planned[r.Id].sequence,
+			Step:      stepOf(steps, planned[r.Id].sequence, completedState(app, r.GetString("state"))),
 		})
 	}
 	// Hottest first, and within a band the buoyancy score orders it — the model's

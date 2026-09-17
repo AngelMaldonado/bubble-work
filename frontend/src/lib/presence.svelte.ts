@@ -30,9 +30,9 @@ const READ = 5 * 60_000;
 /** How often "is she still here?" is asked of the rows we already have. */
 const TICK = 20_000;
 
-export type Around = { id: string; name: string; idle: boolean };
+export type Around = { id: string; name: string; idle: boolean; avatar?: string };
 
-type Row = { id: string; name: string; at: string };
+type Row = { id: string; name: string; at: string; avatar?: string };
 
 class Presence {
   /** Who is around, this person first — a row of initials is read left to
@@ -106,7 +106,7 @@ class Presence {
     const live = this.rows
       .map((r) => ({ ...r, since: now - when(r.at) }))
       .filter((r) => r.since >= -60_000 && r.since < OPEN)
-      .map((r) => ({ id: r.id, name: r.name, idle: r.since >= HERE }));
+      .map((r) => ({ id: r.id, name: r.name, avatar: r.avatar, idle: r.since >= HERE }));
     const me = api.me?.id;
     this.around = [...live.filter((p) => p.id === me), ...live.filter((p) => p.id !== me)];
   }

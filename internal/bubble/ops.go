@@ -540,8 +540,9 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 // la burbuja; la prioridad y el plazo los decide quien orquesta, no quien
 // ejecuta. Lo que queda aquí es la ejecución: cómo se llama y de qué burbuja es.
 type ThreadEdit struct {
-	Name   *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
-	Bubble *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+	Name     *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
+	Bubble   *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+	Priority *string `json:"priority,omitempty" jsonschema:"P1, P2, P3 or P4 — this piece's own priority, separate from its bubble's; empty clears it. Only the global lead sets it"`
 }
 
 var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -563,9 +564,8 @@ func dueDay(in string) (string, error) {
 // SetThread edits the record around the document. Mirrors `threads.UpdateRule`
 // — any member of its workspace.
 //
-// La prioridad NO está aquí y tampoco en la burbuja como campo escribible: se
-// deriva de impacto × urgencia, y una segunda forma de escribirla sería una
-// segunda respuesta.
+// La prioridad del hilo sí está, y sólo la pone el lead global: es la de esta
+// pieza, guardada y separada de la de su burbuja (ésa se deriva del mapa).
 func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
@@ -588,6 +588,18 @@ func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core
 			}
 		}
 		th.Set("bubble", *in.Bubble)
+	}
+	if in.Priority != nil {
+		if !isGlobalLead(auth) {
+			return nil, fmt.Errorf("only the global lead sets a thread's priority")
+		}
+		p := strings.ToUpper(strings.TrimSpace(*in.Priority))
+		switch p {
+		case "", "P1", "P2", "P3", "P4":
+		default:
+			return nil, fmt.Errorf("a priority is P1, P2, P3 or P4, not %q", *in.Priority)
+		}
+		th.Set("priority", p)
 	}
 	// Renaming moves the file: the hook on the record request does it for the
 	// web, and this door goes through the same app, so it happens here too.

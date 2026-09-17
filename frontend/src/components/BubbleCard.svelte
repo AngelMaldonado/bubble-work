@@ -47,6 +47,6 @@
       {/each}
     </ul>
   {:else}
-    <p class="faint mt-3 text-xs">sin threads abiertos</p>
+    <p class="faint mt-3 text-xs">sin hilos abiertos</p>
   {/if}
 </article>

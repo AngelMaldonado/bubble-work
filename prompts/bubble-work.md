@@ -95,13 +95,22 @@ made it warm and when. Starting without it is how you redo something that was
 finished on Tuesday.
 
 Everything about a thread that is not its document goes through `set_thread`:
-its name and the bubble that carries it. What the work is FOR, how much it
-matters and when it is due belong to the BUBBLE (`set_bubble`): they describe a
-body of work, and they are decided by whoever orchestrates, not by whoever
-executes. How a deadline is split among the pieces is the executor's business,
-and needs no field.
-**Priority itself is never written** — the server derives it from the bubble's
-impact × urgency, and there is no second way to say it.
+its name and the bubble that carries it. What the work is FOR and when it is due
+belong to the BUBBLE (`set_bubble`): they describe a body of work, and they are
+decided by whoever orchestrates, not by whoever executes. How a deadline is
+split among the pieces is the executor's business, and needs no field.
+
+**Priority lives at two levels, and they are separate.** A bubble's priority is
+derived by the server from its impact × urgency. A thread has its OWN priority
+(P1…P4), written by the global lead, which neither inherits nor overrides the
+bubble's: one says how much a body of work matters, the other how much this
+piece does.
+
+**The order of execution is one sequence for the whole department**, set by the
+global lead in the planner. `next` tells you what is on now (several threads
+means they run in parallel), what comes after, and the first thread in it that
+is yours — assigned to you, or unassigned in a bubble you are accountable for. Finishing a thread moves the sequence on by itself — there is
+no pointer to advance.
 
 A bubble also carries a `stage`: where the lead put it on the department's plan.
 That is a different question from its band — the band says whether reality is

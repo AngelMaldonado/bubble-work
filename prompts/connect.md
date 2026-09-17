@@ -16,4 +16,4 @@ Cuando el MCP responda, llama a la herramienta `house_rules` y añade lo que dev
 
 Eso es lo que hace que la próxima sesión —la tuya o la de otro— no empiece a ciegas: sin esa sección, cada conversación vuelve a inventar dónde se anota el trabajo.
 
-Ese token es mi sesión: quien lo tenga trabaja como yo, y lo que escribas queda firmado con mi nombre. Ponlo en el archivo de configuración, no me lo repitas y no lo escribas en ningún otro lado.
+Ese token es la llave de este agente y actúa en mi nombre: quien lo tenga trabaja como yo, y lo que escribas queda firmado con mi nombre. Ponlo en el archivo de configuración, no me lo repitas y no lo escribas en ningún otro lado. Si se filtra, lo revoco desde Ajustes → Tokens.

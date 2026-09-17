@@ -7,6 +7,9 @@ En los dos, **el estado son dos directorios**: la base de PocketBase y el árbol
 de markdown (un git por workspace). Se respaldan y se restauran **juntos** — un
 commit sin su fila, o una fila sin su archivo, no significan nada.
 
+En **Coolify** es un tercer camino, con su propio compose: ver
+[`coolify.md`](./coolify.md).
+
 ## Con docker (recomendado)
 
 ```sh

@@ -24,6 +24,8 @@
     type Objective as ObjectiveRecord,
     type Stage,
     type ThreadRecord,
+    type ThreadHeat,
+    avatarUrl,
   } from '../lib/api';
   import PlannerView, { type Objective } from './PlannerView.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
@@ -33,13 +35,22 @@
   import { priorityMap, priorityMeaning } from '../lib/priority';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import { tooLong } from '../lib/limits.svelte';
+  import type { SheetThread } from './CardSheet.svelte';
+  import type { SeqThread } from './SequencePane.svelte';
+  import { ago } from '../lib/when';
 
   let {
     onback,
     onsearch,
+    onopenthread,
+    sequenceEnabled = false,
   }: {
     onback?: () => void;
     onsearch?: () => void;
+    /** abrir un hilo a pantalla completa, por su proyecto y su número */
+    onopenthread?: (slug: string, seq: number) => void;
+    /** el departamento tiene encendida la secuencia (Ajustes → Funciones) */
+    sequenceEnabled?: boolean;
   } = $props();
 
   // The planner has NO workspace. Not a default one, not the one you came from:
@@ -78,6 +89,13 @@
   // that spans the department, two cards called "Facturación" are two different
   // pieces of work.
   let places = $state<Record<string, string>>({});
+  let slugs = $state<Record<string, string>>({});
+  // Los hilos con su calor, su prioridad y su paso en la secuencia: los del
+  // board de TODOS, que el servidor compone en un solo instante. Los registros
+  // de `threads` no traen banda, y la cara de hilos de una tarjeta y la
+  // secuencia la necesitan.
+  let heated = $state<ThreadHeat[]>([]);
+  let people = $state<Record<string, { name: string; avatar: string }>>({});
   let error = $state('');
   // Nothing is destroyed without being asked first, and the question is asked
   // HERE — the writer knows the name of what is about to go and what goes with
@@ -99,6 +117,8 @@
       stageRows = st;
       threads = th;
       places = Object.fromEntries(ws.map((w) => [w.id, w.name]));
+      slugs = Object.fromEntries(ws.map((w) => [w.id, w.slug]));
+      loadHeat();
       objectiveRows = ob;
       notes = inb;
       prios = Object.fromEntries(pr.map((x) => [x.id, x.priority]));
@@ -108,6 +128,95 @@
     }
   }
   load();
+
+  async function loadHeat() {
+    try {
+      const [all, ps] = await Promise.all([api.allBoard(), api.people()]);
+      heated = all.threads;
+      people = Object.fromEntries(
+        ps.map((p) => [p.id, { name: p.display_name || p.email, avatar: avatarUrl(p, '64x64') }]),
+      );
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  const bubbleName = (id?: string) => (id ? (bubbles.find((b) => b.id === id)?.name ?? '') : '');
+
+  /** Los hilos de una burbuja, para la otra cara de su tarjeta: como en su
+   *  cajón del board, el más reciente primero. */
+  function threadsOf(card: Card): SheetThread[] {
+    return heated
+      .filter((t) => t.bubble === card.id)
+      .sort((a, b) => (b.at ?? '').localeCompare(a.at ?? ''))
+      .map((t) => ({
+        id: t.id,
+        seq: t.seq,
+        name: t.name,
+        lifecycle: t.heat.lifecycle,
+        priority: t.priority ?? '',
+        owner: (t.assignees ?? []).map((id) => people[id]?.name).filter(Boolean).join(', '),
+        age: ago(t.at ?? ''),
+      }));
+  }
+
+  /** Todos los hilos, para el panel de secuencia. */
+  const sequenceThreads = $derived<SeqThread[]>(
+    heated.map((t) => ({
+      id: t.id,
+      seq: t.seq,
+      name: t.name,
+      project: places[t.workspace] ?? '',
+      bubble: bubbleName(t.bubble),
+      priority: t.priority ?? '',
+      sequence: t.sequence ?? 0,
+      done: t.heat.lifecycle === 'closed',
+      assignees: (t.assignees ?? []).map((id) => ({
+        id,
+        name: people[id]?.name ?? '',
+        avatar: people[id]?.avatar || undefined,
+      })),
+    })),
+  );
+
+  async function heatWrite(run: () => Promise<unknown>) {
+    try {
+      await run();
+    } catch (e) {
+      error = (e as Error).message;
+    }
+    await loadHeat();
+  }
+
+  /** Una burbuja soltada en la columna de la secuencia: sus hilos abiertos que
+   *  aún no están en la línea entran al final, uno por paso, en su orden (#). */
+  function dropBubble(cardId: string) {
+    const name = bubbleName(cardId) || 'La burbuja';
+    const mine = heated.filter((t) => t.bubble === cardId);
+    const last = Math.max(0, ...heated.map((t) => t.sequence ?? 0));
+    const fresh = mine
+      .filter((t) => t.heat.lifecycle !== 'closed' && !(t.sequence ?? 0))
+      .sort((a, b) => a.seq - b.seq);
+    // Soltar y que no pase nada parece una caída que no llegó. Se dice por qué.
+    if (!fresh.length) {
+      const open = mine.filter((t) => t.heat.lifecycle !== 'closed').length;
+      error = !mine.length
+        ? `«${name}» no tiene hilos: créalos desde su tarjeta (🧵 Hilos) y vuelve a soltarla.`
+        : open
+          ? `Los hilos abiertos de «${name}» ya están todos en la secuencia.`
+          : `«${name}» no tiene hilos abiertos: todos están terminados.`;
+      return;
+    }
+    heatWrite(() =>
+      Promise.all(fresh.map((t, i) => api.setSequence(t.id, last + (i + 1) * 10))),
+    );
+  }
+
+  function openThreadById(id: string) {
+    const t = heated.find((x) => x.id === id);
+    const slug = t ? slugs[t.workspace] : '';
+    if (t && slug) onopenthread?.(slug, t.seq);
+  }
 
   /** The objective's ROW id, from the number the view shows. The view numbers
    *  them 1..n because the number is the priority order; the server does not. */
@@ -198,6 +307,7 @@
             pieces: pieces[b.id] ?? 0,
             where: places[b.workspace],
             ws: b.workspace,
+            owners: b.owners ?? [],
             born: b.created,
             due: b.due_date?.slice(0, 10) || undefined,
           }),
@@ -215,7 +325,9 @@
         id: n.id,
         text: n.note,
         body: n.body ?? '',
-        from: n.captured_by === api.me?.id ? 'tú' : 'alguien',
+        // Lo que entró por un canal dice quién lo mandó por ahí; lo escrito en
+        // la app, quién lo capturó.
+        from: n.source_from || (n.captured_by === api.me?.id ? 'tú' : 'alguien'),
         when: new Date(n.created).toLocaleDateString(),
       })),
   );
@@ -336,7 +448,7 @@
     doom = {
       title: `¿Borrar la burbuja «${b?.name ?? id}»?`,
       body: n
-        ? `Sus ${n} threads NO se borran: quedan sin burbuja en el board de su proyecto, que es exactamente lo que pasó.`
+        ? `Sus ${n} hilos NO se borran: quedan sin burbuja en el board de su proyecto, que es exactamente lo que pasó.`
         : 'Sale del plan y del board de su proyecto.',
       go: () => write(() => api.remove('bubbles', id)),
     };
@@ -391,6 +503,7 @@
     // frase, el contrato— ni un documento de git, que son de los threads y son
     // la ejecución.
     if ('notes' in fields) out.brief = String(fields.notes ?? '');
+    if ('owners' in fields) out.owners = (fields.owners as string[] | undefined) ?? [];
     if ('impact' in fields) out.impact = fields.impact || '';
     if ('urgency' in fields) out.urgency = fields.urgency || '';
     // Un día, o nada: lo que la tarjeta y el calendario dicen es «para el 30».
@@ -559,6 +672,20 @@
   {onsearch}
   onopencard={openCard}
   onpatchcard={patchCard}
+  loadPeople={(card) => (card.ws ? api.roster(card.ws) : Promise.resolve([]))}
+  {threadsOf}
+  canPrioritize={api.me?.role === 'lead'}
+  onthreadpriority={(id, p) => heatWrite(() => api.setThreadPriority(id, p))}
+  onnewthread={(card, name) =>
+    card.ws
+      ? heatWrite(() => api.createThread({ workspace: card.ws!, bubble: card.id, name }))
+      : undefined}
+  onopenthread={openThreadById}
+  sequenceThreads={sequenceEnabled ? sequenceThreads : undefined}
+  onreorder={(changes) =>
+    heatWrite(() => Promise.all(changes.map((c) => api.setSequence(c.id, c.sequence))))}
+  oncompletethread={(id) => heatWrite(() => api.completeThread(id))}
+  ondropbubble={dropBubble}
   onmoveevent={(id, day) => patchCard(id, { due: day })}
   onmovecard={moveCard}
   onautoorder={autoOrder}

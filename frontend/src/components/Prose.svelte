@@ -150,6 +150,14 @@
   .prose :global(ol) {
     padding-left: 1.5em;
   }
+  /* El marcador, explícito. El preflight de Tailwind pone `list-style: none` a
+     toda `ul` y `ol`, así que una lista salía como párrafos sangrados sin
+     viñeta ni número. Cada nivel anidado cambia de forma, como en un editor. */
+  .prose :global(ul) { list-style: disc; }
+  .prose :global(ul ul) { list-style: circle; }
+  .prose :global(ul ul ul) { list-style: square; }
+  .prose :global(ol) { list-style: decimal; }
+  .prose :global(li::marker) { color: var(--muted); }
   .prose :global(li) {
     margin: 0.3em 0;
   }

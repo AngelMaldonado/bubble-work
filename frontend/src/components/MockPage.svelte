@@ -238,7 +238,6 @@
 <BubbleDrawer
   bind:open={drawerOpen}
   name={open?.name ?? ''}
-  outcome={open?.outcome ?? ''}
   lifecycle={open?.life ?? 'hot'}
   reason={open?.why ?? ''}
   owners={open?.owner ? [open.owner] : []}

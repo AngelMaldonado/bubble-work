@@ -91,7 +91,7 @@
 
   async function setState(state?: State) {
     if (!state) {
-      error = 'Este workspace no tiene un estado para eso. Defínelo en su flujo de trabajo.';
+      error = 'Este proyecto no tiene un estado para eso. Defínelo en su flujo de trabajo.';
       return;
     }
     try {
@@ -226,7 +226,7 @@
   function askRemovePage(at: string) {
     doom = {
       title: `¿Borrar «${pages.find((p) => p.path === at)?.name ?? at}»?`,
-      body: 'Sale del thread y del repositorio. Lo escrito sigue en la historia de git, que es de donde se recupera si hacía falta.',
+      body: 'Sale del hilo y del repositorio. Lo escrito sigue en la historia de git, que es de donde se recupera si hacía falta.',
       go: async () => {
         try {
           await api.removePath(workspace.id, at);
@@ -284,6 +284,17 @@
     reason={thread.heat.reason}
     priority={bubblePriority}
     threadState={bandName(thread.heat.lifecycle)}
+    threadPriority={thread.priority ?? ''}
+    onpriority={api.me?.role === 'lead'
+      ? async (p) => {
+          try {
+            await api.setThreadPriority(thread.id, p);
+            onchanged?.();
+          } catch (e) {
+            error = (e as Error).message;
+          }
+        }
+      : undefined}
     markdown={doc.content}
     html={doc.html}
     {elsewhere}
@@ -325,7 +336,7 @@
           <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
             <Dialog.Title class="text-lg font-bold">¿A qué burbuja?</Dialog.Title>
             <Dialog.Description class="muted text-sm">
-              Una burbuja es la unidad de atención: mover un thread cambia lo que
+              Una burbuja es la unidad de atención: mover un hilo cambia lo que
               flota y lo que se hunde.
             </Dialog.Description>
             <ul class="pick">
@@ -358,7 +369,7 @@
           <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
             <Dialog.Title class="text-lg font-bold">¿Borrar «{thread.name}»?</Dialog.Title>
             <Dialog.Description class="muted text-sm">
-              Se va el thread y su documento del repositorio. Lo escrito sigue en
+              Se va el hilo y su documento del repositorio. Lo escrito sigue en
               la historia de git, que es de donde se recupera si hizo falta.
             </Dialog.Description>
             <div class="flex justify-end gap-2">

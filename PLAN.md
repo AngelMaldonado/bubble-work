@@ -1530,6 +1530,172 @@ Lo que se descartó:
 **Hecho cuando:** un prompt copiado después del despliegue lleva un token cuyo
 `exp` cae tres años más tarde, y el MCP sigue respondiendo pasados cinco días.
 
+## Ajustes: flotabilidad, personas, perfil y tokens de agente
+
+Una pantalla `/ajustes/<tab>` con el layout del planeador (barra propia, ← al
+board) y tabs de Skeleton controladas por la dirección: la tab se enlaza y
+sobrevive a recargar. Entra desde el menú del pie de la columna y ⌘K.
+
+- **Flotabilidad** (*buoyancy*): edita la fila `tuning` en palabras de lo que
+  produce (días, ciclos, % que sigue flotando). La leen todos, la cambia el lead
+  global; recalibrar sigue siendo un UPDATE, no una migración.
+- **Mi usuario**: nombre visible, avatar (`users.avatar`, 2 MB, sin SVG) y
+  contraseña. El correo es de sólo lectura: cambiarlo bien pide verificar por
+  correo, y la instancia no manda correos.
+
+### Los agentes entran con un token suyo, no con la sesión
+
+La colección `agent_tokens` (dueño, nombre, sha256 oculto, prefijo, caducidad,
+último uso, revocación) y un middleware que, **sólo en `/mcp`**, acepta
+`Bearer bw_…` y pone al dueño como quien pide. El agente sigue SIENDO su persona
+—mismas reglas, misma firma—: no aparece una identidad de agente. Crear,
+extender (desde hoy o desde la caducidad, la más tarde; 0 la quita), renombrar y
+revocar son rutas propias: la huella la calcula el servidor. Se permite «sin
+caducidad» (decisión del usuario). El token se enseña una vez, con el prompt de
+conexión ya relleno; el 🤖 lleva a Ajustes → Tokens en vez de copiar la sesión.
+El JWT de sesión se sigue aceptando en `/mcp`, así lo ya configurado no se rompe.
+
+Lo que se descartó:
+
+- **Seguir con la sesión** (la migración de tres años). No se revoca sola, no
+  dice qué agente la usa, y cambiar la contraseña corta a todos los agentes.
+- **JWT estático por agente** (`NewStaticAuthToken`). Sólo se invalida rotando
+  el `tokenKey` de la persona, que mata todas sus sesiones y tokens a la vez.
+- **Que el token abra toda la API REST.** Un agente habla MCP; abrir más es dar
+  más de lo que se pidió al generarlo.
+
+Queda por decidir: bajar la sesión del navegador de tres años a algo corto,
+ahora que los agentes ya no dependen de ella.
+
+### Borrar a una persona es marcarla
+
+`users.deleted_at`. Una persona borrada no entra (`authRule`), sus sesiones
+mueren (se rota su `tokenKey`), sus tokens de agente dejan de valer, desaparece
+de los selectores y lo que escribió se queda con «(eliminado)» junto al nombre.
+Sus membresías **se conservan** (decisión del usuario): restaurar —vaciar la
+fecha— la deja como estaba. El lead global da de alta, cambia el rol global,
+borra y restaura desde la app; los candados (no borrarse ni quitarse el rol a uno
+mismo, no dejar el departamento sin lead global) están en el servidor, porque una
+regla no sabe contar cuántos leads quedarían. El borrado duro por la API se
+cierra: la regla por defecto de PocketBase dejaba a cada persona borrarse.
+
+Lo que se descartó:
+
+- **Borrado duro.** PocketBase lo rechaza (un comentario exige autor) y, si no,
+  se llevaría la historia del departamento.
+- **Quitar las membresías al borrar.** Restaurar dejaría a la persona sin nada
+  y habría que recordar dónde estaba.
+
+**Hecho cuando:** los tests en vivo de tokens y personas pasan, y el usuario lo
+valida en la app.
+
+## Los hilos vuelven a tener prioridad, y el departamento una secuencia
+
+**La prioridad vuelve al hilo, separada de la de su burbuja.** Había subido a la
+burbuja («El planeador orquesta BURBUJAS») con el argumento de que la decide
+quien orquesta. Se sostiene para la burbuja, y no alcanza para las piezas: dentro
+de un mismo cuerpo de trabajo hay piezas que importan más que otras. Las dos
+conviven y no se tocan: la burbuja dice cuánto importa un cuerpo de trabajo (se
+deriva de impacto × urgencia, como antes), el hilo cuánto importa esa pieza. En
+el hilo se GUARDA (`threads.priority`, P1…P4) y la escribe sólo el lead global:
+el mapa sirve para decidir un cuerpo de trabajo, y para una pieza basta con
+elegir la letra. Se ve y se cambia con un badge en el cajón de la burbuja, en la
+pantalla del hilo y en la cara «Hilos» de la tarjeta del planeador.
+
+Lo que se descartó:
+
+- **Heredar la de la burbuja y poder sobrescribirla.** Era la propuesta; el
+  usuario la quiso separada del todo, y una herencia obliga a explicar en cada
+  badge si es propia o prestada.
+- **Derivarla del mapa también en el hilo.** Un menú P1…P4 no tiene vuelta al
+  mapa (P2 y P3 salen de tres casillas cada una), y elegir dos ejes para una
+  pieza pequeña es un clic de más.
+
+**El orden de ejecución es UNA secuencia para todo el departamento**, no un orden
+por proyecto ni por burbuja: las tareas van hacia los mismos objetivos, y en qué
+orden se hacen es una decisión de organización. `threads.sequence` es el paso de
+un hilo (10, 20, 30…, con huecos para insertar); dos hilos con el mismo paso van
+en paralelo; vacío es «no está en la secuencia». La arma el lead global en un
+cuarto panel del planeador, «🧭 Secuencia», arrastrando desde una bandeja «Sin
+secuenciar». **«Ahora» no se guarda**: es el primer paso con algo abierto, así
+que terminar un hilo —desde la secuencia, desde su pantalla o por MCP— la recorre
+sola. Los agentes la leen con la tool `next` (ahora, luego, y lo primero asignado
+a quien pregunta).
+
+**La secuencia vive como una columna del kanban, no como un panel.** Primero fue
+un cuarto panel del planeador (con un tope de tres paneles a la vez); probándolo,
+se vio que el kanban ya es donde el lead ordena, y que otro panel sólo quitaba
+ancho. «🧭 Secuencia» es una columna FIJA —no se renombra, no se borra, no se
+mueve— justo a la derecha de «Sin planear»; lo que se edita es su contenido.
+Soltar ahí la tarjeta de una burbuja mete sus hilos abiertos al final de la
+línea, uno por paso en su orden. Se descartó el panel aparte (y con él el tope
+de tres paneles, que ya no hace falta).
+
+**La secuencia es una función que se enciende** (`features.sequence`, una fila
+como `tuning`, que sólo cambia el lead global en Ajustes → Funciones). Nace
+apagada: cambia cómo se decide qué se hace primero, y eso lo decide el lead, no
+una migración. Apagada no aparece en ningún sitio —columna, planeador, cajón— y
+`next` lo dice; los datos de `threads.sequence` se quedan, y encenderla trae la
+línea como estaba. Se rechazó guardarla dentro de `tuning`: aquello calibra la
+flotabilidad, esto dice qué partes del producto existen.
+
+Lo que se descartó:
+
+- **Una línea por burbuja.** El orden no depende del proyecto.
+- **Derivar el orden de dependencias** (`blocked_by`). Dice qué no puede ir
+  antes, no qué se decidió hacer primero.
+- **Guardar un puntero a «ahora».** Un puntero se queda atrás el día que alguien
+  termina un hilo por otra puerta.
+- **Una línea estrictamente secuencial.** El usuario pidió paralelismo: varias
+  personas trabajan a la vez.
+
+**Hecho cuando:** los tests en vivo de prioridad y secuencia pasan, y el usuario
+lo valida en el planeador.
+
+## Canales del inbox: plugins compilados, y WhatsApp el primero
+
+Lo que llega por fuera de la app entra al inbox sin copiarlo a mano. Un **canal**
+es un plugin COMPILADO (`internal/channels`): un paquete que se registra desde su
+`init` con la interfaz `Channel` (`Start`, `Stop`, `Status`, `Action`) y entrega
+mensajes normalizados (`Inbound`) a un `Sink`. El canal no conoce el inbox y el
+inbox no conoce WhatsApp. Las rutas son genéricas (`/api/channels/{kind}/…`, sólo
+el lead global) y lo propio de cada canal va por `Action`. Un canal se deja fuera
+del binario con una etiqueta de build (`-tags nowhatsapp`).
+
+`channels` guarda una fila por tipo: si está encendido, su configuración no
+secreta y a nombre de quién se captura (`inbox_items.captured_by` exige una
+persona: quien enciende el canal). Las notas ganan `source`, `source_ref` (índice
+único: un mensaje que llega dos veces entra una) y `source_from` (quién lo mandó
+allí, que no tiene por qué tener cuenta).
+
+**WhatsApp escucha UN grupo** con whatsmeow (go.mau.fi/whatsmeow, MPL-2.0), que
+habla el protocolo de WhatsApp Web multidispositivo — el de Baileys, en Go. Se
+vincula por QR o por código de teléfono, se elige el grupo por nombre, y cada
+mensaje del grupo entra al inbox (texto; las imágenes como archivos de la nota;
+audio, video y documentos se nombran sin adjuntarse) y recibe la reacción 📥; si
+reaccionar falla, se contesta «📥 Recibido en el inbox». La sesión (llaves de la
+cuenta) vive aparte, en `pb_data/channels/whatsapp.db`, con el driver SQLite sin
+CGO que ya usa PocketBase: el binario sigue siendo uno.
+
+Lo que se descartó:
+
+- **El paquete `plugin` de Go.** Sólo funciona en Linux y se rompe entre
+  versiones.
+- **Baileys o WAHA como servicio aparte.** El mismo riesgo que whatsmeow, con otro
+  runtime que desplegar y vigilar.
+- **La WhatsApp Cloud API oficial, por ahora.** Sin riesgo de bloqueo, pero exige
+  un endpoint HTTPS público (las instancias viven en una LAN) y, desde octubre de
+  2026, cobra cada mensaje del negocio. Cabe como otro canal con esta interfaz.
+- **Capturar mensajes directos de cualquiera.** Un grupo decide quién puede
+  mandar al inbox sin inventar una lista de números.
+
+El riesgo asumido: whatsmeow no es oficial, y WhatsApp bloquea cuentas que
+automatizan envíos. Se mitiga con un número dedicado y con un canal que sólo
+escucha y reacciona, nunca escribe primero.
+
+**Hecho cuando:** un mensaje en el grupo aparece en el inbox con quién lo mandó y
+recibe 📥, una sola vez, y el usuario lo valida con un grupo real.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`
@@ -1617,6 +1783,22 @@ hace falta.
 Rechazado: Watchtower. Reinicia con cualquier digest nuevo, sin sitio donde
 meter la copia ni la vuelta atrás, y «se actualizó solo y ahora no arranca» es
 exactamente el caso que hay que cubrir.
+
+**Una imagen más nueva que la vigente es una actualización.** *(built)* En
+Coolify quien actualiza es el orquestador: tira de `:stable` y recrea el
+contenedor. Con `boot` tal cual, eso no hacía nada —la imagen sólo sembraba el
+volumen la primera vez, y la versión vigente seguía siendo la del volumen—. Ahora
+`boot` compara al arrancar: si la imagen trae una versión MÁS NUEVA, copia la
+base en frío (`pb_data/backups/antes-de-<tag>.zip`, con la forma de un respaldo
+de PocketBase), la instala y la lanza con la vigente como red. Una más vieja o
+igual no toca nada, y una que no llegó a contestar queda en `bin/failed` para
+que reiniciar el contenedor no la reintente cada vez — un minuto sin servicio
+por reinicio. Así valen los dos caminos, el botón y el orquestador, y el más
+nuevo gana. Montarlo está en `deploy/coolify.md`.
+
+Rechazado: `serve` en vez de `boot` bajo Coolify. Deja que mande la imagen, que
+es lo más simple, y mata el botón de actualizar y la vuelta atrás — la versión
+que no contesta se queda sin contestar hasta que alguien redespliega a mano.
 
 **La serie arranca en `v1.0.0`.** No en 0.x: esto ya sostiene trabajo de verdad
 en instancias de verdad, y un 0.x le dice a quien lo aloja que puede romperse sin

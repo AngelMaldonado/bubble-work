@@ -1,13 +1,17 @@
 package bubble
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"mime"
 	"net/http"
 	"path"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
@@ -78,7 +82,8 @@ func registerAssets(app core.App, t *tree.Tree) {
 					fmt.Sprintf("that image is larger than %d bytes", limit), nil)
 			}
 
-			if err := t.WriteBytes(repo, docPath, body, actorLabel(e.Auth), "asset: "+docPath); err != nil {
+			docPath, err = placeAsset(t, repo, docPath, body, actorLabel(e.Auth))
+			if err != nil {
 				return e.BadRequestError(err.Error(), err)
 			}
 			// An image is not production. It is a picture somebody attached; the
@@ -126,6 +131,49 @@ func registerAssets(app core.App, t *tree.Tree) {
 
 		return se.Next()
 	})
+}
+
+// placing serializes choosing a name and writing it, so two uploads racing for
+// `image.png` cannot both decide it is free.
+var placing sync.Mutex
+
+// placeAsset writes an asset under a name nobody else is using, and returns it.
+//
+// A path in assets/ is never rewritten with different bytes. Every screenshot
+// pasted from the clipboard arrives as `image.png`: writing it over the last one
+// replaced the picture in every document that already cited it, and the client —
+// which caches an image by its path for the life of the tab — kept drawing the
+// old bytes under the new paste. With a path that never changes what it holds,
+// that cache is correct.
+//
+// The same bytes under the same name are the same picture, and reuse the path
+// instead of making a copy. Different bytes take the first free `stem-N.ext`.
+func placeAsset(t *tree.Tree, repo, docPath string, body []byte, actor string) (string, error) {
+	placing.Lock()
+	defer placing.Unlock()
+
+	ext := path.Ext(docPath)
+	stem := strings.TrimSuffix(docPath, ext)
+	for n := 1; ; n++ {
+		candidate := docPath
+		if n > 1 {
+			candidate = stem + "-" + strconv.Itoa(n) + ext
+		}
+		existing, err := t.ReadBytes(repo, candidate)
+		if err == nil {
+			if bytes.Equal(existing, body) {
+				return candidate, nil
+			}
+			continue
+		}
+		if !errors.Is(err, fs.ErrNotExist) {
+			return "", err
+		}
+		if err := t.WriteBytes(repo, candidate, body, actor, "asset: "+candidate); err != nil {
+			return "", err
+		}
+		return candidate, nil
+	}
 }
 
 // slugifyFile keeps a readable name and drops anything that would make it a path.

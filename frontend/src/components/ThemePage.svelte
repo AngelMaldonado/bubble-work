@@ -208,7 +208,7 @@
       <label class="text-sm"><span class="muted">Texto</span>
         <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="input mt-1" placeholder="nombre del thread" /></label>
       <div class="text-sm">
-        <Combobox collection={prioCollection} value={prio}
+        <Combobox openOnClick collection={prioCollection} value={prio}
           onValueChange={(e: { value: string[] }) => (prio = e.value)}>
           <Combobox.Label class="muted">Selección — <b>Combobox</b></Combobox.Label>
           <Combobox.Control>

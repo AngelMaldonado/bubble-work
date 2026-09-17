@@ -30,6 +30,13 @@ export type ThreadHeat = {
   assignees?: string[];
   /** when anything last happened to it, RFC3339 — the row says it in words */
   at?: string;
+  /** su PROPIA prioridad (P1…P4), separada de la de su burbuja */
+  priority?: string;
+  /** su paso en la secuencia del departamento; 0 o ausente, fuera de ella */
+  sequence?: number;
+  /** su lugar en la línea viva de todo el departamento: 1 = ahora; 0 si no
+   *  está en la secuencia o ya terminó */
+  step?: number;
 };
 
 export type BubbleHeat = {
@@ -128,6 +135,11 @@ export type ThreadRecord = {
    *  prioridad que el servidor deriva. */
   rank?: number;
   completed_at?: string;
+  /** su propia prioridad, P1…P4 */
+  priority?: string;
+  /** su paso en la secuencia del departamento */
+  sequence?: number;
+  assignees?: string[];
 };
 
 export type Objective = {
@@ -152,13 +164,48 @@ export type InboxItem = {
    *  borrarse: su cuerpo y sus imágenes siguen siendo de algún sitio. */
   bubble?: string;
   created: string;
+  /** por qué canal entró (`whatsapp`), si no se escribió en la app */
+  source?: string;
+  /** quién la mandó por ese canal, como lo dice el canal */
+  source_from?: string;
+};
+
+/** Cómo está un canal del inbox. `extra` es lo propio de cada canal. */
+export type ChannelStatus = {
+  kind: string;
+  enabled: boolean;
+  state: 'disabled' | 'unlinked' | 'pairing' | 'connecting' | 'connected' | 'error';
+  detail?: string;
+  extra?: Record<string, unknown>;
 };
 /** Qué corre aquí, y si hay algo más nuevo. `boot` dice si esta instancia
  *  puede actualizarse sola: una lanzada con `serve` a mano no tiene quién
  *  deshaga una actualización que no arranca, y por eso no se le ofrece. */
 export type Version = { version: string; latest: string; stale: boolean; boot: boolean };
 
-export type Person = { id: string; email: string; display_name?: string; role?: string };
+export type Person = {
+  id: string;
+  email: string;
+  display_name?: string;
+  role?: string;
+  /** nombre del archivo en el propio registro; la URL la arma `avatarUrl` */
+  avatar?: string;
+  created?: string;
+};
+
+/** Qué partes del producto tiene encendidas el departamento. Una fila. */
+export type Features = { id: string; sequence: boolean; updated?: string };
+
+/** La calibración de la flotabilidad: una sola fila para todo el departamento. */
+export type Tuning = {
+  id: string;
+  cycle_hours: number;
+  dormant_cycles: number;
+  decay_cycles: number;
+  grace_cycles: number;
+  ownerless_is_rip: boolean;
+  updated?: string;
+};
 
 /** One person's place in one workspace. `id` is the MEMBERSHIP's — that is what
  *  a role change or a removal edits — and `user` is the person's. */
@@ -167,6 +214,10 @@ export type Member = {
   user: string;
   name: string;
   role: 'lead' | 'member';
+  /** la persona está borrada: su membresía se conserva para restaurarla */
+  deleted?: boolean;
+  /** la URL de su avatar, o vacío */
+  avatar?: string;
 };
 
 /** Lo que alguien dijo en un thread. El cuerpo es markdown: lo renderiza el
@@ -177,6 +228,8 @@ export type Comment = {
   thread: string;
   author: string;
   name: string;
+  /** la URL de su avatar, o vacío */
+  avatar: string;
   body: string;
   created: string;
   mine: boolean;
@@ -264,6 +317,42 @@ export class ApiError extends Error {
   get conflict() {
     return this.status === 409;
   }
+}
+
+/** Cómo se nombra a una persona: su nombre, o su correo, o `fallback`. Una
+ *  persona borrada lo dice: lo que escribió se queda con su firma, y leerla sin
+ *  saber que ya no está es preguntarle algo a quien no va a contestar. */
+function named(
+  u: { display_name?: string; email?: string; deleted_at?: string } | undefined,
+  fallback: string,
+) {
+  const name = u?.display_name || u?.email || fallback;
+  return u?.deleted_at ? `${name} (eliminado)` : name;
+}
+
+/** Un token de agente, tal como lo enseña el servidor: nunca la huella. */
+export type AgentToken = {
+  id: string;
+  owner: string;
+  name: string;
+  prefix: string;
+  expires_at: string;
+  last_used_at: string;
+  revoked_at: string;
+  created: string;
+  /** sólo en la respuesta de crear: la única vez que sale */
+  token?: string;
+};
+
+/** Una persona vista desde la gestión de usuarios. */
+export type PersonAdmin = Person & { deleted_at?: string };
+
+/** La URL del avatar de una persona, o vacío. `thumb` pide una de las
+ *  miniaturas que declara la migración (`64x64`, `160x160`). */
+export function avatarUrl(p: Pick<Person, 'id' | 'avatar'> | null | undefined, thumb = '') {
+  if (!p?.avatar) return '';
+  const q = thumb ? `?thumb=${thumb}` : '';
+  return `/api/files/users/${p.id}/${encodeURIComponent(p.avatar)}${q}`;
 }
 
 class Api {
@@ -435,6 +524,16 @@ class Api {
     return out.items;
   }
 
+  /** El brief de una burbuja: lo que el planeador escribió de qué trata. El
+   *  board no lo trae —es largo, con diagramas, y el board se pide entero en
+   *  cada cambio— así que se lee cuando alguien lo abre. */
+  async bubbleBrief(id: string) {
+    const out = await this.call<{ brief?: string }>(
+      `/api/collections/bubbles/records/${id}?fields=brief`,
+    );
+    return out.brief ?? '';
+  }
+
   /** Las burbujas que alcanzas, de todos tus workspaces: es lo que el planeador
    *  organiza. */
   async allBubbles() {
@@ -467,7 +566,7 @@ class Api {
         id: string;
         user: string;
         role: 'lead' | 'member';
-        expand?: { user?: { display_name?: string; email?: string } };
+        expand?: { user?: { display_name?: string; email?: string; deleted_at?: string; avatar?: string } };
       }[];
     }>(
       `/api/collections/memberships/records?perPage=200&expand=user` +
@@ -480,14 +579,181 @@ class Api {
       // `display_name` no es obligatorio, y PocketBase OCULTA el correo de otra
       // persona salvo que ella lo haya hecho visible — así que el correo es un
       // segundo intento, no el respaldo. Lo último es decirlo, no imprimir un id.
-      name: m.expand?.user?.display_name || m.expand?.user?.email || 'sin nombre',
+      name: named(m.expand?.user, 'sin nombre'),
+      deleted: !!m.expand?.user?.deleted_at,
+      avatar: avatarUrl({ id: m.user, avatar: m.expand?.user?.avatar }, '64x64'),
     }));
   }
 
   /** The same roster, shaped for a field that only needs to name a person. */
   async roster(workspace: string) {
     const rows = await this.members(workspace);
-    return rows.map((m) => ({ id: m.user, name: m.name }));
+    // Sin las personas borradas: su membresía se conserva para poder
+    // restaurarlas, pero no se pone a cargo a quien ya no puede entrar.
+    return rows.filter((m) => !m.deleted).map((m) => ({ id: m.user, name: m.name, avatar: m.avatar ?? '' }));
+  }
+
+  // ---- ajustes ------------------------------------------------------------
+
+  /** La calibración. Una fila, sembrada por la migración: la lee cualquiera
+   *  con sesión y sólo la cambia el lead global. */
+  async tuning(): Promise<Tuning> {
+    const out = await this.call<{ items: Tuning[] }>('/api/collections/tuning/records?perPage=1');
+    if (!out.items[0]) throw new Error('no hay calibración: falta la fila de tuning');
+    return out.items[0];
+  }
+
+  setTuning(id: string, fields: Partial<Omit<Tuning, 'id' | 'updated'>>) {
+    return this.update<Tuning>('tuning', id, fields);
+  }
+
+  // ---- canales del inbox (lead global) ----
+
+  channels() {
+    return this.call<ChannelStatus[]>('/api/channels');
+  }
+
+  setChannel(kind: string, on: boolean) {
+    return this.call<ChannelStatus>(`/api/channels/${kind}/${on ? 'enable' : 'disable'}`, { method: 'POST' });
+  }
+
+  /** Lo propio de un canal: vincular, elegir grupo, desvincular… */
+  channelAction<T = ChannelStatus>(kind: string, action: string, body: Record<string, unknown> = {}) {
+    return this.call<T>(`/api/channels/${kind}/${action}`, { method: 'POST', body: JSON.stringify(body) });
+  }
+
+  /** El QR vigente de un canal que se está vinculando, como URL de blob. La
+   *  ruta exige sesión y un `<img>` no manda cabeceras. Vacío si no hay. */
+  async channelQR(kind: string): Promise<string> {
+    const res = await fetch(`/api/channels/${kind}/qr.png?t=${Date.now()}`, {
+      headers: this.token ? { Authorization: this.token } : {},
+    });
+    return res.ok ? URL.createObjectURL(await res.blob()) : '';
+  }
+
+  /** Las funciones encendidas. Sin fila, todo apagado: una pantalla que enseña
+   *  algo que el servidor no tiene encendido es una promesa rota. */
+  async features(): Promise<Features> {
+    try {
+      const out = await this.call<{ items: Features[] }>('/api/collections/features/records?perPage=1');
+      return out.items[0] ?? { id: '', sequence: false };
+    } catch {
+      return { id: '', sequence: false };
+    }
+  }
+
+  setFeatures(id: string, fields: Partial<Omit<Features, 'id' | 'updated'>>) {
+    return this.update<Features>('features', id, fields);
+  }
+
+  // ---- tokens de agente ----
+
+  /** Los míos; el lead global recibe los de todos (lo decide la regla). */
+  async tokens(): Promise<(AgentToken & { ownerName: string })[]> {
+    const out = await this.call<{
+      items: (AgentToken & { expand?: { owner?: { display_name?: string; email?: string; deleted_at?: string } } })[];
+    }>('/api/collections/agent_tokens/records?perPage=500&sort=-created&expand=owner');
+    return out.items.map((t) => ({ ...t, ownerName: named(t.expand?.owner, '') }));
+  }
+
+  createToken(name: string, days: number) {
+    return this.call<AgentToken>('/api/tokens', { method: 'POST', body: JSON.stringify({ name, days }) });
+  }
+
+  /** `days` desde hoy o desde la caducidad actual, la más tarde; 0 la quita. */
+  extendToken(id: string, days: number) {
+    return this.call<AgentToken>(`/api/tokens/${id}/extend`, { method: 'POST', body: JSON.stringify({ days }) });
+  }
+
+  renameToken(id: string, name: string) {
+    return this.call<AgentToken>(`/api/tokens/${id}/rename`, { method: 'POST', body: JSON.stringify({ name }) });
+  }
+
+  revokeToken(id: string) {
+    return this.call<AgentToken>(`/api/tokens/${id}/revoke`, { method: 'POST', body: '{}' });
+  }
+
+  // ---- gestión de personas (lead global) ----
+
+  // ---- prioridad de un hilo y secuencia (lead global) ----
+
+  /** La prioridad PROPIA de un hilo; vacía la quita. */
+  setThreadPriority(id: string, priority: string) {
+    return this.update<ThreadRecord>('threads', id, { priority });
+  }
+
+  /** El paso de un hilo en la secuencia; 0 lo saca de ella. */
+  setSequence(id: string, sequence: number) {
+    return this.update<ThreadRecord>('threads', id, { sequence });
+  }
+
+  /** Terminar un hilo: pasa al estado «completado» de su proyecto. */
+  completeThread(id: string) {
+    return this.call<{ id: string; state: string }>(`/api/threads/${id}/complete`, { method: 'POST' });
+  }
+
+  /** Todas, borradas incluidas: restaurar necesita verlas. */
+  async allPeople(): Promise<PersonAdmin[]> {
+    const out = await this.call<{ items: PersonAdmin[] }>(
+      '/api/collections/users/records?perPage=500&sort=display_name,email',
+    );
+    return out.items;
+  }
+
+  /** Cuántos proyectos tiene cada persona, `user` → nombres. */
+  async membershipsByPerson(): Promise<Record<string, string[]>> {
+    const out = await this.call<{
+      items: { user: string; expand?: { workspace?: { name?: string } } }[];
+    }>('/api/collections/memberships/records?perPage=1000&expand=workspace');
+    const by: Record<string, string[]> = {};
+    for (const m of out.items) (by[m.user] ??= []).push(m.expand?.workspace?.name ?? '?');
+    return by;
+  }
+
+  createPerson(fields: { email: string; name: string; password: string; role: 'lead' | 'member' }) {
+    return this.call<PersonAdmin>('/api/people', { method: 'POST', body: JSON.stringify(fields) });
+  }
+
+  /** El rol GLOBAL de una persona. No confundir con `setRole`, que es el de su
+   *  membresía en un proyecto. */
+  setGlobalRole(id: string, role: 'lead' | 'member') {
+    return this.update<PersonAdmin>('users', id, { role });
+  }
+
+  deletePerson(id: string) {
+    return this.call<PersonAdmin>(`/api/people/${id}/delete`, { method: 'POST', body: '{}' });
+  }
+
+  restorePerson(id: string) {
+    return this.call<PersonAdmin>(`/api/people/${id}/restore`, { method: 'POST', body: '{}' });
+  }
+
+  /** Cambiar lo mío: nombre, o el avatar (con `FormData`). Deja `me` al día,
+   *  que es lo que lee el resto de la aplicación. */
+  async updateMe(fields: Record<string, unknown> | FormData): Promise<Person> {
+    if (!this.me) throw new Error('sin sesión');
+    const out = await this.call<Person>(`/api/collections/users/records/${this.me.id}`, {
+      method: 'PATCH',
+      body: fields instanceof FormData ? fields : JSON.stringify(fields),
+    });
+    this.me = { ...this.me, ...out };
+    return this.me;
+  }
+
+  /** Cambiar la contraseña.
+   *
+   *  PocketBase rota el `tokenKey` de la persona al cambiarla, así que el token
+   *  con el que se hizo la petición deja de valer en ese mismo instante —y con él
+   *  el de cualquier agente que usara esta sesión—. Se vuelve a entrar con la
+   *  nueva para que la pantalla no se quede sin sesión a media frase. */
+  async changePassword(oldPassword: string, password: string) {
+    if (!this.me) throw new Error('sin sesión');
+    const email = this.me.email;
+    await this.call(`/api/collections/users/records/${this.me.id}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ oldPassword, password, passwordConfirm: password }),
+    });
+    return this.signIn(email, password);
   }
 
   /** Everybody with an account. Listing people is open to anybody signed in —
@@ -495,7 +761,9 @@ class Api {
    *  same list as a workspace's roster. */
   async people() {
     const out = await this.call<{ items: Person[] }>(
-      '/api/collections/users/records?perPage=500&sort=display_name,email',
+      `/api/collections/users/records?perPage=500&sort=display_name,email` +
+        // A quien se invita tiene que poder entrar.
+        `&filter=${encodeURIComponent(`deleted_at = ""`)}`,
     );
     return out.items;
   }
@@ -653,7 +921,7 @@ class Api {
     const out = await this.call<{
       items: {
         id: string; thread: string; author: string; body: string; created: string;
-        expand?: { author?: { display_name?: string; email?: string } };
+        expand?: { author?: { display_name?: string; email?: string; deleted_at?: string; avatar?: string } };
       }[];
     }>(
       `/api/collections/comments/records?perPage=500&sort=created&expand=author` +
@@ -663,7 +931,8 @@ class Api {
       id: c.id,
       thread: c.thread,
       author: c.author,
-      name: c.expand?.author?.display_name || c.expand?.author?.email || 'alguien',
+      name: named(c.expand?.author, 'alguien'),
+      avatar: avatarUrl({ id: c.author, avatar: c.expand?.author?.avatar }, '64x64'),
       body: c.body,
       created: c.created,
       mine: c.author === this.me?.id,
@@ -699,11 +968,12 @@ class Api {
    *  construction; WHAT counts as online is decided by the reader, not stored. */
   async presence() {
     const out = await this.call<{
-      items: { user: string; at: string; expand?: { user?: { display_name?: string; email?: string } } }[];
+      items: { user: string; at: string; expand?: { user?: { display_name?: string; email?: string; deleted_at?: string; avatar?: string } } }[];
     }>('/api/collections/presence/records?perPage=200&expand=user');
-    return out.items.map((r) => ({
+    return out.items.filter((r) => !r.expand?.user?.deleted_at).map((r) => ({
       id: r.user,
       at: r.at,
+      avatar: avatarUrl({ id: r.user, avatar: r.expand?.user?.avatar }, '64x64'),
       name: r.expand?.user?.display_name || r.expand?.user?.email || 'alguien',
     }));
   }

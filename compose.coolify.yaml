@@ -1,0 +1,49 @@
+# Una instancia montada en Coolify, como servicio Docker Compose.
+#
+# La diferencia con `compose.yml` es quién está delante: aquí el proxy es el de
+# Coolify, que alcanza el contenedor por la red del stack, así que el puerto se
+# EXPONE y no se publica en el host. El dominio se pone en la UI de Coolify
+# (servicio `bubble`, puerto 8090); ver deploy/coolify.md.
+#
+# Sin Coolify también arranca —`docker compose -f compose.coolify.yaml up -d`—,
+# pero sin nadie delante no contesta desde fuera: para eso está `compose.yml`.
+name: ayetec-bubble
+
+services:
+  bubble:
+    image: ghcr.io/angelmaldonado/bubble-work:${BUBBLE_CHANNEL:-stable}
+    # Coolify redespliega tirando de la etiqueta: sin `always` se quedaría con
+    # la `:stable` que ya tenía en caché y el redespliegue no cambiaría nada.
+    pull_policy: always
+    container_name: ayetec-bubble
+    restart: unless-stopped
+    # `boot` como en la imagen: el botón de actualizar sigue funcionando, y una
+    # imagen más nueva que la vigente se adopta al arrancar (internal/boot).
+    expose:
+      - '8090'
+    environment:
+      BUBBLE_DATA: /data/pb_data
+      BUBBLE_REPOS: /data/repos
+      BUBBLE_BIN_DIR: /data/bin
+      # Coolify enruta el dominio que se le ponga en la UI a este puerto.
+      SERVICE_FQDN_BUBBLE_8090: ${SERVICE_FQDN_BUBBLE_8090:-}
+    volumes:
+      # UN volumen: la base, los repositorios de markdown, los binarios de cada
+      # versión y la sesión de WhatsApp son un solo estado.
+      - bubble-data:/data
+    healthcheck:
+      test: ['CMD', 'wget', '-qO-', 'http://127.0.0.1:8090/api/version']
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      # Un arranque que adopta una versión nueva copia la base y migra antes de
+      # contestar.
+      start_period: 90s
+    logging:
+      options:
+        max-size: 10m
+        max-file: '3'
+
+volumes:
+  bubble-data:
+    name: ayetec-bubble-data

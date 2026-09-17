@@ -1,7 +1,7 @@
 <script lang="ts">
-  import { api, type Board as BoardData, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
+  import { api, type Board as BoardData, type Features, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { isEditable } from './lib/keys';
-  import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { allUrl, boardUrl, inventoryUrl, parse, plannerUrl, sequenceUrl, settingsUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
   import Board from './components/Board.svelte';
@@ -17,10 +17,11 @@
   import NewWorkspace from './components/NewWorkspace.svelte';
   import People from './components/People.svelte';
   import Presence from './components/Presence.svelte';
-  import { setupPrompt } from './lib/connect';
   import { presence } from './lib/presence.svelte';
   import { Dialog, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import Shell from './components/Shell.svelte';
+  import Settings from './components/Settings.svelte';
+  import SequenceView from './components/SequenceView.svelte';
   import WorkspaceSwitcher from './components/WorkspaceSwitcher.svelte';
   import ThemePage from './components/ThemePage.svelte';
   import MockPage from './components/MockPage.svelte';
@@ -50,6 +51,9 @@
   // quien lo tiene: un lugar al que no puedes entrar, listado, es una puerta
   // cerrada con tu nombre encima.
   let seesInv = $state(false);
+  // Qué partes del producto tiene encendidas el departamento. Apagada, la
+  // secuencia no aparece en ningún sitio: ni columna, ni planeador, ni cajón.
+  let features = $state<Features>({ id: '', sequence: false });
   let workspaces = $state<Workspace[]>([]);
 
   // Which workspace is on screen is a question the address answers. Landing on
@@ -76,6 +80,10 @@
       go(boardUrl(current.slug), true);
     }
   });
+  // `/secuencia` con la función apagada no es una pantalla: se va a Todos.
+  $effect(() => {
+    if (ready && route.kind === 'sequence' && features.id && !features.sequence) go(allUrl, true);
+  });
   // The box that scrolls. The minimap needs it: the shell holds still and the
   // pane moves, so a spy listening to the window sees a page that never scrolls.
   let paneEl = $state<HTMLElement | null>(null);
@@ -95,6 +103,7 @@
       // presence is about people, and there is nobody yet.
       presence.start();
       api.seesInventory().then((yes) => (seesInv = yes));
+      api.features().then((f) => (features = f));
       api.version().then((v) => (serverVersion = devLatest(v)));
       loadHeat();
     }
@@ -184,7 +193,34 @@
   /** Back to the board, and ask the server what it says now: writing in a
    *  thread warms its bubble, so the board that was true when it opened is not
    *  any more. */
+  // A dónde lleva «← board» cuando no es al board: al planeador, si de ahí se
+  // abrió el hilo. En la sesión y consumido al usarse, igual que la tarjeta a
+  // la que el planeador vuelve (`plannerReturn`).
+  const backTo = {
+    set(url: string) {
+      try {
+        sessionStorage.setItem('bw.back-to', url);
+      } catch {
+        // sin memoria de sesión, se vuelve al board
+      }
+    },
+    take(): string {
+      try {
+        const url = sessionStorage.getItem('bw.back-to') ?? '';
+        sessionStorage.removeItem('bw.back-to');
+        return url;
+      } catch {
+        return '';
+      }
+    },
+  };
+
   function back() {
+    const to = route.kind === 'thread' ? backTo.take() : '';
+    if (to) {
+      go(to);
+      return;
+    }
     // Always somewhere. It used to navigate only when there WAS a workspace, so
     // on an account that belongs to none — a fresh install, or the moment after
     // wiping one — every "← board" was a button that did nothing, and the
@@ -260,19 +296,10 @@
   // once they have opened it, not a second box at the door.
   let naming = $state<'bubble' | 'thread' | null>(null);
   let crew = $state(false);
-  // Copiado hace un momento: un ✓ que se apaga solo. Sin ventana — lo único
-  // que hacía falta de la de v0 era este botón.
-  let copied = $state(false);
-  async function copyPrompt() {
-    try {
-      const prompt = await setupPrompt(`${location.origin}/mcp`, api.token);
-      await navigator.clipboard.writeText(prompt);
-      copied = true;
-      setTimeout(() => (copied = false), 1800);
-    } catch {
-      error = 'El navegador no dejó copiar al portapapeles.';
-    }
-  }
+  // Conectar un agente ya no copia la SESIÓN: lleva a Ajustes → Tokens, donde
+  // se genera un token propio del agente y el prompt sale con él. La sesión
+  // caducaba con el navegador y no se podía revocar sola.
+  const connectAgent = () => go(settingsUrl('tokens'));
   let fresh = $state('');
   /** Which bubble a new thread goes into. A thread is work; a bubble is what
    *  the work is FOR, and one without the other is the row that later nobody
@@ -429,6 +456,9 @@
   function openThread(t: ThreadHeat) {
     const slug =
       current?.slug ?? (board?.workspaces ?? []).find((w) => w.id === t.workspace)?.slug;
+    // Abierto desde el board: su vuelta es el board, aunque quedara anotada
+    // otra de un hilo abierto antes desde el planeador.
+    backTo.take();
     if (slug) go(threadUrl(slug, t.seq));
   }
 
@@ -490,7 +520,11 @@
     { id: 'light', icon: '☀️', title: 'Tema claro', run: () => theme.set('light') },
     { id: 'dark', icon: '🌙', title: 'Tema oscuro', run: () => theme.set('dark') },
     { id: 'system', icon: '🌗', title: 'Tema automático', hint: 'como el sistema', run: () => theme.set('system') },
-    { id: 'connect', icon: '🤖', title: 'Copiar el prompt que conecta tu IA', hint: 'MCP · lleva tu token', run: copyPrompt },
+    { id: 'connect', icon: '🤖', title: 'Conectar tu IA', hint: 'MCP · genera un token', run: connectAgent },
+    ...(features.sequence
+      ? [{ id: 'sequence', icon: '🧭', title: 'Secuencia', hint: 'qué va ahora y qué sigue', run: () => go(sequenceUrl) }]
+      : []),
+    { id: 'settings', icon: '⚙', title: 'Ajustes', hint: isLead ? 'flotabilidad · usuarios · mi usuario · tokens' : 'mi usuario · tokens', run: () => go(settingsUrl()) },
     { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: signOut },
   ]);
 
@@ -609,7 +643,15 @@
 {:else if route.kind === 'planner' && isLead}
   <!-- The strategic layer gets a screen, not a tab inside the operative one —
        and no workspace: the plan is the department's, not this project's. -->
-  <Planner onback={back} onsearch={() => (omni = true)} />
+  <Planner
+    sequenceEnabled={features.sequence}
+    onback={back}
+    onsearch={() => (omni = true)}
+    onopenthread={(slug, seq) => {
+      // Volver de ese hilo trae de vuelta al planeador, no al board.
+      backTo.set(plannerUrl);
+      go(threadUrl(slug, seq));
+    }} />
 {:else if route.kind === 'planner' && signedIn}
   <!-- Guarded at the ADDRESS, not only at the sidebar — but what a member gets
        is not a refusal. The objectives, the inbox and the kanban of the whole
@@ -620,6 +662,18 @@
     onback={back}
     onsearch={() => (omni = true)}
     onopen={(slug) => go(boardUrl(slug))} />
+{:else if route.kind === 'settings' && signedIn && me}
+  <!-- Como el planeador: su propia barra y su vuelta. La tab va en la
+       dirección, y cambiarla REEMPLAZA la entrada: el botón de atrás vuelve al
+       board, no recorre las tabs una por una. -->
+  <Settings
+    {me}
+    tab={route.tab}
+    {features}
+    onfeatures={(f) => (features = f)}
+    onback={back}
+    ontab={(t) => go(settingsUrl(t), true)}
+    onme={(p) => (me = p)} />
 {:else if route.kind === 'inventory' && signedIn}
   <!-- Guardado en la DIRECCIÓN y no sólo en la fila del sidebar: esconder un
        lugar no es cerrarlo, y un enlace pegado en un chat es exactamente cómo se
@@ -668,19 +722,36 @@
       // relación, y al pie decía que era otra clase de cosa. El planeador y el
       // inventario sí lo son, y se quedan abajo.
       { id: 'all', name: 'Todos', face: '∗', href: allUrl, top: true },
+      // Junto a Todos: también es una vista de TODO, sólo que en el orden en
+      // que se ejecuta. Cada quien la ve con su alcance.
+      ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
       { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
+      { id: 'settings', name: 'Ajustes', face: '⚙', href: settingsUrl() },
     ]}
     pinned={route.kind === 'planner'
       ? 'planner'
-      : route.kind === 'inventory'
+      : route.kind === 'sequence'
+        ? 'sequence'
+        : route.kind === 'inventory'
         ? 'inventory'
         : isAll
           ? 'all'
           : ''}
-    onpin={(id) => go(id === 'all' ? allUrl : id === 'inventory' ? inventoryUrl : plannerUrl)}
+    onpin={(id) =>
+      go(
+        id === 'all'
+          ? allUrl
+          : id === 'sequence'
+            ? sequenceUrl
+            : id === 'inventory'
+              ? inventoryUrl
+              : id === 'settings'
+                ? settingsUrl()
+                : plannerUrl,
+      )}
     onsignout={signOut}
-    current={current?.id ?? ''}
+    current={route.kind === 'sequence' ? '' : (current?.id ?? '')}
     label="Proyectos"
     newLabel="Nuevo proyecto"
     version={updating || versionLabel}
@@ -695,7 +766,14 @@
     onrename={renameWorkspace}
     ondelete={deleteWorkspace}
     oncreate={createWorkspace}>
-    {#if current || isAll}
+    {#if route.kind === 'sequence' && me && features.sequence}
+      <SequenceView
+        {me}
+        onopen={(slug, seq) => {
+          backTo.set(sequenceUrl);
+          go(threadUrl(slug, seq));
+        }} />
+    {:else if current || isAll}
       <Board
         workspace={current}
         {board}
@@ -726,7 +804,7 @@
          abierto: un repositorio pertenece a uno, y en TODOS no hay cuál
          enseñar. -->
     {#snippet corner()}
-      {#if current}
+      {#if current && route.kind !== 'sequence'}
         <Repos workspace={current} canWrite={hereLead} />
       {/if}
     {/snippet}
@@ -763,15 +841,15 @@
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
-        <button class="float-btn" {...attributes} onclick={copyPrompt}>
-          <span aria-hidden="true">{copied ? '✓' : '🤖'}</span>
+        <button class="float-btn" {...attributes} onclick={connectAgent}>
+          <span aria-hidden="true">🤖</span>
         </button>
       {/snippet}
     </Tooltip.Trigger>
     <Portal>
       <Tooltip.Positioner>
         <Tooltip.Content>
-          {copied ? 'Copiado — pégalo en tu asistente' : 'Copiar el prompt que conecta tu IA'}
+          Conectar tu IA: genera un token y copia el prompt
         </Tooltip.Content>
       </Tooltip.Positioner>
     </Portal>

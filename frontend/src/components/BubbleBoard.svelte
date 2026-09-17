@@ -9,8 +9,12 @@
     life: Lifecycle;
     /** how many of its threads are producing: the flame on the orb */
     burning?: number;
+    /** P1…P4 derivada de impacto × urgencia */
+    priority?: string;
     owner?: string;
     people?: string[];
+    /** nombre → URL del avatar, para quien lo tenga */
+    faces?: Record<string, string>;
     /** su workspace, cuando el board es de varios */
     project?: string;
   };
@@ -113,8 +117,10 @@
                 name={b.name}
                 lifecycle={b.life}
                 burning={b.burning ?? 0}
+                priority={b.priority ?? ''}
                 owner={b.owner ?? ''}
                 people={b.people ?? []}
+                faces={b.faces ?? {}}
                 project={b.project ?? ''}
                 index={i}
                 onclick={() => onopen?.(b)}

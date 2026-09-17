@@ -10,14 +10,17 @@
   //
   // The five palettes carry the same hues as the flat accents in app.css, so an
   // orb and a dot never disagree about what "dormant" looks like.
-  import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
+  import { Menu, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
+  import { priorityMeaning } from '../lib/priority';
   import type { Lifecycle } from '../lib/api';
 
   let {
     name,
     lifecycle,
     burning = 0,
+    priority = '',
     people = [],
+    faces = {},
     owner = '',
     project = '',
     index = 0,
@@ -27,7 +30,11 @@
     name: string;
     lifecycle: Lifecycle;
     burning?: number;
+    /** P1…P4, derivada de impacto × urgencia; vacía si no se ha decidido */
+    priority?: string;
     people?: string[];
+    /** nombre → URL del avatar; quien no lo tenga lleva su inicial */
+    faces?: Record<string, string>;
     owner?: string;
     /** de qué workspace es, cuando el board es de más de uno. Vacío en el board
      *  de un proyecto: ahí decirlo en cada orbe es repetir la pantalla entera. */
@@ -55,6 +62,13 @@
   const shown = $derived(ordered.slice(0, MAX));
   const extra = $derived(Math.max(0, ordered.length - shown.length));
   const initial = (s: string) => (s[0] ?? '?').toUpperCase();
+
+  /** «P1 · Crítica: operación detenida. Interrumpe cualquier trabajo» — la
+   *  misma tabla que la leyenda de prioridades del planeador. */
+  const priorityHint = (code: string) => {
+    const row = priorityMeaning.find(([c]) => c === code);
+    return row ? `${code} · ${row[1]}: ${row[2].toLowerCase()}. ${row[3]}` : `Prioridad ${code}`;
+  };
 
   // The menu is CONTROLLED, and that is not a style choice — it is the only
   // right-click path that positions itself.
@@ -111,6 +125,26 @@
   }
 </script>
 
+<!-- Un badge de la esfera con su explicación. Tooltip de Skeleton y no `title`:
+     el del navegador tarda un segundo, no se puede tematizar y en una esfera que
+     flota apenas llega a salir. El disparador es NUESTRO `span` (snippet
+     `element`), porque el de Skeleton es un <button> y ya estamos dentro del
+     botón de la esfera. -->
+{#snippet tip(cls: string, text: string, hint: string)}
+  <Tooltip positioning={{ placement: 'top' }} openDelay={150} closeDelay={60}>
+    <Tooltip.Trigger>
+      {#snippet element(attributes: Record<string, unknown>)}
+        <span class={cls} {...attributes}>{text}</span>
+      {/snippet}
+    </Tooltip.Trigger>
+    <Portal>
+      <Tooltip.Positioner>
+        <Tooltip.Content>{hint}</Tooltip.Content>
+      </Tooltip.Positioner>
+    </Portal>
+  </Tooltip>
+{/snippet}
+
 <!-- Right-click opens the actions. Zag's ContextTrigger, not a hand-rolled
      `oncontextmenu`: it also opens on a long press and on the keyboard's own
      context key, which a mouse-only handler silently drops.
@@ -151,14 +185,28 @@
          finished threads is not a "12": that number reads as workload and
          competes with the band the orb already sits in. -->
     {#if burning > 0}
-      <span class="badge" title="{burning} en curso">{burning}</span>
+      {@render tip(
+        'badge',
+        String(burning),
+        burning === 1 ? '1 hilo en curso: produjo evidencia este ciclo' : `${burning} hilos en curso: produjeron evidencia este ciclo`,
+      )}
+    {/if}
+    <!-- La prioridad, en la esquina opuesta a lo que arde: la banda dice si se
+         mueve, esto dice cuánto importa que se mueva, y son dos preguntas. Con
+         el mismo color que el chip de prioridad en todas partes. -->
+    {#if priority}
+      {@render tip(
+        `prio prio-${priority}`,
+        priority,
+        priorityHint(priority),
+      )}
     {/if}
     {#if ordered.length}
       <span class="people">
         <!-- La posición forma parte de la clave: si dos personas comparten
              nombre visible, se dibujan dos avatares, no se cae la aplicación. -->
         {#each shown as p, i (p + ':' + i)}
-          <span class="person" class:owner={p === owner} style="--i: {i}" title={p}>{initial(p)}</span>
+          <span class="person" class:owner={p === owner} style="--i: {i}" title={p}>{#if faces[p]}<img src={faces[p]} alt="" />{:else}{initial(p)}{/if}</span>
         {/each}
         {#if extra}
           <span class="person more" style="--i: {shown.length}" title={ordered.slice(MAX).join(', ')}>+{extra}</span>
@@ -286,6 +334,23 @@
     pointer-events: none;
   }
 
+  .prio {
+    position: absolute;
+    top: -3px;
+    left: -3px;
+    min-width: 22px;
+    height: 20px;
+    padding: 0 5px;
+    border-radius: 6px;
+    display: grid;
+    place-content: center;
+    font-size: 0.62rem;
+    font-weight: 800;
+    letter-spacing: 0.02em;
+    color: var(--on-p);
+    border: 1.5px solid var(--surface-solid);
+    box-shadow: 0 2px 6px color-mix(in oklab, black 25%, transparent);
+  }
   .badge {
     position: absolute;
     top: -3px;
@@ -326,6 +391,8 @@
     background: color-mix(in oklab, var(--color-surface-100) 82%, var(--surface-solid));
   }
   .person:first-child { margin-left: 0; }
+  .person { overflow: hidden; }
+  .person img { width: 100%; height: 100%; object-fit: cover; }
   .person.owner {
     color: var(--color-surface-950);
     background: var(--color-surface-100);

@@ -139,6 +139,9 @@
         <ul class="roster">
           {#each members as m (m.id)}
             <li class="row">
+              <span class="face" aria-hidden="true">
+                {#if m.avatar}<img src={m.avatar} alt="" />{:else}{(m.name[0] ?? '?').toUpperCase()}{/if}
+              </span>
               {#if m.user === api.me?.id && renamingMe}
                 <input
                   class="mine"
@@ -197,6 +200,7 @@
         {#if canInvite}
           <div class="invite">
             <Combobox
+              openOnClick
               class="min-w-0 flex-1"
               placeholder="¿A quién invitas?"
               {collection}
@@ -244,6 +248,22 @@
 <Confirm bind:ask={doom} />
 
 <style>
+  /* La cara de alguien en una fila: su foto, o su inicial. */
+  .face {
+    display: grid;
+    flex: none;
+    place-content: center;
+    width: 22px;
+    height: 22px;
+    overflow: hidden;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--muted);
+    font-size: 0.66rem;
+    font-weight: 700;
+  }
+  .face img { width: 100%; height: 100%; object-fit: cover; }
+
   .roster { display: flex; flex-direction: column; gap: 0.15rem; margin: 0; padding: 0; list-style: none; }
   .row {
     display: flex;

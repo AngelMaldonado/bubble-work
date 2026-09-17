@@ -24,6 +24,8 @@
     /** el id del workspace de la tarjeta. `where` es su NOMBRE, para leerlo;
      *  esto es lo que hace falta para guardar y resolver sus imágenes. */
     ws?: string;
+    /** quién está a cargo: ids de persona (`bubbles.owners`) */
+    owners?: string[];
   };
   export type Column = {
     id: string;

@@ -136,7 +136,7 @@
           {#each items as c (c.id)}
             <li class="said">
               <span class="who" style="--hue: {hue(c.author)}" title={c.name}>
-                {(c.name[0] ?? '?').toUpperCase()}
+                {#if c.avatar}<img src={c.avatar} alt="" />{:else}{(c.name[0] ?? '?').toUpperCase()}{/if}
               </span>
               <div class="min-w-0">
                 <p class="meta">
@@ -216,7 +216,10 @@
     scrollbar-color: color-mix(in oklab, var(--muted) 35%, transparent) transparent;
   }
   .said { display: grid; grid-template-columns: auto 1fr; gap: 0.6rem; }
+  .who img { width: 100%; height: 100%; object-fit: cover; }
   .who {
+    overflow: hidden;
+    flex: none;
     width: 28px;
     height: 28px;
     display: grid;

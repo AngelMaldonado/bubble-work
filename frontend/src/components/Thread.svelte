@@ -284,6 +284,17 @@
     reason={thread.heat.reason}
     priority={bubblePriority}
     threadState={bandName(thread.heat.lifecycle)}
+    threadPriority={thread.priority ?? ''}
+    onpriority={api.me?.role === 'lead'
+      ? async (p) => {
+          try {
+            await api.setThreadPriority(thread.id, p);
+            onchanged?.();
+          } catch (e) {
+            error = (e as Error).message;
+          }
+        }
+      : undefined}
     markdown={doc.content}
     html={doc.html}
     {elsewhere}

@@ -1,7 +1,7 @@
 <script lang="ts" module>
   /** One person who is around. `idle` is a tab left open — true and less
    *  interesting than being here, so it is drawn dimmer rather than dropped. */
-  export type Around = { id: string; name: string; idle?: boolean };
+  export type Around = { id: string; name: string; idle?: boolean; avatar?: string };
 </script>
 
 <script lang="ts">
@@ -46,7 +46,7 @@
               class:idle={who.idle}
               style="--hue: {hue(who.id)}; --i: {i}"
               {...attributes}>
-              {initial(who.name)}
+              {#if who.avatar}<img src={who.avatar} alt="" />{:else}{initial(who.name)}{/if}
             </span>
           {/snippet}
         </Tooltip.Trigger>
@@ -104,5 +104,8 @@
   }
   /* You get the ring rather than a label: it is the only one you never need
      named. */
+  /* La foto llena el círculo; sin ella, la inicial sobre su color. */
+  .who { overflow: hidden; }
+  .who img { width: 100%; height: 100%; object-fit: cover; }
   .me { box-shadow: 0 0 0 2px var(--accent, oklch(0.68 0.2 40)); }
 </style>

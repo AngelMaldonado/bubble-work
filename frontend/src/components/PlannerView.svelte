@@ -12,6 +12,9 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
   import Kanban, { type Card, type Column } from './Kanban.svelte';
+  import SequencePane, { type SeqThread } from './SequencePane.svelte';
+  import type { SheetThread } from './CardSheet.svelte';
+  import { plannerReturn } from '../lib/filters.svelte';
   import CardSheet from './CardSheet.svelte';
   import InboxSheet, { type Note } from './InboxSheet.svelte';
   import PlannerCalendar, { type CalEvent } from './PlannerCalendar.svelte';
@@ -56,6 +59,15 @@
     ondeleteobjective,
     onpatchobjective,
     onpatchcard,
+    loadPeople,
+    threadsOf,
+    canPrioritize = false,
+    onthreadpriority,
+    onnewthread,
+    onopenthread,
+    sequenceThreads,
+    onreorder,
+    oncompletethread,
     onaddcolumn,
     onrenamecolumn,
     ondeletecolumn,
@@ -114,6 +126,20 @@
     /** an objective edited in place — its name, or the outcome it claims */
     onpatchobjective?: (n: number, fields: { name?: string; outcome?: string }) => void;
     onpatchcard?: (id: string, fields: Record<string, unknown>) => void;
+    /** el roster del proyecto de una tarjeta, para ponerle responsables */
+    loadPeople?: (card: Card) => Promise<{ id: string; name: string; avatar?: string }[]>;
+    /** los hilos de una burbuja, para la otra cara de su tarjeta */
+    threadsOf?: (card: Card) => SheetThread[];
+    canPrioritize?: boolean;
+    onthreadpriority?: (threadId: string, priority: string) => void;
+    onnewthread?: (card: Card, name: string) => void | Promise<void>;
+    /** abrir un hilo a pantalla completa. Antes, esta pantalla anota a dónde
+     *  volver: la tarjeta, por su cara de hilos, y el scroll de la lista. */
+    onopenthread?: (threadId: string) => void;
+    /** los hilos para el panel de secuencia; sin esto no se ofrece el panel */
+    sequenceThreads?: SeqThread[];
+    onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
+    oncompletethread?: (threadId: string) => void | Promise<void>;
     /** the columns, when they are rows somebody owns — see Kanban */
     onaddcolumn?: () => void;
     onrenamecolumn?: (id: string, name: string) => void;
@@ -143,7 +169,7 @@
   const kept = (() => {
     try {
       return JSON.parse(localStorage.getItem(PANES) ?? 'null') as
-        | { inbox: boolean; cal: boolean; board: boolean }
+        | { inbox: boolean; cal: boolean; board: boolean; seq?: boolean }
         | null;
     } catch {
       return null; // private mode, or something else wrote nonsense there
@@ -158,12 +184,143 @@
   let showCal = $state(readonly ? true : (kept?.cal ?? false));
   // svelte-ignore state_referenced_locally
   let showBoard = $state(readonly ? false : (kept?.board ?? true));
+  // svelte-ignore state_referenced_locally
+  let showSeq = $state(readonly ? false : (kept?.seq ?? false));
+
+  // Tres paneles como mucho a la vez: cuatro columnas en una pantalla de
+  // portátil son cuatro columnas que no caben. Encender un cuarto apaga el que
+  // lleva más tiempo encendido — el que menos se está mirando ahora.
+  const MAX_PANES = 3;
+  // svelte-ignore state_referenced_locally
+  let lit = $state<Pane[]>(
+    ([['inbox', showInbox], ['cal', showCal], ['board', showBoard], ['seq', showSeq]] as [Pane, boolean][])
+      .filter(([, on]) => on)
+      .map(([k]) => k),
+  );
+  // Guardado de antes de que existiera el tope, con los cuatro encendidos.
+  // svelte-ignore state_referenced_locally
+  while (lit.length > MAX_PANES) setPane(lit.shift()!, false);
+  function setPane(k: Pane, on: boolean) {
+    if (k === 'inbox') showInbox = on;
+    else if (k === 'cal') showCal = on;
+    else if (k === 'board') showBoard = on;
+    else showSeq = on;
+  }
+  function toggle(k: Pane) {
+    const on = !lit.includes(k);
+    lit = lit.filter((x) => x !== k);
+    if (on) {
+      // Cuenta lo que se VE: una secuencia recordada como encendida pero con la
+      // función apagada no ocupa sitio, y no debe ser la que se apague.
+      const seen = lit.filter((x) => x !== 'seq' || !!sequenceThreads);
+      if (seen.length >= MAX_PANES) {
+        const oldest = seen[0];
+        lit = lit.filter((x) => x !== oldest);
+        setPane(oldest, false);
+      }
+      lit.push(k);
+    }
+    setPane(k, on);
+  }
+  // ---- ancho de cada panel ----
+  //
+  // Arrastrables por el borde que los separa, y recordados igual que qué
+  // paneles hay abiertos: quien planea con un calendario ancho lo quiere ancho
+  // mañana. Un ancho sin fijar (0) deja el reparto por defecto del CSS; el
+  // último panel visible nunca lleva ancho: se queda con lo que sobra, que es lo
+  // que hace que la fila llene la pantalla sea cual sea la ventana.
+  type Pane = 'inbox' | 'cal' | 'board' | 'seq';
+  const SIZES = 'bubble.planner.sizes';
+  const MIN = 200;
+  // svelte-ignore state_referenced_locally
+  let sizes = $state<Record<Pane, number>>(
+    (() => {
+      try {
+        const got = JSON.parse(localStorage.getItem(SIZES) ?? 'null');
+        return {
+          inbox: Number(got?.inbox) || 0,
+          cal: Number(got?.cal) || 0,
+          board: Number(got?.board) || 0,
+          seq: Number(got?.seq) || 0,
+        };
+      } catch {
+        return { inbox: 0, cal: 0, board: 0, seq: 0 };
+      }
+    })(),
+  );
+  $effect(() => {
+    if (readonly) return;
+    try {
+      localStorage.setItem(SIZES, JSON.stringify(sizes));
+    } catch {
+      // igual que los paneles: no poder recordarlo no impide el cambio
+    }
+  });
+
+  let panesEl = $state<HTMLElement | null>(null);
+  const els: Record<Pane, HTMLElement | null> = $state({ inbox: null, cal: null, board: null, seq: null });
+  const visible = $derived(
+    ([['inbox', showInbox], ['cal', showCal], ['seq', showSeq && !!sequenceThreads], ['board', showBoard]] as [Pane, boolean][])
+      .filter(([, on]) => on)
+      .map(([k]) => k),
+  );
+  /** El `style` de un panel: fijo si alguien le dio ancho y no es el último. */
+  const paneStyle = (k: Pane) =>
+    k !== visible[visible.length - 1] && sizes[k] > 0 ? `flex: 0 0 ${sizes[k]}px` : '';
+
+  /** Cuánto puede medir `k` sin dejar a los demás paneles por debajo del mínimo. */
+  function clampWidth(k: Pane, w: number) {
+    const total = panesEl?.getBoundingClientRect().width ?? Infinity;
+    const others = visible.filter((x) => x !== k);
+    const room = total - others.length * MIN;
+    return Math.round(Math.max(MIN, Math.min(w, room)));
+  }
+
+  /** Arrastrar el borde derecho de `k`. */
+  function drag(k: Pane, e: PointerEvent) {
+    const el = els[k];
+    if (!el || e.button !== 0) return;
+    e.preventDefault();
+    const handle = e.currentTarget as HTMLElement;
+    handle.setPointerCapture(e.pointerId);
+    const startX = e.clientX;
+    const startW = el.getBoundingClientRect().width;
+    const move = (ev: PointerEvent) => {
+      sizes[k] = clampWidth(k, startW + ev.clientX - startX);
+    };
+    const up = () => {
+      handle.removeEventListener('pointermove', move);
+      handle.removeEventListener('pointerup', up);
+      handle.removeEventListener('pointercancel', up);
+      document.body.classList.remove('resizing-cols');
+    };
+    document.body.classList.add('resizing-cols');
+    handle.addEventListener('pointermove', move);
+    handle.addEventListener('pointerup', up);
+    handle.addEventListener('pointercancel', up);
+  }
+
+  /** Con el teclado: flechas de 24 en 24; Inicio vuelve al reparto por defecto. */
+  function nudge(k: Pane, e: KeyboardEvent) {
+    const el = els[k];
+    if (!el) return;
+    if (e.key === 'Home') {
+      e.preventDefault();
+      sizes[k] = 0;
+      return;
+    }
+    const step = e.key === 'ArrowLeft' ? -24 : e.key === 'ArrowRight' ? 24 : 0;
+    if (!step) return;
+    e.preventDefault();
+    sizes[k] = clampWidth(k, el.getBoundingClientRect().width + step);
+  }
+
   $effect(() => {
     if (readonly) return; // no es una preferencia, es la única vista
     try {
       localStorage.setItem(
         PANES,
-        JSON.stringify({ inbox: showInbox, cal: showCal, board: showBoard }),
+        JSON.stringify({ inbox: showInbox, cal: showCal, board: showBoard, seq: showSeq }),
       );
     } catch {
       // not being able to remember it is not a reason to refuse the change
@@ -177,6 +334,22 @@
   // its column is the board's arrangement of it, not a property of the work.
   let openIn = $state('');
   let cardOpen = $state(false);
+  let cardFace = $state<'plan' | 'hilos'>('plan');
+  let backScroll = $state(0);
+
+  // Abrir un hilo desde la tarjeta lleva a otra pantalla; volver de ella tiene
+  // que traer de vuelta la misma tarjeta, por la cara de hilos y con la lista
+  // donde se quedó. Se anota antes de irse y se consume al volver.
+  function openThread(card: Card, t: SheetThread, scroll: number) {
+    plannerReturn.set({ card: card.id, face: 'hilos', scroll });
+    onopenthread?.(t.id);
+  }
+  $effect(() => {
+    const back = plannerReturn.peek();
+    if (!back || !columns.some((c) => c.cards.some((x) => x.id === back.card))) return;
+    plannerReturn.clear();
+    openById(back.card, back.face, back.scroll);
+  });
 
   // Keep the open card in step with the server.
   //
@@ -207,9 +380,11 @@
    *  The sheet is opened HERE because this is where it lives: the owner of the
    *  data can fetch a document but it cannot open a dialog that belongs to this
    *  component, which is why the click did nothing at all. */
-  function openById(id: string) {
+  function openById(id: string, face: 'plan' | 'hilos' = 'plan', scroll = 0) {
     const card = columns.flatMap((c) => c.cards).find((c) => c.id === id);
     if (!card) return;
+    cardFace = face;
+    backScroll = scroll;
     open = card;
     openIn = columns.find((c) => c.cards.includes(card))?.id ?? '';
     cardOpen = true;
@@ -296,9 +471,12 @@
     readonly
       ? []
       : [
-          { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => (showInbox = !showInbox) },
-          { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => (showCal = !showCal) },
-          { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => (showBoard = !showBoard) },
+          { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => toggle('inbox') },
+          { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => toggle('cal') },
+          ...(sequenceThreads
+            ? [{ k: 'seq', face: '🧭', label: 'Secuencia', on: showSeq, go: () => toggle('seq') }]
+            : []),
+          { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => toggle('board') },
         ],
   );
   const opens = $derived(
@@ -342,9 +520,9 @@
     {#if workspace}<span class="ws">{workspace}</span>{/if}
   </div>
 
-  <div class="panes">
+  <div class="panes" bind:this={panesEl}>
     {#if showInbox}
-      <section class="pane inbox">
+      <section class="pane inbox" bind:this={els.inbox} style={paneStyle('inbox')}>
         <header><span class="pane-name">📥 Inbox</span><span class="count">{inbox.length}</span></header>
         <!-- The field is FIRST and always there. An inbox exists to be dumped
              into; asking somebody to press "+" before they can type is asking
@@ -365,9 +543,25 @@
         <p class="hint">Entra vago. Sale con objetivo, impacto y urgencia — y de ahí sale su prioridad.</p>
       </section>
     {/if}
+    {#if visible.indexOf('inbox') > -1 && visible.indexOf('inbox') < visible.length - 1}
+      <!-- Separador arrastrable. Doble clic (o Inicio) vuelve al ancho por defecto.
+           Un `separator` enfocable es el patrón de ARIA para dividir ventanas;
+           el lint de Svelte no lo distingue de uno decorativo. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="ancho de el inbox"
+        tabindex="0"
+        onpointerdown={(e) => drag('inbox', e)}
+        onkeydown={(e) => nudge('inbox', e)}
+        ondblclick={() => (sizes.inbox = 0)}></div>
+    {/if}
 
     {#if showCal}
-      <section class="pane cal">
+      <section class="pane cal" bind:this={els.cal} style={paneStyle('cal')}>
         <PlannerCalendar
           {events}
           {readonly}
@@ -375,12 +569,53 @@
           onpick={readonly ? onpickevent : openById} />
       </section>
     {/if}
+    {#if visible.indexOf('cal') > -1 && visible.indexOf('cal') < visible.length - 1}
+      <!-- Separador arrastrable. Doble clic (o Inicio) vuelve al ancho por defecto.
+           Un `separator` enfocable es el patrón de ARIA para dividir ventanas;
+           el lint de Svelte no lo distingue de uno decorativo. -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="ancho de el calendario"
+        tabindex="0"
+        onpointerdown={(e) => drag('cal', e)}
+        onkeydown={(e) => nudge('cal', e)}
+        ondblclick={() => (sizes.cal = 0)}></div>
+    {/if}
+
+    {#if showSeq && sequenceThreads}
+      <section class="pane seq" bind:this={els.seq} style={paneStyle('seq')}>
+        <SequencePane
+          threads={sequenceThreads}
+          {onreorder}
+          oncomplete={oncompletethread}
+          onopen={(t) => onopenthread?.(t.id)} />
+      </section>
+    {/if}
+    {#if visible.indexOf('seq') > -1 && visible.indexOf('seq') < visible.length - 1}
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+      <div
+        class="resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="ancho de la secuencia"
+        tabindex="0"
+        onpointerdown={(e) => drag('seq', e)}
+        onkeydown={(e) => nudge('seq', e)}
+        ondblclick={() => (sizes.seq = 0)}></div>
+    {/if}
 
     {#if showBoard}
-      <section class="pane board">
+      <section class="pane board" bind:this={els.board} style={paneStyle('board')}>
         <Kanban
           bind:columns
           onopen={(c) => {
+            cardFace = 'plan';
+            backScroll = 0;
             open = c;
             openIn = columns.find((x) => x.cards.includes(c))?.id ?? '';
             cardOpen = true;
@@ -460,6 +695,14 @@
   onmove={moveCard}
   ondelete={dropCard}
   onpatch={onpatchcard}
+  {loadPeople}
+  {threadsOf}
+  {canPrioritize}
+  {onthreadpriority}
+  {onnewthread}
+  onopenthread={openThread}
+  bind:face={cardFace}
+  {backScroll}
   bind:writing
   {choosePriority} />
 {/if}
@@ -643,11 +886,43 @@
   }
   .pane:last-child { border-right: none; }
 
+  /* El borde entre dos paneles, agarrable. Se monta ENCIMA de la línea de un
+     pixel que ya los separa —márgenes negativos— para no robarle ancho a nadie;
+     al pasar o arrastrar, la línea se ilumina y dice que se puede mover. */
+  .resizer {
+    position: relative;
+    z-index: 2;
+    flex: none;
+    width: 9px;
+    margin: 0 -5px 0 -4px;
+    cursor: col-resize;
+    touch-action: none;
+  }
+  .resizer::after {
+    content: '';
+    position: absolute;
+    top: 0;
+    bottom: 0;
+    left: 3px;
+    width: 3px;
+    border-radius: 3px;
+    background: transparent;
+    transition: background 0.12s ease;
+  }
+  .resizer:hover::after,
+  .resizer:focus-visible::after,
+  :global(body.resizing-cols) .resizer::after { background: var(--accent, var(--line)); }
+  .resizer:focus-visible { outline: none; }
+  /* Mientras se arrastra, ni se selecciona texto ni el cursor parpadea al
+     pasar por encima de otra cosa. */
+  :global(body.resizing-cols) { cursor: col-resize; user-select: none; }
+
   /* The inbox is a column you scan; the other two are surfaces you work on, and
      the calendar takes whatever the kanban does not need. */
   .inbox { flex: 0 0 288px; padding: 0.75rem; }
   .cal { flex: 3 1 0; }
   .board { flex: 2 1 0; }
+  .seq { flex: 0 0 340px; padding: 0.75rem; }
   .empty { margin: auto; color: var(--faint); font-size: 0.85rem; }
 
   .inbox > header { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }

@@ -505,6 +505,7 @@
                    esta aplicación; y sobre todo, dos formas de elegir una fecha
                    en el mismo producto son dos formas de equivocarse. -->
               <DatePicker
+                openOnClick
                 defaultValue={renewValue}
                 onValueChange={(e: { value: { year: number; month: number; day: number }[] }) =>
                   (thing = { ...thing, renews_at: isoDay(e.value?.[0]) })}

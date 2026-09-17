@@ -64,7 +64,7 @@
   //  En Todos no se pide: serían N peticiones para dibujar iniciales, y en un
   //  board de varios proyectos lo que hace falta saber de un orbe no es quién
   //  responde sino de dónde es. La insignia del proyecto ocupa ese sitio.
-  let roster = $state<{ id: string; name: string }[]>([]);
+  let roster = $state<{ id: string; name: string; avatar?: string }[]>([]);
   $effect(() => {
     const id = workspace?.id;
     roster = [];
@@ -88,10 +88,16 @@
       // avatar sin nombre no dice nada que valga la pena dibujar.
       owner: all ? '' : nameOf((b.owners ?? [])[0] ?? ''),
       people: all ? [] : (b.owners ?? []).map(nameOf).filter(Boolean),
+      faces: all
+        ? {}
+        : Object.fromEntries(
+            roster.filter((p) => p.avatar && (b.owners ?? []).includes(p.id)).map((p) => [p.name, p.avatar!]),
+          ),
       project: all ? projectOf(b.workspace) : '',
       // The flame counts what is PRODUCING inside it, which is the one number
       // an orb can carry without becoming a card.
       burning: threadsOf(b.id).filter((t) => t.heat.lifecycle === 'hot').length,
+      priority: b.priority ?? '',
     })),
   );
 
@@ -289,6 +295,8 @@
       // happened to it.
       owner: (t.assignees ?? []).map(nameOf).filter(Boolean).join(', '),
       age: ago(t.at ?? ''),
+      priority: t.priority ?? '',
+      step: t.step ?? 0,
     }))}
     cyclePct={cycle?.pct ?? null}
     cycleLeft={cycle?.words ?? ''}
@@ -301,6 +309,12 @@
     }}
     onnewthread={all ? undefined : newThread}
     ondeletethread={all ? undefined : removeThread}
+    onpriority={api.me?.role === 'lead'
+      ? (seq, p) => {
+          const t = threadsOf(shown?.id ?? '').find((x) => x.seq === seq);
+          if (t) write(() => api.setThreadPriority(t.id, p));
+        }
+      : undefined}
     onowners={all
       ? undefined
       : (ids: string[]) => shown && write(() => api.update('bubbles', shown.id, { owners: ids }))}

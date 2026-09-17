@@ -17,6 +17,7 @@
   import type { Lifecycle } from '../lib/api';
   import { limited } from '../lib/limits.svelte';
   import Prose from './Prose.svelte';
+  import PriorityBadge from './PriorityBadge.svelte';
   import MarkdownField from './MarkdownField.svelte';
 
   let {
@@ -39,6 +40,7 @@
     onopenthread,
     onnewthread,
     ondeletethread,
+    onpriority,
     onowners,
     onclose,
     onreopen,
@@ -67,11 +69,13 @@
     /** how it ended, if it did — la frase de quien la cerró */
     closure?: string;
     /** who could be accountable for this: the workspace's roster */
-    people?: { id: string; name: string }[];
+    people?: { id: string; name: string; avatar?: string }[];
     onopenthread?: (seq: number) => void;
     /** create one with the name typed here */
     onnewthread?: (name: string) => void;
     ondeletethread?: (seq: number) => void;
+    /** cambiar la prioridad PROPIA de un hilo. Sólo se pasa al lead global. */
+    onpriority?: (seq: number, priority: string) => void;
     /** An empty list hands it back to nobody, which is a real answer and has a
      *  cost: a quiet bubble with nobody accountable is 🪦, not 😴. */
     onowners?: (ids: string[]) => void;
@@ -94,8 +98,26 @@
       state?: string;
       owner?: string;
       age?: string;
+      /** su lugar en la línea viva del departamento: 1 = ahora; 0, fuera */
+      step?: number;
     }[];
   } = $props();
+
+  // Dos órdenes para la misma lista. «Recientes» contesta qué se movió; «En
+  // secuencia», qué toca hacer de esta burbuja y en qué paso de la línea de
+  // TODO el departamento va cada pieza. Lo que no está en la secuencia va al
+  // final, en su orden de siempre.
+  let order = $state<'recent' | 'sequence'>('recent');
+  const inLine = $derived(threads.some((t) => (t.step ?? 0) > 0));
+  const shownThreads = $derived(
+    order === 'recent'
+      ? threads
+      : [
+          ...threads.filter((t) => (t.step ?? 0) > 0).sort((a, b) => (a.step ?? 0) - (b.step ?? 0)),
+          ...threads.filter((t) => !(t.step ?? 0)),
+        ],
+  );
+  const stepText = (n: number) => (n === 1 ? 'ahora' : n === 2 ? 'siguiente' : `paso ${n}`);
 
   // The thread list fades at whichever edge still has list behind it, the same
   // as the project column and the board.
@@ -301,6 +323,7 @@
         <div class="owners mt-2">
           <span class="faint shrink-0">a cargo</span>
           <Combobox
+            openOnClick
             class="min-w-0 flex-1"
             multiple
             placeholder={owners.length ? 'agregar a alguien…' : 'nadie'}
@@ -336,6 +359,9 @@
           <ul class="chips">
             {#each owners as id (id)}
               <li class="chip">
+                {#if people.find((p) => p.id === id)?.avatar}
+                  <img class="chip-face" src={people.find((p) => p.id === id)?.avatar} alt="" />
+                {/if}
                 {nameOf(id)}
                 <button
                   aria-label="quitar a {nameOf(id)}"
@@ -366,9 +392,19 @@
         </div>
       {/if}
 
-      <p class="faint mt-4 shrink-0 text-xs">{threads.length} hilos · el más reciente primero</p>
+      <div class="listhead mt-4">
+        <p class="faint text-xs">
+          {threads.length} hilos · {order === 'recent' ? 'el más reciente primero' : 'en el orden de la secuencia'}
+        </p>
+        {#if inLine || order === 'sequence'}
+          <div class="seg" role="group" aria-label="orden">
+            <button class:on={order === 'recent'} aria-pressed={order === 'recent'} onclick={() => (order = 'recent')}>Recientes</button>
+            <button class:on={order === 'sequence'} aria-pressed={order === 'sequence'} onclick={() => (order = 'sequence')}>🧭 Secuencia</button>
+          </div>
+        {/if}
+      </div>
       <ul class="threads mt-1 space-y-0.5" style={fade.style} {@attach fade.attach}>
-        {#each threads as t (t.seq)}
+        {#each shownThreads as t (t.seq)}
           <!-- Two lines, because one was hiding the half that answers "should I
                open this?": its own band and why, who has it, and how old it is.
                The title alone only answers "what is it called". -->
@@ -383,7 +419,14 @@
               <span class="flex items-center gap-2 pr-7">
                 <span class="faint shrink-0 tabular-nums">#{t.seq}</span>
                 <span class="min-w-0 flex-1 truncate text-sm">{t.title}</span>
-                {#if t.priority}<span class="faint shrink-0 text-xs">{t.priority}</span>{/if}
+                {#if t.step}
+                  <span class="step" class:now={t.step === 1} title="su lugar en la secuencia del departamento">🧭 {stepText(t.step)}</span>
+                {/if}
+                <PriorityBadge
+                  size="xs"
+                  value={t.priority ?? ''}
+                  canEdit={!!onpriority}
+                  onchange={(p) => onpriority?.(t.seq, p)} />
               </span>
               <!-- The band, who has it, and how long since. The column's own
                    state — Backlog, En curso — is not on here: it is a place a
@@ -538,6 +581,7 @@
     color: var(--muted);
     font-size: 0.76rem;
   }
+  .chip-face { width: 16px; height: 16px; margin-left: -0.3rem; border-radius: 999px; object-fit: cover; }
   .chip button { color: var(--faint); font-size: 0.9rem; line-height: 1; }
   .chip button:hover { color: var(--text); }
 
@@ -574,6 +618,21 @@
      puede hacer a la derecha. */
   /* Una fila como la de «a cargo»: la pregunta, y justo a su lado lo que se
      puede hacer con ella. */
+  .listhead { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 0.5rem; }
+  .listhead p { margin: 0; }
+  .seg { display: inline-flex; padding: 2px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+  .seg button { padding: 0.05rem 0.45rem; border-radius: 6px; color: var(--faint); font-size: 0.7rem; }
+  .seg button.on { background: var(--hover); color: var(--text); font-weight: 600; }
+  .step {
+    flex: none;
+    padding: 0 0.4rem;
+    border-radius: 999px;
+    background: var(--hover);
+    color: var(--muted);
+    font-size: 0.66rem;
+    white-space: nowrap;
+  }
+  .step.now { background: color-mix(in oklab, var(--accent) 22%, transparent); color: var(--text); font-weight: 600; }
   .about {
     display: flex;
     align-items: center;

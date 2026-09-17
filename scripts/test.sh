@@ -566,8 +566,10 @@ chk ">>> medio x alto = P2" "$(PRI "(id='$B7')" "$A" | j "['items'][0]['priority
 chk ">>> sin impacto ni urgencia, sin prioridad" "$(PRI "(id='$BU_B')" "$B" | j "['items'][0]['priority']")" ""
 chk ">>> priority NO es una columna de bubbles" \
   "$(curl -s "$API/api/collections/bubbles/records/$B5" -H "Authorization: $SU" | python3 -c 'import sys,json;print("si" if "priority" not in json.load(sys.stdin) else "NO, es columna")')" si
-chk ">>> ...ni un thread la lleva ya: no es suya" \
-  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("si" if not any(k in d for k in ("priority","impact","urgency","objective")) else sorted(d))')" si
+chk ">>> ...un thread no lleva impacto, urgencia ni objetivo: son de su burbuja" \
+  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("si" if not any(k in d for k in ("impact","urgency","objective")) else sorted(d))')" si
+chk "...pero sí su PROPIA prioridad, vacía hasta que el lead la pone" \
+  "$(curl -s "$API/api/collections/threads/records/$T5" -H "Authorization: $SU" | j "['priority']")" ""
 chk "se puede filtrar por prioridad como cualquier campo" \
   "$(PRI "(priority='P1')" "$A" | j "['totalItems']")" 1
 chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "['totalItems']")" 0
@@ -885,7 +887,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+  "board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,next,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
 # Los dos documentos que no describen el sistema sino qué hacer con él: el que un
 # agente se pega en SUS instrucciones, y la plantilla que una persona copia para
 # configurar su asistente. Markdown servido, no cadenas dentro del código.
@@ -1367,6 +1369,139 @@ print(next((x["area"] for x in e if x["path"]=="assets/mi-diagrama.png"), "falta
 chk "y quedó commiteada como todo lo demás" \
   "$(cd "$R/alpha" && git log --oneline -- assets/mi-diagrama.png | wc -l | tr -d ' ')" 1
 rm -f "$PNG" "$BIG"
+
+# ------------------------------------------------- tokens de agente ----
+echo
+tpost(){ curl -s -X POST "$API/api/tokens$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+tcode(){ code -X POST "$API/api/tokens$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+NEWTOK=$(tpost "$A" "" '{"name":"agente de alice","days":0}')
+TOK=$(echo "$NEWTOK" | j "['token']")
+TOKID=$(echo "$NEWTOK" | j "['id']")
+chk ">>> alice genera un token de agente, y se le enseña una vez" "${TOK:0:3}" "bw_"
+chk "...sin caducidad si se pide así" "$(echo "$NEWTOK" | j "['expires_at']")" ""
+chk ">>> con él, un agente entra al MCP como alice" \
+  "$(mcptext "Bearer $TOK" workspaces '{}' | grep -c '"alpha"')" 1
+chk ">>> la huella no sale nunca por la API" \
+  "$(list agent_tokens "$A" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("si" if d["totalItems"]==1 and "hash" not in d["items"][0] else "no")')" si
+chk ">>> bob no ve el token de alice" "$(list agent_tokens "$B" | j "['totalItems']")" 0
+chk "...el lead global sí, para poder revocarlo" "$(list agent_tokens "$C" | j "['totalItems']")" 1
+chk ">>> el token abre el MCP y nada más: la API REST no lo acepta" \
+  "$(code "$API/api/limits" -H "Authorization: Bearer $TOK")" 401
+chk ">>> nadie crea un token por la API de registros: la huella la calcula el servidor" \
+  "$(pcode agent_tokens "$A" "{\"owner\":\"$AID\",\"name\":\"x\",\"hash\":\"abc\"}")" 403
+chk ">>> caducidad negativa se rechaza" "$(tcode "$A" "" '{"name":"x","days":-1}')" 400
+chk ">>> bob no extiende el token de alice" "$(tcode "$B" "/$TOKID/extend" '{"days":30}')" 404
+chk ">>> alice lo extiende 30 días" \
+  "$(tpost "$A" "/$TOKID/extend" '{"days":30}' | python3 -c 'import sys,json;print("si" if json.load(sys.stdin)["expires_at"] else "no")')" si
+chk "...y le quita la caducidad con 0" "$(tpost "$A" "/$TOKID/extend" '{"days":0}' | j "['expires_at']")" ""
+chk ">>> y lo renombra" "$(tpost "$A" "/$TOKID/rename" '{"name":"claude de alice"}' | j "['name']")" "claude de alice"
+chk ">>> bob no lo revoca" "$(tcode "$B" "/$TOKID/revoke" '{}')" 404
+chk ">>> el lead global sí" \
+  "$(tpost "$C" "/$TOKID/revoke" '{}' | python3 -c 'import sys,json;print("si" if json.load(sys.stdin)["revoked_at"] else "no")')" si
+chk "...y revocado ya no entra al MCP" "$(code -X POST "$API/mcp" -H "Authorization: Bearer $TOK" -H "$JS" \
+  -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" 401
+chk "...ni se extiende: se genera otro" "$(tcode "$A" "/$TOKID/extend" '{"days":30}')" 400
+chk ">>> un token inventado tampoco entra" "$(code -X POST "$API/mcp" -H "Authorization: Bearer bw_inventado" -H "$JS" \
+  -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" 401
+
+# ------------------------------------------ personas: alta y borrado lógico ----
+echo
+ppost(){ curl -s -X POST "$API/api/people$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+pplcode(){ code -X POST "$API/api/people$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+chk ">>> un member no da de alta a nadie" \
+  "$(pplcode "$A" "" '{"email":"frank@bubble.test","password":"passwordpass"}')" 403
+FRANK=$(ppost "$C" "" '{"email":"frank@bubble.test","name":"Frank","password":"passwordpass","role":"member"}' | j "['id']")
+chk ">>> el lead global da de alta a frank" "$([ -n "$FRANK" ] && echo si || echo no)" si
+FR=$(login frank@bubble.test)
+chk "...y frank entra" "$([ -n "$FR" ] && echo si || echo no)" si
+chk "...el mismo correo dos veces, no" \
+  "$(pplcode "$C" "" '{"email":"frank@bubble.test","password":"passwordpass"}')" 400
+FTOK=$(tpost "$FR" "" '{"name":"agente de frank","days":90}' | j "['token']")
+chk "frank tiene un agente" "$(mcp "Bearer $FTOK" tools/list '{}' | grep -q '"workspaces"' && echo si || echo no)" si
+chk ">>> nadie se marca borrado editando un usuario" \
+  "$(code -X PATCH "$API/api/collections/users/records/$FRANK" -H "Authorization: $C" -H "$JS" -d '{"deleted_at":"2026-01-01 00:00:00.000Z"}')" 404
+chk ">>> ni se borra de verdad por la API" \
+  "$(code -X DELETE "$API/api/collections/users/records/$AID" -H "Authorization: $A")" 403
+chk ">>> un member no borra a nadie" "$(pplcode "$A" "/$FRANK/delete" '{}')" 403
+chk ">>> el lead global no se borra a sí mismo" "$(pplcode "$C" "/$CID/delete" '{}')" 400
+chk ">>> el lead global borra a frank" \
+  "$(ppost "$C" "/$FRANK/delete" '{}' | python3 -c 'import sys,json;print("si" if json.load(sys.stdin)["deleted_at"] else "no")')" si
+chk "...frank ya no entra" "$(code -X POST "$API/api/collections/users/auth-with-password" -H "$JS" \
+  -d '{"identity":"frank@bubble.test","password":"passwordpass"}')" 403
+chk "...su sesión abierta murió" "$(code "$API/api/limits" -H "Authorization: $FR")" 401
+chk "...y su agente tampoco entra" "$(code -X POST "$API/mcp" -H "Authorization: Bearer $FTOK" -H "$JS" \
+  -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" 401
+chk ">>> restaurarlo lo devuelve" "$(ppost "$C" "/$FRANK/restore" '{}' | j "['deleted_at']")" ""
+chk "...frank entra otra vez" "$([ -n "$(login frank@bubble.test)" ] && echo si || echo no)" si
+chk "...y su agente también" "$(mcp "Bearer $FTOK" tools/list '{}' | grep -q '"workspaces"' && echo si || echo no)" si
+chk ">>> el lead global no se quita el rol a sí mismo" \
+  "$(code -X PATCH "$API/api/collections/users/records/$CID" -H "Authorization: $C" -H "$JS" -d '{"role":"member"}')" 400
+chk ">>> con dos leads, uno le quita el rol al otro" \
+  "$(code -X PATCH "$API/api/collections/users/records/$DAVE" -H "Authorization: $C" -H "$JS" -d '{"role":"member"}')" 200
+chk ">>> y al último no se lo quita nadie, ni un superuser" \
+  "$(code -X PATCH "$API/api/collections/users/records/$CID" -H "Authorization: $SU" -H "$JS" -d '{"role":"member"}')" 400
+chk ">>> una persona pone su avatar" \
+  "$(printf '\x89PNG\r\n\x1a\n' > /tmp/bubble-avatar.png; head -c 200 /dev/urandom >> /tmp/bubble-avatar.png
+     code -X PATCH "$API/api/collections/users/records/$AID" -H "Authorization: $A" -F "avatar=@/tmp/bubble-avatar.png;type=image/png")" 200
+chk "...pero no el de otra" \
+  "$(code -X PATCH "$API/api/collections/users/records/$BID" -H "Authorization: $A" -F "avatar=@/tmp/bubble-avatar.png;type=image/png")" 404
+rm -f /tmp/bubble-avatar.png
+
+# ------------------------------- prioridad del hilo y secuencia de ejecución ----
+echo
+# Sin burbuja: la de alpha se borró más arriba, y lo que se prueba aquí es el hilo.
+SQ1=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Paso uno\"}" | j "['id']")
+SQ2=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Paso uno bis\"}" | j "['id']")
+SQ3=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Paso dos\",\"assignees\":[\"$AID\"]}" | j "['id']")
+tpatch(){ code -X PATCH "$API/api/collections/threads/records/$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+FEAT=$(list features "$A" | j "['items'][0]['id']")
+chk ">>> la secuencia nace apagada" "$(list features "$A" | j "['items'][0]['sequence']")" False
+chk "...y next lo dice en vez de inventar una línea" "$(mcptext "$A" next '{}' | j "['enabled']")" False
+chk ">>> un member no la enciende" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $A" -H "$JS" -d '{"sequence":true}')" 404
+chk ">>> el lead global sí" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":true}')" 200
+chk ">>> un member no pone la prioridad de un hilo" "$(tpatch "$A" "$SQ1" '{"priority":"P1"}')" 404
+chk ">>> ni lo mete en la secuencia" "$(tpatch "$A" "$SQ1" '{"sequence":10}')" 404
+chk "...pero sigue pudiendo renombrarlo" "$(tpatch "$A" "$SQ1" '{"name":"Paso uno"}')" 200
+chk ">>> un member tampoco crea un hilo ya priorizado" \
+  "$(pcode threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"colado\",\"priority\":\"P1\"}")" 400
+chk ">>> el lead global pone la prioridad del hilo" "$(tpatch "$C" "$SQ1" '{"priority":"P1"}')" 200
+chk "...que vive separada de la de su burbuja" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t['priority'] for t in d['threads'] if t['id']=='$SQ1'))")" P1
+chk ">>> por MCP, un member no la pone" \
+  "$(mcptext "$A" set_thread "{\"thread\":\"$SQ2\",\"priority\":\"P2\"}" | grep -c 'only the global lead')" 1
+chk "...el lead global sí" "$(mcptext "$C" set_thread "{\"thread\":\"$SQ2\",\"priority\":\"P2\"}" | j "['priority']")" P2
+chk ">>> una prioridad que no existe se rechaza" \
+  "$(mcptext "$C" set_thread "{\"thread\":\"$SQ2\",\"priority\":\"P9\"}" | grep -c 'P1, P2, P3 or P4')" 1
+tpatch "$C" "$SQ1" '{"sequence":10}' >/dev/null
+tpatch "$C" "$SQ2" '{"sequence":10}' >/dev/null
+tpatch "$C" "$SQ3" '{"sequence":20}' >/dev/null
+chk ">>> el lead arma la secuencia, y el board la devuelve" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t['sequence'] for t in d['threads'] if t['id']=='$SQ3'))")" 20
+NEXT=$(mcptext "$A" next '{}')
+chk ">>> next: ahora van dos hilos en paralelo" "$(echo "$NEXT" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["now"]["threads"]))')" 2
+chk "...luego el paso dos" "$(echo "$NEXT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["then"]["threads"][0]["name"])')" "Paso dos"
+chk "...y lo mío es el paso dos" "$(echo "$NEXT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["mine"]["name"])')" "Paso dos"
+chk ">>> erin no ve la secuencia de un proyecto que no alcanza" \
+  "$(mcptext "$ER" next '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["now"])')" None
+OWNB=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"De bob\",\"owners\":[\"$BID\"]}" | j "['id']")
+SQ4=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"bubble\":\"$OWNB\",\"name\":\"Sin asignar de bob\"}" | j "['id']")
+tpatch "$C" "$SQ4" '{"sequence":30}' >/dev/null
+chk ">>> lo mío incluye lo sin asignar de una burbuja a mi cargo" \
+  "$(mcptext "$B" next '{}' | python3 -c 'import sys,json;print((json.load(sys.stdin)["mine"] or {}).get("name"))')" "Sin asignar de bob"
+chk "...pero no a quien no responde por ella" \
+  "$(mcptext "$A" next '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["mine"]["name"])')" "Paso dos"
+chk ">>> terminar un hilo por REST" "$(code -X POST "$API/api/threads/$SQ1/complete" -H "Authorization: $A")" 200
+chk "...con uno de los dos abierto, el paso sigue siendo ahora" \
+  "$(mcptext "$A" next '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["now"]["sequence"])')" 10
+code -X POST "$API/api/threads/$SQ2/complete" -H "Authorization: $A" >/dev/null
+chk ">>> terminado el paso, la secuencia se recorre sola" \
+  "$(mcptext "$A" next '{}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["now"]["threads"][0]["name"])')" "Paso dos"
+chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el 1" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ3'))")" 1
+chk "...y uno terminado ya no tiene paso" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
 
 
 # --------------------------------- el superuser: opera la caja, no trabaja ----

@@ -1,8 +1,10 @@
 package boot
 
 import (
+	"archive/zip"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -96,6 +98,104 @@ func TestSeedYPunteros(t *testing.T) {
 	}
 	if s.Current() != "v1.0.0" {
 		t.Errorf("con el binario ausente debía reinstalarse, y current quedó %q", s.Current())
+	}
+}
+
+func TestSeedAdoptaUnaImagenMasNueva(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "bubble-falso")
+	if err := os.WriteFile(exe, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	s := Store{Dir: filepath.Join(dir, "bin")}
+	if err := s.Seed(exe, "v1.1.0"); err != nil {
+		t.Fatal(err)
+	}
+
+	if s.Adopts("v1.1.0") || s.Adopts("v1.0.0") || s.Adopts("dev") {
+		t.Error("sólo una versión más nueva se adopta")
+	}
+	if !s.Adopts("v1.2.0") {
+		t.Error("una imagen más nueva debía adoptarse")
+	}
+
+	// Coolify cambió la imagen: la versión nueva pasa a ser la vigente, y la
+	// anterior sigue siendo la red.
+	if err := s.Seed(exe, "v1.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Current() != "v1.2.0" {
+		t.Errorf("una imagen más nueva debía adoptarse, y current quedó %q", s.Current())
+	}
+	if s.LastGood() != "v1.1.0" {
+		t.Errorf("adoptarla no puede declararla buena antes de contestar: last-good=%q", s.LastGood())
+	}
+	if _, err := os.Stat(s.Binary("v1.2.0")); err != nil {
+		t.Errorf("el binario de la imagen no quedó instalado: %v", err)
+	}
+
+	// Una imagen más vieja, o la misma, no toca nada.
+	for _, tag := range []string{"v1.0.0", "v1.2.0", "dev"} {
+		if err := s.Seed(exe, tag); err != nil {
+			t.Fatal(err)
+		}
+		if s.Current() != "v1.2.0" {
+			t.Errorf("sembrar %s movió la vigente a %q", tag, s.Current())
+		}
+	}
+
+	// La que ya falló no se reintenta al reiniciar con la misma imagen.
+	if err := s.SetCurrent("v1.1.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.SetFailed("v1.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Seed(exe, "v1.2.0"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Current() != "v1.1.0" {
+		t.Errorf("reintentó una versión que ya había fallado: current=%q", s.Current())
+	}
+	// ...pero la siguiente imagen sí.
+	if err := s.Seed(exe, "v1.3.0"); err != nil {
+		t.Fatal(err)
+	}
+	if s.Current() != "v1.3.0" {
+		t.Errorf("una fallida no debe bloquear la siguiente: current=%q", s.Current())
+	}
+}
+
+func TestSnapshot(t *testing.T) {
+	data := t.TempDir()
+	must := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	must(os.WriteFile(filepath.Join(data, "data.db"), []byte("base"), 0o644))
+	must(os.MkdirAll(filepath.Join(data, "storage", "x"), 0o755))
+	must(os.WriteFile(filepath.Join(data, "storage", "x", "a.png"), []byte("png"), 0o644))
+	must(os.MkdirAll(filepath.Join(data, "backups"), 0o755))
+	must(os.WriteFile(filepath.Join(data, "backups", "vieja.zip"), []byte("zip"), 0o644))
+
+	must(Snapshot(data, "antes-de-v1.2.0.zip"))
+
+	zr, err := zip.OpenReader(filepath.Join(data, "backups", "antes-de-v1.2.0.zip"))
+	must(err)
+	defer zr.Close()
+	got := map[string]bool{}
+	for _, f := range zr.File {
+		got[f.Name] = true
+	}
+	if !got["data.db"] || !got["storage/x/a.png"] {
+		t.Errorf("la copia no trae la base y los archivos: %v", got)
+	}
+	for name := range got {
+		if strings.HasPrefix(name, "backups/") {
+			t.Errorf("la copia se metió a sí misma o a las anteriores: %s", name)
+		}
 	}
 }
 

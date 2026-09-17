@@ -121,6 +121,26 @@
   z-index: var(--z-float);
 }
 
+/* Una opción ELEGIDA bajo el puntero sigue pareciendo elegida.
+ *
+ * Skeleton pinta la elegida con `preset-filled` (casi negro) y la resaltada con
+ * `preset-tonal` (gris claro), y la resaltada va después: al pasar por encima
+ * de una opción ya elegida se volvía gris y parecía que se deseleccionaba. Aquí
+ * se queda rellena y sólo se aclara un poco, con un velo encima del fondo —un
+ * `box-shadow` interior, que pinta sobre el fondo y bajo el texto— claro en
+ * modo claro y oscuro en modo oscuro. */
+[data-scope='combobox'][data-part='item'][data-state='checked'][data-highlighted],
+[data-scope='listbox'][data-part='item'][data-state='checked'][data-highlighted],
+[data-scope='select'][data-part='item'][data-state='checked'][data-highlighted] {
+  @apply preset-filled;
+  box-shadow: inset 0 0 0 100vmax rgb(255 255 255 / 0.16);
+}
+[data-mode='dark'] [data-scope='combobox'][data-part='item'][data-state='checked'][data-highlighted],
+[data-mode='dark'] [data-scope='listbox'][data-part='item'][data-state='checked'][data-highlighted],
+[data-mode='dark'] [data-scope='select'][data-part='item'][data-state='checked'][data-highlighted] {
+  box-shadow: inset 0 0 0 100vmax rgb(0 0 0 / 0.14);
+}
+
 /* A menu's PANEL takes focus when it opens — that is how the arrow keys work —
    and the browser draws its focus ring around it, which reads as a selected box
    rather than as an open menu. The ring belongs to the items, which have their

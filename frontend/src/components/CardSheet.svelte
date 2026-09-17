@@ -11,6 +11,7 @@
     Combobox,
     DatePicker,
     Dialog,
+    FloatingPanel,
     Menu,
     Portal,
     parseDate,
@@ -20,8 +21,11 @@
   import XIcon from '@lucide/svelte/icons/x';
   import ChevronIcon from '@lucide/svelte/icons/chevron-down';
   import AlignLeftIcon from '@lucide/svelte/icons/align-left';
-  import ListIcon from '@lucide/svelte/icons/list';
+  import UsersIcon from '@lucide/svelte/icons/users';
   import MarkdownField from './MarkdownField.svelte';
+  import PriorityBadge from './PriorityBadge.svelte';
+  import { bandFace, bandName } from '../lib/bands';
+  import type { Lifecycle } from '../lib/api';
   import { limited, tooLong } from '../lib/limits.svelte';
   import type { Card } from './Kanban.svelte';
 
@@ -36,6 +40,15 @@
     'data-[state=open]:opacity-100 data-[state=open]:translate-y-0';
 
   export type Objective = { n: number; name: string };
+  export type SheetThread = {
+    id: string;
+    seq: number;
+    name: string;
+    lifecycle: Lifecycle;
+    priority?: string;
+    owner?: string;
+    age?: string;
+  };
 
   let {
     open = $bindable(false),
@@ -51,6 +64,14 @@
     onpatch,
     choosePriority = true,
     writing = $bindable(false),
+    loadPeople,
+    threadsOf,
+    canPrioritize = false,
+    onthreadpriority,
+    onnewthread,
+    onopenthread,
+    face = $bindable<'plan' | 'hilos'>('plan'),
+    backScroll = 0,
   }: {
     open?: boolean;
     card?: Card | null;
@@ -81,7 +102,124 @@
      *  reads it before refreshing the card from the server: everything else can
      *  be replaced under the sheet safely, text being typed cannot. */
     writing?: boolean;
+    /** quién puede estar a cargo de esta tarjeta: el roster de su proyecto.
+     *  Sin esto no se ofrece elegir responsables. */
+    loadPeople?: (card: Card) => Promise<{ id: string; name: string; avatar?: string }[]>;
+    /** los hilos de esta burbuja, para planearlos en la otra cara de la tarjeta */
+    threadsOf?: (card: Card) => SheetThread[];
+    /** quien mira puede cambiar la prioridad de un hilo (el lead global) */
+    canPrioritize?: boolean;
+    onthreadpriority?: (threadId: string, priority: string) => void;
+    /** crear un hilo en esta burbuja con el nombre escrito aquí */
+    onnewthread?: (card: Card, name: string) => void | Promise<void>;
+    /** abrir un hilo a pantalla completa; `scroll` es dónde estaba la lista */
+    onopenthread?: (card: Card, thread: SheetThread, scroll: number) => void;
+    /** qué cara se ve: el plan de la burbuja o sus hilos */
+    face?: 'plan' | 'hilos';
+    /** al volver de un hilo: el scroll de la lista donde se quedó */
+    backScroll?: number;
   } = $props();
+
+  // ---- la otra cara: los hilos ----
+  //
+  // Planear una burbuja es también planear sus piezas. «Hilos» le da la vuelta a
+  // la tarjeta y enseña lo mismo que el cajón de la burbuja en el board, con la
+  // prioridad de cada hilo a mano. Voltearla y no abrir otro diálogo: es la
+  // misma burbuja vista por detrás, y el plan sigue a un clic.
+  const threadRows = $derived(card && threadsOf ? threadsOf(card) : []);
+  let contentEl = $state<HTMLElement | null>(null);
+  async function flip(to: 'plan' | 'hilos') {
+    if (face === to) return;
+    const el = contentEl;
+    const reduce = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+    if (!el || reduce || !el.animate) {
+      face = to;
+      return;
+    }
+    await el.animate(
+      [{ transform: 'perspective(1400px) rotateY(0deg)' }, { transform: 'perspective(1400px) rotateY(90deg)' }],
+      { duration: 140, easing: 'ease-in' },
+    ).finished;
+    face = to;
+    el.scrollTop = 0;
+    el.animate(
+      [{ transform: 'perspective(1400px) rotateY(-90deg)' }, { transform: 'perspective(1400px) rotateY(0deg)' }],
+      { duration: 160, easing: 'ease-out' },
+    );
+  }
+  // Volver de un hilo deja la lista donde estaba.
+  $effect(() => {
+    if (face === 'hilos' && backScroll && contentEl) {
+      const el = contentEl;
+      requestAnimationFrame(() => (el.scrollTop = backScroll));
+    }
+  });
+  // Otra tarjeta empieza por su plan.
+  let faceFor = '';
+  $effect(() => {
+    const id = card?.id ?? '';
+    if (id !== faceFor) {
+      if (faceFor) face = 'plan';
+      faceFor = id;
+    }
+  });
+
+  let naming = $state(false);
+  let fresh = $state('');
+  async function createThread() {
+    const name = fresh.trim();
+    if (!name || !card) return;
+    fresh = '';
+    naming = false;
+    await onnewthread?.(card, name);
+  }
+
+  // ---- responsables ----
+  //
+  // Los mismos que «a cargo» en el cajón de la burbuja: es el mismo campo
+  // (`bubbles.owners`), y quien planea es quien suele decidir a quién le toca.
+  // El roster es el del PROYECTO de la tarjeta: el planeador mezcla proyectos,
+  // y poner a cargo a alguien que no puede ver la burbuja sería una promesa
+  // que no puede cumplir.
+  type Someone = { id: string; name: string; avatar?: string };
+  let people = $state<Someone[]>([]);
+  let peopleFor = '';
+  $effect(() => {
+    const c = card;
+    if (!c || !loadPeople || c.id === peopleFor) return;
+    peopleFor = c.id;
+    people = [];
+    loadPeople(c)
+      .then((rows) => {
+        if (card?.id === c.id) people = rows;
+      })
+      .catch(() => (people = []));
+  });
+  let hunting = $state('');
+  const shortlist = $derived(
+    people.filter((p) => p.name.toLowerCase().includes(hunting.trim().toLowerCase())),
+  );
+  const roster = $derived(
+    useListCollection({
+      items: shortlist,
+      itemToString: (p: Someone) => p.name,
+      itemToValue: (p: Someone) => p.id,
+    }),
+  );
+  const someone = (id: string) => people.find((p) => p.id === id);
+
+  // ---- el mapa, en un panel flotante ----
+  //
+  // Estaba debajo de todo, como una sección más, y era lo que empujaba la
+  // tarjeta fuera de la pantalla. Se consulta al decidir la prioridad, así que
+  // se abre DESDE la prioridad, junto a ella, y se puede arrastrar para ver la
+  // tarjeta debajo. Elegir una casilla la aplica y lo cierra.
+  let mapOpen = $state(false);
+  let mapTrigger = $state<HTMLElement | null>(null);
+  // Portado a <body>: fuera del contenido del diálogo. Sin esto, un clic en el
+  // panel contaba como un clic FUERA de la tarjeta y la cerraba.
+  const inPanel = (target: EventTarget | null) =>
+    target instanceof Element && !!target.closest('[data-scope="floating-panel"]');
 
   // Priority is CHOSEN here, and the map is what you consult before choosing —
   // which is how INITIAL.md describes it: "solo para consulta o modificación".
@@ -129,6 +267,14 @@
   // The description edits in place, driven from its section header the way
   // Trello does it: reading is the default and "Editar" is a decision.
   let editingNotes = $state(false);
+  // Empezar a editar es empezar a escribir, entre por donde entre: «Editar», un
+  // clic en el campo vacío o un doble clic en lo renderizado. Sólo lo marcaba
+  // «Editar», y entrando por el campo, al terminar, el efecto de arriba tomaba
+  // lo escrito por un documento que llegaba tarde y lo pisaba con el vacío del
+  // servidor — así que no había nada que guardar.
+  $effect(() => {
+    if (editingNotes) touched = true;
+  });
 
   // Guardar la descripción es «Listo», pero no SÓLO «Listo»: la edición también
   // termina con Escape dentro del campo o cerrando la tarjeta, y en esos dos
@@ -280,6 +426,12 @@
 <Dialog
   {open}
   closeOnEscape={false}
+  onInteractOutside={(e: { detail?: { originalEvent?: Event }; target?: EventTarget | null; preventDefault: () => void }) => {
+    if (inPanel(e.detail?.originalEvent?.target ?? e.target ?? null)) e.preventDefault();
+  }}
+  onFocusOutside={(e: { detail?: { originalEvent?: Event }; target?: EventTarget | null; preventDefault: () => void }) => {
+    if (inPanel(e.detail?.originalEvent?.target ?? e.target ?? null)) e.preventDefault();
+  }}
   onOpenChange={(e: { open: boolean }) => {
     if (!e.open && !leave()) return;
     open = e.open;
@@ -292,31 +444,43 @@
       class="fixed inset-0 flex items-center justify-center p-4"
       style="z-index: var(--z-drawer)">
       <Dialog.Content
-        class="card bg-surface-100-900 w-full max-w-3xl space-y-4 p-4 shadow-xl {anim}">
+        {@attach (el: HTMLElement) => {
+          contentEl = el;
+          return () => (contentEl = null);
+        }}
+        class="card bg-surface-100-900 w-full max-w-3xl max-h-[calc(100dvh-2rem)] space-y-4 overflow-y-auto p-4 shadow-xl {anim}">
         {#if card}
           {#if refused && blocked}
             <p class="unsaved" role="alert">No se guardó ni se cerró: {blocked}</p>
           {/if}
           <!-- Where it is, first — Trello puts the list above the title because
                a card's column is the loudest thing about it. -->
-          {#if column}
-            <Menu onSelect={(e: { value: string }) => onmove?.(card.id, e.value)}>
-              <Menu.Trigger>
-                <span class="lista">🗂 {column.name} <ChevronIcon class="size-3.5" /></span>
-              </Menu.Trigger>
-              <Portal>
-                <Menu.Positioner>
-                  <Menu.Content>
-                    {#each columns as c (c.id)}
-                      <Menu.Item value={c.id}>
-                        <Menu.ItemText>{c.id === columnId ? '· ' : ''}{c.name}</Menu.ItemText>
-                      </Menu.Item>
-                    {/each}
-                  </Menu.Content>
-                </Menu.Positioner>
-              </Portal>
-            </Menu>
-          {/if}
+          <div class="toprow">
+            {#if column}
+              <Menu onSelect={(e: { value: string }) => onmove?.(card.id, e.value)}>
+                <Menu.Trigger>
+                  <span class="lista">🗂 {column.name} <ChevronIcon class="size-3.5" /></span>
+                </Menu.Trigger>
+                <Portal>
+                  <Menu.Positioner>
+                    <Menu.Content>
+                      {#each columns as c (c.id)}
+                        <Menu.Item value={c.id}>
+                          <Menu.ItemText>{c.id === columnId ? '· ' : ''}{c.name}</Menu.ItemText>
+                        </Menu.Item>
+                      {/each}
+                    </Menu.Content>
+                  </Menu.Positioner>
+                </Portal>
+              </Menu>
+            {/if}
+            {#if threadsOf}
+              <!-- Le da la vuelta a la tarjeta: detrás del plan, sus hilos. -->
+              <button class="flipbtn" class:on={face === 'hilos'} onclick={() => flip(face === 'plan' ? 'hilos' : 'plan')}>
+                {face === 'plan' ? `🧵 Hilos (${threadRows.length})` : '← Plan'}
+              </button>
+            {/if}
+          </div>
 
           <header class="head">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">
@@ -336,11 +500,64 @@
             </Dialog.CloseTrigger>
           </header>
 
+          {#if face === 'hilos' && threadsOf}
+            <!-- La otra cara: los hilos de esta burbuja, como en su cajón del
+                 board, con la prioridad de cada uno a mano. -->
+            <section class="hilos">
+              <p class="faint text-xs">{threadRows.length} hilos · el más reciente primero</p>
+              <ul class="hlist">
+                {#each threadRows as t (t.id)}
+                  <li class="htile band-{t.lifecycle}">
+                    <button
+                      class="hopen"
+                      onclick={() => card && onopenthread?.(card, t, contentEl?.scrollTop ?? 0)}>
+                      <span class="hline">
+                        <span class="faint tabular-nums">#{t.seq}</span>
+                        <span class="min-w-0 flex-1 truncate">{t.name}</span>
+                      </span>
+                      <span class="faint hsub">
+                        {bandFace(t.lifecycle)} {bandName(t.lifecycle)}{t.owner ? ` · ${t.owner}` : ''}{t.age ? ` · ${t.age}` : ''}
+                      </span>
+                    </button>
+                    <PriorityBadge
+                      size="xs"
+                      value={t.priority ?? ''}
+                      canEdit={canPrioritize && !!onthreadpriority}
+                      onchange={(p) => onthreadpriority?.(t.id, p)} />
+                  </li>
+                {:else}
+                  <li class="faint text-sm">Esta burbuja todavía no tiene hilos.</li>
+                {/each}
+              </ul>
+              {#if onnewthread}
+                {#if naming}
+                  <input
+                    class="input"
+                    placeholder="¿Cómo se llama?"
+                    autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                    bind:value={fresh}
+                    {@attach limited('threads.name')}
+                    {@attach (el: HTMLInputElement) => el.focus()}
+                    onblur={() => (naming = false)}
+                    onkeydown={(e) => {
+                      if (e.key === 'Enter') createThread();
+                      if (e.key === 'Escape') {
+                        e.stopPropagation();
+                        naming = false;
+                      }
+                    }} />
+                {:else}
+                  <button class="btn btn-sm w-full preset-tonal-surface" onclick={() => (naming = true)}>+ hilo</button>
+                {/if}
+              {/if}
+            </section>
+          {:else}
           <!-- The card's facts, in one row of chips. Priority has no "+" and no
                dropdown on purpose: it is the only one here that is DERIVED. -->
           <div class="facts">
             <div class="fact pick">
               <Combobox
+                openOnClick
                 positioning={{ sameWidth: false }}
                 collection={objCollection}
                 value={card.obj ? [String(card.obj)] : []}
@@ -374,16 +591,26 @@
                      no longer something to consult before choosing, it is the
                      rule that produced this. -->
                 <span class="cap">Prioridad</span>
-                <p class="prio-read prio-{card.prio ?? ''}" title={card.prio ? meaning[card.prio] : ''}>
+                <!-- Se ELIGE en el mapa: la prioridad sale de impacto × urgencia,
+                     y el mapa es la única forma de decir los dos a la vez. -->
+                <button
+                  bind:this={mapTrigger}
+                  class="prio-read prio-{card.prio ?? ''}"
+                  class:on={mapOpen}
+                  title={priorityMap ? 'elegir en el mapa' : card.prio ? meaning[card.prio] : ''}
+                  disabled={!priorityMap}
+                  onclick={() => (mapOpen = !mapOpen)}>
                   {#if card.prio}
                     <span class="prio-chip prio-{card.prio}">{card.prio}</span>
                     <span class="what">{meaning[card.prio] ?? ''}</span>
                   {:else}
                     <span class="what">sin impacto ni urgencia</span>
                   {/if}
-                </p>
+                  {#if priorityMap}<ChevronIcon class="ml-auto size-3.5 shrink-0" />{/if}
+                </button>
               {:else}
               <Combobox
+                openOnClick
                 positioning={{ sameWidth: false }}
                 collection={prioCollection}
                 value={card.prio ? [card.prio] : []}
@@ -425,6 +652,7 @@
                    ejecuta. -->
               {#key card.id}
               <DatePicker
+                openOnClick
                 defaultValue={due}
                 onValueChange={(e: { value: { year: number; month: number; day: number }[] }) =>
                   set({ due: isoDate(e.value?.[0]) })}
@@ -483,6 +711,62 @@
             </div>
           </div>
 
+          {#if loadPeople}
+            <section>
+              <div class="sec">
+                <UsersIcon class="size-4" />
+                <h3>Responsables</h3>
+              </div>
+              <div class="owners">
+                <Combobox
+                  openOnClick
+                  class="min-w-0 flex-1"
+                  multiple
+                  placeholder={(card.owners ?? []).length ? 'agregar a alguien…' : 'nadie a cargo'}
+                  collection={roster}
+                  value={card.owners ?? []}
+                  inputValue={hunting}
+                  onInputValueChange={(e: { inputValue: string }) => (hunting = e.inputValue)}
+                  onOpenChange={() => (hunting = '')}
+                  onValueChange={(e: { value: string[] }) => set({ owners: e.value })}>
+                  <Combobox.Control>
+                    <Combobox.Input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+                    <Combobox.Trigger />
+                  </Combobox.Control>
+                  <Portal>
+                    <Combobox.Positioner>
+                      <Combobox.Content class="who-list">
+                        {#each shortlist as p (p.id)}
+                          <Combobox.Item item={p}>
+                            <Combobox.ItemText>{p.name}</Combobox.ItemText>
+                            <Combobox.ItemIndicator />
+                          </Combobox.Item>
+                        {:else}
+                          <p class="faint px-2 py-1 text-xs">
+                            {people.length ? 'nadie más con ese nombre' : 'nadie en este proyecto todavía'}
+                          </p>
+                        {/each}
+                      </Combobox.Content>
+                    </Combobox.Positioner>
+                  </Portal>
+                </Combobox>
+              </div>
+              {#if (card.owners ?? []).length}
+                <ul class="chips">
+                  {#each card.owners ?? [] as id (id)}
+                    <li class="chip">
+                      {#if someone(id)?.avatar}<img class="chip-face" src={someone(id)?.avatar} alt="" />{/if}
+                      {someone(id)?.name ?? '…'}
+                      <button
+                        aria-label="quitar a {someone(id)?.name ?? 'esta persona'}"
+                        onclick={() => set({ owners: (card!.owners ?? []).filter((x) => x !== id) })}>×</button>
+                    </li>
+                  {/each}
+                </ul>
+              {:else}
+                <p class="faint mt-1 text-xs">nadie a cargo · si se enfría, cae a 🪦</p>
+              {/if}
+
           <section>
             <div class="sec">
               <AlignLeftIcon class="size-4" />
@@ -499,7 +783,6 @@
                     refused = true;
                     return;
                   }
-                  if (!editingNotes) touched = true;
                   // Terminar la edición guarda (ver el efecto de `wasEditing`).
                   editingNotes = !editingNotes;
                 }}>
@@ -517,57 +800,6 @@
               placeholder="el plan de esto: por qué, qué incluye, lo que se sabe — pega imágenes o escribe /mermaid" />
           </section>
 
-          {#if priorityMap}
-            <section>
-              <div class="sec">
-                <ListIcon class="size-4" />
-                <h3>El mapa</h3>
-              </div>
-              <!-- What impact × urgency produces. Where the priority is chosen it
-                   is what you consult first: «lo necesito urgente» se responde
-                   con «¿pasa algo si no se hace hoy?». Where it is derived, it
-                   is the rule that produced the chip above. -->
-              <table class="map">
-                <thead>
-                  <tr><th></th>{#each priorityMap.cols as c (c)}<th>{c}</th>{/each}</tr>
-                </thead>
-                <tbody>
-                  {#each priorityMap.rows as row (row[0])}
-                    <tr>
-                      <th>{row[0]}</th>
-                      {#each row.slice(1) as cell, i (i)}
-                        <td>
-                          <!-- Where the priority is derived, a cell is not a
-                               shortcut to a letter: it IS the pair — impact
-                               across, urgency down — and picking one is how the
-                               priority above changes at all. There was no other
-                               way to set the two axes, so the chip never moved
-                               off "sin impacto ni urgencia".
-
-                               Marked only in that mode, and for the same
-                               reason: the current cell is one pair, while three
-                               different pairs give P3, so highlighting by
-                               letter would point at two places you are not. -->
-                          <button
-                            class="prio-chip prio-{cell}"
-                            class:here={!choosePriority &&
-                              card.impact === AXIS[row[0]] &&
-                              card.urgency === AXIS[priorityMap.cols[i]]}
-                            title={choosePriority
-                              ? `poner ${cell}`
-                              : `${row[0]} × ${priorityMap.cols[i]} → ${cell}`}
-                            onclick={() =>
-                              set(
-                                choosePriority
-                                  ? { prio: cell }
-                                  : { impact: AXIS[row[0]], urgency: AXIS[priorityMap.cols[i]] },
-                              )}>{cell}</button>
-                        </td>
-                      {/each}
-                    </tr>
-                  {/each}
-                </tbody>
-              </table>
             </section>
           {/if}
 
@@ -576,11 +808,90 @@
               🗑 borrar
             </button>
           </footer>
+          {/if}
         {/if}
       </Dialog.Content>
     </Dialog.Positioner>
   </Portal>
 </Dialog>
+
+{#if priorityMap && card}
+  <!-- El mapa, flotando junto a la prioridad. Arrastrable para destapar lo que
+       tapa; sin redimensionar, porque su tamaño es el de la tabla. -->
+  <FloatingPanel
+    open={mapOpen}
+    onOpenChange={(e: { open: boolean }) => (mapOpen = e.open)}
+    resizable={false}
+    defaultSize={{ width: 380, height: 188 }}
+    getAnchorPosition={({ triggerRect }: { triggerRect: DOMRect | null }) => {
+      const r = mapTrigger?.getBoundingClientRect() ?? triggerRect;
+      if (!r) return { x: 24, y: 24 };
+      const x = Math.min(Math.max(8, r.left), window.innerWidth - 388);
+      const below = r.bottom + 6;
+      const y = below + 188 > window.innerHeight ? Math.max(8, r.top - 194) : below;
+      return { x, y };
+    }}>
+    <Portal>
+      <FloatingPanel.Positioner class="prio-panel">
+        <FloatingPanel.Content>
+          <FloatingPanel.DragTrigger>
+            <FloatingPanel.Header>
+              <FloatingPanel.Title>El mapa de prioridad</FloatingPanel.Title>
+              <FloatingPanel.Control>
+                <FloatingPanel.CloseTrigger aria-label="cerrar el mapa"><XIcon class="size-4" /></FloatingPanel.CloseTrigger>
+              </FloatingPanel.Control>
+            </FloatingPanel.Header>
+          </FloatingPanel.DragTrigger>
+          <FloatingPanel.Body>
+  <table class="map">
+                  <thead>
+                    <tr><th></th>{#each priorityMap.cols as c (c)}<th>{c}</th>{/each}</tr>
+                  </thead>
+                  <tbody>
+                    {#each priorityMap.rows as row (row[0])}
+                      <tr>
+                        <th>{row[0]}</th>
+                        {#each row.slice(1) as cell, i (i)}
+                          <td>
+                            <!-- Where the priority is derived, a cell is not a
+                                 shortcut to a letter: it IS the pair — impact
+                                 across, urgency down — and picking one is how the
+                                 priority above changes at all. There was no other
+                                 way to set the two axes, so the chip never moved
+                                 off "sin impacto ni urgencia".
+
+                                 Marked only in that mode, and for the same
+                                 reason: the current cell is one pair, while three
+                                 different pairs give P3, so highlighting by
+                                 letter would point at two places you are not. -->
+                            <button
+                              class="prio-chip prio-{cell}"
+                              class:here={!choosePriority &&
+                                card.impact === AXIS[row[0]] &&
+                                card.urgency === AXIS[priorityMap.cols[i]]}
+                              title={choosePriority
+                                ? `poner ${cell}`
+                                : `${row[0]} × ${priorityMap.cols[i]} → ${cell}`}
+                              onclick={() => {
+                                set(
+                                  choosePriority
+                                    ? { prio: cell }
+                                    : { impact: AXIS[row[0]], urgency: AXIS[priorityMap.cols[i]] },
+                                );
+                                mapOpen = false;
+                              }}>{cell}</button>
+                          </td>
+                        {/each}
+                      </tr>
+                    {/each}
+                  </tbody>
+                </table>
+          </FloatingPanel.Body>
+        </FloatingPanel.Content>
+      </FloatingPanel.Positioner>
+    </Portal>
+  </FloatingPanel>
+{/if}
 
 <style>
   .unsaved {
@@ -603,6 +914,92 @@
     outline: 2px solid var(--text);
     outline-offset: 2px;
   }
+  .toprow { display: flex; align-items: center; gap: 0.5rem; }
+  .flipbtn {
+    margin-left: auto;
+    padding: 0.2rem 0.65rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.8rem;
+  }
+  .flipbtn:hover, .flipbtn.on { color: var(--text); background: var(--hover); }
+  .hilos { display: flex; flex-direction: column; gap: 0.5rem; }
+  .hlist { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.15rem; }
+  .htile { display: flex; align-items: center; gap: 0.5rem; padding-right: 0.4rem; border-radius: 9px; }
+  .htile:hover { background: var(--hover); }
+  .hopen { display: flex; flex: 1; min-width: 0; flex-direction: column; padding: 0.45rem 0.5rem; text-align: left; }
+  .hline { display: flex; align-items: center; gap: 0.5rem; font-size: 0.88rem; }
+  .hsub { display: block; margin-top: 0.1rem; overflow: hidden; font-size: 0.74rem; text-overflow: ellipsis; white-space: nowrap; }
+
+  button.prio-read { width: 100%; text-align: left; cursor: pointer; }
+  button.prio-read:disabled { cursor: default; }
+  button.prio-read:not(:disabled):hover,
+  button.prio-read.on { border-color: color-mix(in oklab, var(--text) 35%, var(--line)); }
+
+  /* Responsables: el mismo control y las mismas fichas que «a cargo» en el
+     cajón de la burbuja. */
+  .owners :global([data-scope='combobox'][data-part='root']) { min-width: 0; width: 100%; }
+  .owners :global([data-scope='combobox'][data-part='control']) {
+    display: flex;
+    align-items: center;
+    gap: 0.35rem;
+    width: 100%;
+    min-height: 2.1rem;
+    padding: 0.1rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .owners :global([data-scope='combobox'][data-part='control']:focus-within) {
+    border-color: color-mix(in oklab, var(--accent, var(--text)) 60%, transparent);
+  }
+  /* El campo de dentro NO es otra caja: Skeleton estiliza el `input` con su
+     propio borde y fondo, y dentro de un control que ya es la caja se leía
+     como una caja dibujada dentro de otra. */
+  .owners :global(input) {
+    min-width: 0;
+    flex: 1;
+    padding: 0.15rem 0.25rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text);
+    font-size: 0.85rem;
+    outline: none;
+  }
+  .owners :global([data-scope='combobox'][data-part='trigger']) {
+    flex: none;
+    color: var(--faint);
+    font-size: 0.8rem;
+  }
+  .chips { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0.6rem 0 0; padding: 0; list-style: none; }
+  .chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.1rem 0.35rem 0.1rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 0.76rem;
+  }
+  .chip-face { width: 16px; height: 16px; margin-left: -0.3rem; border-radius: 999px; object-fit: cover; }
+  .chip button { color: var(--faint); font-size: 0.9rem; line-height: 1; }
+  .chip button:hover { color: var(--text); }
+
+  /* El panel del mapa: por encima de la tarjeta, que ya está por encima del
+     board. */
+  /* `pointer-events: auto` porque la tarjeta es un diálogo modal, y Zag le
+     quita los eventos de puntero a todo `body` mientras está abierta; el panel
+     vive portado ahí y, sin esto, se vería y no se podría pulsar. */
+  :global(.prio-panel) { z-index: calc(var(--z-drawer) + 2); pointer-events: auto; }
+  :global(.prio-panel [data-part='body']) { padding: 0.5rem 0.75rem 0.6rem; overflow: hidden; }
+  :global(.prio-panel [data-part='drag-trigger']) { cursor: grab; }
+
   .prio-read {
     display: flex;
     align-items: center;

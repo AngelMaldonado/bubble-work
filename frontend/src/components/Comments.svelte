@@ -122,7 +122,7 @@
         <!-- La frase que evita el malentendido más caro del modelo. Sin ella, lo
              primero que hace cualquiera es comentar para que algo "siga vivo". -->
         <p class="pulse">
-          Comentar no calienta el thread — mantiene el pulso: dice que alguien sigue atento, y
+          Comentar no calienta el hilo — mantiene el pulso: dice que alguien sigue atento, y
           por eso no se le llama abandonado. Lo que lo calienta es escribir el trabajo.
           <br />
           Lo dicho no se edita ni se borra: si algo salió mal, se dice otra cosa debajo.
@@ -136,7 +136,7 @@
           {#each items as c (c.id)}
             <li class="said">
               <span class="who" style="--hue: {hue(c.author)}" title={c.name}>
-                {(c.name[0] ?? '?').toUpperCase()}
+                {#if c.avatar}<img src={c.avatar} alt="" />{:else}{(c.name[0] ?? '?').toUpperCase()}{/if}
               </span>
               <div class="min-w-0">
                 <p class="meta">
@@ -156,13 +156,17 @@
         <form class="composer" onsubmit={(e) => { e.preventDefault(); send(); }}>
           <textarea
             rows="2"
-            placeholder="Escribe… (⌘↵ para enviar)"
+            placeholder="Escribe… (↵ envía, ⇧↵ salto de línea)"
             bind:value={draft} {@attach limited('comments.body')}
             onkeydown={(e) => {
-              if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
-                e.preventDefault();
-                send();
-              }
+              // Enter envía, como en cualquier chat; Shift+Enter es el salto de
+              // línea. Mientras un IME compone, Enter confirma la palabra y no
+              // es un envío.
+              if (e.key !== 'Enter' || e.shiftKey || e.isComposing) return;
+              e.preventDefault();
+              // Por el formulario y no llamando a `send`: así pasa por el tope
+              // del campo, que se engancha al `submit`.
+              e.currentTarget.form?.requestSubmit();
             }}></textarea>
           <button class="btn btn-sm preset-filled-primary-500" disabled={!draft.trim() || sending}>
             {sending ? '…' : 'Comentar'}
@@ -212,7 +216,10 @@
     scrollbar-color: color-mix(in oklab, var(--muted) 35%, transparent) transparent;
   }
   .said { display: grid; grid-template-columns: auto 1fr; gap: 0.6rem; }
+  .who img { width: 100%; height: 100%; object-fit: cover; }
   .who {
+    overflow: hidden;
+    flex: none;
     width: 28px;
     height: 28px;
     display: grid;

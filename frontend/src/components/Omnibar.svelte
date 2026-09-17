@@ -39,6 +39,7 @@
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import SearchIcon from '@lucide/svelte/icons/search';
   import { pieces, rank, type Range } from '../lib/fuzzy';
+  import { tick } from 'svelte';
 
   let {
     open = $bindable(false),
@@ -136,13 +137,38 @@
     return () => clearTimeout(timer);
   });
 
+  // La lista desplaza por dentro. Moverse con las flechas sin que ella siga
+  // al cursor es elegir algo que no se ve: se lleva la fila marcada a la vista
+  // —lo justo, sin centrarla—, y en la primera se sube del todo para que se lea
+  // el encabezado de su grupo.
+  let list = $state<HTMLUListElement | null>(null);
+  // Mientras se navega con el teclado, el ratón quieto no manda: al desplazarse
+  // la lista, la fila que queda bajo el puntero recibiría `mouseenter` y se
+  // llevaría el cursor. Moverlo de verdad lo devuelve.
+  let byKeys = false;
+  const hover = (i: number) => {
+    if (!byKeys) cursor = i;
+  };
+  async function reveal() {
+    byKeys = true;
+    await tick();
+    if (!list) return;
+    if (cursor === 0) {
+      list.scrollTop = 0;
+      return;
+    }
+    list.querySelector<HTMLElement>('.hit.on')?.scrollIntoView({ block: 'nearest' });
+  }
+
   function keys(e: KeyboardEvent) {
     if (e.key === 'ArrowDown' || (e.key === 'n' && e.ctrlKey)) {
       e.preventDefault();
       cursor = Math.min(cursor + 1, pickable.length - 1);
+      reveal();
     } else if (e.key === 'ArrowUp' || (e.key === 'p' && e.ctrlKey)) {
       e.preventDefault();
       cursor = Math.max(cursor - 1, 0);
+      reveal();
     } else if (e.key === 'Enter') {
       e.preventDefault();
       run(pickable[cursor]);
@@ -185,14 +211,14 @@
           <kbd>esc</kbd>
         </label>
 
-        <ul class="hits">
+        <ul class="hits" bind:this={list} onmousemove={() => (byKeys = false)}>
           {#each rows as r (r.key)}
             {#if r.kind === 'head'}
               <li class="head">{r.label}</li>
             {:else if r.kind === 'cmd'}
               {@const i = index(r)}
               <li>
-                <button class="hit" class:on={i === cursor} onmouseenter={() => (cursor = i)} onclick={() => run(r)}>
+                <button class="hit" class:on={i === cursor} onmouseenter={() => hover(i)} onclick={() => run(r)}>
                   <span class="ico" aria-hidden="true">{r.cmd.icon}</span>
                   <span class="t">
                     {#each pieces(r.cmd.title, r.ranges) as p}<span class:hi={p.on}>{p.text}</span>{/each}
@@ -204,7 +230,7 @@
             {:else}
               {@const i = index(r)}
               <li>
-                <button class="hit" class:on={i === cursor} onmouseenter={() => (cursor = i)} onclick={() => run(r)}>
+                <button class="hit" class:on={i === cursor} onmouseenter={() => hover(i)} onclick={() => run(r)}>
                   <span class="ico" aria-hidden="true">{r.hit.icon}</span>
                   <span class="t">
                     {#each pieces(r.hit.title, r.ranges) as p}<span class:hi={p.on}>{p.text}</span>{/each}

@@ -12,7 +12,7 @@
     "target": "ES2022",
     "module": "ESNext",
     "verbatimModuleSyntax": true,
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
   "include": ["src/**/*.d.ts", "src/**/*.ts", "src/**/*.svelte", "vite.config.ts"]
 }

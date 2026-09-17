@@ -1,4 +1,5 @@
 <script lang="ts">
+  import PriorityBadge from './PriorityBadge.svelte';
   import { bandFace, bandName } from '../lib/bands';
   // A thread's interior — a faithful port of v0's ThreadView.
   //
@@ -33,6 +34,8 @@
     reason = '',
     priority = '',
     threadState = '',
+    threadPriority = '',
+    onpriority,
     assignees = [],
     labels = [],
     markdown = '',
@@ -68,6 +71,10 @@
     // `$state(...)` as a store subscription on the prop and every piece of local
     // reactivity in the component silently stops working.
     threadState?: string;
+    /** la prioridad PROPIA del hilo, separada de la de su burbuja (`priority`) */
+    threadPriority?: string;
+    /** cambiarla; sólo se pasa al lead global */
+    onpriority?: (priority: string) => void;
     assignees?: string[];
     labels?: string[];
     /** the markdown: the record, and what an edit quotes from */
@@ -143,7 +150,7 @@
     { k: 'move', face: '↔', label: 'Mover de burbuja', go: onmove },
     { k: 'talk', face: '💬', label: talk ? `Comentarios (${talk})` : 'Comentarios', go: ontalk },
     { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
-    { k: 'delete', face: '🗑', label: 'Borrar el thread', tone: 'danger', go: ondelete },
+    { k: 'delete', face: '🗑', label: 'Borrar el hilo', tone: 'danger', go: ondelete },
     // A verb nobody gave a handler is not drawn. The alternative is a button
     // that swallows the click, which reads as broken rather than as absent —
     // and the real view wires these one at a time.
@@ -184,7 +191,7 @@
   ]);
 </script>
 
-<div class="screen band-{lifecycle}" aria-label="thread">
+<div class="screen band-{lifecycle}" aria-label="hilo">
   <div class="topbar">
     <button class="back" onclick={onback} aria-label="volver al board">
       <span aria-hidden="true">←</span> board
@@ -213,7 +220,10 @@
         {bandFace(lifecycle)} {bandName(lifecycle)}
       </span>
       {#if threadState}<span class="chip who" title="estado">{threadState}</span>{/if}
-      {#if priority}<span class="chip">{priority}</span>{/if}
+      <!-- Dos prioridades, y se dicen las dos: la de este hilo (su badge) y la
+           de la burbuja que lo lleva, que es otra pregunta. -->
+      <PriorityBadge value={threadPriority} canEdit={!!onpriority} onchange={(p) => onpriority?.(p)} />
+      {#if priority}<span class="chip" title="prioridad de la burbuja">burbuja {priority}</span>{/if}
       {#if assignees.length}<span class="chip who">{assignees.join(', ')}</span>{/if}
     </div>
 

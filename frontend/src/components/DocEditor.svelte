@@ -12,6 +12,7 @@
   // the text comes from or where it goes — that is the caller's, because one
   // writes a thread's document and the other a page.
   import { droppedFile, insertImage, pastedImage } from '../lib/attach';
+  import { annotate } from '../lib/annotate';
   import { untrack } from 'svelte';
   import Prose from './Prose.svelte';
   import SlashMenu from './SlashMenu.svelte';
@@ -127,7 +128,8 @@
       // documento.
       e.preventDefault();
       e.stopPropagation();
-      attach(file);
+      // Se pega después de anotarla, o no se pega si se canceló.
+      annotate(file).then((out) => out && attach(out));
     }
   }
 
@@ -379,6 +381,11 @@
     border-radius: 12px;
     background: var(--surface-solid);
     overflow: hidden;
+    /* CodeMirror numera sus capas para sí mismo —paneles 300, gutters 200,
+       tooltips 500— y sin un contexto propio esos números compiten con los de
+       la página: la barra `--INSERT--` salía por encima del modal de anotar
+       una imagen. Aislado, cuentan sólo dentro del editor. */
+    isolation: isolate;
   }
   .editors :global(.cm-vim-panel) {
     padding: 0.2rem 0.6rem;

@@ -13,6 +13,8 @@
  *     /w/alpha/t/14                thread #14 of that workspace
  *     /w/alpha/wiki/docs/adr.md    a page in its wiki
  *     /planeador                   the department's planner — no workspace
+ *     /secuencia                   the execution sequence, as the viewer sees it
+ *     /ajustes/tokens              settings, one tab per address
  *     /theme, /theme/mock          the design system, and the whole product mocked
  *
  * The slug and the seq, not ids: both are what people already say out loud
@@ -26,6 +28,8 @@ export type Route =
   | { kind: 'wiki'; slug: string; page: string }
   | { kind: 'planner' }
   | { kind: 'inventory' }
+  | { kind: 'sequence' }
+  | { kind: 'settings'; tab: string }
   | { kind: 'theme' }
   | { kind: 'mock' };
 
@@ -35,6 +39,11 @@ export function parse(pathname: string): Route {
   if (p === '/theme/mock') return { kind: 'mock' };
   if (p === '/planeador') return { kind: 'planner' };
   if (p === '/inventario') return { kind: 'inventory' };
+  if (p === '/secuencia') return { kind: 'sequence' };
+  // La tab va en la dirección: «mira tus tokens» es un enlace, no unas
+  // instrucciones. Vacía, la pantalla elige la primera que te corresponde.
+  const set = p.match(/^\/ajustes(?:\/([a-z-]+))?$/);
+  if (set) return { kind: 'settings', tab: set[1] ?? '' };
   // Todos es una DIRECCIÓN y no un filtro guardado: mirar todos los proyectos a
   // la vez es una pantalla, y una pantalla que no se puede enlazar es una
   // pantalla que no se puede mandar a nadie.
@@ -57,3 +66,5 @@ export const wikiUrl = (slug: string, page: string) =>
   `/w/${slug}/wiki/${page.split('/').map(encodeURIComponent).join('/')}`;
 export const plannerUrl = '/planeador';
 export const inventoryUrl = '/inventario';
+export const sequenceUrl = '/secuencia';
+export const settingsUrl = (tab = '') => (tab ? `/ajustes/${tab}` : '/ajustes');

@@ -69,3 +69,38 @@ export const lastOpenBubble = {
     }
   },
 };
+
+/**
+ * A dónde volver en el planeador después de abrir un hilo desde una tarjeta.
+ *
+ * En `sessionStorage`, como la burbuja abierta del board: es «dónde ibas» en
+ * esta pestaña, no una preferencia. Se escribe al irse y se CONSUME al volver —
+ * leerla dos veces reabriría la tarjeta cada vez que alguien entra al planeador.
+ */
+const RETURN_KEY = 'bw.planner-return';
+
+export type PlannerReturn = { card: string; face: 'plan' | 'hilos'; scroll: number };
+
+export const plannerReturn = {
+  set(v: PlannerReturn): void {
+    try {
+      sessionStorage.setItem(RETURN_KEY, JSON.stringify(v));
+    } catch {
+      // sin memoria de sesión, volver deja el planeador como estaba
+    }
+  },
+  peek(): PlannerReturn | null {
+    try {
+      return JSON.parse(sessionStorage.getItem(RETURN_KEY) ?? 'null');
+    } catch {
+      return null;
+    }
+  },
+  clear(): void {
+    try {
+      sessionStorage.removeItem(RETURN_KEY);
+    } catch {
+      // nada que limpiar
+    }
+  },
+};

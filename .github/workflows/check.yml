@@ -8,40 +8,28 @@ name: check
 #
 # No en cada push a una rama de trabajo: mientras se está construyendo algo, lo
 # que dice si va bien es `just check` en la máquina de quien lo escribe — el hook
-# de commit ya lo corre. Gastar cinco minutos de runner en cada empujón
-# intermedio enseña a mirar para otro lado cuando sale rojo, que es justo lo que
-# esta puerta no puede permitirse. El push a main tampoco lo necesita: el
-# release corre `scripts/check.sh` antes de tagear nada.
+# de commit ya lo corre. El push a main tampoco lo necesita: el release comprueba
+# antes de tagear, y si este mismo árbol ya pasó aquí, no lo repite.
 on:
   pull_request:
     branches: [main]
 
-# Una corrida a la vez de ESTE repositorio, y el grupo es COMPARTIDO con
-# `release`: los dos corren en la misma VM, y los grupos de concurrencia valen
-# para todo el repositorio. En un runner alojado cada trabajo es una VM nueva;
-# en el nuestro comparten disco, y la suite levanta un servidor sobre un
-# directorio de datos. Dos a la vez se pisarían y el fallo parecería del código.
-#
-# Entre REPOSITORIOS la concurrencia de GitHub no cruza: eso lo resuelve
-# `BUBBLE_TEST_PORT`, que le da a cada proyecto su puerto y su directorio.
+# Una corrida por PR; la nueva reemplaza a la que quedó vieja. En un runner
+# alojado cada trabajo es una VM limpia, así que ya no hay disco que compartir
+# con `release` ni motivo para serializarse con él.
 concurrency:
-  group: bubble-work-ci
-  cancel-in-progress: false
+  group: check-${{ github.ref }}
+  cancel-in-progress: true
+
+# `contents: write` sólo para dejar la marca de «este árbol pasó» (ver abajo).
+permissions:
+  contents: write
 
 jobs:
   check:
-    # La VM de Linux dentro de reko (ver deploy/CI.md). Este repositorio es
-    # PRIVADO, así que cada corrida en un runner alojado se paga.
-    #
-    # En una VM y no en el host macOS por dos razones: la suite corre con bash 5
-    # y coreutils de GNU —el cruce de sistemas que encontró cinco aserciones que
-    # en macOS pasaban sin llegar a la regla que decían comprobar— y el código
-    # de un PR se ejecuta donde no se ve el disco de nadie y se puede resetear.
-    #
-    # Y NO en ayetec, que también tiene runner: ése corre con sudo sin
-    # contraseña en la máquina que sirve la instancia pública, y `pull_request`
-    # ejecuta código de la rama que se propone.
-    runs-on: [self-hosted, reko-ci]
+    # Alojado: el repositorio es público, así que no cuesta minutos, y no
+    # depende de que ninguna máquina de casa esté encendida (deploy/CI.md).
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,7 +37,16 @@ jobs:
           # `git describe`, y un clon superficial no tiene tags que describir.
           fetch-depth: 0
 
+      # Idempotente por CONTENIDO: el árbol del commit, no el commit. Un re-run,
+      # o el merge a main de un PR cuya base no se movió, tienen el mismo árbol
+      # que algo que ya pasó, y comprobarlo otra vez no puede dar otra respuesta.
+      # La marca es una ref (`refs/ci/check/<árbol>`) y no la caché de Actions,
+      # porque la caché de un PR no la puede leer un push a main.
+      - id: seen
+        run: scripts/ci-seen.sh
+
       - uses: actions/setup-go@v5
+        if: steps.seen.outputs.hit != '1'
         with:
           go-version-file: go.mod
           cache: true
@@ -57,6 +54,17 @@ jobs:
       # bun para el type-check de la interfaz. `check.sh` se lo salta si no está,
       # y saltárselo aquí sería no comprobarlo en ningún sitio.
       - uses: oven-sh/setup-bun@v2
-      - run: cd frontend && bun install --frozen-lockfile
+        if: steps.seen.outputs.hit != '1'
+      - if: steps.seen.outputs.hit != '1'
+        run: cd frontend && bun install --frozen-lockfile
 
-      - run: scripts/check.sh
+      - if: steps.seen.outputs.hit != '1'
+        run: scripts/check.sh
+
+      # Sólo el CI escribe la marca: lo que pasó en la máquina de alguien no
+      # cuenta, o `--no-verify` se saltaría también esta puerta. Un PR desde un
+      # fork no tiene permiso de escribir refs, y entonces simplemente no deja
+      # marca.
+      - if: steps.seen.outputs.hit != '1'
+        continue-on-error: true
+        run: git push origin "HEAD:${{ steps.seen.outputs.ref }}"

@@ -260,7 +260,7 @@
       role="dialog"
       tabindex="-1"
       aria-modal="true"
-      aria-label="Cambiar de workspace"
+      aria-label="Cambiar de proyecto"
       onclick={(e) => e.stopPropagation()}>
       <div class="tiles">
         {#each entries as e, i (e.slug)}

@@ -51,6 +51,10 @@ EXPOSE 8090
 # un `docker compose up` los borraría y la instancia «volvería» a la versión de
 # la imagen sin que nadie entienda por qué.
 #
+# Salvo si la imagen trae una versión MÁS NUEVA que la vigente: eso es una
+# actualización que llega por el orquestador (Coolify), y `boot` la adopta
+# copiando antes la base.
+#
 # El hijo corre las migraciones pendientes al arrancar. Es la puerta de un solo
 # sentido: volver atrás devuelve el binario, no el esquema, y por eso
 # `POST /api/update` copia la base antes de reiniciar.

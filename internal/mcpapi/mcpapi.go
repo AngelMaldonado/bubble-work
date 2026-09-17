@@ -353,6 +353,24 @@ func build() *mcp.Server {
 		return jsonOut(map[string]any{"id": rec.Id, "url": rec.GetString("url")}), nil, nil
 	})
 
+	mcp.AddTool(s, &mcp.Tool{
+		Name: "next",
+		Description: "What to work on next. The department keeps ONE execution sequence, set by the " +
+			"global lead: `now` is the first step with open threads (several means they run in " +
+			"parallel), `then` is the step after it, and `mine` is the first open thread in the " +
+			"sequence that is yours: assigned to you, or unassigned in a bubble you are accountable for. Finishing a thread moves the sequence on by itself.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := bubble.Next(c.app, c.auth)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(out), nil, nil
+	})
+
 	type completeArg struct {
 		Thread string `json:"thread"`
 	}
@@ -480,24 +498,25 @@ func build() *mcp.Server {
 	})
 
 	type setThreadArg struct {
-		Thread string  `json:"thread"`
-		Name   *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
-		Bubble *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+		Thread   string  `json:"thread"`
+		Name     *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
+		Bubble   *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
+		Priority *string `json:"priority,omitempty" jsonschema:"P1, P2, P3 or P4 — this piece's own priority, separate from its bubble's; empty clears it. Only the global lead"`
 	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "set_thread",
-		Description: "Everything about a thread that is not its document: its name " +
-			"and which bubble carries it. What the work is FOR, how much it matters and " +
-			"when it is due belong to the BUBBLE — see `set_bubble`: they describe a " +
-			"body of work, and they are decided by whoever orchestrates, not by " +
-			"whoever executes.",
+		Description: "Everything about a thread that is not its document: its name, " +
+			"which bubble carries it, and — global lead only — its own priority (P1…P4), " +
+			"which is separate from its bubble's. What the work is FOR and when it is " +
+			"due belong to the BUBBLE — see `set_bubble`. Where a thread sits in the " +
+			"department's execution sequence is the lead's, set in the planner; `next` reads it.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setThreadArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
 		th, err := bubble.SetThread(c.app, c.auth, in.Thread, bubble.ThreadEdit{
-			Name: in.Name, Bubble: in.Bubble,
+			Name: in.Name, Bubble: in.Bubble, Priority: in.Priority,
 		})
 		if err != nil {
 			return nil, nil, err
@@ -505,6 +524,7 @@ func build() *mcp.Server {
 		return jsonOut(map[string]any{
 			"id": th.Id, "seq": th.GetInt("seq"), "name": th.GetString("name"),
 			"doc_path": th.GetString("doc_path"), "bubble": th.GetString("bubble"),
+			"priority": th.GetString("priority"),
 		}), nil, nil
 	})
 

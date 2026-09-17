@@ -18,6 +18,7 @@
   import { SlashMenu as SlashMenuState } from '../lib/slashmenu.svelte';
   import { vimPref } from '../lib/vim.svelte';
   import { droppedFile, insertImage, pastedImage } from '../lib/attach';
+  import { annotate } from '../lib/annotate';
   import { fit, overText } from '../lib/limits.svelte';
 
   let {
@@ -31,6 +32,7 @@
     render,
     onattach,
     limit = '',
+    fill = false,
   }: {
     value?: string;
     editing?: boolean;
@@ -48,6 +50,9 @@
      *  `lib/limits`). Pasado, el servidor rechaza la escritura entera: se avisa
      *  aquí, mientras se escribe, en vez de con un guardado que no ocurre. */
     limit?: string;
+    /** ocupar todo el alto que le dé su contenedor (un flex en columna), en vez
+     *  de `minHeight`. Para un panel donde el campo ES lo que hay. */
+    fill?: boolean;
   } = $props();
 
   const room = $derived(limit ? fit(limit, value) : null);
@@ -115,7 +120,7 @@
   }
 </script>
 
-<div class="field" style="--min: {minHeight}">
+<div class="field" class:fill style="--min: {minHeight}">
   {#if chrome}
   <div class="bar">
     <div class="seg" role="group" aria-label="modo">
@@ -162,7 +167,8 @@
         if (f) {
           e.preventDefault();
           e.stopPropagation();
-          attach(f);
+          // Se pega después de anotarla, o no se pega si se canceló.
+          annotate(f).then((out) => out && attach(out));
         }
       }}
       ondragover={(e) => onattach && e.preventDefault()}
@@ -242,7 +248,9 @@
      status bar through the middle of the editor and across the slash menu. A
      definite height lets the editor fill it and the panel land at the bottom,
      which is where it is in a thread and where a status bar belongs. */
-  .editor { height: var(--min); overflow: hidden; }
+  /* `isolation`: las capas de CodeMirror (paneles 300, gutters 200) cuentan
+     sólo dentro del editor, no contra los modales de la página. */
+  .editor { height: var(--min); overflow: hidden; isolation: isolate; }
   .editor :global(.cm-editor) { height: 100%; }
 
   /* The same status bar the thread's editor has. */
@@ -272,6 +280,14 @@
     text-align: left;
   }
   .empty:hover { background: var(--hover); }
+
+  /* Todo el alto del contenedor: el editor y lo renderizado se estiran hasta
+     abajo y desplazan por dentro, sin el tope de 60vh de lo renderizado. */
+  .field.fill { flex: 1 1 auto; min-height: 0; }
+  .fill .editor-wrap { flex: 1 1 auto; min-height: 0; }
+  .fill .editor { flex: 1 1 auto; height: auto; min-height: 0; }
+  .fill .preview,
+  .fill .empty { flex: 1 1 auto; min-height: 0; max-height: none; }
 
   .uploading {
     position: absolute;

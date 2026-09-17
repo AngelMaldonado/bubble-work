@@ -19,6 +19,7 @@ import (
 
 	"github.com/AngelMaldonado/bubble-work/internal/boot"
 	"github.com/AngelMaldonado/bubble-work/internal/bubble"
+	"github.com/AngelMaldonado/bubble-work/internal/channels"
 	"github.com/AngelMaldonado/bubble-work/internal/mcpapi"
 	"github.com/AngelMaldonado/bubble-work/internal/release"
 	"github.com/AngelMaldonado/bubble-work/internal/tree"
@@ -69,6 +70,11 @@ func main() {
 	// The agent surface. Every tool calls the same function the REST route calls,
 	// so the two cannot drift and neither can bypass what the other enforces.
 	mcpapi.Register(app, t)
+
+	// Por dónde entra al inbox lo que no se escribe en la app. Cada canal es un
+	// plugin compilado que se registra solo (ver `channels_*.go`); aquí sólo se
+	// montan los que el binario trae.
+	channels.Mount(app)
 
 	// Qué está corriendo aquí. Sin sesión y sin tocar la base a propósito: es la
 	// comprobación de salud del contenedor y lo que mira un actualizador antes y

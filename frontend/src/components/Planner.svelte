@@ -26,6 +26,8 @@
     type ThreadRecord,
     type ThreadHeat,
     type ThreadStage,
+    type CalendarEvent,
+    type Tuning,
     avatarUrl,
   } from '../lib/api';
   import PlannerView, { type Objective } from './PlannerView.svelte';
@@ -42,6 +44,7 @@
   import { plannerFilters, NO_FILTERS, type PlannerFilters } from '../lib/filters.svelte';
   import { bandFace, bandName } from '../lib/bands';
   import Crumbs from './Crumbs.svelte';
+  import { occurrences, isoDay } from '../lib/repeat';
 
   let {
     onback,
@@ -87,6 +90,18 @@
   // están en el mismo sitio del plan. Vacío es una respuesta — el lead no ha
   // definido ninguna todavía — y entonces todo cae en «Sin planear».
   let taskStages = $state<ThreadStage[]>([]);
+  let dates = $state<CalendarEvent[]>([]);
+  // Cuánto dura un ciclo AHORA. El tablero dice «en silencio 2 ciclos» y sin
+  // esto nadie sabe si eso son dos días o dos semanas: `cycle_hours` se
+  // recalibra desde Ajustes y cambia el veredicto de todo sin migración.
+  let tuning = $state<Tuning | null>(null);
+  const cycleWords = $derived.by(() => {
+    const h = tuning?.cycle_hours ?? 0;
+    if (!h) return '';
+    if (h < 48) return `${Math.round(h)} h`;
+    const d = Math.round(h / 24);
+    return d % 7 === 0 ? `${d / 7} sem` : `${d} d`;
+  });
 
   /** Cómo se ve el planeador: por módulos (burbujas) o por tareas (hilos).
    *
@@ -159,10 +174,11 @@
 
   async function load() {
     try {
-      const [bu, st, ts, th, ob, inb, pr, ws] = await Promise.all([
+      const [bu, st, ts, ce, th, ob, inb, pr, ws] = await Promise.all([
         api.allBubbles(),
         api.stages(),
         api.threadStages(),
+        api.calendarEvents(),
         api.allThreads(),
         api.objectives(),
         api.inbox(),
@@ -172,6 +188,7 @@
       bubbles = bu;
       stageRows = st;
       taskStages = ts;
+      dates = ce;
       threads = th;
       places = Object.fromEntries(ws.map((w) => [w.id, w.name]));
       slugs = Object.fromEntries(ws.map((w) => [w.id, w.slug]));
@@ -187,6 +204,11 @@
   load();
 
   // Las preferencias, una vez. Si fallan o no hay, se ve lo de siempre.
+  api
+    .tuning()
+    .then((t) => (tuning = t))
+    .catch(() => {});
+
   api
     .prefs()
     .then((p) => {
@@ -488,7 +510,33 @@
    *  del tablero, que valen para los dos.
    *
    *  Una tarea terminada no aparece: su fecha ya es historia, no plazo. */
+  /** La ventana en la que se despliegan las repeticiones.
+   *
+   *  Un rango fijo y generoso en vez de preguntarle al calendario qué mes está
+   *  mirando: el componente no lo dice hacia fuera, y esto es barato —son
+   *  cuentas sobre un puñado de filas— mientras que cablear el rango a través
+   *  de dos componentes para ahorrarlas sería pagar en acoplamiento. */
+  const window = $derived.by(() => {
+    const now = new Date();
+    return {
+      from: isoDay(new Date(now.getFullYear(), now.getMonth() - 2, 1)),
+      to: isoDay(new Date(now.getFullYear() + 1, now.getMonth() + 2, 0)),
+    };
+  });
+
   const events = $derived<CalEvent[]>([
+    // Lo que pasa en una fecha y NO es trabajo. Primero, porque es el marco:
+    // una entrega el día de la junta se lee distinto.
+    ...dates.flatMap((e) =>
+      occurrences(e.start, e.repeat ?? '', window.from, window.to).map((day) => ({
+        // Un id por ocurrencia: el calendario necesita que dos días distintos
+        // de la misma junta sean dos eventos, o dibuja uno solo.
+        id: `cal:${e.id}:${day}`,
+        title: `📅 ${e.name}`,
+        start: day,
+        allDay: true,
+      })),
+    ),
     ...shownBubbles
       .filter((b) => b.due_date && !b.closed_at)
       .map((b) => ({
@@ -509,11 +557,62 @@
       })),
   ]);
 
+  // ---- las fechas del departamento ----
+  //
+  // Una junta, un cierre, una visita: pasa en una fecha y NO es trabajo. No se
+  // completa, no produce evidencia y no calienta nada — por eso es una fila
+  // suya y no un hilo con fecha.
+  const isLead = $derived(api.me?.role === 'lead');
+  let datesOpen = $state(false);
+  let dateDraft = $state({ name: '', start: '', repeat: '' as '' | 'daily' | 'weekly' | 'biweekly' | 'monthly' });
+
+  const repeatNames: Record<string, string> = {
+    '': 'no se repite',
+    daily: 'cada día',
+    weekly: 'cada semana',
+    biweekly: 'cada dos semanas',
+    monthly: 'cada mes',
+  };
+
+  function addDate() {
+    const name = dateDraft.name.trim();
+    if (!name || !dateDraft.start) return;
+    const fields = {
+      name,
+      start: `${dateDraft.start} 00:00:00.000Z`,
+      repeat: dateDraft.repeat,
+    };
+    dateDraft = { name: '', start: '', repeat: '' };
+    write(() => api.create('calendar_events', fields));
+  }
+
+  const patchDate = (id: string, fields: Record<string, unknown>) =>
+    write(() => api.update('calendar_events', id, fields));
+
+  function deleteDate(id: string) {
+    const e = dates.find((x) => x.id === id);
+    doom = {
+      title: `¿Borrar «${e?.name ?? id}»?`,
+      body: e?.repeat
+        ? 'Se va la serie entera, no un día suelto.'
+        : 'Sale del calendario de todo el departamento.',
+      go: () => write(() => api.remove('calendar_events', id)),
+    };
+  }
+
   /** Arrastrar un evento a otro día. El calendario lleva módulos y tareas, así
    *  que hay que preguntar de qué es el id ANTES de escribir: escribir la fecha
    *  de una tarea en la fila de una burbuja no fallaría con un error claro —
    *  guardaría el plazo equivocado en el sitio equivocado. */
   function moveEvent(id: string, day: string) {
+    // Una ocurrencia de algo que se repite no se mueve arrastrándola: mover UNA
+    // junta de la serie es una excepción, y las excepciones son justo lo que se
+    // dejó fuera al elegir un menú cerrado en vez de RRULE. Se cambia la serie
+    // entera, o no se cambia.
+    if (id.startsWith('cal:')) {
+      error = 'Una junta que se repite se cambia entera, no un día suelto.';
+      return;
+    }
     const stamp = day ? `${day} 00:00:00.000Z` : '';
     if (heated.some((t) => t.id === id)) {
       heatWrite(() => api.update('threads', id, { due_date: stamp }));
@@ -900,6 +999,82 @@
   </p>
 {/if}
 
+{#if datesOpen}
+  <Dialog open onOpenChange={() => (datesOpen = false)}>
+    <Portal>
+      <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
+      <Dialog.Positioner
+        class="fixed inset-0 flex items-center justify-center p-4"
+        style="z-index: var(--z-drawer)">
+        <Dialog.Content class="card bg-surface-100-900 w-full max-w-lg space-y-4 p-5 shadow-xl">
+          <Dialog.Title class="text-lg font-bold">Fechas del departamento</Dialog.Title>
+          <Dialog.Description class="muted text-sm">
+            Lo que pasa en una fecha y no es trabajo: una junta, un cierre, una
+            visita. No se completa y no calienta nada — para eso están los hilos.
+          </Dialog.Description>
+
+          <ul class="dates">
+            {#each dates as e (e.id)}
+              <li class="date">
+                <input
+                  class="input dname"
+                  autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+                  value={e.name}
+                  onchange={(ev) => patchDate(e.id, { name: ev.currentTarget.value })}
+                  {@attach limited('calendar_events.name')} />
+                <input
+                  class="input dwhen"
+                  type="date"
+                  value={e.start?.slice(0, 10) ?? ''}
+                  onchange={(ev) =>
+                    patchDate(e.id, {
+                      start: ev.currentTarget.value ? `${ev.currentTarget.value} 00:00:00.000Z` : '',
+                    })} />
+                <select
+                  class="select drep"
+                  value={e.repeat ?? ''}
+                  onchange={(ev) => patchDate(e.id, { repeat: ev.currentTarget.value })}>
+                  {#each Object.entries(repeatNames) as [v, label] (v)}
+                    <option value={v}>{label}</option>
+                  {/each}
+                </select>
+                <button class="x" title="borrar" onclick={() => deleteDate(e.id)}>×</button>
+              </li>
+            {/each}
+            {#if !dates.length}
+              <li><p class="muted text-sm">Todavía no hay ninguna.</p></li>
+            {/if}
+          </ul>
+
+          <form class="date" onsubmit={(e) => { e.preventDefault(); addDate(); }}>
+            <input
+              class="input dname"
+              placeholder="Junta semanal"
+              autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+              bind:value={dateDraft.name}
+              {@attach limited('calendar_events.name')} />
+            <input class="input dwhen" type="date" bind:value={dateDraft.start} />
+            <select class="select drep" bind:value={dateDraft.repeat}>
+              {#each Object.entries(repeatNames) as [v, label] (v)}
+                <option value={v}>{label}</option>
+              {/each}
+            </select>
+            <button
+              class="btn btn-sm preset-filled-primary-500"
+              disabled={!dateDraft.name.trim() || !dateDraft.start}>Añadir</button>
+          </form>
+
+          <div class="flex justify-end">
+            <button class="btn btn-sm preset-tonal-surface" onclick={() => (datesOpen = false)}>
+              Listo
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Portal>
+  </Dialog>
+{/if}
+
 {#if promoting}
   <!-- Dos pasos: proyecto, y después módulo. Con vuelta atrás, que es la mitad
        del argumento para que sean dos. -->
@@ -1071,7 +1246,8 @@
   onrenamecolumn={renameStage}
   ondeletecolumn={deleteStage}
   onmovecolumn={moveStage}
-  cardsAreTasks={tasksMode}>
+  cardsAreTasks={tasksMode}
+  onopendates={isLead ? () => (datesOpen = true) : undefined}>
   <!-- La barra vive aquí, donde están los datos que llena: los proyectos, la
        gente y los objetivos ya están cargados para el tablero. -->
   {#snippet filterBar()}
@@ -1124,8 +1300,17 @@
         <option value="none">sin objetivo</option>
       </select>
 
-      <select class="select" bind:value={filters.band} aria-label="filtrar por banda">
-        <option value="">cualquier banda</option>
+      <!-- Qué dura un ciclo, pegado al filtro que habla de bandas: las bandas se
+           miden en ciclos («en silencio 2 ciclos») y el número solo no dice si
+           eso son dos días o dos semanas. No es una rejilla del calendario — el
+           ciclo se cuenta desde el último calor de CADA burbuja, no desde una
+           fecha común— así que se dice como duración, que es lo que sí es. -->
+      <select
+        class="select"
+        bind:value={filters.band}
+        title={cycleWords ? `Un ciclo dura ${cycleWords}` : 'Banda de calor'}
+        aria-label="filtrar por banda">
+        <option value="">cualquier banda{cycleWords ? ` · ciclo ${cycleWords}` : ''}</option>
         <option value="hot">{bandFace('hot')} {bandName('hot')}</option>
         <option value="dormant">{bandFace('dormant')} {bandName('dormant')}</option>
         <option value="rip">{bandFace('rip')} {bandName('rip')}</option>
@@ -1157,6 +1342,19 @@
   }
   /* Filtrando, la barra se nota: es la explicación de por qué falta algo. */
   .filters.on { border-left: 2px solid var(--accent); }
+  .dates { display: flex; flex-direction: column; gap: 0.4rem; margin: 0; padding: 0; list-style: none; }
+  .date { display: flex; align-items: center; gap: 0.4rem; }
+  .date .dname { flex: 1 1 auto; min-width: 0; }
+  .date .dwhen { flex: 0 0 auto; width: auto; }
+  .date .drep { flex: 0 0 auto; width: auto; }
+  .date .x {
+    flex: none;
+    padding: 0 0.4rem;
+    border-radius: 7px;
+    color: var(--faint);
+  }
+  .date .x:hover { background: var(--hover); color: var(--text); }
+
   .mode {
     display: flex;
     flex: none;

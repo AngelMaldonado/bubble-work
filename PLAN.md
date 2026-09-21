@@ -1732,6 +1732,66 @@ Lo que se descartó:
 **Hecho cuando:** los tests en vivo de `agents_md` pasan, y el lead guarda una
 versión de cada documento desde la app y la ve leída por un agente.
 
+## Lo que pasa en una fecha y no es trabajo *(built)*
+
+Una junta semanal no tenía dónde ponerse: el calendario sólo sabía de burbujas y
+de tareas con fecha. La salida tentadora era crear un hilo y darle fecha, y es
+justo la que hay que cerrar — un hilo se completa, produce evidencia y
+**calienta**. Un hilo que renaciera cada lunes emitiría `thread-created` todas
+las semanas: una burbuja 🔥 para siempre sin que nadie trabaje, que es lo
+contrario de lo que el calor dice.
+
+Así que `calendar_events` es una colección aparte, del departamento, escrita por
+el lead global. **No emite ningún evento y no calienta nada**, y hay una
+aserción viva que lo fija contando las filas de `events` antes y después.
+
+**La repetición es un menú cerrado** —diaria, semanal, quincenal, mensual— y se
+rechaza la RRULE de iCalendar: trae una librería más y mucha superficie que
+probar (excepciones, fin de serie, «el tercer jueves») por casos que todavía no
+existen aquí. Tampoco hay fin de serie: una repetición dura hasta que alguien la
+borra, porque un `until` que nadie pone es una columna vacía y uno puesto mal es
+una junta que desaparece sin que se sepa por qué.
+
+Se guarda **una fila con su primera fecha**, no una por ocurrencia: las
+siguientes se calculan al dibujar (`frontend/src/lib/repeat.ts`). Una tabla con
+una fila por lunes crece sola, hay que podarla, y mover la junta obliga a
+reescribir todo el futuro en vez de un campo. Y por eso mismo una ocurrencia
+suelta **no se arrastra** a otro día: mover una de la serie es una excepción, y
+las excepciones son lo que se dejó fuera al elegir el menú cerrado.
+
+## El ciclo NO es una rejilla del calendario
+
+Estaba planeado «pintar dónde empieza y termina el ciclo actual», y al ir a
+hacerlo resultó estar mal planteado: **no hay un ciclo del departamento**. El
+ciclo se mide desde el último calor de CADA burbuja (`cycleLeft(warmAt, …)`), no
+desde una fecha común, así que una burbuja calentada ayer y otra calentada hace
+una semana están en puntos distintos del suyo. Una rejilla global tendría que
+inventar un ancla que el modelo no tiene, y diría algo falso de casi todas.
+
+Lo que sí faltaba es más pequeño y es verdad: el tablero dice «en silencio 2
+ciclos» y nadie sabía si eso son dos días o dos semanas, porque `cycle_hours` se
+recalibra desde Ajustes y cambia el veredicto sin migración. Ahora la duración
+del ciclo se dice junto al filtro de bandas, que es donde se lee el número.
+
+## Instalable, y sin escritura sin conexión *(built)*
+
+La aplicación se instala desde el navegador: un manifiesto, los iconos y un
+`theme-color`. Los PNG se generan del mismo dibujo que el favicon
+(`frontend/scripts/icons.mjs`) en vez de dibujarse aparte — dos dibujos del
+mismo logo se separan en cuanto alguien toca uno.
+
+**No hay service worker, y es una decisión.** Lo que se rechaza es la escritura
+sin conexión: cada escritura va por el servidor, que la anota en `events` y hace
+un commit de git, y `edit` exige el hash del documento que se leyó. Escribir sin
+red significa inventar resolución de conflictos contra git y contra el calor —
+dos cosas que el modelo define con precisión y que un buzón de cambios pendientes
+volvería aproximadas.
+
+La lectura sin conexión es otra pregunta y está abierta: cachear el shell y lo
+último visto no rompe nada. No se hace ahora porque sin lo anterior el valor es
+pequeño — se vería un tablero viejo sin poder tocarlo — y porque una caché es
+una segunda copia que hay que saber invalidar.
+
 ## Las fechas vuelven a bajar: una tarea tiene la suya *(built)*
 
 `1788508000_dates_move_up.go` quitó `threads.due_date` y subió los valores a las

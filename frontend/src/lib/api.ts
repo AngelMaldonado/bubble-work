@@ -44,6 +44,21 @@ export type ThreadHeat = {
   due_date?: string;
 };
 
+/** Lo que pasa en una fecha y no es trabajo: una junta, un cierre, una visita.
+ *
+ *  No es un hilo a propósito: un hilo se completa, produce evidencia y calienta,
+ *  y una junta semanal que renaciera como hilo mantendría una burbuja 🔥 para
+ *  siempre sin que nadie trabajara. */
+export type CalendarEvent = {
+  id: string;
+  name: string;
+  /** cuándo es la PRIMERA; las siguientes se calculan */
+  start: string;
+  /** vacío es «no se repite» */
+  repeat?: '' | 'daily' | 'weekly' | 'biweekly' | 'monthly';
+  notes?: string;
+};
+
 /** Una columna del tablero de TAREAS. Del departamento, como `Stage`, pero de
  *  hilos: un módulo y una tarea no están en el mismo sitio del plan. */
 export type ThreadStage = {
@@ -692,6 +707,15 @@ class Api {
 
   /** El id de mi fila, cacheado para no preguntarlo en cada guardado. */
   private prefRow = '';
+
+  /** Lo que pasa en una fecha y no es trabajo. Del departamento, como los
+   *  objetivos: lo escribe el lead global y lo ve todo el mundo. */
+  async calendarEvents(): Promise<CalendarEvent[]> {
+    const out = await this.call<{ items: CalendarEvent[] }>(
+      '/api/collections/calendar_events/records?perPage=500&sort=start',
+    );
+    return out.items;
+  }
 
   /** Las columnas del tablero de tareas, en orden. Vacío es una respuesta: el
    *  lead todavía no ha definido ninguna. */

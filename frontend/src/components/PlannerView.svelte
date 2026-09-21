@@ -80,7 +80,11 @@
     onpickevent,
     filterBar,
     cardsAreTasks = false,
+    onopendates,
   }: {
+    /** Abrir el editor de fechas del departamento (juntas, cierres). Lo dibuja
+     *  quien tiene los datos; esta pantalla sólo pone el botón. */
+    onopendates?: () => void;
     /** Las tarjetas del tablero son TAREAS, no módulos. Cambia una sola cosa
      *  aquí: abrir una tarjeta lleva a su hilo en vez de abrir la hoja de la
      *  burbuja, que es de otra fila y editaría los campos equivocados. */
@@ -458,6 +462,9 @@
       : [
           { k: 'obj', face: '🎯', label: 'Objetivos', go: () => (objOpen = true) },
           { k: 'prio', face: '🔢', label: 'Prioridades', go: () => (prioOpen = true) },
+          // Lo que pasa en una fecha y no es trabajo. Sólo si quien contiene
+          // esta pantalla sabe escribirlo: la agenda mira y no escribe.
+          ...(onopendates ? [{ k: 'dates', face: '📅', label: 'Fechas', go: onopendates }] : []),
           { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
         ],
   );

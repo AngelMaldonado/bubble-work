@@ -1582,6 +1582,40 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
 
+# ------------------- lo que pasa en una fecha y NO es trabajo ----
+#
+# Una junta no se completa, no produce evidencia y NO calienta. Por eso es una
+# fila suya y no un hilo con fecha: un hilo que renaciera cada lunes emitiría
+# `thread-created` todas las semanas y mantendría una burbuja caliente sin que
+# nadie trabajara.
+CEV="$API/api/collections/calendar_events/records"
+echo
+chk ">>> un lead de workspace NO pone una fecha del departamento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CEV" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"Junta","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}')" 400
+EVBEFORE=$(curl -s "$API/api/collections/events/records?perPage=1" -H "Authorization: $SU" | j "['totalItems']")
+CEID=$(curl -s -X POST "$CEV" -H "Authorization: $C" -H 'Content-Type: application/json' \
+  -d '{"name":"Junta semanal","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}' | j "['id']")
+chk ">>> el lead global sí, y con su repetición" \
+  "$(curl -s "$CEV/$CEID" -H "Authorization: $A" | j "['repeat']")" weekly
+chk ">>> ...y la ve cualquiera que trabaje aquí" \
+  "$(curl -s "$CEV/$CEID" -H "Authorization: $B" | j "['name']")" "Junta semanal"
+chk ">>> anónimo no" "$(curl -s "$CEV?perPage=1" | j "['totalItems']")" 0
+chk ">>> una repetición que no está en el menú se rechaza" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CEV" -H "Authorization: $C" \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"Cada tercer jueves","start":"2026-10-05 00:00:00.000Z","repeat":"rrule"}')" 400
+# La aserción que sostiene todo el argumento.
+chk ">>> crear una fecha NO deja evidencia: no calienta nada" \
+  "$(curl -s "$API/api/collections/events/records?perPage=1" -H "Authorization: $SU" | j "['totalItems']")" "$EVBEFORE"
+# 404 y no 403: la regla de borrado no lo alcanza, así que para él esa fila no
+# existe como algo borrable. Es como contesta el resto de la API.
+chk ">>> un member no la borra" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$CEV/$CEID" -H "Authorization: $B")" 404
+chk ">>> el lead global sí" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$CEV/$CEID" -H "Authorization: $C")" 204
+
 # ------------------------------- las columnas del tablero de TAREAS ----
 #
 # Propias, y no las de las burbujas: una burbuja en «Corto plazo» con sus hilos

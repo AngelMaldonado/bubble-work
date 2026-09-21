@@ -5,6 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <meta name="color-scheme" content="light dark" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <!-- Instalable. Sin service worker a propósito: cada escritura va por el
+         servidor, que la anota y hace un commit de git, y `edit` exige el hash
+         del documento — escribir sin red sería inventar resolución de
+         conflictos contra git. Ver PLAN.md. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS no lee el manifiesto para el icono: sin esto, la aplicación
+         instalada en un iPhone sale con una captura de pantalla por icono. -->
+    <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
+    <meta name="apple-mobile-web-app-title" content="bubble.work" />
+    <meta name="theme-color" content="#f2551f" />
     <title>bubble.work</title>
     <script>
       // Before first paint, or the page flashes light and then goes dark.

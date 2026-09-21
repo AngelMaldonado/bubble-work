@@ -12,11 +12,11 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
   import Kanban, { type Card, type Column } from './Kanban.svelte';
-  import SequencePane, { type SeqThread } from './SequencePane.svelte';
   import type { SheetThread } from './CardSheet.svelte';
   import { plannerReturn } from '../lib/filters.svelte';
   import CardSheet from './CardSheet.svelte';
   import InboxSheet, { type Note } from './InboxSheet.svelte';
+  import type { Snippet } from 'svelte';
   import PlannerCalendar, { type CalEvent } from './PlannerCalendar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import { edgeFade } from '../lib/fade.svelte';
@@ -65,10 +65,6 @@
     onthreadpriority,
     onnewthread,
     onopenthread,
-    sequenceThreads,
-    onreorder,
-    oncompletethread,
-    ondropbubble,
     onaddcolumn,
     onrenamecolumn,
     ondeletecolumn,
@@ -77,7 +73,34 @@
     readonly = false,
     title = 'Planeador',
     onpickevent,
+    filterBar,
+    cardsAreTasks = false,
+    onopendates,
+    modeSwitch,
+    boardPane,
   }: {
+    /** Qué va en el panel del tablero. Con la función de secuencia encendida,
+     *  la LÍNEA de ejecución; sin ella —o con el kanban elegido— este hueco se
+     *  queda vacío y se dibuja el kanban. Un snippet y no una bandera porque lo
+     *  que va dentro lo arma quien tiene los datos. */
+    boardPane?: Snippet;
+    /** Qué mira el planeador entero: módulos o tareas. Va en la CABECERA y no
+     *  en la barra de filtros porque no filtra nada — cambia lo que el tablero
+     *  ES, igual que el título de al lado dice en qué pantalla estás. Un
+     *  conmutador de eso entre los filtros se lee como un filtro más. */
+    modeSwitch?: Snippet;
+    /** Abrir el editor de fechas del departamento (juntas, cierres). Lo dibuja
+     *  quien tiene los datos; esta pantalla sólo pone el botón. */
+    onopendates?: () => void;
+    /** Las tarjetas del tablero son TAREAS, no módulos. Cambia una sola cosa
+     *  aquí: abrir una tarjeta lleva a su hilo en vez de abrir la hoja de la
+     *  burbuja, que es de otra fila y editaría los campos equivocados. */
+    cardsAreTasks?: boolean;
+    /** La barra de filtros, encima del tablero. La dibuja quien tiene los datos
+     *  —los proyectos, la gente, los objetivos— en vez de pasarle cuatro listas
+     *  a esta pantalla para que los dibuje ella. Sin ella, no hay barra: la
+     *  agenda sólo mira. */
+    filterBar?: Snippet;
     /** Whose plan this is, shown top right. Empty in the real planner: the plan
      *  is the department's, and a project's name up there says it is that
      *  project's — which is exactly what it is not. */
@@ -137,12 +160,6 @@
     /** abrir un hilo a pantalla completa. Antes, esta pantalla anota a dónde
      *  volver: la tarjeta, por su cara de hilos, y el scroll de la lista. */
     onopenthread?: (threadId: string) => void;
-    /** los hilos para la columna de la secuencia del kanban; sin esto no se ofrece */
-    sequenceThreads?: SeqThread[];
-    onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
-    oncompletethread?: (threadId: string) => void | Promise<void>;
-    /** una burbuja soltada en la columna de la secuencia: sus hilos abiertos al final */
-    ondropbubble?: (cardId: string) => void;
     /** the columns, when they are rows somebody owns — see Kanban */
     onaddcolumn?: () => void;
     onrenamecolumn?: (id: string, name: string) => void;
@@ -446,6 +463,9 @@
       : [
           { k: 'obj', face: '🎯', label: 'Objetivos', go: () => (objOpen = true) },
           { k: 'prio', face: '🔢', label: 'Prioridades', go: () => (prioOpen = true) },
+          // Lo que pasa en una fecha y no es trabajo. Sólo si quien contiene
+          // esta pantalla sabe escribirlo: la agenda mira y no escribe.
+          ...(onopendates ? [{ k: 'dates', face: '📅', label: 'Fechas', go: onopendates }] : []),
           { k: 'search', face: '🔍', label: 'Buscar · ⌘K', go: onsearch },
         ],
   );
@@ -477,6 +497,11 @@
       <span aria-hidden="true">←</span> board
     </button>
     <h2 class="ttl">{title}</h2>
+    {#if modeSwitch}{@render modeSwitch()}{/if}
+    <!-- Los filtros, en la cabecera y no encima del tablero: valen para los dos
+         paneles —la línea y el kanban— y para el calendario, así que colgarlos
+         de uno de ellos decía que eran suyos. -->
+    {#if filterBar}{@render filterBar()}{/if}
 
     {#if workspace}<span class="ws">{workspace}</span>{/if}
   </div>
@@ -550,9 +575,20 @@
 
     {#if showBoard}
       <section class="pane board" bind:this={els.board} style={paneStyle('board')}>
+        {#if boardPane}
+          {@render boardPane()}
+        {:else}
+        <!-- El tablero mide `height: 100%`, así que con la barra encima necesita
+             su propia caja: si no, el 100% se cuenta contra el panel entero y
+             se sale por abajo justo lo que mide la barra. -->
+        <div class="board-wrap">
         <Kanban
           bind:columns
           onopen={(c) => {
+            if (cardsAreTasks) {
+              onopenthread?.(c.id);
+              return;
+            }
             cardFace = 'plan';
             backScroll = 0;
             open = c;
@@ -568,16 +604,9 @@
           {onrenamecolumn}
           {ondeletecolumn}
           {onmovecolumn}
-          orderKey="bubble.planner.columns"
-          sequence={sequenceThreads
-            ? {
-                threads: sequenceThreads,
-                onreorder,
-                oncomplete: oncompletethread,
-                onopen: (t) => onopenthread?.(t.id),
-                ondropbubble,
-              }
-            : undefined} />
+          orderKey="bubble.planner.columns" />
+        </div>
+        {/if}
       </section>
     {/if}
 
@@ -798,7 +827,10 @@
   .topbar {
     display: flex;
     align-items: center;
-    gap: 0.75rem;
+    gap: 0.6rem;
+    /* Lo que no cabe se encoge; lo que no se puede encoger se recorta. Sin esto
+       el último control se sale por la derecha y no hay forma de alcanzarlo. */
+    overflow: hidden;
     height: var(--topbar-h);
     padding: 0 0.9rem;
     border-bottom: 1px solid var(--line);
@@ -817,7 +849,8 @@
     font-size: 0.82rem;
   }
   .back:hover { color: var(--text); background: var(--hover); }
-  .ttl { margin: 0; font-size: 0.95rem; font-weight: 700; }
+  .ttl { flex: none; margin: 0; font-size: 0.95rem; font-weight: 700; }
+  .back { flex: none; }
   .ws { margin-left: auto; color: var(--faint); font-size: 0.82rem; }
 
   /* No cards. Three panes of one screen are regions of a whole, and wrapping
@@ -871,6 +904,7 @@
   .inbox { flex: 0 0 288px; padding: 0.75rem; }
   .cal { flex: 3 1 0; }
   .board { flex: 2 1 0; }
+  .board-wrap { flex: 1; min-height: 0; }
   .empty { margin: auto; color: var(--faint); font-size: 0.85rem; }
 
   .inbox > header { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }

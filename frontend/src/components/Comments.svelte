@@ -16,18 +16,26 @@
   import { live } from '../lib/live.svelte';
   import { ago } from '../lib/when';
   import Prose from './Prose.svelte';
+  import Crumbs from './Crumbs.svelte';
   import { limited } from '../lib/limits.svelte';
 
   let {
     open = $bindable(false),
     thread,
+    workspace = '',
     title = '',
+    crumbs = [],
     onposted,
   }: {
     open?: boolean;
     /** el id del thread; vacío mientras no hay ninguno abierto */
     thread: string;
+    /** el workspace del thread: sin él, una referencia a `assets/` no se
+     *  reescribe a la ruta que sirve el archivo y la imagen sale rota */
+    workspace?: string;
     title?: string;
+    /** dónde estás: los niveles POR ENCIMA del título, que ya es la hoja */
+    crumbs?: (string | null | undefined)[];
     /** se dijo algo — el pulso del thread cambió */
     onposted?: () => void;
   } = $props();
@@ -57,7 +65,7 @@
       // entonces dos pantallas muestran lo mismo distinto.
       const missing = items.filter((c) => html[c.id] === undefined);
       if (missing.length) {
-        const done = await Promise.all(missing.map((c) => api.renderMarkdown(c.body)));
+        const done = await Promise.all(missing.map((c) => api.renderMarkdown(c.body, workspace)));
         const next = { ...html };
         missing.forEach((c, i) => (next[c.id] = done[i]));
         html = next;
@@ -113,9 +121,12 @@
       <Dialog.Content class="drawer talk">
         <header class="flex items-start gap-3">
           <span class="mt-0.5 text-xl" aria-hidden="true">💬</span>
-          <Dialog.Title class="min-w-0 flex-1 truncate text-lg font-bold">
-            {title || 'Comentarios'}
-          </Dialog.Title>
+          <div class="min-w-0 flex-1">
+            <Crumbs parts={crumbs} />
+            <Dialog.Title class="truncate text-lg font-bold">
+              {title || 'Comentarios'}
+            </Dialog.Title>
+          </div>
           <Dialog.CloseTrigger class="btn btn-sm preset-tonal-surface">✕</Dialog.CloseTrigger>
         </header>
 

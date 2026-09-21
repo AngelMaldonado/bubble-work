@@ -138,3 +138,47 @@ export async function showImages(el: HTMLElement, token: string): Promise<void> 
     }),
   );
 }
+
+/** Los adjuntos que no son imágenes, como cajitas que se abren.
+ *
+ *  Mismo problema que las imágenes y misma salida: la ruta pide el header de
+ *  autorización y un `<a href>` no lo manda, así que el navegador recibiría un
+ *  401 al hacer clic. Se descargan aquí, con el header, y el enlace pasa a
+ *  apuntar al blob — que sí se abre en una pestaña.
+ *
+ *  Se marcan con `data-attachment` para que el estilo los dibuje como cajita.
+ *  El marcado no lo pone nadie a mano: una cajita ES una referencia del
+ *  documento, y una lista aparte se desincronizaría con lo que el markdown
+ *  dice. Borrar la referencia quita la cajita, que es lo que uno espera.
+ */
+export async function showAttachments(el: HTMLElement, token: string): Promise<void> {
+  const links = [
+    ...el.querySelectorAll<HTMLAnchorElement>('a[href^="/api/workspaces/"][href*="/file?path="]'),
+  ];
+  await Promise.all(
+    links.map(async (a) => {
+      const href = a.getAttribute('href');
+      if (!href) return;
+      a.dataset.attachment = '';
+      let job = drawn.get(href);
+      if (!job) {
+        job = fetch(href, { headers: token ? { Authorization: token } : {} })
+          .then((r) => (r.ok ? r.blob() : Promise.reject(new Error(String(r.status)))))
+          .then((b) => URL.createObjectURL(b));
+        drawn.set(href, job);
+        job.catch(() => drawn.delete(href));
+      }
+      try {
+        a.href = await job;
+        // En otra pestaña: un PDF que se abre encima se lleva por delante lo
+        // que se estaba escribiendo.
+        a.target = '_blank';
+        a.rel = 'noopener';
+      } catch {
+        // Se queda la ruta original y el clic dará 401 o 404 — que es la
+        // verdad: ese archivo no está.
+        a.dataset.attachment = 'roto';
+      }
+    }),
+  );
+}

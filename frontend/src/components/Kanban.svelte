@@ -39,6 +39,10 @@
      *  planear»): no se renombra, no se borra y no se mueve. Ofrecerlo sería un
      *  menú que no hace nada, o un arrastre que al recargar vuelve atrás. */
     locked?: boolean;
+    /** nace estrecha. Para la columna de terminadas: lo hecho ya no pide nada,
+     *  y abierto le roba ancho a lo que falta. Es sólo el valor INICIAL —
+     *  quien la abra la deja abierta mientras mire este tablero. */
+    collapsed?: boolean;
   };
 </script>
 
@@ -55,13 +59,10 @@
   // drag engine.
   import PlusIcon from '@lucide/svelte/icons/plus';
   import MoreIcon from '@lucide/svelte/icons/more-horizontal';
-  import SpoolIcon from '@lucide/svelte/icons/spool';
-  import SproutIcon from '@lucide/svelte/icons/sprout';
-  import { ago, when } from '../lib/when';
+  import BoardCard from './BoardCard.svelte';
   import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
   import { limited } from '../lib/limits.svelte';
   import { tick } from 'svelte';
-  import SequencePane, { type SeqThread } from './SequencePane.svelte';
 
   let {
     columns = $bindable([]),
@@ -74,7 +75,6 @@
     onmovecard,
     onautoorder,
     onmovecolumn,
-    sequence,
     orderKey = '',
   }: {
     columns?: Column[];
@@ -100,16 +100,6 @@
     onmovecard?: (cardId: string, columnId: string, before: string | null) => void;
     /** devolver una columna al orden automático, el que deriva la prioridad */
     onautoorder?: (columnId: string) => void;
-    /** La columna de la secuencia de ejecución, cuando la función está
-     *  encendida. No es una etapa: ordena HILOS, no burbujas, y es fija. */
-    sequence?: {
-      threads: SeqThread[];
-      onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
-      oncomplete?: (id: string) => void | Promise<void>;
-      onopen?: (t: SeqThread) => void;
-      /** soltar la tarjeta de una burbuja: sus hilos abiertos al final */
-      ondropbubble?: (cardId: string) => void;
-    };
     /** dónde recordar, en este navegador, el orden en que se ven las columnas.
      *  Vacío: el orden es el de `columns`. */
     orderKey?: string;
@@ -122,7 +112,6 @@
   // orden sólo en este navegador. No toca el orden de las etapas en el servidor,
   // que es el de todo el departamento: acomodar mi vista no es reordenar la de
   // los demás. Una columna nueva aparece donde le toca por su orden natural.
-  const SEQ = '__sequence';
   /** ¿Lo que se arrastra es una columna? Por su marca, no por su id: «Sin
    *  planear» se llama `''`, y un id vacío leído como falso la dejaba sin
    *  poder soltarse en ningún sitio. */
@@ -148,12 +137,8 @@
       // sin memoria, el orden dura lo que la pestaña
     }
   }
-  /** El orden natural: las columnas como llegan, con la secuencia tras la primera. */
-  const natural = $derived([
-    ...columns.slice(0, 1).map((c) => c.id),
-    ...(sequence ? [SEQ] : []),
-    ...columns.slice(1).map((c) => c.id),
-  ]);
+  /** El orden natural: las columnas como llegan. */
+  const natural = $derived(columns.map((c) => c.id));
   /** Lo guardado primero; lo que no estaba, detrás de su vecino natural anterior. */
   const slots = $derived.by(() => {
     const exists = new Set(natural);
@@ -174,44 +159,6 @@
     return out;
   });
   const colById = (id: string) => columns.find((c) => c.id === id);
-
-  /** La columna de la secuencia recibe tarjetas de burbuja. Cuando se sueltan
-   *  ahí, las columnas de etapas no deben tratar la caída como suya. */
-  let overSeq = $state(false);
-  function sequenceColumn(el: HTMLElement) {
-    let stop: (() => void) | undefined;
-    let live = true;
-    Promise.all([
-      import('@atlaskit/pragmatic-drag-and-drop/element/adapter'),
-      import('@atlaskit/pragmatic-drag-and-drop/combine'),
-    ]).then(([{ dropTargetForElements, monitorForElements }, { combine }]) => {
-      if (!live) return;
-      stop = combine(
-        dropTargetForElements({
-          element: el,
-          // Una columna arrastrada la recibe el tablero, no ésta.
-          canDrop: ({ source }) => !!source.data.cardId,
-          getData: () => ({ seqcol: true }),
-          onDragEnter: () => (overSeq = true),
-          onDragLeave: () => (overSeq = false),
-          onDrop: () => (overSeq = false),
-        }),
-        monitorForElements({
-          canMonitor: ({ source }) => !!source.data.cardId,
-          onDrop: ({ source, location }) => {
-            if (!location.current.dropTargets.some((t) => t.data.seqcol)) return;
-            sequence?.ondropbubble?.(source.data.cardId as string);
-            dragging = null;
-            over = null;
-          },
-        }),
-      );
-    });
-    return () => {
-      live = false;
-      stop?.();
-    };
-  }
 
   // Columns are the board's own shape, and it belongs to whoever runs the
   // board. "Por decidir / Planeado / En curso" is a good default and a terrible
@@ -250,23 +197,14 @@
    *  mismo ancho: el tablero se abre para recibirla en vez de pedir que se
    *  apunte a una raya de 3px. */
   let liftingCol = $state<string | null>(null);
+
+  /** Qué columnas ha abierto o cerrado quien mira, por encima de lo que la
+   *  columna trae. No se guarda: es una decisión de este rato, no una
+   *  preferencia — el orden de las columnas sí lo es, y por eso ese sí. */
+  let toggled = $state<Record<string, boolean>>({});
+  const shut = (col: Column) => toggled[col.id] ?? !!col.collapsed;
   let preview = $state<string[] | null>(null);
   const shown = $derived(preview ?? slots);
-
-  /** El día en que nació, dicho como lo dice una persona — para el tooltip,
-   *  donde «hace 3 meses» ya no basta y hace falta la fecha. */
-  const bornFmt = new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short', year: 'numeric' });
-  function bornOn(iso: string): string {
-    const t = when(iso);
-    return Number.isNaN(t) ? iso : bornFmt.format(new Date(t));
-  }
-
-  /** The card shows a date the way a person says it; the value stays ISO. */
-  const fmt = new Intl.DateTimeFormat('es-MX', { day: 'numeric', month: 'short' });
-  function shortDate(iso: string): string {
-    const d = new Date(iso + 'T00:00:00');
-    return Number.isNaN(d.getTime()) ? iso : fmt.format(d);
-  }
 
   /** Where a dragged card would land right now: column id, and the card it goes
    *  before (null = at the end). Drawn as a gap, so the board shows the result
@@ -479,8 +417,6 @@
             const target = location.current.dropTargets[0];
             if (!target) return;
             // Soltada en la columna de la secuencia: no es una etapa, y la
-            // tarjeta no cambia de columna (ver `sequenceColumn`).
-            if (location.current.dropTargets.some((t) => t.data.seqcol)) return;
             const to = (target.data.col as string) ?? colId;
             if (to !== colId) return; // one monitor acts, not five
 
@@ -513,38 +449,27 @@
 
 <div class="board" {@attach board}>
   {#each slots as slot (slot)}
-    {#if slot === SEQ && sequence}
-      <!-- La secuencia: no se renombra ni se borra, pero se mueve como las
-           demás (por su cabecera). Soltar aquí la tarjeta de una burbuja mete
-           sus hilos abiertos al final de la línea. -->
-      <section
-        class="col seqcol"
-        class:over={overSeq}
-        class:lifting={liftingCol === SEQ}
-        data-slot={SEQ}
-        style:order={shown.indexOf(SEQ)}
-        aria-label="secuencia de ejecución"
-        {@attach sequenceColumn}>
-        <header class="seqhead" {@attach (el) => head(el, SEQ)}>
-          <span class="name">🧭 Secuencia</span>
-          <span class="count" title="hilos en la secuencia">{sequence.threads.filter((t) => t.sequence > 0).length}</span>
-        </header>
-        <SequencePane
-          threads={sequence.threads}
-          onreorder={sequence.onreorder}
-          oncomplete={sequence.oncomplete}
-          onopen={sequence.onopen}
-          headless />
-      </section>
-    {:else if colById(slot)}
+    {#if colById(slot)}
     {@const col = colById(slot)!}
     <section
       class="col"
       class:over={over?.col === col.id}
       class:lifting={liftingCol === col.id}
+      class:shut={shut(col)}
       data-slot={col.id}
       style:order={shown.indexOf(col.id)}
       {@attach (el) => column(el, col.id)}>
+      {#if shut(col)}
+        <!-- Plegada sigue siendo destino de caída: soltar algo aquí es darlo por
+             terminado, que es el gesto que más se va a hacer con esta columna. -->
+        <button
+          class="shut-head"
+          title="{col.name} ({col.cards.length}) — clic para abrir"
+          onclick={() => (toggled[col.id] = false)}>
+          <span class="shut-name">{col.name}</span>
+          <span class="count">{col.cards.length}</span>
+        </button>
+      {:else}
       <header {@attach (el) => head(el, col.id)}>
         {#if renaming === col.id}
           <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
@@ -561,6 +486,11 @@
             {col.name}
           </button>
           <span class="count">{col.cards.length}</span>
+          {#if col.collapsed}
+            <button class="fold" title="Plegar la columna" onclick={() => (toggled[col.id] = true)}>
+              ›
+            </button>
+          {/if}
           {#if col.manual}
             <!-- Que se VEA que el orden es de alguien. La columna ordenada sola
                  no dice nada: lo normal no necesita etiqueta. -->
@@ -603,68 +533,12 @@
           {#if over?.col === col.id && over.before === c.id}
             <div class="gap" aria-hidden="true"></div>
           {/if}
-          <article
-            class="card"
-            class:lifting={dragging === c.id}
-            {@attach (el) => card(el, c, col.id)}>
-            <button class="open" onclick={() => onopen?.(c)}>
-              <!-- The title keeps 24px clear on the right: that is where the ×
-                   appears, and without the gap it lands on top of the words.
-                   Reserved rather than shifted on hover, so nothing moves under
-                   the pointer. -->
-              <span class="ttl">{c.title}</span>
-              <span class="meta">
-                {#if c.prio}<span class="prio-chip prio-{c.prio}">{c.prio}</span>{/if}
-                {#if c.objName}
-                  <span class="obj" title="Objetivo: {c.objName}">{c.objName}</span>
-                {:else if c.obj}
-                  <span class="obj">O{c.obj}</span>
-                {/if}
-                {#if c.due}<span class="due">{shortDate(c.due)}</span>{/if}
-              </span>
-              <!-- El pie de la tarjeta: cuánto lleva viva a la izquierda, de qué
-                   proyecto es a la derecha. Las dos son contexto, no lo que la
-                   tarjeta ES — por eso van debajo y en pequeño. -->
-              {#if c.pieces || c.born || c.where}
-                <span class="foot">
-                  <!-- Cuántas piezas lleva dentro. El lead no necesita verlas: le
-                       basta saber si esto son ocho o una, que es lo que cambia
-                       cómo se planea. Una bobina: son HILOS, y el número solo no
-                       decía de qué. Al pie, junto a la edad: las dos dicen el
-                       TAMAÑO de esto — cuánto abarca y cuánto lleva. -->
-                  {#if c.pieces}
-                    <span class="pieces" title="{c.pieces} {c.pieces === 1 ? 'hilo' : 'hilos'} dentro">
-                      <SpoolIcon class="size-3" aria-hidden="true" />{c.pieces}
-                    </span>
-                  {/if}
-                  {#if c.born}
-                    <!-- Desde que nació, no desde la última evidencia: eso es el
-                         calor del board, y aquí se pregunta otra cosa — cuánto
-                         lleva este cuerpo de trabajo en el plan. -->
-                    <span class="age" title="Creada el {bornOn(c.born)}">
-                      <SproutIcon class="size-3" aria-hidden="true" />{ago(c.born)}
-                    </span>
-                  {/if}
-                  <!-- De qué proyecto es, como insignia: en un tablero que cruza
-                       el departamento distingue dos tarjetas con el mismo
-                       nombre, y no compite con lo que dice qué es. -->
-                  {#if c.where}<span class="where">{c.where}</span>{/if}
-                </span>
-              {/if}
-            </button>
-            {#if ondeletecard}
-              <!-- OUTSIDE the card's own button: a delete that can be hit while
-                   aiming to open something is a delete nobody trusts. -->
-              <button
-                class="x"
-                aria-label="eliminar «{c.title}»"
-                title="eliminar"
-                onclick={(e) => {
-                  e.stopPropagation();
-                  ondeletecard?.(c.id);
-                }}>×</button>
-            {/if}
-          </article>
+          <BoardCard
+            card={c}
+            lifting={dragging === c.id}
+            attach={(el) => card(el, c, col.id)}
+            onopen={() => onopen?.(c)}
+            ondelete={ondeletecard ? () => ondeletecard?.(c.id) : undefined} />
         {/each}
         {#if over?.col === col.id && over.before === null}
           <div class="gap" aria-hidden="true"></div>
@@ -674,6 +548,7 @@
       <button class="add" onclick={() => onadd?.(col.id)}>
         <PlusIcon class="size-4" /> tarjeta
       </button>
+      {/if}
     </section>
     {/if}
   {/each}
@@ -697,6 +572,33 @@
     overflow-x: auto;
     align-items: flex-start;
   }
+  /* Plegada: lo que mide su botón, no una columna vacía. Sigue siendo destino
+     de caída — soltar algo aquí es darlo por terminado. */
+  .col.shut {
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: 0.35rem;
+  }
+  .shut-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.3rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .shut-head:hover { color: var(--text); }
+  .fold {
+    padding: 0 0.3rem;
+    border-radius: 6px;
+    color: var(--faint);
+    font-size: 0.9rem;
+    line-height: 1;
+  }
+  .fold:hover { background: var(--hover); color: var(--text); }
+
   .col {
     flex: 0 0 272px;
     display: flex;
@@ -710,23 +612,6 @@
   /* The column you are over lights up as a whole, so the target is legible even
      when the gap is off screen. */
   .col.over { border-color: color-mix(in oklab, var(--accent) 55%, transparent); }
-  /* Más ancha que una etapa: una línea con pasos en paralelo necesita sitio, y
-     alta del todo para que su propio scroll trabaje. */
-  .seqcol { flex-basis: 340px; height: 100%; padding: 0.45rem; }
-  /* Su cabecera es el asa para mover la columna, como la de una etapa. */
-  .seqhead {
-    display: flex;
-    flex: none;
-    align-items: center;
-    gap: 0.4rem;
-    padding: 0.1rem 0.35rem 0.4rem;
-    cursor: grab;
-    font-weight: 700;
-    font-size: 0.85rem;
-  }
-  .seqcol { display: flex; flex-direction: column; }
-  .seqcol > :global(.pane) { flex: 1; min-height: 0; }
-
   .col > header {
     display: flex;
     align-items: center;
@@ -812,103 +697,6 @@
     background: var(--accent);
   }
 
-  .card {
-    position: relative;
-    border: 1px solid var(--line);
-    border-radius: 10px;
-    background: var(--surface-solid);
-    box-shadow: 0 1px 2px var(--shadow);
-  }
-  /* Shown when the card is being used — hovered or focused. One × per card,
-     always visible, is a column of invitations to throw work away. */
-  .x {
-    position: absolute;
-    top: 0.25rem;
-    right: 0.25rem;
-    display: grid;
-    place-content: center;
-    width: 20px;
-    height: 20px;
-    border-radius: 6px;
-    color: var(--faint);
-    font-size: 0.95rem;
-    line-height: 1;
-    opacity: 0;
-    transition: opacity 0.12s ease;
-  }
-  .card:hover .x,
-  .card:focus-within .x { opacity: 1; }
-  .x:hover { background: var(--hover); color: var(--color-error-500); }
-  .card.lifting { opacity: 0.4; }
-  .open {
-    display: block;
-    width: 100%;
-    padding: 0.55rem 0.6rem;
-    text-align: left;
-    background: transparent;
-  }
-  .card:hover { border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
-  .ttl { display: block; padding-right: 1.4rem; font-size: 0.86rem; line-height: 1.3; color: var(--text); }
-  .meta {
-    display: flex;
-    align-items: center;
-    gap: 0.45rem;
-    min-width: 0;
-    margin-top: 0.35rem;
-    font-size: 0.7rem;
-  }
-  .obj, .due { color: var(--faint); }
-  .due { margin-left: auto; }
-  /* El objetivo se recorta y no empuja: es texto libre y los de verdad son
-     frases, así que sin `min-width: 0` en el flex se comía la fila y echaba
-     fuera la prioridad. Completo en el tooltip. */
-  .obj {
-    flex: 0 1 auto;
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-  .pieces {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    color: var(--faint);
-  }
-  /* El pie: edad a la izquierda, proyecto a la derecha, en la misma línea. */
-  .foot {
-    display: flex;
-    align-items: center;
-    gap: 0.5rem;
-    margin-top: 0.4rem;
-    font-size: 0.64rem;
-  }
-  .age {
-    flex: none;
-    display: inline-flex;
-    align-items: center;
-    gap: 0.2rem;
-    color: var(--faint);
-  }
-  /* Which project it is from: a badge, bottom right. On a board that spans the
-     department it tells two identically named cards apart; it never competes
-     with what says what the card IS. */
-  .where {
-    display: block;
-    width: fit-content;
-    max-width: 70%;
-    margin-left: auto;
-    padding: 0.05rem 0.45rem;
-    border-radius: 999px;
-    background: var(--hover);
-    color: var(--muted);
-    font-size: 0.64rem;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
   .add {
     display: flex;
     align-items: center;
@@ -932,9 +720,4 @@
     letter-spacing: 0.02em;
   }
 
-  .pieces {
-    color: var(--faint);
-    font-size: 0.64rem;
-    font-variant-numeric: tabular-nums;
-  }
 </style>

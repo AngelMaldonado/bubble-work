@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"github.com/AngelMaldonado/bubble-work/internal/tree"
 	"net/http"
 
 	"github.com/pocketbase/pocketbase/apis"
@@ -25,7 +26,13 @@ const defaultTextMax = 5000
 func registerLimits(app core.App) {
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		se.Router.GET("/api/limits", func(e *core.RequestEvent) error {
-			return e.JSON(http.StatusOK, Limits(e.App))
+			// Los topes y lo que se puede subir, por la misma puerta: las dos
+			// son «qué acepta el servidor», y el cliente ya pedía ésta una vez.
+			return e.JSON(http.StatusOK, map[string]any{
+				"fields": Limits(e.App),
+				"accept": tree.Accepts(),
+				"bytes":  assetLimit(),
+			})
 		}).Bind(apis.RequireAuth())
 		return se.Next()
 	})

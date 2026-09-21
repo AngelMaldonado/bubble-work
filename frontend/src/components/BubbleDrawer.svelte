@@ -19,6 +19,7 @@
   import Prose from './Prose.svelte';
   import PriorityBadge from './PriorityBadge.svelte';
   import MarkdownField from './MarkdownField.svelte';
+  import Crumbs from './Crumbs.svelte';
 
   let {
     open = $bindable(false),
@@ -27,6 +28,7 @@
     // two ways in, rather than a second place to name a thread.
     naming = $bindable(false),
     name,
+    project = '',
     bubble = '',
     lifecycle,
     reason = '',
@@ -52,6 +54,8 @@
     open?: boolean;
     naming?: boolean;
     name: string;
+    /** el proyecto al que pertenece, para decir dónde estás sobre el título */
+    project?: string;
     /** su id: a qué burbuja pertenece lo que se lee y se guarda aquí */
     bubble?: string;
     lifecycle: Lifecycle;
@@ -257,7 +261,10 @@
         <!-- The band, first: it is the thing you came to find out, and it reads
              before the name does. -->
         <span class="mt-0.5 text-xl" title={reason}>{bandFace(lifecycle)}</span>
-        <Dialog.Title class="min-w-0 flex-1 truncate text-lg font-bold">{name}</Dialog.Title>
+        <div class="min-w-0 flex-1">
+          <Crumbs parts={[project]} />
+          <Dialog.Title class="truncate text-lg font-bold">{name}</Dialog.Title>
+        </div>
         <Dialog.CloseTrigger class="btn btn-sm preset-tonal-surface">✕</Dialog.CloseTrigger>
       </header>
 

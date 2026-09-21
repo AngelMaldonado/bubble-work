@@ -12,6 +12,7 @@
   import BubbleDrawer from './BubbleDrawer.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
   import Minimap, { type MapItem } from './Minimap.svelte';
+  import Crumbs from './Crumbs.svelte';
   import { ago, cycleLeft } from '../lib/when';
   import { lastOpenBubble } from '../lib/filters.svelte';
   import { limited } from '../lib/limits.svelte';
@@ -199,6 +200,7 @@
     doom = {
       title: `¿Borrar «${t.name}»?`,
       body: 'El hilo #' + t.seq + ' sale de la burbuja y del planeador. Su documento sigue en la historia de git, que es de donde se recupera si hacía falta.',
+      crumbs: [projectOf(open?.workspace ?? '') || workspace?.name || '', open?.name],
       go: () => write(() => api.deleteThread(t.id)),
     };
   }
@@ -280,6 +282,7 @@
   <BubbleDrawer
     bind:open={drawer}
     name={shown?.name ?? ''}
+    project={projectOf(shown?.workspace ?? '') || workspace?.name || ''}
     lifecycle={shown?.heat.lifecycle ?? 'hot'}
     reason={shown?.heat.reason ?? ''}
     owners={shown?.owners ?? []}
@@ -351,7 +354,10 @@
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
-          <Dialog.Title class="text-lg font-bold">¿Cerrar «{closing.name}»?</Dialog.Title>
+          <div>
+            <Crumbs parts={[projectOf(closing.workspace) || workspace?.name || '']} />
+            <Dialog.Title class="text-lg font-bold">¿Cerrar «{closing.name}»?</Dialog.Title>
+          </div>
           <Dialog.Description class="muted text-sm">
             Baja a la banda de cerradas con sus hilos. No se borra nada, y se
             puede reabrir desde el mismo cajón.
@@ -386,7 +392,10 @@
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
-          <Dialog.Title class="text-lg font-bold">Renombrar la burbuja</Dialog.Title>
+          <div>
+            <Crumbs parts={[projectOf(renaming.workspace) || workspace?.name || '', renaming.name]} />
+            <Dialog.Title class="text-lg font-bold">Renombrar la burbuja</Dialog.Title>
+          </div>
           <form onsubmit={(e) => { e.preventDefault(); rename(); }}>
             <input
               class="input"

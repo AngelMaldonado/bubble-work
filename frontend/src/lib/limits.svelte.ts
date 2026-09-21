@@ -19,6 +19,11 @@ import type { Attachment } from 'svelte/attachments';
 import { api } from './api';
 
 let table = $state<Record<string, number>>({});
+/** Las extensiones que el servidor admite en `assets/`, para el diálogo de
+ *  archivos. Vacío mientras no se sabe: un `accept` vacío deja elegir
+ *  cualquier cosa y que conteste el servidor, que es mejor que filtrar por una
+ *  lista adivinada. */
+let uploads = $state<string[]>([]);
 let asking: Promise<void> | null = null;
 
 /** Pide los topes una vez. Sin sesión todavía falla, y se vuelve a pedir en el
@@ -28,12 +33,20 @@ function ready(): Promise<void> {
   asking ??= api
     .limits()
     .then((t) => {
-      table = t;
+      table = t.fields ?? {};
+      uploads = t.accept ?? [];
     })
     .catch(() => {
       asking = null;
     });
   return asking;
+}
+
+/** Lo que el diálogo de archivos debe ofrecer: `.png,.pdf,…`. Vacío mientras no
+ *  se sabe, que deja elegir cualquier cosa — el servidor sigue decidiendo. */
+export function acceptUploads(): string {
+  ready();
+  return uploads.join(',');
 }
 
 /** Cuánto cabe en `colección.campo`, o 0 si no se sabe (aún). */

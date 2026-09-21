@@ -26,6 +26,7 @@
   import ThreadToc from './ThreadToc.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import type { Heading } from '../lib/prose';
+  import DueDate from './DueDate.svelte';
 
   let {
     seq,
@@ -36,6 +37,8 @@
     threadState = '',
     threadPriority = '',
     onpriority,
+    due = '',
+    ondue,
     assignees = [],
     labels = [],
     markdown = '',
@@ -75,6 +78,10 @@
     threadPriority?: string;
     /** cambiarla; sólo se pasa al lead global */
     onpriority?: (priority: string) => void;
+    /** cuándo vence este hilo, `2026-12-24`. Vacío es sin fecha. */
+    due?: string;
+    /** sin esto la fecha sólo se lee */
+    ondue?: (day: string) => void;
     assignees?: string[];
     labels?: string[];
     /** the markdown: the record, and what an edit quotes from */
@@ -224,6 +231,15 @@
            de la burbuja que lo lleva, que es otra pregunta. -->
       <PriorityBadge value={threadPriority} canEdit={!!onpriority} onchange={(p) => onpriority?.(p)} />
       {#if priority}<span class="chip" title="prioridad de la burbuja">burbuja {priority}</span>{/if}
+      <!-- Cuándo vence ESTA pieza, separada del plazo de su burbuja: aquél es
+           el compromiso, ésta es cómo se reparte. -->
+      {#if ondue}
+        <span class="due" class:set={!!due}>
+          <DueDate value={due} placeholder="sin entrega" onchange={(d) => ondue?.(d)} />
+        </span>
+      {:else if due}
+        <span class="chip" title="entrega de este hilo">📅 {due}</span>
+      {/if}
       {#if assignees.length}<span class="chip who">{assignees.join(', ')}</span>{/if}
     </div>
 
@@ -453,6 +469,57 @@
     white-space: nowrap;
   }
   .chip.add { background: none; cursor: pointer; }
+
+  /* El calendario de Skeleton, con la forma de los chips de esta fila. Skeleton
+     lo dibuja por `[data-part]`, así que el estilo cruza la frontera del
+     componente; acotado a `.due` para no tocar ningún otro. Apagado mientras no
+     hay fecha: sin ella no dice nada y no tiene por qué llamar la atención. */
+  .due :global([data-scope='date-picker'][data-part='control']) {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    /* La píldora manda: lo que lleve dentro no puede sobresalir de ella. */
+    overflow: hidden;
+    line-height: 1.5;
+    padding: 0.1rem 0.5rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: transparent;
+  }
+  .due :global([data-scope='date-picker'][data-part='input']) {
+    width: 6.5rem;
+    padding: 0;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    color: var(--faint);
+    font-size: 0.72rem;
+    outline: none;
+  }
+  .due.set :global([data-scope='date-picker'][data-part='input']) { color: var(--muted); }
+  .due.set :global([data-scope='date-picker'][data-part='control']) {
+    border-color: color-mix(in oklab, var(--accent) 35%, var(--line));
+  }
+  /* El disparador trae su propio alto, su relleno y su fondo de Skeleton, y
+     dentro de una píldora de 0.72rem eso se sale por abajo. Aquí es sólo el
+     icono: sin caja propia y sin alto propio. */
+  .due :global([data-scope='date-picker'][data-part='trigger']) {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    min-height: 0;
+    height: auto;
+    margin: 0;
+    padding: 0;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--faint);
+    font-size: 0.7rem;
+    line-height: 1;
+  }
+  .due :global([data-scope='date-picker'][data-part='trigger']:hover) { color: var(--accent); }
   .chip.lvl { text-transform: none; font-weight: 600; color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
   .chip.who { text-transform: none; }
 

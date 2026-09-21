@@ -17,7 +17,7 @@
   import SlashMenu from './SlashMenu.svelte';
   import { SlashMenu as SlashMenuState } from '../lib/slashmenu.svelte';
   import { vimPref } from '../lib/vim.svelte';
-  import { droppedFile, insertImage, pastedImage } from '../lib/attach';
+  import { droppedFile, insertAttachment, pastedImage } from '../lib/attach';
   import { annotate } from '../lib/annotate';
   import { fit, overText } from '../lib/limits.svelte';
 
@@ -62,7 +62,7 @@
     if (!file || !onattach || attaching) return;
     attaching = true;
     try {
-      const next = await insertImage(editor, file, onattach);
+      const next = await insertAttachment(editor, file, onattach);
       if (next !== null) value = next;
     } finally {
       attaching = false;
@@ -176,11 +176,14 @@
         const f = droppedFile(e);
         if (f && onattach) {
           e.preventDefault();
-          attach(f);
+          // Sólo una imagen pasa por el modal de anotar. Un PDF no se anota ni
+          // se recorta: se sube tal cual y se enlaza.
+          if (f.type.startsWith('image/')) annotate(f).then((out) => out && attach(out));
+          else attach(f);
         }
       }}>
       <div class="editor" bind:this={fieldEl} {@attach mount}></div>
-      {#if attaching}<span class="uploading">subiendo imagen…</span>{/if}
+      {#if attaching}<span class="uploading">subiendo…</span>{/if}
 
       <SlashMenu menu={slash} field={fieldEl} onpick={(c) => slash.run(editor, value, c)} />
     </div>

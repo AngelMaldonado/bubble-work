@@ -11,8 +11,9 @@
   // editor itself, the slash menu, and saving. What it does NOT own is where
   // the text comes from or where it goes — that is the caller's, because one
   // writes a thread's document and the other a page.
-  import { droppedFile, insertImage, pastedImage } from '../lib/attach';
+  import { droppedFile, insertAttachment, pastedImage } from '../lib/attach';
   import { annotate } from '../lib/annotate';
+  import { acceptUploads } from '../lib/limits.svelte';
   import { untrack } from 'svelte';
   import Prose from './Prose.svelte';
   import SlashMenu from './SlashMenu.svelte';
@@ -110,7 +111,7 @@
     try {
       // La misma inserción que el brief de una burbuja y el cuerpo de una nota:
       // una sola definición de «qué es una imagen pegada».
-      const next = await insertImage(editor, file, onattach);
+      const next = await insertAttachment(editor, file, onattach);
       if (next !== null) draft = next;
     } finally {
       attaching = false;
@@ -137,7 +138,10 @@
     const file = droppedFile(e);
     if (file) {
       e.preventDefault();
-      attach(file);
+      // Sólo una imagen pasa por el modal de anotar. Un PDF no se anota ni se
+      // recorta: se sube tal cual y se enlaza.
+      if (file.type.startsWith('image/')) annotate(file).then((out) => out && attach(out));
+      else attach(file);
     }
   }
 
@@ -251,13 +255,13 @@
     <!-- Adjuntar vive donde se escribe, porque lo que produce es una línea de
          markdown en el documento. Arrastrar y pegar hacen lo mismo; el botón
          está para quien no sabe que puede. -->
-    <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar una imagen">
+    <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar un archivo">
       {attaching ? '…' : '📎'}
     </button>
     <input
       class="hidden-file"
       type="file"
-      accept="image/*"
+      accept={acceptUploads()}
       bind:this={picker}
       onchange={(e) => {
         const el = e.currentTarget as HTMLInputElement;

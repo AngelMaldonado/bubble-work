@@ -68,9 +68,10 @@ func registerAssets(app core.App, t *tree.Tree) {
 				name = header.Filename
 			}
 			docPath := path.Join(tree.DirAssets, slugifyFile(name))
-			if !tree.IsImage(docPath) {
+			if !tree.IsAttachment(docPath) {
 				return e.BadRequestError(
-					"only images live in assets/ — png, jpg, gif, webp, svg, avif", nil)
+					"assets/ holds images (png, jpg, gif, webp, svg, avif) "+
+						"and attached documents (pdf, txt, csv, json)", nil)
 			}
 
 			body, err := io.ReadAll(io.LimitReader(file, limit+1))
@@ -79,7 +80,7 @@ func registerAssets(app core.App, t *tree.Tree) {
 			}
 			if int64(len(body)) > limit {
 				return e.BadRequestError(
-					fmt.Sprintf("that image is larger than %d bytes", limit), nil)
+					fmt.Sprintf("that file is larger than %d bytes", limit), nil)
 			}
 
 			docPath, err = placeAsset(t, repo, docPath, body, actorLabel(e.Auth))
@@ -92,7 +93,12 @@ func registerAssets(app core.App, t *tree.Tree) {
 				"workspace": ws.Id,
 				"path":      docPath,
 				"bytes":     len(body),
-				"url":       fmt.Sprintf("/api/workspaces/%s/file?path=%s", ws.Id, docPath),
+				// Para que quien lo insertó sepa si escribe `![]()` —una imagen
+				// se ve— o `[]()` —un documento se abre—. Es lo único que
+				// distingue a los dos en el markdown, y adivinarlo por la
+				// extensión en el cliente sería una segunda lista que mantener.
+				"image": tree.IsImage(docPath),
+				"url":   fmt.Sprintf("/api/workspaces/%s/file?path=%s", ws.Id, docPath),
 			})
 		}).Bind(apis.RequireAuth())
 
@@ -104,8 +110,8 @@ func registerAssets(app core.App, t *tree.Tree) {
 				return err
 			}
 			p := e.Request.URL.Query().Get("path")
-			if !tree.IsImage(p) {
-				return e.BadRequestError("this route serves images", nil)
+			if !tree.IsAttachment(p) {
+				return e.BadRequestError("this route serves what lives in assets/", nil)
 			}
 			body, err := t.ReadBytes(repo, p)
 			if err != nil {
@@ -124,6 +130,14 @@ func registerAssets(app core.App, t *tree.Tree) {
 			// URL directly can run anything out of it.
 			h.Set("Content-Security-Policy", "default-src 'none'; sandbox")
 			h.Set("X-Content-Type-Options", "nosniff")
+			// Un adjunto se abre con el nombre con el que se subió, no con
+			// `file?path=…`, que es lo que el navegador usaría si no se lo
+			// decimos. `inline` y no `attachment`: un PDF se mira antes de
+			// guardarse, y quien lo quiera guardar ya tiene el botón.
+			if !tree.IsImage(p) {
+				h.Set("Content-Disposition",
+					fmt.Sprintf("inline; filename=%q", path.Base(p)))
+			}
 			h.Set("Cache-Control", "private, max-age=300")
 			_, werr := e.Response.Write(body)
 			return werr

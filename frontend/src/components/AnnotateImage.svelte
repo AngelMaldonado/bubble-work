@@ -29,7 +29,7 @@
   ];
 
   let open = $state(true);
-  let tool = $state<'pen' | 'text'>('pen');
+  let tool = $state<'pen' | 'text' | 'crop'>('pen');
   let color = $state(colors[0]);
   let weight = $state(1);
   let ops = $state<Op[]>([]);
@@ -46,6 +46,73 @@
   const side = () => Math.max(canvas?.width ?? 0, canvas?.height ?? 0);
   const penWidth = (w: number) => Math.max(2, side() * [0.0025, 0.005, 0.01][w]);
   const fontSize = (w: number) => Math.max(14, side() * [0.025, 0.04, 0.06][w]);
+
+  // ---- recorte ---------------------------------------------------------------
+  //
+  // ANTES de subir, como los trazos, y por la misma razón: el subidor
+  // deduplica por bytes y reusa la ruta, así que recortar un asset ya subido
+  // obligaría a elegir entre pisar el archivo —y cambiarle la imagen a otro
+  // documento que lo cita— o dejar un `nombre-2.png` que nadie borra.
+  // Recortando aquí, los píxeles que sobran no llegan nunca al repositorio.
+  //
+  // El marco se dibuja en el DOM y no en el canvas: lo que esté pintado en el
+  // canvas es lo que `toBlob` sube, y un rectángulo de selección dentro de la
+  // imagen subida sería exactamente el error que esto evita.
+  type Box = { x1: number; y1: number; x2: number; y2: number };
+  let box = $state<Box | null>(null);
+  let boxing = false;
+  /** si ya se aplicó un recorte: entonces hay que exportar el canvas aunque no
+   *  haya ni un trazo, porque el archivo original ya no es lo que se ve */
+  let cropped = $state(false);
+
+  const rect = $derived(
+    box && {
+      left: Math.min(box.x1, box.x2),
+      top: Math.min(box.y1, box.y2),
+      width: Math.abs(box.x2 - box.x1),
+      height: Math.abs(box.y2 - box.y1),
+    },
+  );
+  /** Un marco de menos de unos píxeles es un clic, no una selección. */
+  const boxUsable = $derived(!!rect && rect.width > 8 && rect.height > 8);
+
+  /** De la pantalla al canvas, para el marco: el canvas se dibuja encogido. */
+  function toCanvas(px: number, py: number): Point {
+    const r = canvas!.getBoundingClientRect();
+    const s = stage!.getBoundingClientRect();
+    return {
+      x: ((px + s.left - r.left) * canvas!.width) / r.width,
+      y: ((py + s.top - r.top) * canvas!.height) / r.height,
+    };
+  }
+
+  async function applyCrop() {
+    if (!canvas || !rect || !boxUsable) return;
+    const a = toCanvas(rect.left, rect.top);
+    const b = toCanvas(rect.left + rect.width, rect.top + rect.height);
+    const sx = Math.max(0, Math.round(Math.min(a.x, b.x)));
+    const sy = Math.max(0, Math.round(Math.min(a.y, b.y)));
+    const sw = Math.min(canvas.width - sx, Math.round(Math.abs(b.x - a.x)));
+    const sh = Math.min(canvas.height - sy, Math.round(Math.abs(b.y - a.y)));
+    if (sw < 1 || sh < 1) return;
+
+    // Se recorta lo que YA está pintado —imagen y anotaciones—, así que las
+    // anotaciones quedan dentro del recorte y la lista se vacía: repetirlas
+    // sobre la imagen nueva las pintaría dos veces y en el sitio equivocado.
+    const cut = document.createElement('canvas');
+    cut.width = sw;
+    cut.height = sh;
+    cut.getContext('2d')?.drawImage(canvas, sx, sy, sw, sh, 0, 0, sw, sh);
+
+    image = await createImageBitmap(cut);
+    ops = [];
+    canvas.width = sw;
+    canvas.height = sh;
+    box = null;
+    cropped = true;
+    tool = 'pen';
+    redraw();
+  }
 
   let done = false;
   function finish(out: File | null) {
@@ -138,6 +205,14 @@
       place(e);
       return;
     }
+    if (tool === 'crop') {
+      e.preventDefault();
+      canvas.setPointerCapture(e.pointerId);
+      const s = stage!.getBoundingClientRect();
+      boxing = true;
+      box = { x1: e.clientX - s.left, y1: e.clientY - s.top, x2: e.clientX - s.left, y2: e.clientY - s.top };
+      return;
+    }
     canvas.setPointerCapture(e.pointerId);
     stroke = { kind: 'stroke', color, width: penWidth(weight), points: [at(e)] };
     const c = ctx();
@@ -145,6 +220,11 @@
   }
 
   function move(e: PointerEvent) {
+    if (boxing && box) {
+      const s = stage!.getBoundingClientRect();
+      box = { ...box, x2: e.clientX - s.left, y2: e.clientY - s.top };
+      return;
+    }
     if (!stroke) return;
     const prev = stroke.points[stroke.points.length - 1];
     const p = at(e);
@@ -157,6 +237,13 @@
   }
 
   function up() {
+    if (boxing) {
+      boxing = false;
+      // Un clic suelto sin arrastrar quita el marco en vez de dejar uno de un
+      // píxel esperando a que alguien le dé a «Recortar».
+      if (!boxUsable) box = null;
+      return;
+    }
     if (!stroke) return;
     ops.push(stroke);
     stroke = null;
@@ -202,6 +289,12 @@
       typing = null;
       return;
     }
+    if (box) {
+      // Deshacer un marco que todavía no se aplicó es quitarlo. Un recorte YA
+      // aplicado no se deshace: la imagen de partida se reemplazó.
+      box = null;
+      return;
+    }
     ops.pop();
     redraw();
   }
@@ -214,7 +307,7 @@
 
   async function insert() {
     commitText();
-    if (!ops.length || !canvas) {
+    if ((!ops.length && !cropped) || !canvas) {
       finish(file);
       return;
     }
@@ -259,6 +352,8 @@
                 title="Mano alzada">✏️ Trazo</button>
               <button class="chip" class:on={tool === 'text'} onclick={() => (tool = 'text')}
                 title="Clic en la imagen para escribir">🔤 Texto</button>
+              <button class="chip" class:on={tool === 'crop'} onclick={() => ((tool = 'crop'), commitText())}
+                title="Arrastra un marco y aplícalo">⛶ Recortar</button>
             </div>
 
             <div class="group" role="radiogroup" aria-label="Color">
@@ -291,8 +386,15 @@
               {/each}
             </div>
 
+            {#if tool === 'crop'}
+              <div class="group">
+                <button class="chip go" onclick={applyCrop} disabled={!boxUsable}>Aplicar recorte</button>
+                <button class="chip" onclick={() => (box = null)} disabled={!box}>Quitar marco</button>
+              </div>
+            {/if}
+
             <div class="group">
-              <button class="chip" onclick={undo} disabled={!ops.length && !typing} title="⌘Z">↶ Deshacer</button>
+              <button class="chip" onclick={undo} disabled={!ops.length && !typing && !box} title="⌘Z">↶ Deshacer</button>
               <button class="chip" onclick={clear} disabled={!ops.length}>Borrar todo</button>
             </div>
           </div>
@@ -302,10 +404,21 @@
           <canvas
             bind:this={canvas}
             class:text={tool === 'text'}
+            class:cropping={tool === 'crop'}
             onpointerdown={down}
             onpointermove={move}
             onpointerup={up}
             onpointercancel={up}></canvas>
+          {#if rect}
+            <!-- Encima del canvas, nunca dentro: lo pintado en el canvas es lo
+                 que se sube. -->
+            <div
+              class="marco"
+              class:ready={boxUsable}
+              aria-hidden="true"
+              style="left: {rect.left}px; top: {rect.top}px; width: {rect.width}px; height: {rect.height}px">
+            </div>
+          {/if}
           {#if typing}
             <input
               bind:this={field}
@@ -411,6 +524,18 @@
     touch-action: none;
   }
   canvas.text { cursor: text; }
+  canvas.cropping { cursor: crosshair; }
+
+  /* El marco del recorte: lo de fuera se apaga, para que lo que se ve dentro
+     sea exactamente lo que va a quedar. */
+  .marco {
+    position: absolute;
+    border: 1px solid #fff;
+    outline: 1px dashed rgba(0, 0, 0, 0.7);
+    box-shadow: 0 0 0 9999px rgba(0, 0, 0, 0.45);
+    pointer-events: none;
+  }
+  .marco.ready { border-color: var(--accent); }
 
   /* Encima del canvas, donde se hizo clic, con la letra al tamaño en que va a
      quedar dibujada. */

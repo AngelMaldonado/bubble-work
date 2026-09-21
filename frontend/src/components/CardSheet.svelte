@@ -28,6 +28,7 @@
   import type { Lifecycle } from '../lib/api';
   import { limited, tooLong } from '../lib/limits.svelte';
   import type { Card } from './Kanban.svelte';
+  import Crumbs from './Crumbs.svelte';
 
   // Skeleton ships NO css for Dialog — its parts are styled with utilities, and
   // the shape below is the one its documentation uses. Writing our own scrim and
@@ -481,6 +482,8 @@
               </button>
             {/if}
           </div>
+
+          <Crumbs parts={[card.where]} />
 
           <header class="head">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">

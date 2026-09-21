@@ -13,6 +13,9 @@
     /** the affirmative button. "Borrar" unless this destroys something that is
      *  not deleted — closing a bubble, say. */
     verb?: string;
+    /** dónde estaba lo que se va a destruir. Lo llena quien escribe, que es
+     *  quien sabe de qué proyecto y de qué módulo cuelga. */
+    crumbs?: (string | null | undefined)[];
     go: () => void;
   } | null;
 </script>
@@ -31,6 +34,7 @@
   // thing and what disappears with it, and a view that confirms its own deletes
   // would ask again in the mock, where nothing is deleted.
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
+  import Crumbs from './Crumbs.svelte';
 
   let { ask = $bindable(null) }: { ask?: Doom } = $props();
 
@@ -49,7 +53,10 @@
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
-          <Dialog.Title class="text-lg font-bold">{ask.title}</Dialog.Title>
+          <div>
+            <Crumbs parts={ask.crumbs ?? []} />
+            <Dialog.Title class="text-lg font-bold">{ask.title}</Dialog.Title>
+          </div>
           {#if ask.body}
             <Dialog.Description class="muted text-sm">{ask.body}</Dialog.Description>
           {/if}

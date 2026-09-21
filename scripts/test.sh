@@ -1389,6 +1389,18 @@ chk ">>> el markdown conserva assets/… tal cual" \
 chk ">>> ...y el html sale apuntando a la ruta que sí la sirve" \
   "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "/api/workspaces/'"$ALPHA"'/file?path=assets/mi-diagrama.png" in json.load(sys.stdin)["html"] else "no")')" si
 
+# `/api/markdown` reescribe SÓLO si le dicen de qué workspace es. Quien lo llame
+# sin workspace —un comentario, por ejemplo— recibe la ruta corta intacta, y el
+# navegador pide algo que no existe. Es un contrato, no un detalle: se prueba en
+# los dos sentidos.
+MDBODY='{"content":"![d](assets/mi-diagrama.png)","workspace":"'"$ALPHA"'"}'
+chk ">>> /api/markdown con workspace resuelve la imagen" \
+  "$(curl -s -X POST "$API/api/markdown" -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d "$MDBODY" | python3 -c 'import sys,json;print("si" if "/api/workspaces/'"$ALPHA"'/file?path=assets/mi-diagrama.png" in json.load(sys.stdin)["html"] else "no")')" si
+chk ">>> ...y sin workspace la deja corta, que es por qué hay que mandarlo" \
+  "$(curl -s -X POST "$API/api/markdown" -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d '{"content":"![d](assets/mi-diagrama.png)"}' | python3 -c 'import sys,json;print("si" if "\"assets/mi-diagrama.png\"" in json.load(sys.stdin)["html"] else "no")')" si
+
 chk ">>> el árbol lista la imagen" \
   "$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A" | python3 -c 'import sys,json
 e=json.load(sys.stdin)["entries"]

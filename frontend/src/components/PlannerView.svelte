@@ -17,6 +17,7 @@
   import { plannerReturn } from '../lib/filters.svelte';
   import CardSheet from './CardSheet.svelte';
   import InboxSheet, { type Note } from './InboxSheet.svelte';
+  import type { Snippet } from 'svelte';
   import PlannerCalendar, { type CalEvent } from './PlannerCalendar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import { edgeFade } from '../lib/fade.svelte';
@@ -77,7 +78,13 @@
     readonly = false,
     title = 'Planeador',
     onpickevent,
+    filterBar,
   }: {
+    /** La barra de filtros, encima del tablero. La dibuja quien tiene los datos
+     *  —los proyectos, la gente, los objetivos— en vez de pasarle cuatro listas
+     *  a esta pantalla para que los dibuje ella. Sin ella, no hay barra: la
+     *  agenda sólo mira. */
+    filterBar?: Snippet;
     /** Whose plan this is, shown top right. Empty in the real planner: the plan
      *  is the department's, and a project's name up there says it is that
      *  project's — which is exactly what it is not. */
@@ -550,6 +557,11 @@
 
     {#if showBoard}
       <section class="pane board" bind:this={els.board} style={paneStyle('board')}>
+        {#if filterBar}{@render filterBar()}{/if}
+        <!-- El tablero mide `height: 100%`, así que con la barra encima necesita
+             su propia caja: si no, el 100% se cuenta contra el panel entero y
+             se sale por abajo justo lo que mide la barra. -->
+        <div class="board-wrap">
         <Kanban
           bind:columns
           onopen={(c) => {
@@ -578,6 +590,7 @@
                 ondropbubble,
               }
             : undefined} />
+        </div>
       </section>
     {/if}
 
@@ -871,6 +884,7 @@
   .inbox { flex: 0 0 288px; padding: 0.75rem; }
   .cal { flex: 3 1 0; }
   .board { flex: 2 1 0; }
+  .board-wrap { flex: 1; min-height: 0; }
   .empty { margin: auto; color: var(--faint); font-size: 0.85rem; }
 
   .inbox > header { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }

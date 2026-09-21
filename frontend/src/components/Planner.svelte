@@ -38,6 +38,8 @@
   import type { SheetThread } from './CardSheet.svelte';
   import type { SeqThread } from './SequencePane.svelte';
   import { ago } from '../lib/when';
+  import { plannerFilters, NO_FILTERS, type PlannerFilters } from '../lib/filters.svelte';
+  import { bandFace, bandName } from '../lib/bands';
 
   let {
     onback,
@@ -96,6 +98,34 @@
   // secuencia la necesitan.
   let heated = $state<ThreadHeat[]>([]);
   let people = $state<Record<string, { name: string; avatar: string }>>({});
+  let bands = $state<Record<string, string>>({});
+
+  // Lo que el tablero está escondiendo. Filtrar no es buscar: ⌘K te LLEVA a
+  // algo, esto esconde lo que no coincide sin moverte de sitio.
+  let filters = $state<PlannerFilters>(plannerFilters.get());
+  $effect(() => plannerFilters.set(filters));
+  const filtering = $derived(
+    !!(filters.q.trim() || filters.project || filters.owner || filters.objective || filters.band),
+  );
+
+  /** Las burbujas que pasan el filtro. En el cliente, sobre lo que ya se trajo:
+   *  `allBubbles()` viene entero de una vez, y pedirle al servidor lo mismo
+   *  otra vez por cada tecla sería más lento y no más cierto. */
+  const shownBubbles = $derived.by(() => {
+    const q = filters.q.trim().toLowerCase();
+    return bubbles.filter(
+      (b) =>
+        (!q || b.name.toLowerCase().includes(q)) &&
+        (!filters.project || b.workspace === filters.project) &&
+        (!filters.owner || (b.owners ?? []).includes(filters.owner)) &&
+        (!filters.objective ||
+          (filters.objective === 'none' ? !b.objective : b.objective === filters.objective)) &&
+        // La banda llega con el calor y puede tardar un instante más que la
+        // fila. Mientras no se sabe, no se esconde: un tablero que parpadea a
+        // vacío al cargar es peor que uno que filtra medio segundo tarde.
+        (!filters.band || !bands[b.id] || bands[b.id] === filters.band),
+    );
+  });
   let error = $state('');
   // Nothing is destroyed without being asked first, and the question is asked
   // HERE — the writer knows the name of what is about to go and what goes with
@@ -133,6 +163,10 @@
     try {
       const [all, ps] = await Promise.all([api.allBoard(), api.people()]);
       heated = all.threads;
+      // La banda de cada burbuja, que ya venía en la misma llamada y se tiraba.
+      // Es lo único que el filtro de banda necesita: `allBubbles()` trae la
+      // fila, no el calor, y el calor no se guarda — se calcula.
+      bands = Object.fromEntries(all.bubbles.map((b) => [b.id, b.heat.lifecycle]));
       people = Object.fromEntries(
         ps.map((p) => [p.id, { name: p.display_name || p.email, avatar: avatarUrl(p, '64x64') }]),
       );
@@ -290,7 +324,7 @@
       (col) => ({
         ...col,
         manual: bubbles.some((b) => (b.stage ?? '') === col.id && (b.rank ?? 0) > 0),
-        cards: sortColumn(bubbles.filter((b) => (b.stage ?? '') === col.id)).map(
+        cards: sortColumn(shownBubbles.filter((b) => (b.stage ?? '') === col.id)).map(
           (b): Card => ({
             id: b.id,
             title: b.name,
@@ -704,9 +738,88 @@
   onaddcolumn={addStage}
   onrenamecolumn={renameStage}
   ondeletecolumn={deleteStage}
-  onmovecolumn={moveStage} />
+  onmovecolumn={moveStage}>
+  <!-- La barra vive aquí, donde están los datos que llena: los proyectos, la
+       gente y los objetivos ya están cargados para el tablero. -->
+  {#snippet filterBar()}
+    <div class="filters" class:on={filtering}>
+      <input
+        class="input q"
+        type="search"
+        placeholder="Filtrar el tablero…"
+        aria-label="filtrar por nombre"
+        autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+        bind:value={filters.q} />
+
+      <select class="select" bind:value={filters.project} aria-label="filtrar por proyecto">
+        <option value="">todos los proyectos</option>
+        {#each Object.entries(places) as [id, name] (id)}
+          <option value={id}>{name}</option>
+        {/each}
+      </select>
+
+      <select class="select" bind:value={filters.owner} aria-label="filtrar por responsable">
+        <option value="">cualquier responsable</option>
+        {#each Object.entries(people) as [id, p] (id)}
+          <option value={id}>{p.name}</option>
+        {/each}
+      </select>
+
+      <select class="select" bind:value={filters.objective} aria-label="filtrar por objetivo">
+        <option value="">cualquier objetivo</option>
+        {#each objectiveRows as o, i (o.id)}
+          <option value={o.id}>{i + 1}. {o.name}</option>
+        {/each}
+        <option value="none">sin objetivo</option>
+      </select>
+
+      <select class="select" bind:value={filters.band} aria-label="filtrar por banda">
+        <option value="">cualquier banda</option>
+        <option value="hot">{bandFace('hot')} {bandName('hot')}</option>
+        <option value="dormant">{bandFace('dormant')} {bandName('dormant')}</option>
+        <option value="rip">{bandFace('rip')} {bandName('rip')}</option>
+        <option value="closed">{bandFace('closed')} {bandName('closed')}</option>
+      </select>
+
+      {#if filtering}
+        <!-- Decir CUÁNTAS se están escondiendo, y no sólo que hay un filtro: un
+             tablero con la mitad de las tarjetas fuera y ninguna señal es cómo
+             alguien concluye que se perdió su trabajo. -->
+        <span class="hid">{bubbles.length - shownBubbles.length} escondidas</span>
+        <button class="clear" onclick={() => (filters = { ...NO_FILTERS })}>Limpiar</button>
+      {/if}
+    </div>
+  {/snippet}
+</PlannerView>
 
 <style>
+  .filters {
+    flex: none;
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 0.35rem;
+    padding: 0.5rem 0.9rem 0;
+  }
+  /* Filtrando, la barra se nota: es la explicación de por qué falta algo. */
+  .filters.on { border-left: 2px solid var(--accent); }
+  .filters .q { flex: 1 1 9rem; min-width: 7rem; }
+  .filters .q,
+  .filters .select {
+    width: auto;
+    padding: 0.15rem 0.5rem;
+    font-size: 0.76rem;
+  }
+  .filters .select { padding-right: 1.6rem; }
+  .hid { color: var(--faint); font-size: 0.72rem; }
+  .clear {
+    padding: 0.15rem 0.45rem;
+    border-radius: 7px;
+    color: var(--faint);
+    font-size: 0.74rem;
+  }
+  .clear:hover { background: var(--hover); color: var(--text); }
+
   .places {
     display: flex;
     flex-direction: column;

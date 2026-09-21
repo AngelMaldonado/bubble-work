@@ -308,7 +308,8 @@
     </header>
   {/if}
 
-  <div class="scroll">
+  <div class="split">
+    <div class="scroll">
     {#if doneSteps.length}
       <section class="done-steps">
         <button class="toggle" aria-expanded={showDone} onclick={() => (showDone = !showDone)}>
@@ -367,28 +368,43 @@
       </div>
     {/if}
 
+    </div>
+
+    <!-- Al COSTADO, y no plegada al pie: secuenciar es arrastrar de aquí a la
+         línea, y un origen que hay que desplegar primero —y que empuja la
+         línea hacia abajo al hacerlo— convierte un gesto en tres. -->
     {#if !readonly}
-    <section class="tray" class:over={over === 'tray'} {@attach (el) => target(el, { kind: 'tray' })}>
+    <section
+      class="tray"
+      class:shut={!showTray}
+      class:over={over === 'tray'}
+      {@attach (el) => target(el, { kind: 'tray' })}>
       <div class="tray-head">
-        <button class="toggle" aria-expanded={showTray} onclick={() => (showTray = !showTray)}>
-          {showTray ? '▾' : '▸'} Sin secuenciar ({unsequenced.length})
+        <button
+          class="toggle"
+          aria-expanded={showTray}
+          title={showTray ? 'Esconder la bandeja' : 'Mostrar la bandeja'}
+          onclick={() => (showTray = !showTray)}>
+          {showTray ? '▸' : '◂'} {showTray ? 'Sin secuenciar' : ''} ({unsequenced.length})
         </button>
-        {#if showTray}
+      </div>
+      {#if showTray}
+        <!-- Los filtros, apilados: en una columna estrecha dos selects uno al
+             lado del otro no caben sin cortarse. -->
+        <div class="tray-filters">
           <select class="select filter" bind:value={fProject} aria-label="filtrar por proyecto">
-            <option value="">todos</option>
+            <option value="">todos los proyectos</option>
             {#each projects as p (p)}<option value={p}>{p}</option>{/each}
           </select>
           <select class="select filter" bind:value={fPrio} aria-label="filtrar por prioridad">
-            <option value="">todas</option>
+            <option value="">todas las prioridades</option>
             <option value="P1">P1</option>
             <option value="P2">P2</option>
             <option value="P3">P3</option>
             <option value="P4">P4</option>
             <option value="none">sin prioridad</option>
           </select>
-        {/if}
-      </div>
-      {#if showTray}
+        </div>
         <div class="tray-body">
           {#each tray as t (t.id)}{@render threadCard(t, true)}{/each}
           {#if !tray.length}
@@ -426,8 +442,17 @@
     color: var(--faint);
     font-size: 0.68rem;
   }
-  .scroll {
+  /* La línea y la bandeja, lado a lado. Quien se estrecha primero es la
+     bandeja: la línea es lo que se lee, la bandeja es de donde se saca. */
+  .split {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .scroll {
+    flex: 1 1 auto;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
     display: flex;
@@ -614,10 +639,21 @@
   .finish:hover { background: var(--hover); color: var(--text); }
 
   .tray {
-    margin-top: auto;
+    flex: 0 0 auto;
+    width: clamp(8.5rem, 34%, 13rem);
+    min-height: 0;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
     padding: 0.45rem;
     border: 1px dashed var(--line);
     border-radius: 10px;
+  }
+  /* Escondida ocupa lo que mide su botón, no una columna vacía. */
+  .tray.shut {
+    width: auto;
+    overflow: visible;
   }
   .tray.over { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, transparent); }
   .tray-head {
@@ -626,13 +662,13 @@
     flex-wrap: wrap;
     gap: 0.35rem;
   }
-  .tray-head .toggle { margin-right: auto; }
-  .filter { width: auto; padding: 0.1rem 1.6rem 0.1rem 0.45rem; font-size: 0.74rem; }
+  .tray-head .toggle { margin-right: auto; white-space: nowrap; }
+  .tray-filters { display: flex; flex-direction: column; gap: 0.3rem; }
+  .filter { width: 100%; padding: 0.1rem 1.6rem 0.1rem 0.45rem; font-size: 0.74rem; }
   .tray-body {
     display: flex;
     flex-direction: column;
     gap: 0.35rem;
-    margin-top: 0.45rem;
   }
   .hint { color: var(--faint); font-size: 0.74rem; padding: 0.2rem 0.3rem; }
 </style>

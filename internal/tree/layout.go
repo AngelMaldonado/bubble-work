@@ -87,6 +87,29 @@ var imageExt = map[string]bool{
 // IsImage reports whether a path is an image this store accepts.
 func IsImage(p string) bool { return imageExt[strings.ToLower(path.Ext(p))] }
 
+// Documents that are ATTACHED to a piece of work rather than written as one: a
+// contract, an export, a payload somebody pasted from a bug report.
+//
+// A whitelist and not a blacklist, and a short one, for the reason above: git
+// keeps every version of every byte forever, so what is allowed in decides how
+// big the repository gets. No archives and no binaries — a 5 MiB zip per
+// attachment inflates a repository fast and nobody can read it from a clone.
+//
+// `.md` is deliberately NOT here. A markdown document already has a home, in
+// docs/ or beside its thread, and a second one inside assets/ would be both a
+// duplicate place for the same thing and a way to write a document through the
+// upload door. Everything on this list can arrive only as an upload.
+var attachExt = map[string]bool{
+	".pdf": true, ".txt": true, ".csv": true, ".json": true,
+}
+
+// IsAttachment reports whether a path may live under assets/ — an image, or one
+// of the documents that are attached rather than written.
+func IsAttachment(p string) bool {
+	ext := strings.ToLower(path.Ext(p))
+	return imageExt[ext] || attachExt[ext]
+}
+
 // Classify says where a document path sits in the layout, refusing anything that
 // does not fit it.
 func Classify(doc string) (Area, error) {
@@ -101,8 +124,9 @@ func Classify(doc string) (Area, error) {
 	// assets/ is the one place a non-text file lives, and the only thing that
 	// lives there.
 	if strings.HasPrefix(rel, DirAssets+"/") {
-		if !imageExt[ext] {
-			return "", fmt.Errorf("%w: %q — %s/ holds images", ErrOutside, doc, DirAssets)
+		if !imageExt[ext] && !attachExt[ext] {
+			return "", fmt.Errorf("%w: %q — %s/ holds images and attached documents",
+				ErrOutside, doc, DirAssets)
 		}
 		return AreaAsset, nil
 	}

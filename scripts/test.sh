@@ -1378,6 +1378,37 @@ BIG=/tmp/bubble-big.png; head -c 200000 /dev/urandom > "$BIG"
 chk "una imagen dentro del límite pasa" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
      -H "Authorization: $A" -F "file=@$BIG" -F "name=grande.png")" 200
+
+# En assets/ vive lo que se ADJUNTA a un trabajo, no sólo lo que se ve. La lista
+# es blanca y corta a propósito: git guarda cada versión de cada byte para
+# siempre, así que lo que entra decide cuánto crece el repositorio. Un markdown
+# NO entra —ya tiene casa en docs/ o junto a su hilo— y eso lo fija la aserción
+# de arriba.
+PDF=/tmp/bubble-informe.pdf; printf '%%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%%%EOF\n' > "$PDF"
+PDFUP=$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+  -F "file=@$PDF" -F "name=Informe Q3.pdf")
+chk ">>> un PDF sí entra, y aterriza en assets/" "$(echo "$PDFUP" | j "['path']")" "assets/informe-q3.pdf"
+chk ">>> ...y el servidor dice que NO es imagen, para enlazarlo en vez de embeberlo" \
+  "$(echo "$PDFUP" | j "['image']")" "False"
+chk ">>> ...mientras que de una imagen dice que sí" \
+  "$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+     -F "file=@$PNG" -F "name=mi-diagrama.png" | j "['image']")" "True"
+PDFURL="$API/api/workspaces/$ALPHA/file?path=assets/informe-q3.pdf"
+chk ">>> se sirve con su nombre, no con file?path=…" \
+  "$(curl -s -o /dev/null -D - "$PDFURL" -H "Authorization: $A" \
+     | tr -d '\r' | grep -i '^content-disposition:' | tr -d ' ')" \
+  'Content-Disposition:inline;filename="informe-q3.pdf"'
+chk ">>> los bytes del adjunto vuelven idénticos" \
+  "$(curl -s "$PDFURL" -H "Authorization: $A" | cmp -s - "$PDF" && echo si || echo no)" si
+chk ">>> un adjunto es tan privado como la escritura: erin no lo ve" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$PDFURL" -H "Authorization: $ER")" 404
+chk ">>> un comprimido NO entra: git lo guardaría entero en cada versión" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$PDF" -F "name=cosas.zip")" 400
+chk ">>> ni un ejecutable" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$PDF" -F "name=malo.sh")" 400
+rm -f "$PDF"
 # El documento guarda la ruta CORTA y el servidor la resuelve al renderizar: un
 # markdown con `/api/workspaces/<id>/file?path=…` dentro es un markdown que no
 # sobrevive una mudanza ni se lee desde un clon de git.

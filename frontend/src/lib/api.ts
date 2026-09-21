@@ -1148,7 +1148,7 @@ class Api {
     const form = new FormData();
     form.append('file', file);
     if (name) form.append('name', name);
-    return this.call<{ path: string; url: string; bytes: number }>(
+    return this.call<{ path: string; url: string; bytes: number; image: boolean }>(
       `/api/workspaces/${workspace}/asset`,
       { method: 'POST', body: form },
     );

@@ -1732,6 +1732,40 @@ Lo que se descartó:
 **Hecho cuando:** los tests en vivo de `agents_md` pasan, y el lead guarda una
 versión de cada documento desde la app y la ve leída por un agente.
 
+## En `assets/` vive lo que se ADJUNTA, no sólo lo que se ve *(built)*
+
+`assets/` admitía sólo imágenes, así que un contrato en PDF o un CSV exportado
+no tenían dónde ir. Ahora admite además `.pdf`, `.txt`, `.csv` y `.json`.
+
+**Van en git, dentro del repositorio del proyecto.** Se rechazó la alternativa
+obvia —un `FileField` en `threads`, como el que ya tiene `inbox_items`— porque
+rompe en silencio lo que el producto promete: el markdown en disco es el
+registro, y un documento que cita un archivo guardado fuera del repositorio deja
+de ser legible desde un clon. Clonar el proyecto tiene que traer el trabajo
+entero.
+
+**Lista blanca y corta, no lista negra.** Git guarda cada versión de cada byte
+para siempre, así que lo que se deja entrar decide cuánto crece el repositorio.
+Sin comprimidos, sin binarios, sin ofimática: un `.zip` de 5 MB por adjunto
+infla un repositorio rápido y nadie puede leerlo desde un clon. Con una lista
+negra no se podría razonar sobre eso.
+
+**`.md` no entra**, aunque es texto. Un markdown ya tiene casa —`docs/` o la
+carpeta de su hilo—, y un segundo sitio para lo mismo es cómo se pierde. Además
+es la única extensión de la lista que la API de documentos sabe escribir:
+admitirla en `assets/` sería una puerta para escribir un documento por la
+ventana de subida. Todo lo demás sólo puede llegar subido.
+
+**La respuesta de subida dice si es imagen.** Un `![]()` se ve dentro del
+documento y un `[]()` se abre; quién es cada cosa lo decide `internal/tree`, y
+el cliente lo pregunta en vez de guardar su propia lista de extensiones —dos
+listas se separan, y la que se queda atrás escribe la referencia equivocada.
+
+**Las cajitas de la UI se derivan del documento.** Un adjunto se dibuja porque
+el markdown lo referencia, no porque exista una fila en una lista de adjuntos.
+Borrar la referencia quita la cajita, que es lo que cualquiera espera. Una lista
+paralela acabaría discrepando de lo que el documento dice.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

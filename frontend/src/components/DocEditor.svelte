@@ -11,7 +11,7 @@
   // editor itself, the slash menu, and saving. What it does NOT own is where
   // the text comes from or where it goes — that is the caller's, because one
   // writes a thread's document and the other a page.
-  import { droppedFile, insertImage, pastedImage } from '../lib/attach';
+  import { droppedFile, insertAttachment, pastedImage } from '../lib/attach';
   import { annotate } from '../lib/annotate';
   import { untrack } from 'svelte';
   import Prose from './Prose.svelte';
@@ -110,7 +110,7 @@
     try {
       // La misma inserción que el brief de una burbuja y el cuerpo de una nota:
       // una sola definición de «qué es una imagen pegada».
-      const next = await insertImage(editor, file, onattach);
+      const next = await insertAttachment(editor, file, onattach);
       if (next !== null) draft = next;
     } finally {
       attaching = false;
@@ -137,7 +137,10 @@
     const file = droppedFile(e);
     if (file) {
       e.preventDefault();
-      attach(file);
+      // Sólo una imagen pasa por el modal de anotar. Un PDF no se anota ni se
+      // recorta: se sube tal cual y se enlaza.
+      if (file.type.startsWith('image/')) annotate(file).then((out) => out && attach(out));
+      else attach(file);
     }
   }
 

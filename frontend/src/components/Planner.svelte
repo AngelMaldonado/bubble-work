@@ -25,6 +25,8 @@
     type Stage,
     type ThreadRecord,
     type ThreadHeat,
+    type BubbleHeat,
+    type QueueCard,
     type ThreadStage,
     type CalendarEvent,
     type Tuning,
@@ -39,23 +41,29 @@
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import { limited, tooLong } from '../lib/limits.svelte';
   import type { SheetThread } from './CardSheet.svelte';
-  import type { SeqThread } from './SequencePane.svelte';
+  import SequencePane, { type SeqThread } from './SequencePane.svelte';
   import { ago } from '../lib/when';
-  import { plannerFilters, NO_FILTERS, type PlannerFilters } from '../lib/filters.svelte';
+  import { untrack } from 'svelte';
+  import { plannerFilters, NO_FILTERS, lastOpenBubble, type PlannerFilters } from '../lib/filters.svelte';
   import { bandFace, bandName } from '../lib/bands';
   import Crumbs from './Crumbs.svelte';
   import { occurrences, isoDay } from '../lib/repeat';
+  import FilterPick from './FilterPick.svelte';
 
   let {
     onback,
     onsearch,
     onopenthread,
+    onopenboard,
     sequenceEnabled = false,
   }: {
     onback?: () => void;
     onsearch?: () => void;
     /** abrir un hilo a pantalla completa, por su proyecto y su número */
     onopenthread?: (slug: string, seq: number) => void;
+    /** ir al board de un proyecto; la burbuja que quede abierta la dice
+     *  `lastOpenBubble`, como hace la agenda */
+    onopenboard?: (slug: string) => void;
     /** el departamento tiene encendida la secuencia (Ajustes → Funciones) */
     sequenceEnabled?: boolean;
   } = $props();
@@ -114,13 +122,31 @@
   let mode = $state<'bubbles' | 'tasks'>('bubbles');
   const tasksMode = $derived(mode === 'tasks');
 
+  /** Qué forma tiene el tablero: la LÍNEA de ejecución o el kanban.
+   *
+   *  Con la secuencia encendida, la línea es el sitio por defecto y el kanban es
+   *  opt-in: si un departamento decidió que hay un orden de ejecución, lo que se
+   *  mira a diario es ese orden. Apagada, esto no significa nada y el planeador
+   *  es el tablero de siempre. */
+  let view = $state<'sequence' | 'kanban'>('sequence');
+  const seqView = $derived(sequenceEnabled && view === 'sequence');
+
   function setMode(next: 'bubbles' | 'tasks') {
     if (next === mode) return;
     mode = next;
-    // Se guarda y no se espera: la vista ya cambió, y que el guardado tarde no
-    // es motivo para que el tablero se quede quieto.
-    api.setPrefs({ planner: next }).catch(() => {});
+    savePrefs();
   }
+
+  function setView(next: 'sequence' | 'kanban') {
+    if (next === view) return;
+    view = next;
+    savePrefs();
+  }
+
+  // El saco entero, porque `setPrefs` guarda el saco entero. Se manda y no se
+  // espera: la vista ya cambió, y que el guardado tarde no es motivo para que
+  // el tablero se quede quieto.
+  const savePrefs = () => api.setPrefs({ planner: mode, view }).catch(() => {});
   let threads = $state<ThreadRecord[]>([]);
   let objectiveRows = $state<ObjectiveRecord[]>([]);
   let notes = $state<InboxItem[]>([]);
@@ -138,6 +164,7 @@
   // secuencia la necesitan.
   let heated = $state<ThreadHeat[]>([]);
   let people = $state<Record<string, { name: string; avatar: string }>>({});
+  let heatedBubbles = $state<BubbleHeat[]>([]);
   let bands = $state<Record<string, string>>({});
 
   // Lo que el tablero está escondiendo. Filtrar no es buscar: ⌘K te LLEVA a
@@ -213,6 +240,7 @@
     .prefs()
     .then((p) => {
       if (p.planner === 'tasks' || p.planner === 'bubbles') mode = p.planner;
+      if (p.view === 'kanban' || p.view === 'sequence') view = p.view;
     })
     .catch(() => {});
 
@@ -223,6 +251,7 @@
       // La banda de cada burbuja, que ya venía en la misma llamada y se tiraba.
       // Es lo único que el filtro de banda necesita: `allBubbles()` trae la
       // fila, no el calor, y el calor no se guarda — se calcula.
+      heatedBubbles = all.bubbles;
       bands = Object.fromEntries(all.bubbles.map((b) => [b.id, b.heat.lifecycle]));
       people = Object.fromEntries(
         ps.map((p) => [p.id, { name: p.display_name || p.email, avatar: avatarUrl(p, '64x64') }]),
@@ -270,6 +299,150 @@
     })),
   );
 
+  /** Los módulos, como filas de la línea. Dos líneas independientes: ésta
+   *  contesta «¿qué cuerpo de trabajo atacamos antes?» y la de hilos «¿qué
+   *  pieza se hace antes?». Un módulo en el paso 2 puede tener hilos en el
+   *  paso 5 de la suya, y está bien.
+   *
+   *  Terminado es CERRADA: cerrar una burbuja ya es una decisión con fecha y
+   *  frase. Derivarlo de que no le queden hilos abiertos haría que un módulo
+   *  recién creado contara como terminado desde que nace. */
+  const sequenceModules = $derived<SeqThread[]>(
+    heatedBubbles.map((b) => ({
+      id: b.id,
+      name: b.name,
+      project: places[b.workspace] ?? '',
+      bubble: '',
+      priority: b.priority ?? '',
+      sequence: b.sequence ?? 0,
+      done: b.closed,
+      assignees: (b.owners ?? []).map((id) => ({
+        id,
+        name: people[id]?.name ?? '',
+        avatar: people[id]?.avatar || undefined,
+      })),
+    })),
+  );
+
+  /** Cerrar un módulo desde la línea. Sin frase: la pide el board, donde hay
+   *  sitio para escribirla, y obligar a redactarla aquí para avanzar la línea
+   *  sería cobrar un peaje por terminar algo. */
+  /** Abrir un módulo desde la línea.
+   *
+   *  Al board de su proyecto con él abierto, como hace la agenda: la hoja de la
+   *  burbuja la dibuja `PlannerView` y abrirla desde fuera obligaría a que este
+   *  componente alcanzara su estado interno. La línea dice el ORDEN; lo que ese
+   *  cuerpo de trabajo ES se lee donde ya se leía. */
+  function openModule(id: string) {
+    const b = heatedBubbles.find((x) => x.id === id);
+    const slug = b ? slugs[b.workspace] : '';
+    if (!b || !slug) return;
+    lastOpenBubble.set(b.id);
+    onopenboard?.(slug);
+  }
+
+  /** Reabrir algo terminado, porque volvió a la línea.
+   *
+   *  Un módulo pierde su fecha de cierre —y su frase con ella: la frase decía
+   *  cómo terminó, y no terminó—. Un hilo vuelve al estado por defecto de su
+   *  proyecto, que es de donde salió: no hay un «estado anterior» guardado, y
+   *  el por defecto es el que significa «esto está por hacer». */
+  const reopenModule = (id: string) =>
+    heatWrite(() => api.update('bubbles', id, { closed_at: '', closure: '' }));
+
+  async function reopenThread(id: string) {
+    const t = heated.find((x) => x.id === id);
+    if (!t) return;
+    const states = await api.states(t.workspace);
+    const back = states.find((x) => x.is_default) ?? states.find((x) => x.group !== 'completed');
+    if (!back) {
+      error = 'Ese proyecto no tiene ningún estado abierto al que volver.';
+      return;
+    }
+    await heatWrite(() => api.update('threads', id, { state: back.id }));
+  }
+
+  const closeModule = (id: string) =>
+    heatWrite(() =>
+      api.update('bubbles', id, { closed_at: new Date().toISOString().replace('T', ' ') }),
+    );
+
+  // ---- las dos columnas laterales de la línea ----
+  //
+  // Paginadas en el servidor: lo que está fuera de la línea y lo que ya se
+  // terminó crecen sin techo, y `/api/board` compone el departamento entero
+  // para poder clasificarlo por calor. Esa respuesta es la correcta para un
+  // tablero que se lee de un vistazo, y la equivocada para una lista que se
+  // recorre.
+  type Side = { items: QueueCard[]; page: number; more: boolean; loading: boolean };
+  const emptySide = (): Side => ({ items: [], page: 0, more: true, loading: false });
+  let queueOpen = $state<Side>(emptySide());
+  let queueDone = $state<Side>(emptySide());
+
+  async function pull(side: Side, state: 'open' | 'done') {
+    if (side.loading || !side.more) return;
+    side.loading = true;
+    try {
+      const out = await api.queue({
+        kind: tasksMode ? 'threads' : 'bubbles',
+        state,
+        page: side.page + 1,
+      });
+      side.items = [...side.items, ...out.items];
+      side.page = out.page;
+      side.more = out.more;
+    } catch (e) {
+      // Sin más páginas que pedir: un error aquí no puede dejar el centinela
+      // pidiendo la misma página para siempre.
+      side.more = false;
+      error = (e as Error).message;
+    } finally {
+      side.loading = false;
+    }
+  }
+
+  /** Volver a empezar las dos columnas. Al cambiar de modo son otras listas
+   *  —hilos o módulos—, y al escribir algo puede haber entrado o salido de
+   *  ellas, así que se recargan en vez de parchearse: adivinar aquí en qué
+   *  columna cae una fila es reimplementar el filtro del servidor. */
+  function refillSides() {
+    queueOpen = emptySide();
+    queueDone = emptySide();
+    if (!seqView) return;
+    pull(queueOpen, 'open');
+    pull(queueDone, 'done');
+  }
+  $effect(() => {
+    // Depende del modo y de si la línea está a la vista; nada más.
+    void mode;
+    void seqView;
+    // `untrack`, y no es un detalle: `refillSides` escribe `queueOpen` y
+    // `queueDone`, y `pull` los LEE para saber si ya está pidiendo y si queda
+    // otra página. Sin esto el efecto depende de lo que él mismo escribe y se
+    // repite sin fin — se ve como `/api/queue` pedido en bucle hasta que Svelte
+    // corta con «demasiada profundidad».
+    untrack(() => refillSides());
+  });
+
+  /** Una fila de una columna, como la dibuja la línea. */
+  const asSeq = (c: QueueCard, done: boolean): SeqThread => ({
+    id: c.id,
+    seq: c.seq,
+    name: c.name,
+    project: places[c.workspace] ?? '',
+    bubble: c.bubble ? bubbleName(c.bubble) : '',
+    priority: c.priority ?? '',
+    sequence: 0,
+    done,
+    created: c.created,
+    due: c.due_date,
+    assignees: (c.people ?? []).map((id) => ({
+      id,
+      name: people[id]?.name ?? '',
+      avatar: people[id]?.avatar || undefined,
+    })),
+  });
+
   async function heatWrite(run: () => Promise<unknown>) {
     try {
       await run();
@@ -277,6 +450,7 @@
       error = (e as Error).message;
     }
     await loadHeat();
+    refillSides();
   }
 
   /** Una burbuja soltada en la columna de la secuencia: sus hilos abiertos que
@@ -726,11 +900,12 @@
   }
 
   const addCard = (column: string, title: string) => {
-    // Una TAREA nace dentro de un módulo, y elegirlo es el flujo de dos pasos
-    // del inbox. Mientras ese no exista, se dice por qué en vez de crear una
-    // tarea colgando de nada.
+    // Una TAREA nace dentro de un módulo, así que el «+» del tablero pregunta lo
+    // mismo que promover del inbox: proyecto, y después módulo. La diferencia es
+    // que aquí también hay que ponerle nombre — al venir del inbox lo trae la
+    // nota — y que se queda en la columna donde se pulsó.
     if (tasksMode) {
-      error = 'Una tarea nace dentro de un módulo: ábrelo y créala ahí, o promuévela desde el inbox.';
+      newTask = { title: '', stage: column === UNSTAGED ? '' : column, onThread: false, ...blankWhere() };
       return;
     }
     ask(title, column);
@@ -789,18 +964,28 @@
    *  decided — which is the question an inbox exists to defer. */
   const promote = (note: Note) => {
     if (tasksMode) {
-      promoting = {
+      newTask = {
         note,
-        // Con un solo proyecto no hay nada que elegir, así que se salta el
-        // primer paso — igual que hace el modo módulos.
-        ws: Object.keys(places).length === 1 ? Object.keys(places)[0] : '',
-        bubble: '',
-        fresh: '',
+        title: note.text,
+        // Lo capturado sirve de nombre para las dos cosas: quien lo triee como
+        // módulo no tiene que volver a escribir la misma frase.
+        stage: '',
+        onThread: false,
+        ...blankWhere(),
+        fresh: note.text,
       };
       return;
     }
     ask(note.text, '', note);
   };
+
+  /** Dónde empieza la elección. Con un solo proyecto no hay nada que elegir, así
+   *  que se salta el primer paso — igual que hace el modo módulos. */
+  const blankWhere = () => ({
+    ws: Object.keys(places).length === 1 ? Object.keys(places)[0] : '',
+    bubble: '',
+    fresh: '',
+  });
 
   /** Promover una nota a TAREA: proyecto, y después módulo.
    *
@@ -810,26 +995,59 @@
    *
    *  Una tarea NO nace colgando de nada: un hilo sin burbuja no aparece en el
    *  plan de nadie y es exactamente el trabajo que se pierde. */
-  let promoting = $state<{ note: Note; ws: string; bubble: string; fresh: string } | null>(null);
+  /** Lo que se está creando, y hasta dónde se ha bajado.
+   *
+   *  UN camino, siempre el mismo: Proyecto › Módulo › Hilo. Lo que nace lo
+   *  decide dónde te paras — quien quiere un módulo pulsa «Crear» en el segundo
+   *  paso y no llega al tercero. Antes eran dos flujos con un `kind` decidido
+   *  antes de empezar, y eso obligaba a saber qué querías crear antes de ver
+   *  qué había. */
+  let newTask = $state<{
+    /** la nota de la que sale, si sale de una */
+    note?: Note;
+    /** el nombre del HILO, en el tercer paso */
+    title: string;
+    /** la columna donde se pulsó «+», si fue ahí */
+    stage: string;
+    ws: string;
+    bubble: string;
+    fresh: string;
+    /** ya se bajó al tercer paso */
+    onThread: boolean;
+  } | null>(null);
 
-  const promotingBubbles = $derived(
-    promoting?.ws ? bubbles.filter((b) => b.workspace === promoting!.ws && !b.closed_at) : [],
+  /** En qué paso va el diálogo. Derivado de lo que hay, no un contador: un
+   *  número que hay que mantener en paso con tres campos es un número que se
+   *  desincroniza. */
+  const newStep = $derived<'project' | 'module' | 'thread'>(
+    !newTask?.ws ? 'project' : newTask.onThread ? 'thread' : 'module',
   );
 
-  async function promoteToTask() {
-    const p = promoting;
+  const taskBubbles = $derived(
+    newTask?.ws ? bubbles.filter((b) => b.workspace === newTask!.ws && !b.closed_at) : [],
+  );
+
+  /** Crear donde se paró.
+   *
+   *  `stop: 'module'` crea sólo el módulo; `'thread'` crea el módulo si hacía
+   *  falta y dentro el hilo. Es una función y no dos porque el módulo nace
+   *  igual en los dos casos, y dos copias de «cómo nace un módulo» acabarían
+   *  naciendo distinto. */
+  async function createTask(stop: 'module' | 'thread') {
+    const p = newTask;
     if (!p || !p.ws) return;
-    const name = p.note.text.trim();
-    const long = tooLong('threads.name', name);
+    const name = (stop === 'module' ? p.fresh : p.title).trim();
+    if (!name) return;
+    const long = tooLong(stop === 'module' ? 'bubbles.name' : 'threads.name', name);
     if (long) {
-      promoting = null;
-      error = `No pasó al tablero: el título se vuelve el nombre de la tarea. ${long}`;
+      newTask = null;
+      error = `No pasó al tablero: el título se vuelve el nombre. ${long}`;
       return;
     }
-    promoting = null;
+    newTask = null;
     await write(async () => {
-      // El módulo, si hay que crearlo antes. Sin outcome: lo pone quien
-      // orquesta, y inventarle uno aquí sería escribir el contrato por él.
+      // El módulo, si hay que crearlo. Sin outcome: el contrato lo pone quien
+      // orquesta, e inventarle uno aquí sería escribirlo por él.
       let bubble = p.bubble;
       if (!bubble && p.fresh.trim()) {
         const made = await api.create<BubbleRecord>('bubbles', {
@@ -838,19 +1056,26 @@
         });
         bubble = made.id;
       }
-      if (!bubble) return;
+      if (stop === 'module' || !bubble) return;
+
       const t = await api.createThread({ workspace: p.ws, bubble, name });
-      // Lo que se entendió de la nota viaja al documento de la tarea. La nota
-      // NO se borra: guarda a qué se convirtió, y sale del inbox por eso.
-      const body = p.note.body?.trim();
-      if (body) {
-        const doc = await api.readThread(t.id);
-        await api.patchThread(t.id, { base: doc.hash, content: `${body}\n` });
+      // La columna donde se pulsó «+». Se escribe después de crear, y no antes,
+      // porque `createThread` es la puerta que pone el número y la ruta.
+      if (p.stage) await api.update('threads', t.id, { stage: p.stage });
+      if (p.note) {
+        // Lo que se entendió de la nota viaja al documento de la tarea. La nota
+        // NO se borra: guarda a qué se convirtió, y sale del inbox por eso.
+        const body = p.note.body?.trim();
+        if (body) {
+          const doc = await api.readThread(t.id);
+          await api.patchThread(t.id, { base: doc.hash, content: `${body}\n` });
+        }
+        await api.update('inbox_items', p.note.id, { thread: t.id });
       }
-      await api.update('inbox_items', p.note.id, { thread: t.id });
     });
     await loadHeat();
   }
+
 
   /** Abrir una tarjeta ya no pide nada: la descripción de una burbuja es su
    *  outcome, y viene con la fila. Antes había que ir a buscar el documento del
@@ -1075,10 +1300,12 @@
   </Dialog>
 {/if}
 
-{#if promoting}
-  <!-- Dos pasos: proyecto, y después módulo. Con vuelta atrás, que es la mitad
-       del argumento para que sean dos. -->
-  <Dialog open onOpenChange={() => (promoting = null)}>
+{#if newTask}
+  <!-- Dos pasos: proyecto, y después nombre y módulo. Con vuelta atrás, que es
+       la mitad del argumento para que sean dos. La misma pantalla sirve para el
+       «+» del tablero y para promover una nota: lo único que cambia es si el
+       nombre llega escrito. -->
+  <Dialog open onOpenChange={() => (newTask = null)}>
     <Portal>
       <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
       <Dialog.Positioner
@@ -1086,39 +1313,59 @@
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
           <div>
-            <Crumbs parts={[places[promoting.ws] ?? '']} />
+            <!-- El camino entero, siempre visible: dónde estás y cuánto falta.
+                 El nivel en el que vas va sin rellenar hasta que lo eliges. -->
+            <Crumbs
+              parts={[
+                places[newTask.ws] || 'Proyecto',
+                newStep === 'project'
+                  ? null
+                  : bubbles.find((b) => b.id === newTask!.bubble)?.name ||
+                    newTask.fresh ||
+                    'Módulo',
+                newStep === 'thread' ? newTask.title || 'Hilo' : null,
+              ]} />
             <Dialog.Title class="text-lg font-bold">
-              {promoting.ws ? '¿En qué módulo?' : '¿En qué proyecto nace?'}
+              {#if newStep === 'project'}¿En qué proyecto nace?
+              {:else if newStep === 'module'}¿En qué módulo?
+              {:else}¿Cómo se llama el hilo?{/if}
             </Dialog.Title>
           </div>
           <Dialog.Description class="muted text-sm">
-            «{promoting.note.text}» — una tarea vive dentro de un módulo, y su
-            documento en el repositorio de su proyecto.
+            {#if newStep === 'module'}
+              Elige uno o escribe uno nuevo. Si lo que querías era el módulo,
+              créalo aquí y ya está: al hilo se baja sólo si hace falta.
+            {:else if newStep === 'thread'}
+              Un hilo es una pieza ejecutable, y su documento vive en el
+              repositorio de su proyecto.
+            {:else}
+              Todo cuelga de un proyecto: su repositorio es donde acaba escrito.
+            {/if}
           </Dialog.Description>
 
-          {#if !promoting.ws}
+          {#if newStep === 'project'}
             <ul class="places">
               {#each Object.entries(places) as [id, name] (id)}
                 <li>
-                  <button class="place" onclick={() => (promoting = { ...promoting!, ws: id })}>
+                  <button class="place" onclick={() => (newTask = { ...newTask!, ws: id })}>
                     {name}
                   </button>
                 </li>
               {/each}
             </ul>
-          {:else}
+          {:else if newStep === 'module'}
             <ul class="places">
-              {#each promotingBubbles as b (b.id)}
+              {#each taskBubbles as b (b.id)}
                 <li>
                   <button
                     class="place"
-                    class:on={promoting.bubble === b.id}
-                    onclick={() => (promoting = { ...promoting!, bubble: b.id, fresh: '' })}>
+                    class:on={newTask.bubble === b.id}
+                    onclick={() => (newTask = { ...newTask!, bubble: b.id, fresh: '' })}>
                     {b.name}
                   </button>
                 </li>
               {/each}
-              {#if !promotingBubbles.length}
+              {#if !taskBubbles.length}
                 <li><p class="muted text-sm">Este proyecto no tiene ningún módulo todavía.</p></li>
               {/if}
             </ul>
@@ -1126,29 +1373,58 @@
               class="input"
               placeholder="…o escribe un módulo nuevo"
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-              value={promoting.fresh}
-              oninput={(e) =>
-                (promoting = { ...promoting!, fresh: e.currentTarget.value, bubble: '' })}
+              value={newTask.fresh}
+              oninput={(e) => (newTask = { ...newTask!, fresh: e.currentTarget.value, bubble: '' })}
               {@attach limited('bubbles.name')} />
+          {:else}
+            <input
+              class="input"
+              placeholder="¿Cómo se llama el hilo?"
+              autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+              value={newTask.title}
+              oninput={(e) => (newTask = { ...newTask!, title: e.currentTarget.value })}
+              {@attach limited('threads.name')}
+              {@attach (el: HTMLInputElement) => { el.focus(); el.select(); }} />
           {/if}
 
-          <div class="flex justify-end gap-2">
-            {#if promoting.ws && Object.keys(places).length > 1}
+          <div class="flex flex-wrap justify-end gap-2">
+            {#if newStep === 'module' && Object.keys(places).length > 1}
               <button
                 class="btn btn-sm preset-tonal-surface mr-auto"
-                onclick={() => (promoting = { ...promoting!, ws: '', bubble: '', fresh: '' })}>
+                onclick={() => (newTask = { ...newTask!, ws: '', bubble: '', fresh: '' })}>
                 ← Proyecto
               </button>
+            {:else if newStep === 'thread'}
+              <button
+                class="btn btn-sm preset-tonal-surface mr-auto"
+                onclick={() => (newTask = { ...newTask!, onThread: false })}>
+                ← Módulo
+              </button>
             {/if}
-            <button class="btn btn-sm preset-tonal-surface" onclick={() => (promoting = null)}>
+            <button class="btn btn-sm preset-tonal-surface" onclick={() => (newTask = null)}>
               Cancelar
             </button>
-            <button
-              class="btn btn-sm preset-filled-primary-500"
-              onclick={promoteToTask}
-              disabled={!promoting.ws || (!promoting.bubble && !promoting.fresh.trim())}>
-              Crear la tarea
-            </button>
+
+            {#if newStep === 'module'}
+              <!-- Parar aquí: lo que nace es el módulo. Sólo con uno NUEVO
+                   escrito — «crear» uno que ya existe no crea nada. -->
+              <button
+                class="btn btn-sm preset-tonal-primary"
+                disabled={!newTask.fresh.trim()}
+                onclick={() => createTask('module')}>Crear el módulo</button>
+              <button
+                class="btn btn-sm preset-filled-primary-500"
+                disabled={!newTask.bubble && !newTask.fresh.trim()}
+                onclick={() =>
+                  (newTask = { ...newTask!, onThread: true, title: newTask!.title })}>
+                Hilo →
+              </button>
+            {:else if newStep === 'thread'}
+              <button
+                class="btn btn-sm preset-filled-primary-500"
+                disabled={!newTask.title.trim()}
+                onclick={() => createTask('thread')}>Crear el hilo</button>
+            {/if}
           </div>
         </Dialog.Content>
       </Dialog.Positioner>
@@ -1194,6 +1470,46 @@
 
 <Confirm bind:ask={doom} />
 
+{#snippet seqPane()}
+      <!-- La línea de ejecución como panel propio, no como una columna del
+           kanban: ordenar el trabajo y repartirlo en columnas son dos gestos
+           distintos, y meterlos en la misma pantalla obligaba a que la línea
+           cupiera en el ancho de una columna. -->
+      <div class="seq-pane">
+        <SequencePane
+          title={tasksMode ? '🧭 Secuencia de tareas' : '🧭 Secuencia de módulos'}
+          what={tasksMode ? 'tareas' : 'módulos'}
+          completeLabel={tasksMode ? '✓ Terminar' : '🏆 Cerrar'}
+          threads={tasksMode ? sequenceThreads : sequenceModules}
+          queue={queueOpen.items.map((c) => asSeq(c, false))}
+          queueMore={queueOpen.more}
+          onqueuemore={() => pull(queueOpen, 'open')}
+          done={queueDone.items.map((c) => asSeq(c, true))}
+          doneMore={queueDone.more}
+          ondonemore={() => pull(queueDone, 'done')}
+          onreorder={(changes) =>
+            heatWrite(() =>
+              Promise.all(
+                changes.map((c) =>
+                  tasksMode
+                    ? api.setSequence(c.id, c.sequence)
+                    : api.update('bubbles', c.id, { sequence: c.sequence }),
+                ),
+              ),
+            )}
+          oncomplete={(id) => (tasksMode ? heatWrite(() => api.completeThread(id)) : closeModule(id))}
+          onopen={(t) => (tasksMode ? openThreadById(t.id) : openModule(t.id))}
+          onnew={() => (newTask = { title: '', stage: '', onThread: false, ...blankWhere() })}
+          onreopen={(id) => (tasksMode ? reopenThread(id) : reopenModule(id))}
+          onreview={(id) =>
+            heatWrite(() =>
+              api.update(tasksMode ? 'threads' : 'bubbles', id, {
+                reviewed_at: new Date().toISOString().replace('T', ' '),
+              }),
+            )} />
+      </div>
+{/snippet}
+
 <PlannerView
   {columns}
   {inbox}
@@ -1222,11 +1538,6 @@
       ? heatWrite(() => api.createThread({ workspace: card.ws!, bubble: card.id, name }))
       : undefined}
   onopenthread={openThreadById}
-  sequenceThreads={sequenceEnabled ? sequenceThreads : undefined}
-  onreorder={(changes) =>
-    heatWrite(() => Promise.all(changes.map((c) => api.setSequence(c.id, c.sequence))))}
-  oncompletethread={(id) => heatWrite(() => api.completeThread(id))}
-  ondropbubble={dropBubble}
   onmoveevent={moveEvent}
   onmovecard={moveCard}
   onautoorder={autoOrder}
@@ -1247,29 +1558,51 @@
   ondeletecolumn={deleteStage}
   onmovecolumn={moveStage}
   cardsAreTasks={tasksMode}
-  onopendates={isLead ? () => (datesOpen = true) : undefined}>
+  onopendates={isLead ? () => (datesOpen = true) : undefined}
+  boardPane={seqView ? seqPane : undefined}>
   <!-- La barra vive aquí, donde están los datos que llena: los proyectos, la
        gente y los objetivos ya están cargados para el tablero. -->
+  {#snippet modeSwitch()}
+    <!-- En la cabecera y no entre los filtros: esto no esconde nada, cambia lo
+         que el tablero ES. Un conmutador de eso puesto entre los filtros se lee
+         como un filtro más. -->
+    <div class="mode" role="radiogroup" aria-label="Qué se ordena">
+      <button
+        class="seg"
+        class:on={!tasksMode}
+        aria-pressed={!tasksMode}
+        title="Módulos: cuerpos de trabajo"
+        onclick={() => setMode('bubbles')}>Módulos</button>
+      <button
+        class="seg"
+        class:on={tasksMode}
+        aria-pressed={tasksMode}
+        title="Tareas: las piezas"
+        onclick={() => setMode('tasks')}>Tareas</button>
+    </div>
+
+    {#if sequenceEnabled}
+      <!-- La forma del tablero. Sólo si el departamento encendió la secuencia:
+           un conmutador de algo apagado es enseñar una puerta cerrada. -->
+      <div class="mode" role="radiogroup" aria-label="Forma del tablero">
+        <button
+          class="seg"
+          class:on={view === 'sequence'}
+          aria-pressed={view === 'sequence'}
+          title="En qué orden se ejecuta"
+          onclick={() => setView('sequence')}>🧭 Secuencia</button>
+        <button
+          class="seg"
+          class:on={view === 'kanban'}
+          aria-pressed={view === 'kanban'}
+          title="Repartido en columnas"
+          onclick={() => setView('kanban')}>🗂 Kanban</button>
+      </div>
+    {/if}
+  {/snippet}
+
   {#snippet filterBar()}
     <div class="filters" class:on={filtering}>
-      <!-- El mismo planeador, visto de dos maneras. La elección es de la
-           persona y vive en el servidor: abrir el portátil y encontrarse el
-           tablero en el otro modo es volver a tomar una decisión ya tomada. -->
-      <div class="mode" role="radiogroup" aria-label="Cómo ver el planeador">
-        <button
-          class="seg"
-          class:on={!tasksMode}
-          aria-pressed={!tasksMode}
-          title="Las tarjetas son módulos"
-          onclick={() => setMode('bubbles')}>Módulos</button>
-        <button
-          class="seg"
-          class:on={tasksMode}
-          aria-pressed={tasksMode}
-          title="Las tarjetas son tareas"
-          onclick={() => setMode('tasks')}>Tareas</button>
-      </div>
-
       <input
         class="input q"
         type="search"
@@ -1278,50 +1611,46 @@
         autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
         bind:value={filters.q} />
 
-      <select class="select" bind:value={filters.project} aria-label="filtrar por proyecto">
-        <option value="">todos los proyectos</option>
-        {#each Object.entries(places) as [id, name] (id)}
-          <option value={id}>{name}</option>
-        {/each}
-      </select>
+      <FilterPick
+        label="filtrar por proyecto"
+        any="todos los proyectos"
+        items={Object.entries(places).map(([id, name]) => ({ label: name, value: id }))}
+        bind:value={filters.project} />
 
-      <select class="select" bind:value={filters.owner} aria-label="filtrar por responsable">
-        <option value="">cualquier responsable</option>
-        {#each Object.entries(people) as [id, p] (id)}
-          <option value={id}>{p.name}</option>
-        {/each}
-      </select>
+      <FilterPick
+        label="filtrar por responsable"
+        any="cualquier responsable"
+        items={Object.entries(people).map(([id, p]) => ({ label: p.name, value: id }))}
+        bind:value={filters.owner} />
 
-      <select class="select" bind:value={filters.objective} aria-label="filtrar por objetivo">
-        <option value="">cualquier objetivo</option>
-        {#each objectiveRows as o, i (o.id)}
-          <option value={o.id}>{i + 1}. {o.name}</option>
-        {/each}
-        <option value="none">sin objetivo</option>
-      </select>
+      <FilterPick
+        label="filtrar por objetivo"
+        any="cualquier objetivo"
+        items={[
+          ...objectiveRows.map((o, i) => ({ label: `${i + 1}. ${o.name}`, value: o.id })),
+          { label: 'sin objetivo', value: 'none' },
+        ]}
+        bind:value={filters.objective} />
 
-      <!-- Qué dura un ciclo, pegado al filtro que habla de bandas: las bandas se
-           miden en ciclos («en silencio 2 ciclos») y el número solo no dice si
-           eso son dos días o dos semanas. No es una rejilla del calendario — el
-           ciclo se cuenta desde el último calor de CADA burbuja, no desde una
-           fecha común— así que se dice como duración, que es lo que sí es. -->
-      <select
-        class="select"
-        bind:value={filters.band}
-        title={cycleWords ? `Un ciclo dura ${cycleWords}` : 'Banda de calor'}
-        aria-label="filtrar por banda">
-        <option value="">cualquier banda{cycleWords ? ` · ciclo ${cycleWords}` : ''}</option>
-        <option value="hot">{bandFace('hot')} {bandName('hot')}</option>
-        <option value="dormant">{bandFace('dormant')} {bandName('dormant')}</option>
-        <option value="rip">{bandFace('rip')} {bandName('rip')}</option>
-        <option value="closed">{bandFace('closed')} {bandName('closed')}</option>
-      </select>
+      <!-- Cuánto dura un ciclo, pegado al filtro que habla de bandas: las bandas
+           se miden en ciclos («en silencio 2 ciclos») y el número solo no dice
+           si eso son dos días o dos semanas. No es una rejilla del calendario
+           —el ciclo se cuenta desde el último calor de CADA burbuja, no desde
+           una fecha común— así que se dice como duración, que es lo que sí es. -->
+      <FilterPick
+        label="filtrar por banda"
+        any={cycleWords ? `cualquier banda · ciclo ${cycleWords}` : 'cualquier banda'}
+        items={(['hot', 'dormant', 'rip', 'closed'] as const).map((b) => ({
+          label: `${bandFace(b)} ${bandName(b)}`,
+          value: b,
+        }))}
+        bind:value={filters.band} />
 
       {#if filtering}
         <!-- Decir CUÁNTAS se están escondiendo, y no sólo que hay un filtro: un
              tablero con la mitad de las tarjetas fuera y ninguna señal es cómo
              alguien concluye que se perdió su trabajo. -->
-        <span class="hid">
+        <span class="hid" title="tarjetas escondidas por los filtros">
           {tasksMode ? heated.length - shownThreads.length : bubbles.length - shownBubbles.length}
           escondidas
         </span>
@@ -1332,16 +1661,23 @@
 </PlannerView>
 
 <style>
+  /* En la cabecera, a la derecha de los conmutadores. Se encoge antes que nada
+     y nunca envuelve: la cabecera tiene una altura fija, así que una segunda
+     fila no cabría — lo que sobra se estrecha, y el texto se recorta con
+     puntos suspensivos en vez de salirse. */
   .filters {
-    flex: none;
+    flex: 1 1 auto;
+    min-width: 0;
     display: flex;
     align-items: center;
-    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 0.35rem;
-    padding: 0.5rem 0.9rem 0;
   }
-  /* Filtrando, la barra se nota: es la explicación de por qué falta algo. */
-  .filters.on { border-left: 2px solid var(--accent); }
+  /* Filtrando, se nota: es la explicación de por qué falta algo. */
+  .filters.on :global([data-scope='combobox'][data-part='control']),
+  .filters.on .q {
+    border-color: color-mix(in oklab, var(--accent) 35%, var(--line));
+  }
   .dates { display: flex; flex-direction: column; gap: 0.4rem; margin: 0; padding: 0; list-style: none; }
   .date { display: flex; align-items: center; gap: 0.4rem; }
   .date .dname { flex: 1 1 auto; min-width: 0; }
@@ -1355,34 +1691,96 @@
   }
   .date .x:hover { background: var(--hover); color: var(--text); }
 
+  /* La línea ocupa el panel entero, con su propio scroll dentro. */
+  .seq-pane { flex: 1; min-height: 0; padding: 0 0.6rem 0.6rem; }
+
   .mode {
     display: flex;
     flex: none;
+    align-items: stretch;
     gap: 1px;
-    padding: 1px;
+    padding: 2px;
     border: 1px solid var(--line);
     border-radius: 8px;
   }
   .seg {
-    padding: 0.15rem 0.5rem;
-    border-radius: 7px;
+    padding: 0.15rem 0.6rem;
+    border-radius: 6px;
     color: var(--faint);
-    font-size: 0.74rem;
+    font-size: 0.78rem;
     font-weight: 700;
   }
   .seg:hover { color: var(--text); }
   .seg.on { background: var(--accent); color: var(--surface-solid); }
 
-  .filters .q { flex: 1 1 9rem; min-width: 7rem; }
-  .filters .q,
-  .filters .select {
+  /* Todo en la barra es la misma caja y la misma altura, como en la fila de
+     datos de `CardSheet`: son la misma clase de cosa. `min-height` y no
+     `height`, para que nada se recorte si el texto crece. */
+  .filters .q {
+    flex: 1 1 8rem;
+    min-width: 4rem;
     width: auto;
-    padding: 0.15rem 0.5rem;
-    font-size: 0.76rem;
+    min-height: 2rem;
+    padding: 0.15rem 0.55rem;
+    font-size: 0.8rem;
   }
-  .filters .select { padding-right: 1.6rem; }
-  .hid { color: var(--faint); font-size: 0.72rem; }
+
+  /* Skeleton dibuja el combobox por `[data-part]`, así que el estilo tiene que
+     cruzar la frontera de `FilterPick`. Acotado a `.filters` para no tocar
+     ningún otro combobox de la aplicación.
+
+     Lo que hay que decirle es lo que no puede saber: que estos viven en una
+     FILA y no en una columna, así que no se estiran al 100% — sin esto cada uno
+     ocupaba un renglón entero. */
+  .filters :global([data-scope='combobox'][data-part='root']) {
+    /* Un ancho de partida explícito, no `auto`: con el control al 100% de la
+       raíz y la raíz ajustándose al control, el ancho se define en círculo y el
+       resultado depende de a qué llegue el navegador primero.
+       `min-width` pequeño a propósito: en una cabecera estrecha es mejor un
+       filtro recortado que uno fuera de la pantalla. */
+    flex: 1 1 10rem;
+    min-width: 4.5rem;
+  }
+  .filters :global([data-scope='combobox'][data-part='control']) {
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    width: 100%;
+    min-width: 0;
+    min-height: 2rem;
+    padding: 0.15rem 0.4rem;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    background: var(--surface);
+  }
+  .filters :global([data-scope='combobox'][data-part='control']:focus-within) {
+    border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+  }
+  /* El CONTROL es el campo; el input es sólo el texto dentro. Con su borde y su
+     fondo propios se ve una caja dibujada dentro de otra. */
+  .filters :global([data-scope='combobox'][data-part='control'] input) {
+    min-width: 0;
+    width: 100%;
+    padding: 0.15rem 0.2rem;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+    color: var(--text);
+    font-size: 0.8rem;
+    /* Recortado con puntos, no cortado a medias palabra: un filtro estrecho
+       tiene que seguir diciendo de qué es. */
+    text-overflow: ellipsis;
+    outline: none;
+  }
+  .filters :global([data-scope='combobox'][data-part='trigger']) {
+    flex: none;
+    color: var(--faint);
+    font-size: 0.8rem;
+  }
+  .hid { flex: none; color: var(--faint); font-size: 0.72rem; white-space: nowrap; }
   .clear {
+    flex: none;
     padding: 0.15rem 0.45rem;
     border-radius: 7px;
     color: var(--faint);

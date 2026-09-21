@@ -59,6 +59,44 @@ export type CalendarEvent = {
   notes?: string;
 };
 
+/** Qué acepta el servidor: cuánto cabe en cada campo y qué se puede subir.
+ *
+ *  Del esquema, en cada petición, y no de una copia en el navegador: dos listas
+ *  se separan, y la que se queda atrás dice «cabe» o «no se admite» sobre algo
+ *  que el servidor contesta al revés. */
+export type Limits = {
+  /** `colección.campo` → caracteres */
+  fields: Record<string, number>;
+  /** extensiones que entran en `assets/`, con el punto */
+  accept: string[];
+  /** el tope por archivo, en bytes */
+  bytes: number;
+};
+
+/** Una fila de una de las columnas laterales de la secuencia: lo justo para
+ *  dibujar la misma tarjeta que el kanban. Sin calor — una fila de esas
+ *  columnas ya dice lo único que hace falta saber de ella. */
+export type QueueCard = {
+  id: string;
+  seq?: number;
+  workspace: string;
+  name: string;
+  bubble?: string;
+  priority?: string;
+  due_date?: string;
+  created: string;
+  /** quién la tiene: asignados de un hilo, responsables de un módulo */
+  people?: string[];
+};
+
+export type QueuePage = {
+  items: QueueCard[];
+  page: number;
+  /** hay otra página detrás. No un total: contarlo todo para pintar un botón
+   *  es una consulta cara por una respuesta que se saca pidiendo uno de más. */
+  more: boolean;
+};
+
 /** Una columna del tablero de TAREAS. Del departamento, como `Stage`, pero de
  *  hilos: un módulo y una tarea no están en el mismo sitio del plan. */
 export type ThreadStage = {
@@ -88,6 +126,9 @@ export type BubbleHeat = {
   closure?: string;
   /** when it last produced anything, RFC3339 — what the cycle bar measures */
   warm_at?: string;
+  /** su paso en la línea de MÓDULOS, que es otra que la de los hilos: aquélla
+   *  ordena piezas y ésta cuerpos de trabajo. 0 o ausente, fuera de ella. */
+  sequence?: number;
   heat: Heat;
 };
 
@@ -234,6 +275,9 @@ export type Features = { id: string; sequence: boolean; updated?: string };
 export type Prefs = {
   /** cómo ve el planeador: por módulos (burbujas) o por tareas (hilos) */
   planner?: 'bubbles' | 'tasks';
+  /** qué forma tiene el tablero: la línea de ejecución o el kanban. Sólo
+   *  significa algo con la función de secuencia encendida. */
+  view?: 'sequence' | 'kanban';
 };
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */
@@ -708,6 +752,26 @@ class Api {
   /** El id de mi fila, cacheado para no preguntarlo en cada guardado. */
   private prefRow = '';
 
+  /** Una página de una de las dos columnas laterales de la secuencia.
+   *
+   *  Paginado de verdad y no un recorte en el cliente: lo terminado de un
+   *  departamento crece sin techo, y `/api/board` compone el conjunto ENTERO
+   *  para poder clasificarlo por calor. Esa respuesta es la correcta para un
+   *  tablero que se lee de un vistazo, y la equivocada para una lista que se
+   *  recorre. */
+  queue(opts: {
+    kind: 'threads' | 'bubbles';
+    state: 'open' | 'done';
+    page?: number;
+  }): Promise<QueuePage> {
+    const q = new URLSearchParams({
+      kind: opts.kind,
+      state: opts.state,
+      page: String(opts.page ?? 1),
+    });
+    return this.call<QueuePage>(`/api/queue?${q}`);
+  }
+
   /** Lo que pasa en una fecha y no es trabajo. Del departamento, como los
    *  objetivos: lo escribe el lead global y lo ve todo el mundo. */
   async calendarEvents(): Promise<CalendarEvent[]> {
@@ -899,8 +963,8 @@ class Api {
 
   /** Cuánto cabe en cada campo de texto, `colección.campo` → caracteres. Lo
    *  dice el esquema del servidor; ver `lib/limits`. */
-  limits(): Promise<Record<string, number>> {
-    return this.call<Record<string, number>>('/api/limits');
+  limits(): Promise<Limits> {
+    return this.call<Limits>('/api/limits');
   }
 
   /** Qué está corriendo. Sin sesión: es la misma respuesta que mira el

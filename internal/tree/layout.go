@@ -110,6 +110,25 @@ func IsAttachment(p string) bool {
 	return imageExt[ext] || attachExt[ext]
 }
 
+// Accepts lists every extension that may be uploaded, sorted so the answer is
+// the same every time.
+//
+// Published so the file picker can offer exactly what the server takes. A
+// second list written in the browser is a list that drifts, and the shape the
+// drift takes is the worst one: a picker that greys out a file the server would
+// have accepted, so nobody ever finds out it was allowed.
+func Accepts() []string {
+	out := make([]string, 0, len(imageExt)+len(attachExt))
+	for ext := range imageExt {
+		out = append(out, ext)
+	}
+	for ext := range attachExt {
+		out = append(out, ext)
+	}
+	sort.Strings(out)
+	return out
+}
+
 // Classify says where a document path sits in the layout, refusing anything that
 // does not fit it.
 func Classify(doc string) (Area, error) {

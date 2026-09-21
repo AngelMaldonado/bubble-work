@@ -9,12 +9,10 @@
   // priority, so consulting and choosing are the same gesture.
   import {
     Combobox,
-    DatePicker,
     Dialog,
     FloatingPanel,
     Menu,
     Portal,
-    parseDate,
     useListCollection,
     type ComboboxRootProps,
   } from '@skeletonlabs/skeleton-svelte';
@@ -29,6 +27,7 @@
   import { limited, tooLong } from '../lib/limits.svelte';
   import type { Card } from './Kanban.svelte';
   import Crumbs from './Crumbs.svelte';
+  import DueDate from './DueDate.svelte';
 
   // Skeleton ships NO css for Dialog — its parts are styled with utilities, and
   // the shape below is the one its documentation uses. Writing our own scrim and
@@ -383,35 +382,6 @@
     objItems = hit.length ? hit : objectives.map(asItem);
   };
 
-  /** The picked day as `2026-09-15`.
-   *
-   *  NOT `valueAsString`, which is what this used and why nothing was ever
-   *  saved: Zag formats that field for the LOCALE, so with `es-MX` it hands
-   *  back `15/09/2026` — read out of its machine, where the default `format`
-   *  builds an `Intl.DateTimeFormat` with 2-digit day and month. The server
-   *  refused it, quietly, and the field went back to "sin fecha" on reload.
-   *
-   *  The value itself is a calendar date with three numbers on it, which is the
-   *  same date in any language. */
-  function isoDate(d?: { year: number; month: number; day: number }) {
-    if (!d) return '';
-    const pad = (n: number) => String(n).padStart(2, '0');
-    return `${d.year}-${pad(d.month)}-${pad(d.day)}`;
-  }
-
-  // The due date is a real date, picked from a calendar and stored as an ISO
-  // string. Typing "12 sep" into a text box is how a date becomes a label
-  // nobody can sort, filter or put on a calendar.
-  const due = $derived.by(() => {
-    if (!card?.due) return [];
-    try {
-      return [parseDate(card.due)];
-    } catch {
-      // The mock's older cards carry "12 sep", which is not a date. Showing an
-      // empty picker is better than refusing to open the card.
-      return [];
-    }
-  });
 </script>
 
 <!-- Escape never closes this one. It hosts a text editor, and in vim that key
@@ -654,62 +624,13 @@
                    de trabajo. Cómo se reparte entre sus threads es de quien
                    ejecuta. -->
               {#key card.id}
-              <DatePicker
-                openOnClick
-                defaultValue={due}
-                onValueChange={(e: { value: { year: number; month: number; day: number }[] }) =>
-                  set({ due: isoDate(e.value?.[0]) })}
-                locale="es-MX"
-                startOfWeek={1}>
-                <DatePicker.Label class="cap">Entrega</DatePicker.Label>
-                <DatePicker.Control class="dp-control">
-                  <DatePicker.Input placeholder="sin fecha" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
-                  <DatePicker.Trigger>🗓</DatePicker.Trigger>
-                </DatePicker.Control>
-                <!-- NOT portalled, unlike every other popup here. A modal
-                     dialog turns off pointer events outside itself and hands
-                     them back layer by layer; a calendar that lands on the body
-                     is outside, so it drew fine and ignored every click. Kept
-                     inside the dialog it is part of the layer that is active.
-                     Zag positions it fixed anyway, so nothing clips it. -->
-                  <DatePicker.Positioner>
-                    <DatePicker.Content class="dp-content">
-                      <DatePicker.View view="day">
-                        <DatePicker.Context>
-                          {#snippet children(dp)}
-                            <DatePicker.ViewControl class="dp-nav">
-                              <DatePicker.PrevTrigger>‹</DatePicker.PrevTrigger>
-                              <DatePicker.ViewTrigger>
-                                <DatePicker.RangeText />
-                              </DatePicker.ViewTrigger>
-                              <DatePicker.NextTrigger>›</DatePicker.NextTrigger>
-                            </DatePicker.ViewControl>
-                            <DatePicker.Table>
-                              <DatePicker.TableHead>
-                                <DatePicker.TableRow>
-                                  {#each dp().weekDays as d, i (i)}
-                                    <DatePicker.TableHeader>{d.short}</DatePicker.TableHeader>
-                                  {/each}
-                                </DatePicker.TableRow>
-                              </DatePicker.TableHead>
-                              <DatePicker.TableBody>
-                                {#each dp().weeks as week, i (i)}
-                                  <DatePicker.TableRow>
-                                    {#each week as day, j (j)}
-                                      <DatePicker.TableCell value={day}>
-                                        <DatePicker.TableCellTrigger>{day.day}</DatePicker.TableCellTrigger>
-                                      </DatePicker.TableCell>
-                                    {/each}
-                                  </DatePicker.TableRow>
-                                {/each}
-                              </DatePicker.TableBody>
-                            </DatePicker.Table>
-                          {/snippet}
-                        </DatePicker.Context>
-                      </DatePicker.View>
-                    </DatePicker.Content>
-                  </DatePicker.Positioner>
-              </DatePicker>
+              <!-- El mismo calendario que la entrega de un hilo. Era cincuenta
+                   líneas de marcado copiadas, y dos copias divergen a la primera
+                   corrección. -->
+              <DueDate
+                label="Entrega"
+                value={card.due ?? ''}
+                onchange={(d) => set({ due: d })} />
               {/key}
             </div>
           </div>

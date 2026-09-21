@@ -115,6 +115,9 @@ type BubbleHeat struct {
 	ID        string `json:"id"`
 	Workspace string `json:"workspace"`
 	Name      string `json:"name"`
+	// Su paso en la línea de MÓDULOS, que es otra que la de los hilos: aquélla
+	// ordena piezas y ésta cuerpos de trabajo. Cero es «no está en ella».
+	Sequence int `json:"sequence,omitempty"`
 	// Accountability is a list. The 🪦 band asks whether ANYBODY is accountable,
 	// and an empty list answers that exactly as a missing name did.
 	Owners  []string `json:"owners,omitempty"`
@@ -282,6 +285,7 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 			ID: b.Id, Workspace: ws.Id, Name: b.GetString("name"), Owners: owners,
 			Outcome: b.GetString("outcome"), Closed: closed,
 			Objective: b.GetString("objective"), Stage: b.GetString("stage"),
+			Sequence: b.GetInt("sequence"),
 			Priority: prio[b.Id],
 			Closure:  b.GetString("closure"), WarmAt: stamp(warmest[b.Id]), Heat: res,
 		})

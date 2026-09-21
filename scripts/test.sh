@@ -651,12 +651,19 @@ chk "...y vuelve entero" \
 # aparecer: lo escrito se perdía al recargar. Salen del esquema, no de una copia.
 LIM=$(curl -s "$API/api/limits" -H "Authorization: $B")
 chk ">>> los topes de cada campo se pueden preguntar" \
-  "$(echo "$LIM" | j "['inbox_items.body']")" 2000000
+  "$(echo "$LIM" | j "['fields']['inbox_items.body']")" 2000000
 chk "...cada uno el suyo" \
-  "$(echo "$LIM" | j "['workspaces.name']")" 100
+  "$(echo "$LIM" | j "['fields']['workspaces.name']")" 100
 chk "...y el de un comentario, que se mide en bytes (5 MB)" \
-  "$(echo "$LIM" | j "['comments.body']")" 5242880
+  "$(echo "$LIM" | j "['fields']['comments.body']")" 5242880
 chk "...con sesión" "$(code "$API/api/limits")" 401
+# Qué se puede SUBIR, por la misma puerta. Publicado y no copiado en el cliente:
+# un diálogo de archivos que filtra por una lista adivinada acaba tachando algo
+# que el servidor sí acepta, y nadie se entera de que estaba permitido.
+chk ">>> ...y qué archivos se admiten, para el diálogo de archivos" \
+  "$(echo "$LIM" | python3 -c 'import sys,json;print(",".join(json.load(sys.stdin)["accept"]))')" \
+  ".avif,.csv,.gif,.jpeg,.jpg,.json,.pdf,.png,.svg,.txt,.webp"
+chk "...y el tope por archivo" "$(echo "$LIM" | j "['bytes']")" 5242880
 
 # Una nota lleva imágenes, y como no tiene workspace van en el propio registro.
 # `files+` AÑADE: sin el `+` cada pegado borraría la imagen anterior y la nota
@@ -1581,6 +1588,104 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ3'))")" 1
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
+
+# ------------------- las dos columnas laterales de la secuencia, paginadas ----
+#
+# Lo que está fuera de la línea y lo que ya se terminó crecen sin techo, así que
+# se piden por páginas. Lo terminado se pregunta por el ESTADO y no por
+# `completed_at`: esa columna existe en el esquema y no la escribe nadie.
+Q="$API/api/queue"
+echo
+chk ">>> la cola pide un kind válido" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=cosas&state=open" -H "Authorization: $A")" 400
+chk ">>> ...y un state válido" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=threads&state=quizá" -H "Authorization: $A")" 400
+chk ">>> anónimo no la lee" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=threads&state=open")" 401
+chk ">>> erin, que no está en ningún proyecto, recibe una página vacía y no un error" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $ER" | j "['items']")" "[]"
+chk ">>> la cola abierta trae hilos fuera de la línea" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if d["items"] and all(not i.get("sequence") for i in d["items"]) else "no")')" si
+chk ">>> ...lo más reciente primero" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+c=[i["created"] for i in json.load(sys.stdin)["items"]]
+print("si" if c == sorted(c, reverse=True) else "no")')" si
+chk ">>> ...y con lo justo para dibujar la tarjeta" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+i=json.load(sys.stdin)["items"][0]
+print("si" if {"id","name","workspace","created"} <= set(i) else "no")')" si
+chk ">>> una página de uno dice que hay más" \
+  "$(curl -s "$Q?kind=threads&state=open&perPage=1" -H "Authorization: $C" | j "['more']")" True
+P1=$(curl -s "$Q?kind=threads&state=open&perPage=1" -H "Authorization: $C" | j "['items'][0]['id']")
+P2=$(curl -s "$Q?kind=threads&state=open&perPage=1&page=2" -H "Authorization: $C" | j "['items'][0]['id']")
+chk ">>> ...y la segunda página no repite la primera" \
+  "$([ -n "$P1" ] && [ -n "$P2" ] && [ "$P1" != "$P2" ] && echo si || echo no)" si
+chk ">>> la cola de módulos existe igual" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=bubbles&state=done" -H "Authorization: $C")" 200
+chk ">>> una página demasiado lejos se rechaza en vez de recorrer la tabla" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=threads&state=open&page=9999" -H "Authorization: $C")" 400
+
+# ----------------------------------- revisado: lo hecho que ya se miró ----
+#
+# Entre «terminado» y «borrado» faltaba el gesto de quien mira lo hecho y dice
+# que está bien. Es lo que convierte la columna derecha de la secuencia en una
+# cola —se vacía— en vez de un historial que sólo crece.
+DONEQ="$Q?kind=bubbles&state=done"
+echo
+RVB=$(curl -s -X POST "$API/api/collections/bubbles/records" -H "Authorization: $C" \
+  -H 'Content-Type: application/json' \
+  -d "{\"workspace\":\"$ALPHA\",\"name\":\"Para revisar\",\"closed_at\":\"2026-09-01 00:00:00.000Z\"}" | j "['id']")
+chk ">>> lo cerrado sale en la cola de hecho" \
+  "$(curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" si
+chk ">>> marcarlo revisado es editar la fila, no un rol aparte" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/bubbles/records/$RVB" \
+     -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d '{"reviewed_at":"2026-09-02 00:00:00.000Z"}')" 200
+chk ">>> ...y entonces sale de la cola: la columna se vacía" \
+  "$(curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" no
+chk ">>> desmarcarlo la devuelve" \
+  "$(curl -s -X PATCH "$API/api/collections/bubbles/records/$RVB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"reviewed_at":""}' >/dev/null; \
+     curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" si
+chk ">>> reabrir un módulo lo saca de lo hecho" \
+  "$(curl -s -X PATCH "$API/api/collections/bubbles/records/$RVB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"closed_at":"","closure":""}' >/dev/null; \
+     curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" no
+
+# ----------------------------- la línea de MÓDULOS, hermana de la de hilos ----
+#
+# Dos líneas independientes a propósito: una contesta «¿qué cuerpo de trabajo
+# atacamos antes?» y la otra «¿qué pieza se hace antes?». Y `next` sigue siendo
+# de hilos: lo que un agente puede empezar y terminar es una pieza.
+BUBS="$API/api/collections/bubbles/records"
+echo
+# El par que prueba la guarda: alice SÍ alcanza esta burbuja —lo demuestra
+# editando su outcome— y aun así no puede escribir su paso. Sin la primera
+# línea, el 404 de la segunda podría ser sólo que no la ve.
+chk ">>> un lead de workspace alcanza la burbuja" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BUBS/$NBUB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"outcome":"nadie escribe dos veces"}')" 200
+# 404 y no 403: con `sequence` en el cuerpo la fila deja de pasar su propia
+# regla, así que para quien pide no existe. Es como contesta el resto de la API.
+chk ">>> ...y aun así no ordena la línea de módulos: cruza proyectos" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BUBS/$NBUB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"sequence":10}')" 404
+chk ">>> el lead global sí" \
+  "$(curl -s -X PATCH "$BUBS/$NBUB" -H "Authorization: $C" -H 'Content-Type: application/json' \
+     -d '{"sequence":10}' | j "['sequence']")" 10
+chk ">>> ...y el board la devuelve" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json
+b=json.load(sys.stdin)["bubbles"]
+print(next((x.get("sequence",0) for x in b if x["id"]=="'"$NBUB"'"), "falta"))')" 10
+# La independencia, fijada: el paso del módulo NO es el de sus hilos.
+chk ">>> las dos líneas son independientes: el hilo conserva el suyo" \
+  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | j "['sequence']")" 0
 
 # ------------------- lo que pasa en una fecha y NO es trabajo ----
 #

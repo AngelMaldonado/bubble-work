@@ -13,6 +13,7 @@
   // writes a thread's document and the other a page.
   import { droppedFile, insertAttachment, pastedImage } from '../lib/attach';
   import { annotate } from '../lib/annotate';
+  import { acceptUploads } from '../lib/limits.svelte';
   import { untrack } from 'svelte';
   import Prose from './Prose.svelte';
   import SlashMenu from './SlashMenu.svelte';
@@ -254,13 +255,13 @@
     <!-- Adjuntar vive donde se escribe, porque lo que produce es una línea de
          markdown en el documento. Arrastrar y pegar hacen lo mismo; el botón
          está para quien no sabe que puede. -->
-    <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar una imagen">
+    <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar un archivo">
       {attaching ? '…' : '📎'}
     </button>
     <input
       class="hidden-file"
       type="file"
-      accept="image/*"
+      accept={acceptUploads()}
       bind:this={picker}
       onchange={(e) => {
         const el = e.currentTarget as HTMLInputElement;

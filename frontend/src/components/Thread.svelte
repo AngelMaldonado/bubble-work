@@ -305,6 +305,19 @@
           }
         }
       : undefined}
+    due={thread.due_date?.slice(0, 10) ?? ''}
+    ondue={async (day) => {
+      try {
+        // Un día, o nada. La fecha de la BURBUJA no se toca: aquélla es el
+        // compromiso del cuerpo de trabajo y ésta es cómo se reparte.
+        await api.update('threads', thread.id, {
+          due_date: day ? `${day} 00:00:00.000Z` : '',
+        });
+        onchanged?.();
+      } catch (e) {
+        error = (e as Error).message;
+      }
+    }}
     markdown={doc.content}
     html={doc.html}
     {elsewhere}

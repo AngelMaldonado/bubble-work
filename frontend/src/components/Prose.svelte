@@ -15,6 +15,7 @@
     extractHeadings,
     renderExcalidraw,
     renderMermaid,
+    showAttachments,
     showImages,
     type Heading,
   } from '../lib/prose';
@@ -66,6 +67,7 @@
       enableCheckboxes(node);
       void (async () => {
         await showImages(node, api.token);
+        await showAttachments(node, api.token);
         await renderMermaid(node);
         await renderExcalidraw(node);
         onheadings?.(extractHeadings(node));
@@ -167,6 +169,37 @@
     text-decoration-thickness: 0.08em;
     text-underline-offset: 0.18em;
   }
+  /* Un adjunto no es un enlace más: es un archivo, y se dibuja como tal.
+     `data-attachment` lo pone `showAttachments`, sobre las referencias que el
+     documento YA tiene — no hay una segunda lista que mantener. */
+  .prose :global(a[data-attachment]) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.45rem;
+    max-width: 100%;
+    padding: 0.3rem 0.6rem;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: var(--hover);
+    color: var(--text);
+    font-family: var(--sans);
+    font-size: 0.86rem;
+    text-decoration: none;
+    vertical-align: middle;
+  }
+  .prose :global(a[data-attachment])::before {
+    content: '📎';
+    font-size: 0.9em;
+  }
+  .prose :global(a[data-attachment]:hover) { border-color: var(--accent); }
+  /* El que no se pudo traer se dice, en vez de parecer un adjunto sano que no
+     abre nada. */
+  .prose :global(a[data-attachment='roto']) {
+    border-style: dashed;
+    color: var(--faint);
+  }
+  .prose :global(a[data-attachment='roto'])::before { content: '⚠️'; }
+
   .prose :global(img) {
     display: block;
     max-width: 100%;

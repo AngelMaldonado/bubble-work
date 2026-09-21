@@ -9,7 +9,8 @@
   // The objectives, the inbox and the kanban of the whole department stay the
   // lead's. The DATES are not strategy: a bubble due on the 30th is somebody's
   // month, and the people doing it should be able to look at it.
-  import { api, type BubbleRecord, type Workspace } from '../lib/api';
+  import { api, type BubbleRecord, type CalendarEvent, type Workspace } from '../lib/api';
+  import { isoDay, occurrences } from '../lib/repeat';
   import { lastOpenBubble } from '../lib/filters.svelte';
   import PlannerView from './PlannerView.svelte';
   import type { CalEvent } from './PlannerCalendar.svelte';
@@ -27,6 +28,7 @@
 
   let bubbles = $state<BubbleRecord[]>([]);
   let places = $state<Workspace[]>([]);
+  let dates = $state<CalendarEvent[]>([]);
   let error = $state('');
 
   async function load() {
@@ -34,9 +36,17 @@
       // The same call the planner makes. What comes back is what the RULES
       // allow: a member sees the bubbles of the workspaces they are in, so this
       // is their agenda without a single filter written here.
-      const [bs, ws] = await Promise.all([api.allBubbles(), api.workspaces()]);
+      // Las juntas del departamento las ve todo el mundo: no son trabajo de
+      // nadie en particular y son justo lo que alguien que no lleva el plan
+      // necesita saber de una fecha.
+      const [bs, ws, ce] = await Promise.all([
+        api.allBubbles(),
+        api.workspaces(),
+        api.calendarEvents(),
+      ]);
       bubbles = bs;
       places = ws;
+      dates = ce;
       error = '';
     } catch (e) {
       error = (e as Error).message;
@@ -44,8 +54,26 @@
   }
   load();
 
-  const events = $derived<CalEvent[]>(
-    bubbles
+  /** La misma ventana que el planeador, y por la misma razón: el componente del
+   *  calendario no dice hacia fuera qué mes está mirando. */
+  const window = $derived.by(() => {
+    const now = new Date();
+    return {
+      from: isoDay(new Date(now.getFullYear(), now.getMonth() - 2, 1)),
+      to: isoDay(new Date(now.getFullYear() + 1, now.getMonth() + 2, 0)),
+    };
+  });
+
+  const events = $derived<CalEvent[]>([
+    ...dates.flatMap((e) =>
+      occurrences(e.start, e.repeat ?? '', window.from, window.to).map((day) => ({
+        id: `cal:${e.id}:${day}`,
+        title: `📅 ${e.name}`,
+        start: day,
+        allDay: true,
+      })),
+    ),
+    ...bubbles
       .filter((b) => b.due_date && !b.closed_at)
       .map((b) => ({
         id: b.id,
@@ -53,7 +81,7 @@
         start: b.due_date!.slice(0, 10),
         allDay: true,
       })),
-  );
+  ]);
 
   /** A day is a bubble. Clicking one goes to its board with it open — the
    *  card sheet is the planner's, and it writes. The board opens whatever

@@ -1,5 +1,5 @@
 /**
- * Pegar o soltar una imagen dentro de un editor de markdown.
+ * Pegar o soltar un archivo dentro de un editor de markdown.
  *
  * Una sola vez, para todos los editores: el del documento de un thread, el del
  * brief de una burbuja y el del cuerpo de una nota del inbox. Tres copias de
@@ -72,19 +72,29 @@ export function droppedFile(e: DragEvent): File | null {
   return [...(e.dataTransfer?.files ?? [])][0] ?? null;
 }
 
-/** Sube y escribe `![nombre](ruta)` donde está el cursor. Devuelve el markdown
- *  resultante, o nada si no se escribió. */
-export async function insertImage(
+/** Sube y escribe la referencia donde está el cursor. Devuelve el markdown
+ *  resultante, o nada si no se escribió.
+ *
+ *  Una imagen se EMBEBE —`![nombre](ruta)`, se ve dentro del documento— y un
+ *  documento adjunto se ENLAZA —`[informe.pdf](ruta)`, se abre—. Quien lo dice
+ *  es el servidor, en `image`: la lista de qué extensión es una imagen vive en
+ *  `internal/tree/layout.go` y una copia aquí sería una segunda lista que
+ *  mantener.
+ *
+ *  El nombre completo, con extensión, para un adjunto: `informe` no dice que
+ *  sea un PDF, y es lo único que va a leer quien pase por ahí. */
+export async function insertAttachment(
   editor: MarkdownEditor | null,
   file: File,
-  upload: (file: File) => Promise<{ path: string } | null | void>,
+  upload: (file: File) => Promise<{ path: string; image?: boolean } | null | void>,
 ): Promise<string | null> {
   const out = await upload(file);
   const path = out?.path;
   if (!path || !editor) return null;
-  const label = file.name.replace(/\.[^.]+$/, '') || 'imagen';
+  const image = out?.image ?? file.type.startsWith('image/');
+  const label = image ? file.name.replace(/\.[^.]+$/, '') || 'imagen' : file.name || 'adjunto';
   const at = editor.cursor();
-  const text = `![${label}](${path})`;
+  const text = image ? `![${label}](${path})` : `[${label}](${path})`;
   editor.replace(at, at, text, text.length);
   return editor.value();
 }

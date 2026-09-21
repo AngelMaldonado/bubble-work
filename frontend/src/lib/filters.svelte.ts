@@ -104,3 +104,60 @@ export const plannerReturn = {
     }
   },
 };
+
+/**
+ * Lo que el planeador está escondiendo ahora mismo.
+ *
+ * FILTRAR, no buscar: ⌘K navega —te lleva a una tarjeta, a un hilo, a una
+ * página— y esto esconde del tablero lo que no coincide, sin moverte de sitio.
+ * Dos superficies porque son dos preguntas distintas: «llévame a esto» y
+ * «enséñame sólo esto».
+ *
+ * En `localStorage`, como el orden de las columnas y los paneles, y por la
+ * misma razón: acomodar mi tablero no es acomodar el de los demás. Y en el
+ * navegador, no en la dirección: un enlace que arrastrara los filtros de quien
+ * lo mandó enseñaría al que lo abre un tablero con cosas escondidas y ninguna
+ * pista de por qué.
+ */
+const PLANNER_KEY = 'bw.planner-filters';
+
+export type PlannerFilters = {
+  /** texto libre, contra el nombre de la tarjeta */
+  q: string;
+  /** id del workspace */
+  project: string;
+  /** id de la persona */
+  owner: string;
+  /** id del objetivo; `none` es «sin objetivo», que es una respuesta */
+  objective: string;
+  /** la banda de calor: hot, dormant, rip, closed */
+  band: string;
+};
+
+export const NO_FILTERS: PlannerFilters = {
+  q: '',
+  project: '',
+  owner: '',
+  objective: '',
+  band: '',
+};
+
+export const plannerFilters = {
+  get(): PlannerFilters {
+    try {
+      const raw = JSON.parse(localStorage.getItem(PLANNER_KEY) ?? 'null');
+      return raw && typeof raw === 'object' ? { ...NO_FILTERS, ...raw } : { ...NO_FILTERS };
+    } catch {
+      // Sin memoria, el tablero abre sin esconder nada — que es el valor por
+      // defecto y no un error.
+      return { ...NO_FILTERS };
+    }
+  },
+  set(v: PlannerFilters): void {
+    try {
+      localStorage.setItem(PLANNER_KEY, JSON.stringify(v));
+    } catch {
+      // vale para esta sesión
+    }
+  },
+};

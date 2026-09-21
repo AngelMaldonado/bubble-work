@@ -1732,6 +1732,130 @@ Lo que se descartó:
 **Hecho cuando:** los tests en vivo de `agents_md` pasan, y el lead guarda una
 versión de cada documento desde la app y la ve leída por un agente.
 
+## Lo que pasa en una fecha y no es trabajo *(built)*
+
+Una junta semanal no tenía dónde ponerse: el calendario sólo sabía de burbujas y
+de tareas con fecha. La salida tentadora era crear un hilo y darle fecha, y es
+justo la que hay que cerrar — un hilo se completa, produce evidencia y
+**calienta**. Un hilo que renaciera cada lunes emitiría `thread-created` todas
+las semanas: una burbuja 🔥 para siempre sin que nadie trabaje, que es lo
+contrario de lo que el calor dice.
+
+Así que `calendar_events` es una colección aparte, del departamento, escrita por
+el lead global. **No emite ningún evento y no calienta nada**, y hay una
+aserción viva que lo fija contando las filas de `events` antes y después.
+
+**La repetición es un menú cerrado** —diaria, semanal, quincenal, mensual— y se
+rechaza la RRULE de iCalendar: trae una librería más y mucha superficie que
+probar (excepciones, fin de serie, «el tercer jueves») por casos que todavía no
+existen aquí. Tampoco hay fin de serie: una repetición dura hasta que alguien la
+borra, porque un `until` que nadie pone es una columna vacía y uno puesto mal es
+una junta que desaparece sin que se sepa por qué.
+
+Se guarda **una fila con su primera fecha**, no una por ocurrencia: las
+siguientes se calculan al dibujar (`frontend/src/lib/repeat.ts`). Una tabla con
+una fila por lunes crece sola, hay que podarla, y mover la junta obliga a
+reescribir todo el futuro en vez de un campo. Y por eso mismo una ocurrencia
+suelta **no se arrastra** a otro día: mover una de la serie es una excepción, y
+las excepciones son lo que se dejó fuera al elegir el menú cerrado.
+
+## El ciclo NO es una rejilla del calendario
+
+Estaba planeado «pintar dónde empieza y termina el ciclo actual», y al ir a
+hacerlo resultó estar mal planteado: **no hay un ciclo del departamento**. El
+ciclo se mide desde el último calor de CADA burbuja (`cycleLeft(warmAt, …)`), no
+desde una fecha común, así que una burbuja calentada ayer y otra calentada hace
+una semana están en puntos distintos del suyo. Una rejilla global tendría que
+inventar un ancla que el modelo no tiene, y diría algo falso de casi todas.
+
+Lo que sí faltaba es más pequeño y es verdad: el tablero dice «en silencio 2
+ciclos» y nadie sabía si eso son dos días o dos semanas, porque `cycle_hours` se
+recalibra desde Ajustes y cambia el veredicto sin migración. Ahora la duración
+del ciclo se dice junto al filtro de bandas, que es donde se lee el número.
+
+## Instalable, y sin escritura sin conexión *(built)*
+
+La aplicación se instala desde el navegador: un manifiesto, los iconos y un
+`theme-color`. Los PNG se generan del mismo dibujo que el favicon
+(`frontend/scripts/icons.mjs`) en vez de dibujarse aparte — dos dibujos del
+mismo logo se separan en cuanto alguien toca uno.
+
+**No hay service worker, y es una decisión.** Lo que se rechaza es la escritura
+sin conexión: cada escritura va por el servidor, que la anota en `events` y hace
+un commit de git, y `edit` exige el hash del documento que se leyó. Escribir sin
+red significa inventar resolución de conflictos contra git y contra el calor —
+dos cosas que el modelo define con precisión y que un buzón de cambios pendientes
+volvería aproximadas.
+
+La lectura sin conexión es otra pregunta y está abierta: cachear el shell y lo
+último visto no rompe nada. No se hace ahora porque sin lo anterior el valor es
+pequeño — se vería un tablero viejo sin poder tocarlo — y porque una caché es
+una segunda copia que hay que saber invalidar.
+
+## Las fechas vuelven a bajar: una tarea tiene la suya *(built)*
+
+`1788508000_dates_move_up.go` quitó `threads.due_date` y subió los valores a las
+burbujas. Media razón sigue en pie: lo que el lead pone en el calendario es
+cuándo tiene que estar un CUERPO de trabajo, y eso es de la burbuja. La otra
+mitad —que repartir ese plazo entre las piezas no necesita un campo— no se
+sostuvo.
+
+**Sí lo necesita.** Sin fecha por pieza no se puede decir «esto vence el jueves»
+de nada más pequeño que un módulo. Con cinco tareas dentro de una burbuja que
+vence el 30, las cinco parecen vencer el 30, y la que en realidad bloquea a las
+otras el martes no se distingue de las demás. Repartir el plazo en la cabeza de
+quien ejecuta es justo lo que se pierde cuando esa persona no está.
+
+**Las dos fechas son independientes a propósito.** La de la burbuja es el
+compromiso; la de la tarea es cómo se reparte. Se **rechaza** derivar la de la
+burbuja de sus tareas —que es lo que hacía el traspaso de aquella migración— por
+dos motivos: deja dos sitios diciendo el mismo plazo, uno de ellos calculado, y
+hace imposible decir «la burbuja entera vence el 30» cuando ninguna pieza suelta
+lo hace.
+
+**Los valores viejos no vuelven.** Aquella migración los subió y su `down` ya
+decía que no los devuelve. Lo que hay en las burbujas se queda; las tareas nacen
+sin fecha, que es la verdad — nadie ha repartido nada todavía.
+
+**El calendario lleva las dos, sin conmutador.** Son la misma pregunta —«¿qué
+vence?»— y esconder la mitad detrás de un interruptor que hay que recordar es
+cómo se llega tarde a algo que estaba escrito. Si se llena, lo que lo acota son
+los filtros del tablero, que valen para los dos.
+
+## En `assets/` vive lo que se ADJUNTA, no sólo lo que se ve *(built)*
+
+`assets/` admitía sólo imágenes, así que un contrato en PDF o un CSV exportado
+no tenían dónde ir. Ahora admite además `.pdf`, `.txt`, `.csv` y `.json`.
+
+**Van en git, dentro del repositorio del proyecto.** Se rechazó la alternativa
+obvia —un `FileField` en `threads`, como el que ya tiene `inbox_items`— porque
+rompe en silencio lo que el producto promete: el markdown en disco es el
+registro, y un documento que cita un archivo guardado fuera del repositorio deja
+de ser legible desde un clon. Clonar el proyecto tiene que traer el trabajo
+entero.
+
+**Lista blanca y corta, no lista negra.** Git guarda cada versión de cada byte
+para siempre, así que lo que se deja entrar decide cuánto crece el repositorio.
+Sin comprimidos, sin binarios, sin ofimática: un `.zip` de 5 MB por adjunto
+infla un repositorio rápido y nadie puede leerlo desde un clon. Con una lista
+negra no se podría razonar sobre eso.
+
+**`.md` no entra**, aunque es texto. Un markdown ya tiene casa —`docs/` o la
+carpeta de su hilo—, y un segundo sitio para lo mismo es cómo se pierde. Además
+es la única extensión de la lista que la API de documentos sabe escribir:
+admitirla en `assets/` sería una puerta para escribir un documento por la
+ventana de subida. Todo lo demás sólo puede llegar subido.
+
+**La respuesta de subida dice si es imagen.** Un `![]()` se ve dentro del
+documento y un `[]()` se abre; quién es cada cosa lo decide `internal/tree`, y
+el cliente lo pregunta en vez de guardar su propia lista de extensiones —dos
+listas se separan, y la que se queda atrás escribe la referencia equivocada.
+
+**Las cajitas de la UI se derivan del documento.** Un adjunto se dibuja porque
+el markdown lo referencia, no porque exista una fila en una lista de adjuntos.
+Borrar la referencia quita la cajita, que es lo que cualquiera espera. Una lista
+paralela acabaría discrepando de lo que el documento dice.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

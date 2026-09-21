@@ -598,6 +598,15 @@
       omni = true;
     }
   }
+
+  /** Lo que se puede decir de un error, en orden de utilidad. Nunca vacío. */
+  function crashText(error: unknown): string {
+    const e = error as Error | undefined;
+    const stack = e?.stack ?? '';
+    const msg = e?.message ?? '';
+    if (stack && msg && !stack.includes(msg)) return `${msg}\n\n${stack}`;
+    return stack || msg || String(error) || 'sin detalle';
+  }
 </script>
 
 <svelte:window onkeydowncapture={hotkeys} />
@@ -652,6 +661,10 @@
       // Volver de ese hilo trae de vuelta al planeador, no al board.
       backTo.set(plannerUrl);
       go(threadUrl(slug, seq));
+    }}
+    onopenboard={(slug) => {
+      backTo.set(plannerUrl);
+      go(boardUrl(slug));
     }} />
 {:else if route.kind === 'planner' && signedIn}
   <!-- Guarded at the ADDRESS, not only at the sidebar — but what a member gets
@@ -925,7 +938,11 @@
   {#snippet failed(error: unknown, reset: () => void)}
     <div class="crash" role="alert">
       <h1 class="display text-xl">Algo se rompió al dibujar esta pantalla</h1>
-      <pre>{String((error as Error)?.stack ?? error)}</pre>
+      <!-- Mensaje Y pila, y lo que sea si no hay ninguno de los dos. Esto
+           imprimía sólo `stack`, y hay errores que no traen —los que lanza el
+           propio Svelte, por ejemplo—, así que la pantalla de error salía en
+           blanco: lo único que no puede hacer una pantalla de error. -->
+      <pre>{crashText(error)}</pre>
       <div class="flex gap-2">
         <button class="btn btn-sm preset-tonal-surface" onclick={reset}>Reintentar</button>
         <button class="btn btn-sm preset-filled-primary-500" onclick={() => location.reload()}>

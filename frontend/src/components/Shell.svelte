@@ -16,6 +16,7 @@
   import MoreVerticalIcon from '@lucide/svelte/icons/more-vertical';
   import BrandOrb from './BrandOrb.svelte';
   import { rail } from '../lib/filters.svelte';
+  import { narrow } from '../lib/viewport.svelte';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Snippet } from 'svelte';
   import { limited } from '../lib/limits.svelte';
@@ -110,6 +111,15 @@
     railed = !railed;
     rail.set(railed);
   }
+
+  /** En un teléfono la columna ancha y el contenido no caben a la vez, así que
+   *  la columna se colapsa sola.
+   *
+   *  Y NO se guarda: la preferencia es de quien la tomó, y sobreescribirla
+   *  porque alguien abrió la aplicación en el móvil le dejaría el escritorio
+   *  colapsado mañana sin haber pedido nada. Al volver a una pantalla ancha,
+   *  vuelve lo que eligió. */
+  const shutByWidth = $derived(narrow.on || railed);
   let editing = $state<string | null>(null);
   let draft = $state('');
 
@@ -146,7 +156,7 @@
       class="pin-row"
       data-scope="navigation"
       data-part="trigger"
-      data-layout={railed ? 'rail' : 'sidebar'}
+      data-layout={shutByWidth ? 'rail' : 'sidebar'}
       href={p.href ?? '#'}
       title={p.name}
       onclick={(e) => {
@@ -163,7 +173,7 @@
            sin el atributo la regla no aplicaba — el texto de una fila fijada
            salía al tamaño del documento y el de un proyecto al del componente,
            dos tamaños en la misma columna. -->
-      <span data-scope="navigation" data-part="trigger-text" data-layout={railed ? 'rail' : 'sidebar'}>
+      <span data-scope="navigation" data-part="trigger-text" data-layout={shutByWidth ? 'rail' : 'sidebar'}>
         {p.name}
       </span>
     </a>
@@ -172,7 +182,7 @@
 
 {#snippet versionBadge()}
   {#if latest}
-    <Tooltip positioning={{ placement: railed ? 'right' : 'bottom' }} openDelay={120} closeDelay={60}>
+    <Tooltip positioning={{ placement: shutByWidth ? 'right' : 'bottom' }} openDelay={120} closeDelay={60}>
       <!-- Pulsable SÓLO cuando esta instancia puede ponérsela. Si no, el
            tooltip dice por qué, y el clic no promete nada. -->
       <Tooltip.Trigger class={onversion ? 'ver new live' : 'ver new'} onclick={onversion}>
@@ -195,16 +205,16 @@
   <!-- The workspaces live here. A workspace is the boundary for a body of work
        and the thing you switch between all day, so it gets the persistent
        column; the views get the floating buttons at the bottom right. -->
-  <Navigation layout={railed ? 'rail' : 'sidebar'} class="shell-nav">
+  <Navigation layout={shutByWidth ? 'rail' : 'sidebar'} class="shell-nav">
     <Navigation.Content>
       <Navigation.Header>
         <!-- The mark reads alone, which is exactly what the rail needs; the
              wordmark is what gets dropped when the column narrows, not the
              logo. -->
-        <div class="brand" class:railed>
-          <Navigation.Trigger onclick={toggleRail} title={railed ? 'expandir' : 'colapsar'}>
-            <BrandOrb size={railed ? 26 : 22} />
-            {#if !railed}<span class="display text-base">bubble.work</span>{/if}
+        <div class="brand" class:railed={shutByWidth}>
+          <Navigation.Trigger onclick={toggleRail} title={shutByWidth ? 'expandir' : 'colapsar'}>
+            <BrandOrb size={shutByWidth ? 26 : 22} />
+            {#if !shutByWidth}<span class="display text-base">bubble.work</span>{/if}
           </Navigation.Trigger>
           <!-- Qué versión es esto, pegado al nombre: es de qué producto se
                habla. Chico y apagado mientras no hay nada que decir; con color
@@ -218,7 +228,7 @@
 
       <!-- The label sits OUTSIDE the scrolling list: a heading that scrolls
            away is a heading that stops labelling anything. -->
-      {#if !railed}<Navigation.Label>{label}</Navigation.Label>{/if}
+      {#if !shutByWidth}<Navigation.Label>{label}</Navigation.Label>{/if}
 
       <Navigation.Group class="projects" style={listFade.style} {@attach listFade.attach}>
         <Navigation.Menu>
@@ -229,7 +239,7 @@
             {@render pinRow(p)}
           {/each}
           {#each items as p (p.id)}
-            {#if editing === p.id && !railed}
+            {#if editing === p.id && !shutByWidth}
               <!-- Renaming happens IN PLACE. A dialog for one field is a dialog
                    asking you to confirm you meant to type.
                    Focused explicitly, not with `autofocus`: the attribute only
@@ -257,7 +267,7 @@
                   <span class="pin" aria-hidden="true">{p.name.slice(0, 1)}</span>
                   <Navigation.TriggerText>{p.name}</Navigation.TriggerText>
                 </Navigation.Trigger>
-                {#if !railed && (onrename || ondelete)}
+                {#if !shutByWidth && (onrename || ondelete)}
                   <Menu onSelect={(e: { value: string }) => {
                     if (e.value === 'rename') startRename(p.id, p.name);
                     if (e.value === 'delete') ondelete?.(p.id);
@@ -289,7 +299,7 @@
         <Navigation.Footer class="new-foot">
           <Navigation.Menu>
             <Menu
-              positioning={{ placement: railed ? 'right-end' : 'top-start' }}
+              positioning={{ placement: shutByWidth ? 'right-end' : 'top-start' }}
               onSelect={(e: { value: string }) => {
                 if (e.value === 'create') create();
                 else if (e.value === 'signout') onsignout?.();
@@ -307,10 +317,10 @@
                     class="pin-row menu-row"
                     data-scope="navigation"
                     data-part="trigger"
-                    data-layout={railed ? 'rail' : 'sidebar'}
+                    data-layout={shutByWidth ? 'rail' : 'sidebar'}
                     title="Menú">
-                    <MenuIcon class={railed ? 'size-5' : 'size-4'} />
-                    <span data-scope="navigation" data-part="trigger-text" data-layout={railed ? 'rail' : 'sidebar'}>
+                    <MenuIcon class={shutByWidth ? 'size-5' : 'size-4'} />
+                    <span data-scope="navigation" data-part="trigger-text" data-layout={shutByWidth ? 'rail' : 'sidebar'}>
                       {foot.find((p) => p.id === pinned)?.name ?? 'Menú'}
                     </span>
                   </button>
@@ -362,7 +372,10 @@
   /* Nav column, then everything else. `align-items: stretch` is what lets
      Navigation's own `height: 100%` mean something. */
   .shell {
-    height: 100vh;
+    /* `dvh` y no `vh`: en un móvil la barra del navegador aparece y desaparece,
+       y `100vh` cuenta la pantalla como si nunca estuviera — el pie de la
+       aplicación queda debajo de ella y no se alcanza. */
+    height: 100dvh;
     overflow: hidden;
     display: grid;
     grid-template-columns: auto 1fr;

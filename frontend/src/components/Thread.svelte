@@ -16,6 +16,7 @@
   import Comments from './Comments.svelte';
   import { live } from '../lib/live.svelte';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
+  import Crumbs from './Crumbs.svelte';
 
   let {
     thread,
@@ -45,6 +46,14 @@
   // en ninguna burbuja, que es una respuesta y no un hueco.
   let prios = $state<Record<string, string>>({});
   const bubblePriority = $derived(thread.bubble ? (prios[thread.bubble] ?? '') : '');
+
+  // Dónde está este hilo, para la cabecera de cada modal que se abre desde
+  // aquí. `bubbles` llega después que el thread: hasta entonces el nivel del
+  // módulo simplemente no está, y `Crumbs` no pinta lo que no existe.
+  const bubbleName = $derived(
+    thread.bubble ? (bubbles.find((b) => b.id === thread.bubble)?.name ?? '') : '',
+  );
+  const where = $derived([workspace.name, bubbleName]);
   $effect(() => {
     workspace.id;
     api.states(workspace.id).then((x) => (states = x)).catch(() => {});
@@ -227,6 +236,7 @@
     doom = {
       title: `¿Borrar «${pages.find((p) => p.path === at)?.name ?? at}»?`,
       body: 'Sale del hilo y del repositorio. Lo escrito sigue en la historia de git, que es de donde se recupera si hacía falta.',
+      crumbs: [...where, thread.name],
       go: async () => {
         try {
           await api.removePath(workspace.id, at);
@@ -295,6 +305,19 @@
           }
         }
       : undefined}
+    due={thread.due_date?.slice(0, 10) ?? ''}
+    ondue={async (day) => {
+      try {
+        // Un día, o nada. La fecha de la BURBUJA no se toca: aquélla es el
+        // compromiso del cuerpo de trabajo y ésta es cómo se reparte.
+        await api.update('threads', thread.id, {
+          due_date: day ? `${day} 00:00:00.000Z` : '',
+        });
+        onchanged?.();
+      } catch (e) {
+        error = (e as Error).message;
+      }
+    }}
     markdown={doc.content}
     html={doc.html}
     {elsewhere}
@@ -323,6 +346,8 @@
   <Comments
     bind:open={talking}
     thread={thread.id}
+    workspace={workspace.id}
+    crumbs={where}
     title="#{thread.seq} · {thread.name}"
     onposted={() => { countTalk(); onchanged?.(); }} />
 
@@ -334,7 +359,10 @@
           class="fixed inset-0 flex items-center justify-center p-4"
           style="z-index: var(--z-drawer)">
           <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
-            <Dialog.Title class="text-lg font-bold">¿A qué burbuja?</Dialog.Title>
+            <div>
+              <Crumbs parts={[workspace.name, bubbleName, thread.name]} />
+              <Dialog.Title class="text-lg font-bold">¿A qué burbuja?</Dialog.Title>
+            </div>
             <Dialog.Description class="muted text-sm">
               Una burbuja es la unidad de atención: mover un hilo cambia lo que
               flota y lo que se hunde.
@@ -367,7 +395,10 @@
           class="fixed inset-0 flex items-center justify-center p-4"
           style="z-index: var(--z-drawer)">
           <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
-            <Dialog.Title class="text-lg font-bold">¿Borrar «{thread.name}»?</Dialog.Title>
+            <div>
+              <Crumbs parts={where} />
+              <Dialog.Title class="text-lg font-bold">¿Borrar «{thread.name}»?</Dialog.Title>
+            </div>
             <Dialog.Description class="muted text-sm">
               Se va el hilo y su documento del repositorio. Lo escrito sigue en
               la historia de git, que es de donde se recupera si hizo falta.

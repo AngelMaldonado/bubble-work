@@ -10,6 +10,7 @@
   import FileTextIcon from '@lucide/svelte/icons/file-text';
   import FolderIcon from '@lucide/svelte/icons/folder';
   import WikiView from './WikiView.svelte';
+  import Crumbs from './Crumbs.svelte';
 
   let {
     workspace,
@@ -198,7 +199,10 @@
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
-          <Dialog.Title class="text-lg font-bold">Nueva página</Dialog.Title>
+          <div>
+            <Crumbs parts={[workspace.name, 'docs']} />
+            <Dialog.Title class="text-lg font-bold">Nueva página</Dialog.Title>
+          </div>
           <Dialog.Description class="muted text-sm">
             Va bajo <code>docs/</code>. Puedes anidarla escribiendo la ruta:
             <code>arquitectura/decisiones.md</code>.
@@ -231,7 +235,10 @@
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">
         <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
-          <Dialog.Title class="text-lg font-bold">¿Borrar «{path}»?</Dialog.Title>
+          <div>
+            <Crumbs parts={[workspace.name, 'docs']} />
+            <Dialog.Title class="text-lg font-bold">¿Borrar «{path}»?</Dialog.Title>
+          </div>
           <Dialog.Description class="muted text-sm">
             Sale del árbol y del repositorio. Lo escrito sigue en la historia de
             git, que es de donde se recupera si hacía falta.

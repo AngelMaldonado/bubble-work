@@ -651,12 +651,19 @@ chk "...y vuelve entero" \
 # aparecer: lo escrito se perdía al recargar. Salen del esquema, no de una copia.
 LIM=$(curl -s "$API/api/limits" -H "Authorization: $B")
 chk ">>> los topes de cada campo se pueden preguntar" \
-  "$(echo "$LIM" | j "['inbox_items.body']")" 2000000
+  "$(echo "$LIM" | j "['fields']['inbox_items.body']")" 2000000
 chk "...cada uno el suyo" \
-  "$(echo "$LIM" | j "['workspaces.name']")" 100
+  "$(echo "$LIM" | j "['fields']['workspaces.name']")" 100
 chk "...y el de un comentario, que se mide en bytes (5 MB)" \
-  "$(echo "$LIM" | j "['comments.body']")" 5242880
+  "$(echo "$LIM" | j "['fields']['comments.body']")" 5242880
 chk "...con sesión" "$(code "$API/api/limits")" 401
+# Qué se puede SUBIR, por la misma puerta. Publicado y no copiado en el cliente:
+# un diálogo de archivos que filtra por una lista adivinada acaba tachando algo
+# que el servidor sí acepta, y nadie se entera de que estaba permitido.
+chk ">>> ...y qué archivos se admiten, para el diálogo de archivos" \
+  "$(echo "$LIM" | python3 -c 'import sys,json;print(",".join(json.load(sys.stdin)["accept"]))')" \
+  ".avif,.csv,.gif,.jpeg,.jpg,.json,.pdf,.png,.svg,.txt,.webp"
+chk "...y el tope por archivo" "$(echo "$LIM" | j "['bytes']")" 5242880
 
 # Una nota lleva imágenes, y como no tiene workspace van en el propio registro.
 # `files+` AÑADE: sin el `+` cada pegado borraría la imagen anterior y la nota
@@ -1081,8 +1088,17 @@ chk ">>> ...y el calendario la lee de ahí" \
 ARG="{\"bubble\":\"$NBUB\",\"due\":\"31/12/2026\"}"
 chk ">>> una fecha mal formada se rechaza en vez de guardarse rara" \
   "$(mcptext "$A" set_bubble "$ARG" | grep -c "a due date is a day")" 1
-chk ">>> un thread ya no tiene fecha propia" \
-  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | python3 -c 'import sys,json;print("due_date" in json.load(sys.stdin))')" False
+# La fecha de la BURBUJA es el compromiso; la de la tarea es cómo se reparte, y
+# son independientes a propósito. Con cinco tareas dentro de una burbuja que
+# vence el 30, las cinco parecen vencer el 30 y la que bloquea a las otras el
+# martes no se distingue.
+chk ">>> una tarea vuelve a tener fecha propia" \
+  "$(curl -s -X PATCH "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"due_date":"2026-12-24 00:00:00.000Z"}' \
+     | python3 -c 'import sys,json;print(json.load(sys.stdin)["due_date"][:10])')" 2026-12-24
+chk ">>> ...y NO toca la de su burbuja: una es el compromiso, la otra el reparto" \
+  "$(curl -s "$API/api/collections/bubbles/records/$NBUB" -H "Authorization: $A" \
+     | python3 -c 'import sys,json;print(json.load(sys.stdin)["due_date"][:10])')" 2026-12-31
 
 ARG="{\"note\":\"el portal tarda en cargar\"}"
 chk ">>> capturar en el inbox por MCP" \
@@ -1378,6 +1394,37 @@ BIG=/tmp/bubble-big.png; head -c 200000 /dev/urandom > "$BIG"
 chk "una imagen dentro del límite pasa" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
      -H "Authorization: $A" -F "file=@$BIG" -F "name=grande.png")" 200
+
+# En assets/ vive lo que se ADJUNTA a un trabajo, no sólo lo que se ve. La lista
+# es blanca y corta a propósito: git guarda cada versión de cada byte para
+# siempre, así que lo que entra decide cuánto crece el repositorio. Un markdown
+# NO entra —ya tiene casa en docs/ o junto a su hilo— y eso lo fija la aserción
+# de arriba.
+PDF=/tmp/bubble-informe.pdf; printf '%%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%%%EOF\n' > "$PDF"
+PDFUP=$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+  -F "file=@$PDF" -F "name=Informe Q3.pdf")
+chk ">>> un PDF sí entra, y aterriza en assets/" "$(echo "$PDFUP" | j "['path']")" "assets/informe-q3.pdf"
+chk ">>> ...y el servidor dice que NO es imagen, para enlazarlo en vez de embeberlo" \
+  "$(echo "$PDFUP" | j "['image']")" "False"
+chk ">>> ...mientras que de una imagen dice que sí" \
+  "$(curl -s -X POST "$API/api/workspaces/$ALPHA/asset" -H "Authorization: $A" \
+     -F "file=@$PNG" -F "name=mi-diagrama.png" | j "['image']")" "True"
+PDFURL="$API/api/workspaces/$ALPHA/file?path=assets/informe-q3.pdf"
+chk ">>> se sirve con su nombre, no con file?path=…" \
+  "$(curl -s -o /dev/null -D - "$PDFURL" -H "Authorization: $A" \
+     | tr -d '\r' | grep -i '^content-disposition:' | tr -d ' ')" \
+  'Content-Disposition:inline;filename="informe-q3.pdf"'
+chk ">>> los bytes del adjunto vuelven idénticos" \
+  "$(curl -s "$PDFURL" -H "Authorization: $A" | cmp -s - "$PDF" && echo si || echo no)" si
+chk ">>> un adjunto es tan privado como la escritura: erin no lo ve" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$PDFURL" -H "Authorization: $ER")" 404
+chk ">>> un comprimido NO entra: git lo guardaría entero en cada versión" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$PDF" -F "name=cosas.zip")" 400
+chk ">>> ni un ejecutable" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$API/api/workspaces/$ALPHA/asset" \
+     -H "Authorization: $A" -F "file=@$PDF" -F "name=malo.sh")" 400
+rm -f "$PDF"
 # El documento guarda la ruta CORTA y el servidor la resuelve al renderizar: un
 # markdown con `/api/workspaces/<id>/file?path=…` dentro es un markdown que no
 # sobrevive una mudanza ni se lee desde un clon de git.
@@ -1388,6 +1435,18 @@ chk ">>> el markdown conserva assets/… tal cual" \
   "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "(assets/mi-diagrama.png)" in json.load(sys.stdin)["content"] else "no")')" si
 chk ">>> ...y el html sale apuntando a la ruta que sí la sirve" \
   "$(echo "$PAGE" | python3 -c 'import sys,json;print("si" if "/api/workspaces/'"$ALPHA"'/file?path=assets/mi-diagrama.png" in json.load(sys.stdin)["html"] else "no")')" si
+
+# `/api/markdown` reescribe SÓLO si le dicen de qué workspace es. Quien lo llame
+# sin workspace —un comentario, por ejemplo— recibe la ruta corta intacta, y el
+# navegador pide algo que no existe. Es un contrato, no un detalle: se prueba en
+# los dos sentidos.
+MDBODY='{"content":"![d](assets/mi-diagrama.png)","workspace":"'"$ALPHA"'"}'
+chk ">>> /api/markdown con workspace resuelve la imagen" \
+  "$(curl -s -X POST "$API/api/markdown" -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d "$MDBODY" | python3 -c 'import sys,json;print("si" if "/api/workspaces/'"$ALPHA"'/file?path=assets/mi-diagrama.png" in json.load(sys.stdin)["html"] else "no")')" si
+chk ">>> ...y sin workspace la deja corta, que es por qué hay que mandarlo" \
+  "$(curl -s -X POST "$API/api/markdown" -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d '{"content":"![d](assets/mi-diagrama.png)"}' | python3 -c 'import sys,json;print("si" if "\"assets/mi-diagrama.png\"" in json.load(sys.stdin)["html"] else "no")')" si
 
 chk ">>> el árbol lista la imagen" \
   "$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A" | python3 -c 'import sys,json
@@ -1529,6 +1588,210 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ3'))")" 1
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
+
+# ------------------- las dos columnas laterales de la secuencia, paginadas ----
+#
+# Lo que está fuera de la línea y lo que ya se terminó crecen sin techo, así que
+# se piden por páginas. Lo terminado se pregunta por el ESTADO y no por
+# `completed_at`: esa columna existe en el esquema y no la escribe nadie.
+Q="$API/api/queue"
+echo
+chk ">>> la cola pide un kind válido" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=cosas&state=open" -H "Authorization: $A")" 400
+chk ">>> ...y un state válido" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=threads&state=quizá" -H "Authorization: $A")" 400
+chk ">>> anónimo no la lee" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=threads&state=open")" 401
+chk ">>> erin, que no está en ningún proyecto, recibe una página vacía y no un error" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $ER" | j "['items']")" "[]"
+chk ">>> la cola abierta trae hilos fuera de la línea" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+d=json.load(sys.stdin)
+print("si" if d["items"] and all(not i.get("sequence") for i in d["items"]) else "no")')" si
+chk ">>> ...lo más reciente primero" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+c=[i["created"] for i in json.load(sys.stdin)["items"]]
+print("si" if c == sorted(c, reverse=True) else "no")')" si
+chk ">>> ...y con lo justo para dibujar la tarjeta" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+i=json.load(sys.stdin)["items"][0]
+print("si" if {"id","name","workspace","created"} <= set(i) else "no")')" si
+chk ">>> una página de uno dice que hay más" \
+  "$(curl -s "$Q?kind=threads&state=open&perPage=1" -H "Authorization: $C" | j "['more']")" True
+P1=$(curl -s "$Q?kind=threads&state=open&perPage=1" -H "Authorization: $C" | j "['items'][0]['id']")
+P2=$(curl -s "$Q?kind=threads&state=open&perPage=1&page=2" -H "Authorization: $C" | j "['items'][0]['id']")
+chk ">>> ...y la segunda página no repite la primera" \
+  "$([ -n "$P1" ] && [ -n "$P2" ] && [ "$P1" != "$P2" ] && echo si || echo no)" si
+chk ">>> la cola de módulos existe igual" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=bubbles&state=done" -H "Authorization: $C")" 200
+chk ">>> una página demasiado lejos se rechaza en vez de recorrer la tabla" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=threads&state=open&page=9999" -H "Authorization: $C")" 400
+
+# ----------------------------------- revisado: lo hecho que ya se miró ----
+#
+# Entre «terminado» y «borrado» faltaba el gesto de quien mira lo hecho y dice
+# que está bien. Es lo que convierte la columna derecha de la secuencia en una
+# cola —se vacía— en vez de un historial que sólo crece.
+DONEQ="$Q?kind=bubbles&state=done"
+echo
+RVB=$(curl -s -X POST "$API/api/collections/bubbles/records" -H "Authorization: $C" \
+  -H 'Content-Type: application/json' \
+  -d "{\"workspace\":\"$ALPHA\",\"name\":\"Para revisar\",\"closed_at\":\"2026-09-01 00:00:00.000Z\"}" | j "['id']")
+chk ">>> lo cerrado sale en la cola de hecho" \
+  "$(curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" si
+chk ">>> marcarlo revisado es editar la fila, no un rol aparte" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$API/api/collections/bubbles/records/$RVB" \
+     -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d '{"reviewed_at":"2026-09-02 00:00:00.000Z"}')" 200
+chk ">>> ...y entonces sale de la cola: la columna se vacía" \
+  "$(curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" no
+chk ">>> desmarcarlo la devuelve" \
+  "$(curl -s -X PATCH "$API/api/collections/bubbles/records/$RVB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"reviewed_at":""}' >/dev/null; \
+     curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" si
+chk ">>> reabrir un módulo lo saca de lo hecho" \
+  "$(curl -s -X PATCH "$API/api/collections/bubbles/records/$RVB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"closed_at":"","closure":""}' >/dev/null; \
+     curl -s "$DONEQ" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$RVB"'" for i in json.load(sys.stdin)["items"]) else "no")')" no
+
+# ----------------------------- la línea de MÓDULOS, hermana de la de hilos ----
+#
+# Dos líneas independientes a propósito: una contesta «¿qué cuerpo de trabajo
+# atacamos antes?» y la otra «¿qué pieza se hace antes?». Y `next` sigue siendo
+# de hilos: lo que un agente puede empezar y terminar es una pieza.
+BUBS="$API/api/collections/bubbles/records"
+echo
+# El par que prueba la guarda: alice SÍ alcanza esta burbuja —lo demuestra
+# editando su outcome— y aun así no puede escribir su paso. Sin la primera
+# línea, el 404 de la segunda podría ser sólo que no la ve.
+chk ">>> un lead de workspace alcanza la burbuja" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BUBS/$NBUB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"outcome":"nadie escribe dos veces"}')" 200
+# 404 y no 403: con `sequence` en el cuerpo la fila deja de pasar su propia
+# regla, así que para quien pide no existe. Es como contesta el resto de la API.
+chk ">>> ...y aun así no ordena la línea de módulos: cruza proyectos" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$BUBS/$NBUB" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"sequence":10}')" 404
+chk ">>> el lead global sí" \
+  "$(curl -s -X PATCH "$BUBS/$NBUB" -H "Authorization: $C" -H 'Content-Type: application/json' \
+     -d '{"sequence":10}' | j "['sequence']")" 10
+chk ">>> ...y el board la devuelve" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json
+b=json.load(sys.stdin)["bubbles"]
+print(next((x.get("sequence",0) for x in b if x["id"]=="'"$NBUB"'"), "falta"))')" 10
+# La independencia, fijada: el paso del módulo NO es el de sus hilos.
+chk ">>> las dos líneas son independientes: el hilo conserva el suyo" \
+  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | j "['sequence']")" 0
+
+# ------------------- lo que pasa en una fecha y NO es trabajo ----
+#
+# Una junta no se completa, no produce evidencia y NO calienta. Por eso es una
+# fila suya y no un hilo con fecha: un hilo que renaciera cada lunes emitiría
+# `thread-created` todas las semanas y mantendría una burbuja caliente sin que
+# nadie trabajara.
+CEV="$API/api/collections/calendar_events/records"
+echo
+chk ">>> un lead de workspace NO pone una fecha del departamento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CEV" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"Junta","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}')" 400
+EVBEFORE=$(curl -s "$API/api/collections/events/records?perPage=1" -H "Authorization: $SU" | j "['totalItems']")
+CEID=$(curl -s -X POST "$CEV" -H "Authorization: $C" -H 'Content-Type: application/json' \
+  -d '{"name":"Junta semanal","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}' | j "['id']")
+chk ">>> el lead global sí, y con su repetición" \
+  "$(curl -s "$CEV/$CEID" -H "Authorization: $A" | j "['repeat']")" weekly
+chk ">>> ...y la ve cualquiera que trabaje aquí" \
+  "$(curl -s "$CEV/$CEID" -H "Authorization: $B" | j "['name']")" "Junta semanal"
+chk ">>> anónimo no" "$(curl -s "$CEV?perPage=1" | j "['totalItems']")" 0
+chk ">>> una repetición que no está en el menú se rechaza" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CEV" -H "Authorization: $C" \
+     -H 'Content-Type: application/json' \
+     -d '{"name":"Cada tercer jueves","start":"2026-10-05 00:00:00.000Z","repeat":"rrule"}')" 400
+# La aserción que sostiene todo el argumento.
+chk ">>> crear una fecha NO deja evidencia: no calienta nada" \
+  "$(curl -s "$API/api/collections/events/records?perPage=1" -H "Authorization: $SU" | j "['totalItems']")" "$EVBEFORE"
+# 404 y no 403: la regla de borrado no lo alcanza, así que para él esa fila no
+# existe como algo borrable. Es como contesta el resto de la API.
+chk ">>> un member no la borra" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$CEV/$CEID" -H "Authorization: $B")" 404
+chk ">>> el lead global sí" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$CEV/$CEID" -H "Authorization: $C")" 204
+
+# ------------------------------- las columnas del tablero de TAREAS ----
+#
+# Propias, y no las de las burbujas: una burbuja en «Corto plazo» con sus hilos
+# en «Largo plazo» es un estado que nadie sabe leer. Nacen vacías porque qué
+# columnas hay lo decide quien orquesta, no una migración.
+TSTAGES="$API/api/collections/thread_stages/records"
+echo
+chk ">>> el tablero de tareas nace SIN columnas: eso lo decide el lead" \
+  "$(curl -s "$TSTAGES" -H "Authorization: $A" | j "['totalItems']")" 0
+chk ">>> un lead de workspace NO crea una: el tablero es del departamento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$TSTAGES" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"name":"Por hacer","position":10}')" 400
+TCOL=$(curl -s -X POST "$TSTAGES" -H "Authorization: $C" -H 'Content-Type: application/json' \
+  -d '{"name":"Por hacer","position":10}' | j "['id']")
+TDONE=$(curl -s -X POST "$TSTAGES" -H "Authorization: $C" -H 'Content-Type: application/json' \
+  -d '{"name":"Hecha","position":20,"done":true}' | j "['id']")
+chk ">>> el lead global sí" "$(test -n "$TCOL" && echo si || echo no)" si
+chk ">>> ...y marca cuál es la del final, sin depender de cómo se llame" \
+  "$(curl -s "$TSTAGES/$TDONE" -H "Authorization: $A" | j "['done']")" True
+chk ">>> las lee cualquiera que trabaje aquí" \
+  "$(curl -s "$TSTAGES" -H "Authorization: $B" | j "['totalItems']")" 2
+chk ">>> anónimo no" "$(curl -s "$TSTAGES" | j "['totalItems']")" 0
+
+chk ">>> una tarea se coloca en una columna, y eso NO es orquestar" \
+  "$(curl -s -X PATCH "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d "{\"stage\":\"$TCOL\"}" | j "['stage']")" "$TCOL"
+chk ">>> borrar la columna NO borra la tarea que estaba dentro" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$TSTAGES/$TCOL" -H "Authorization: $C")" 204
+chk ">>> ...que vuelve a «Sin planear»" \
+  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | j "['stage']")" ""
+
+# ------------------------------------- las preferencias de quien mira ----
+#
+# Casi todo lo de vista se queda en el navegador. Esto es para lo que tiene que
+# seguir a la persona entre dispositivos, y por eso es una fila — con la regla
+# que hace que sea SUYA.
+PREFS="$API/api/collections/prefs/records"
+echo
+chk ">>> sin fila, no hay preferencias, y eso no es un error" \
+  "$(curl -s "$PREFS?perPage=1" -H "Authorization: $A" | j "['totalItems']")" 0
+PREFID=$(curl -s -X POST "$PREFS" -H "Authorization: $A" -H 'Content-Type: application/json' \
+  -d "{\"user\":\"$AID\",\"value\":{\"planner\":\"tasks\"}}" | j "['id']")
+chk ">>> alice guarda cómo quiere ver el planeador" "$(test -n "$PREFID" && echo si || echo no)" si
+chk ">>> ...y la lee de vuelta" \
+  "$(curl -s "$PREFS?perPage=1" -H "Authorization: $A" | j "['items'][0]['value']['planner']")" tasks
+chk ">>> bob NO ve la fila de alice" \
+  "$(curl -s "$PREFS?perPage=1" -H "Authorization: $B" | j "['totalItems']")" 0
+chk ">>> ...ni por id" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$PREFS/$PREFID" -H "Authorization: $B")" 404
+chk ">>> ni el lead global: no hay ninguna razón para leer la vista de otro" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$PREFS/$PREFID" -H "Authorization: $C")" 404
+chk ">>> bob no le escribe las preferencias a alice" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PREFS" -H "Authorization: $B" \
+     -H 'Content-Type: application/json' -d "{\"user\":\"$AID\",\"value\":{}}")" 400
+# 404 y no 403: tras el cambio la fila ya no pasaría su propia regla, así que
+# para quien pide deja de existir. Es la misma forma en que el resto de la API
+# contesta a «eso no es tuyo».
+chk ">>> ...y alice no regala la suya cambiándole el dueño" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$PREFS/$PREFID" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d "{\"user\":\"$BID\"}")" 404
+chk ">>> una segunda fila para la misma persona se rechaza" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PREFS" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d "{\"user\":\"$AID\",\"value\":{}}")" 400
+chk ">>> guardar otra vez sobreescribe el saco" \
+  "$(curl -s -X PATCH "$PREFS/$PREFID" -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d '{"value":{"planner":"bubbles"}}' | j "['value']['planner']")" bubbles
+# 403 y no 404: la fila existe y se puede ver, lo que no existe es la puerta.
+chk ">>> nadie borra una fila de preferencias: se sobreescribe" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$PREFS/$PREFID" -H "Authorization: $A")" 403
+chk ">>> anónimo no las ve" \
+  "$(curl -s "$PREFS?perPage=1" | j "['totalItems']")" 0
 
 # ------------------------------------------------ canales del inbox ----
 echo

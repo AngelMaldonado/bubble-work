@@ -1,8 +1,9 @@
 <script lang="ts" module>
   export type SeqThread = {
     id: string;
-    /** el #N del hilo dentro de su proyecto */
-    seq: number;
+    /** el #N del hilo dentro de su proyecto. Un MÓDULO no tiene: es una fila de
+     *  la línea igual que un hilo, pero las burbujas no llevan número. */
+    seq?: number;
     name: string;
     /** el NOMBRE del proyecto, para leerlo */
     project: string;
@@ -17,11 +18,17 @@
      *  sabe. Una vista filtrada lo usa para no renumerar lo que no ve. */
     step?: number;
     done: boolean;
+    /** cuándo nació: la tarjeta lo dice como edad, y es por lo que se ordenan
+     *  las columnas laterales */
+    created?: string;
+    /** cuándo vence, un día */
+    due?: string;
     assignees: { id: string; name: string; avatar?: string }[];
   };
 </script>
 
 <script lang="ts">
+  import BoardCard from './BoardCard.svelte';
   // La secuencia de ejecución del departamento: UNA línea, la que decide quien
   // lleva todo. Cada paso es un valor de `sequence`, y los hilos que lo
   // comparten van a la vez.
@@ -35,11 +42,22 @@
   // tiene por qué descargar un motor de arrastre.
   let {
     threads = [],
+    queue = [],
+    queueMore = false,
+    onqueuemore,
+    done = [],
+    doneMore = false,
+    ondonemore,
     onreorder,
     oncomplete,
     onopen,
+    onnew,
+    onreopen,
+    onreview,
     readonly = false,
     title = '🧭 Secuencia',
+    completeLabel = '✓ Terminar',
+    what = 'hilos',
     headless = false,
   }: {
     threads?: SeqThread[];
@@ -47,13 +65,33 @@
      *  está secuenciado. Es la secuencia de la columna, no la del planeador. */
     readonly?: boolean;
     title?: string;
+    /** Cómo se llama dar por terminada una fila. Un hilo se TERMINA; un módulo
+     *  se CIERRA, que es una decisión con fecha y frase. */
+    completeLabel?: string;
+    /** Qué se ordena aquí, para decirlo donde no hay nada que ordenar. */
+    what?: string;
     /** sin cabecera propia: quien lo contiene pone la suya (la columna del
      *  kanban, que es además el asa para moverla) */
     headless?: boolean;
+    /** Lo que todavía no está en la línea, lo más reciente primero. Lo pagina
+     *  quien lo pide: esta lista crece sin techo y no cabe entera. */
+    queue?: SeqThread[];
+    queueMore?: boolean;
+    onqueuemore?: () => void;
+    /** Lo que ya se terminó, también paginado. */
+    done?: SeqThread[];
+    doneMore?: boolean;
+    ondonemore?: () => void;
     /** sólo los hilos cuyo `sequence` cambió: el resto no hay que tocarlo */
     onreorder?: (changes: { id: string; sequence: number }[]) => void | Promise<void>;
     oncomplete?: (id: string) => void | Promise<void>;
     onopen?: (t: SeqThread) => void;
+    /** crear algo nuevo y meterlo en la línea; sin esto no se ofrece */
+    onnew?: () => void;
+    /** algo terminado vuelve a la línea: hay que reabrirlo */
+    onreopen?: (id: string) => void;
+    /** dar por revisado y cerrado del todo lo que ya estaba hecho */
+    onreview?: (id: string) => void;
   } = $props();
 
   // Copia local, para que un arrastre se vea al instante y no cuando vuelva el
@@ -63,39 +101,48 @@
 
   type Step = { seq: number; threads: SeqThread[]; done: boolean };
 
+  /** Los pasos de la línea. SÓLO trabajo vivo: lo terminado vive en la columna
+   *  de la derecha, y tenerlo además aquí era la misma cosa en dos sitios —
+   *  empujando «Ahora» fuera de la vista, que es lo único que esta pantalla
+   *  tiene que decir. */
   const steps = $derived.by<Step[]>(() => {
     const by = new Map<number, SeqThread[]>();
     for (const t of local) {
-      if (!t.sequence) continue;
+      if (!t.sequence || t.done) continue;
       const list = by.get(t.sequence);
       if (list) list.push(t);
       else by.set(t.sequence, [t]);
     }
     return [...by.entries()]
       .sort((a, b) => a[0] - b[0])
-      .map(([seq, ts]) => ({ seq, threads: ts, done: ts.every((t) => t.done) }));
+      .map(([seq, ts]) => ({ seq, threads: ts, done: false }));
   });
-  const doneSteps = $derived(steps.filter((s) => s.done));
-  const liveSteps = $derived(steps.filter((s) => !s.done));
+  const liveSteps = $derived(steps);
 
-  // Lo terminado se pliega por defecto: ya no pide nada, y abierto empuja
-  // «Ahora» fuera de la vista, que es justo lo que esta pantalla tiene que decir.
-  let showDone = $state(false);
+  // Las dos columnas laterales ya no se derivan de `threads`: llegan del
+  // servidor, por páginas, ordenadas por fecha de creación. Filtrarlas aquí
+  // sería filtrar una página y no el conjunto — para acotar está la barra de
+  // filtros del planeador, que filtra en el sitio donde se pide.
   let showTray = $state(true);
+  let showDone = $state(true);
 
-  // Sin secuenciar sólo cuenta lo que sigue abierto: un hilo terminado que nunca
-  // entró en la línea no tiene ya dónde ir.
-  let fProject = $state('');
-  let fPrio = $state('');
-  const unsequenced = $derived(local.filter((t) => !t.sequence && !t.done));
-  const projects = $derived([...new Set(unsequenced.map((t) => t.project))].sort());
-  const tray = $derived(
-    unsequenced.filter(
-      (t) =>
-        (!fProject || t.project === fProject) &&
-        (!fPrio || (fPrio === 'none' ? !t.priority : t.priority === fPrio)),
-    ),
-  );
+  /** El centinela del final de una columna: cuando entra en pantalla, se pide
+   *  la página siguiente. Un observador y no un `scroll`: el navegador ya sabe
+   *  cuándo algo se ve, y escuchar el scroll es preguntarlo sesenta veces por
+   *  segundo. */
+  function sentinel(more: boolean, ask?: () => void) {
+    return (el: HTMLElement) => {
+      if (!more || !ask) return;
+      const io = new IntersectionObserver(
+        (entries) => entries.some((e) => e.isIntersecting) && ask(),
+        // Un poco antes de llegar: la página siguiente aterriza mientras
+        // todavía queda algo que leer.
+        { root: el.closest('.side'), rootMargin: '240px' },
+      );
+      io.observe(el);
+      return () => io.disconnect();
+    };
+  }
 
   /** El número de un paso: el de la línea entera si el hilo lo trae —una vista
    *  filtrada no ve todos los pasos, y renumerar lo visible diría «ahora» de algo
@@ -131,8 +178,18 @@
    *  legible: sin 15, 17, 18 que acaban sin sitio entre medias. Al dueño sólo
    *  le llega lo que cambió. */
   function drop(id: string, target: Target) {
+    // Lo que viene de una columna lateral todavía no está en la línea, así que
+    // primero entra. Si venía de lo hecho, se REABRE: «ahora» es el primer paso
+    // con algo abierto, y colocar algo terminado en la línea la dejaría
+    // pareciendo atascada en trabajo que ya está.
+    if (!local.some((t) => t.id === id)) {
+      const from = [...queue, ...done].find((t) => t.id === id);
+      if (!from) return;
+      if (from.done) onreopen?.(from.id);
+      local = [...local, { ...from, sequence: 0, done: false }];
+    }
+
     type Slot = { ids: string[] };
-    const done: Slot[] = doneSteps.map((s) => ({ ids: s.threads.map((t) => t.id) }));
     const live: Slot[] = liveSteps.map((s) => ({ ids: s.threads.map((t) => t.id) }));
 
     // El destino se coloca ANTES de quitar el hilo de donde estaba: si su paso
@@ -149,12 +206,12 @@
       dest = { ids: [id] };
       live.splice(target.at, 0, dest);
     }
-    for (const s of [...done, ...live]) {
+    for (const s of live) {
       if (s !== dest) s.ids = s.ids.filter((x) => x !== id);
     }
 
     const next = new Map<string, number>();
-    [...done, ...live]
+    live
       .filter((s) => s.ids.length)
       .forEach((s, i) => s.ids.forEach((x) => next.set(x, (i + 1) * 10)));
 
@@ -253,39 +310,41 @@
 </script>
 
 {#snippet threadCard(t: SeqThread, movable: boolean)}
-  <article
-    class="card"
-    class:done={t.done}
-    class:lifting={dragging === t.id}
-    {@attach (el) => (movable ? card(el, t) : undefined)}>
-    <div class="row">
-      {#if t.done}<span class="tick" aria-label="terminado">✓</span>{/if}
-      {#if t.priority}<span class="prio-chip prio-{t.priority}">{t.priority}</span>{/if}
-      <span class="num">#{t.seq}</span>
-      <button class="name" onclick={() => onopen?.(t)} title={t.name}>{t.name}</button>
-    </div>
-    <div class="row sub">
-      <span class="where">{t.project}{t.bubble ? ` · ${t.bubble}` : ''}</span>
-      {#if t.assignees.length}
-        <span class="people">
-          {#each t.assignees as p (p.id)}
-            <span class="avatar" title={p.name}>
-              {#if p.avatar}
-                <img src={p.avatar} alt={p.name} />
-              {:else}
-                {(p.name || '?').slice(0, 1).toUpperCase()}
-              {/if}
-            </span>
-          {/each}
-        </span>
-      {/if}
+  <!-- La MISMA tarjeta que el kanban. La secuencia dibujaba la suya, parecida
+       pero no igual, y dos tarjetas de la misma cosa acaban divergiendo. Lo
+       único que añade una fila de la línea es quién la tiene. -->
+  <BoardCard
+    card={{
+      id: t.id,
+      title: t.name,
+      prio: t.priority || undefined,
+      where: t.project,
+      born: t.created,
+      due: t.due,
+    }}
+    people={t.assignees}
+    lifting={dragging === t.id}
+    attach={movable ? (el) => card(el, t) : undefined}
+    onopen={() => onopen?.(t)}>
+    <!-- Dentro de la tarjeta y fuera del botón que la abre: son verbos suyos,
+         pero terminar algo por haber apuntado a abrirlo es un clic que nadie
+         perdona. Como snippet hijo, para que vea el `t` de esta fila. -->
+    {#snippet footer()}
       {#if !t.done && oncomplete && !readonly}
-        <!-- Fuera del botón del nombre: terminar algo por haber apuntado a
-             abrirlo es un clic que nadie perdona. -->
-        <button class="finish" onclick={() => oncomplete?.(t.id)}>✓ Terminar</button>
+        <button class="finish" onclick={() => oncomplete?.(t.id)}>{completeLabel}</button>
       {/if}
-    </div>
-  </article>
+      {#if t.done && onreview}
+        <!-- Revisar lo saca de la columna para siempre: es lo que la convierte
+             en una cola que se vacía y no en un historial que sólo crece.
+             Siempre visible, y con su nombre — un botón que sólo aparece al
+             pasar por encima es un botón que la mitad de la gente no descubre. -->
+        <button
+          class="review"
+          title="Dar por revisado: sale de esta columna"
+          onclick={() => onreview?.(t.id)}>☑ Revisado</button>
+      {/if}
+    {/snippet}
+  </BoardCard>
 {/snippet}
 
 {#snippet gap(at: number)}
@@ -305,30 +364,46 @@
     <header class="head">
       <span class="pane-name">{title}</span>
       <span class="count" title="pasos en la secuencia">{steps.length}</span>
+      {#if onnew && !readonly}
+        <button class="new" onclick={onnew} title="Crear y meter en la línea">+</button>
+      {/if}
     </header>
   {/if}
 
-  <div class="scroll">
-    {#if doneSteps.length}
-      <section class="done-steps">
-        <button class="toggle" aria-expanded={showDone} onclick={() => (showDone = !showDone)}>
-          ✓ Hecho ({doneSteps.length})
-        </button>
-        {#if showDone}
-          <!-- No es destino: lo hecho ya pasó, y meter algo ahí sería reescribir
-               la historia de la línea. -->
-          {#each doneSteps as s (s.seq)}
-            <div class="step past">
-              <div class="rail"><span class="marker">✓</span></div>
-              <div class="body">
-                {#each s.threads as t (t.id)}{@render threadCard(t, false)}{/each}
-              </div>
+  <div class="split">
+    <!-- La columna IZQUIERDA: lo que todavía no está en la línea, lo más
+         reciente primero. Arrastrar de aquí al centro es meter algo en la
+         línea; del centro aquí, sacarlo. -->
+    {#if !readonly}
+      <section
+        class="side left"
+        class:shut={!showTray}
+        class:over={over === 'tray'}
+        {@attach (el) => target(el, { kind: 'tray' })}>
+        <div class="side-head">
+          <button
+            class="toggle"
+            aria-expanded={showTray}
+            title={showTray ? 'Esconder la bandeja' : 'Mostrar la bandeja'}
+            onclick={() => (showTray = !showTray)}>
+            {showTray ? '◂' : '▸'} {showTray ? 'Sin secuenciar' : ''}
+          </button>
+        </div>
+        {#if showTray}
+          <div class="side-body">
+            {#each queue as t (t.id)}{@render threadCard(t, true)}{/each}
+            {#if !queue.length}
+              <p class="hint">Todo lo abierto ya está en la línea.</p>
+            {/if}
+            <div class="more" {@attach sentinel(queueMore, onqueuemore)}>
+              {#if queueMore}<span class="hint">cargando…</span>{/if}
             </div>
-          {/each}
+          </div>
         {/if}
       </section>
     {/if}
 
+    <div class="scroll">
     {#if liveSteps.length}
       <div class="line">
         {#if !readonly}{@render gap(0)}{/if}
@@ -362,41 +437,37 @@
           {@attach (el) => (readonly ? undefined : target(el, { kind: 'gap', at: 0 }))}>
           {readonly
             ? 'Nada en la secuencia todavía.'
-            : 'Arrastra hilos desde «Sin secuenciar» para armar la secuencia.'}
+            : `Arrastra ${what} desde «Sin secuenciar» para armar la secuencia.`}
         </div>
       </div>
     {/if}
 
-    {#if !readonly}
-    <section class="tray" class:over={over === 'tray'} {@attach (el) => target(el, { kind: 'tray' })}>
-      <div class="tray-head">
-        <button class="toggle" aria-expanded={showTray} onclick={() => (showTray = !showTray)}>
-          {showTray ? '▾' : '▸'} Sin secuenciar ({unsequenced.length})
-        </button>
-        {#if showTray}
-          <select class="select filter" bind:value={fProject} aria-label="filtrar por proyecto">
-            <option value="">todos</option>
-            {#each projects as p (p)}<option value={p}>{p}</option>{/each}
-          </select>
-          <select class="select filter" bind:value={fPrio} aria-label="filtrar por prioridad">
-            <option value="">todas</option>
-            <option value="P1">P1</option>
-            <option value="P2">P2</option>
-            <option value="P3">P3</option>
-            <option value="P4">P4</option>
-            <option value="none">sin prioridad</option>
-          </select>
-        {/if}
-      </div>
-      {#if showTray}
-        <div class="tray-body">
-          {#each tray as t (t.id)}{@render threadCard(t, true)}{/each}
-          {#if !tray.length}
-            <p class="hint">{unsequenced.length ? 'Nada con esos filtros.' : 'Todo lo abierto ya está en la secuencia.'}</p>
-          {/if}
+    </div>
+
+    <!-- La columna DERECHA: lo que ya se terminó, lo más reciente primero. No
+         es destino de caída — lo hecho ya pasó, y meter algo ahí sería
+         reescribir la historia de la línea. -->
+    {#if done.length || doneMore}
+      <section class="side right" class:shut={!showDone}>
+        <div class="side-head">
+          <button
+            class="toggle"
+            aria-expanded={showDone}
+            title={showDone ? 'Esconder lo hecho' : 'Mostrar lo hecho'}
+            onclick={() => (showDone = !showDone)}>
+            {showDone ? '▸' : '◂'} {showDone ? '✓ Hecho' : '✓'}
+          </button>
         </div>
-      {/if}
-    </section>
+        {#if showDone}
+          <div class="side-body">
+            {#each done as t (t.id)}{@render threadCard(t, true)}{/each}
+            {#if !done.length}<p class="hint">Todavía no hay nada terminado.</p>{/if}
+            <div class="more" {@attach sentinel(doneMore, ondonemore)}>
+              {#if doneMore}<span class="hint">cargando…</span>{/if}
+            </div>
+          </div>
+        {/if}
+      </section>
     {/if}
   </div>
 </div>
@@ -419,6 +490,15 @@
     font-weight: 700;
     color: var(--muted);
   }
+  .new {
+    margin-left: auto;
+    padding: 0 0.45rem;
+    border-radius: 7px;
+    color: var(--faint);
+    font-size: 0.95rem;
+    line-height: 1.4;
+  }
+  .new:hover { background: var(--hover); color: var(--text); }
   .count {
     padding: 0 0.4rem;
     border-radius: 999px;
@@ -426,8 +506,17 @@
     color: var(--faint);
     font-size: 0.68rem;
   }
-  .scroll {
+  /* La línea y la bandeja, lado a lado. Quien se estrecha primero es la
+     bandeja: la línea es lo que se lee, la bandeja es de donde se saca. */
+  .split {
     flex: 1;
+    min-height: 0;
+    display: flex;
+    gap: 0.4rem;
+  }
+  .scroll {
+    flex: 1 1 0;
+    min-width: 0;
     min-height: 0;
     overflow-y: auto;
     display: flex;
@@ -445,8 +534,7 @@
   }
   .toggle:hover { background: var(--hover); color: var(--text); }
 
-  .done-steps { display: flex; flex-direction: column; gap: 0.35rem; }
-
+  
   .line { display: flex; flex-direction: column; }
 
   .step {
@@ -465,7 +553,6 @@
     border-color: var(--accent);
     background: color-mix(in oklab, var(--accent) 18%, transparent);
   }
-  .step.past { opacity: 0.55; }
 
   .rail {
     flex: none;
@@ -545,63 +632,6 @@
   }
   .empty.over { border-color: var(--accent); color: var(--text); }
 
-  .card {
-    display: flex;
-    flex-direction: column;
-    gap: 0.3rem;
-    padding: 0.45rem 0.55rem;
-    border: 1px solid var(--line);
-    border-radius: 9px;
-    background: var(--surface-solid);
-    cursor: grab;
-  }
-  .card:hover { border-color: color-mix(in oklab, var(--accent) 40%, transparent); }
-  .card.done { opacity: 0.55; }
-  .card.lifting { opacity: 0.4; }
-  .row {
-    display: flex;
-    align-items: center;
-    gap: 0.4rem;
-    min-width: 0;
-  }
-  .tick { color: var(--muted); font-size: 0.78rem; }
-  .num { flex: none; color: var(--faint); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
-  .name {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    text-align: left;
-    color: var(--text);
-    font-size: 0.86rem;
-  }
-  .name:hover { text-decoration: underline; }
-  .card.done .name { text-decoration: line-through; }
-  .sub { font-size: 0.72rem; }
-  .where {
-    min-width: 0;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-    color: var(--faint);
-  }
-  .people { display: flex; margin-left: auto; }
-  .avatar {
-    display: grid;
-    place-content: center;
-    width: 22px;
-    height: 22px;
-    margin-left: -5px;
-    overflow: hidden;
-    border: 2px solid var(--surface-solid);
-    border-radius: 999px;
-    background: var(--hover);
-    color: var(--muted);
-    font-size: 0.66rem;
-    font-weight: 700;
-  }
-  .avatar:first-child { margin-left: 0; }
-  .avatar img { width: 100%; height: 100%; object-fit: cover; }
   .finish {
     flex: none;
     padding: 0.1rem 0.4rem;
@@ -609,30 +639,47 @@
     color: var(--faint);
     font-size: 0.72rem;
   }
-  .people + .finish { margin-left: 0.2rem; }
-  .where + .finish { margin-left: auto; }
+  .review {
+    padding: 0.05rem 0.4rem;
+    border-radius: 6px;
+    color: var(--faint);
+    font-size: 0.7rem;
+    line-height: 1.4;
+  }
+  .review:hover { background: var(--hover); color: var(--accent); }
   .finish:hover { background: var(--hover); color: var(--text); }
 
-  .tray {
-    margin-top: auto;
+  /* Las tres columnas: lo que falta, la línea, y lo hecho. Las laterales son
+     estrechas y fijas; el centro se queda con lo que sobre — es lo que se lee.
+     Si el panel se estrecha, se pliegan a una tira, como hace la columna de
+     terminadas del kanban. */
+  .side {
+    /* Un tercio cada una, como el centro: las tres columnas son la misma
+       pregunta en tres momentos —lo que falta, lo que se hace, lo hecho— y
+       ninguna manda sobre las otras. */
+    flex: 1 1 0;
+    min-width: 8rem;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
     padding: 0.45rem;
     border: 1px dashed var(--line);
     border-radius: 10px;
+    overflow-y: auto;
   }
-  .tray.over { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, transparent); }
-  .tray-head {
-    display: flex;
-    align-items: center;
-    flex-wrap: wrap;
-    gap: 0.35rem;
-  }
-  .tray-head .toggle { margin-right: auto; }
-  .filter { width: auto; padding: 0.1rem 1.6rem 0.1rem 0.45rem; font-size: 0.74rem; }
-  .tray-body {
-    display: flex;
-    flex-direction: column;
-    gap: 0.35rem;
-    margin-top: 0.45rem;
-  }
+  /* Plegada ocupa lo que mide su botón, no una columna vacía. */
+  .side.shut { flex: 0 0 auto; min-width: 0; overflow: visible; }
+  .side.over { border-color: var(--accent); background: color-mix(in oklab, var(--accent) 8%, transparent); }
+  /* Lo hecho ya pasó: se lee, no compite. */
+  .side.right { border-style: solid; opacity: 0.75; }
+  .side.right:hover { opacity: 1; }
+  .side-head { display: flex; align-items: center; gap: 0.35rem; }
+  .side-head .toggle { margin-right: auto; white-space: nowrap; }
+  .side-body { display: flex; flex-direction: column; gap: 0.4rem; }
+  /* El centinela del final: sin alto propio no entra nunca en pantalla y la
+     página siguiente no se pide jamás. */
+  .more { min-height: 1px; padding: 0.2rem 0; text-align: center; }
+
   .hint { color: var(--faint); font-size: 0.74rem; padding: 0.2rem 0.3rem; }
 </style>

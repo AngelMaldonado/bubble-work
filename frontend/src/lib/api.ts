@@ -37,6 +37,74 @@ export type ThreadHeat = {
   /** su lugar en la línea viva de todo el departamento: 1 = ahora; 0 si no
    *  está en la secuencia o ya terminó */
   step?: number;
+  /** en qué columna del tablero de TAREAS está; vacío es «Sin planear» */
+  stage?: string;
+  /** cuándo vence ESTA pieza, un día. Independiente del plazo de su burbuja:
+   *  aquél es el compromiso, éste es cómo se reparte. */
+  due_date?: string;
+};
+
+/** Lo que pasa en una fecha y no es trabajo: una junta, un cierre, una visita.
+ *
+ *  No es un hilo a propósito: un hilo se completa, produce evidencia y calienta,
+ *  y una junta semanal que renaciera como hilo mantendría una burbuja 🔥 para
+ *  siempre sin que nadie trabajara. */
+export type CalendarEvent = {
+  id: string;
+  name: string;
+  /** cuándo es la PRIMERA; las siguientes se calculan */
+  start: string;
+  /** vacío es «no se repite» */
+  repeat?: '' | 'daily' | 'weekly' | 'biweekly' | 'monthly';
+  notes?: string;
+};
+
+/** Qué acepta el servidor: cuánto cabe en cada campo y qué se puede subir.
+ *
+ *  Del esquema, en cada petición, y no de una copia en el navegador: dos listas
+ *  se separan, y la que se queda atrás dice «cabe» o «no se admite» sobre algo
+ *  que el servidor contesta al revés. */
+export type Limits = {
+  /** `colección.campo` → caracteres */
+  fields: Record<string, number>;
+  /** extensiones que entran en `assets/`, con el punto */
+  accept: string[];
+  /** el tope por archivo, en bytes */
+  bytes: number;
+};
+
+/** Una fila de una de las columnas laterales de la secuencia: lo justo para
+ *  dibujar la misma tarjeta que el kanban. Sin calor — una fila de esas
+ *  columnas ya dice lo único que hace falta saber de ella. */
+export type QueueCard = {
+  id: string;
+  seq?: number;
+  workspace: string;
+  name: string;
+  bubble?: string;
+  priority?: string;
+  due_date?: string;
+  created: string;
+  /** quién la tiene: asignados de un hilo, responsables de un módulo */
+  people?: string[];
+};
+
+export type QueuePage = {
+  items: QueueCard[];
+  page: number;
+  /** hay otra página detrás. No un total: contarlo todo para pintar un botón
+   *  es una consulta cara por una respuesta que se saca pidiendo uno de más. */
+  more: boolean;
+};
+
+/** Una columna del tablero de TAREAS. Del departamento, como `Stage`, pero de
+ *  hilos: un módulo y una tarea no están en el mismo sitio del plan. */
+export type ThreadStage = {
+  id: string;
+  name: string;
+  position?: number;
+  /** la columna donde una tarea se da por terminada */
+  done?: boolean;
 };
 
 export type BubbleHeat = {
@@ -58,6 +126,9 @@ export type BubbleHeat = {
   closure?: string;
   /** when it last produced anything, RFC3339 — what the cycle bar measures */
   warm_at?: string;
+  /** su paso en la línea de MÓDULOS, que es otra que la de los hilos: aquélla
+   *  ordena piezas y ésta cuerpos de trabajo. 0 o ausente, fuera de ella. */
+  sequence?: number;
   heat: Heat;
 };
 
@@ -195,6 +266,19 @@ export type Person = {
 
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
 export type Features = { id: string; sequence: boolean; updated?: string };
+
+/** Lo que una persona eligió y tiene que seguirla entre dispositivos.
+ *
+ *  Casi todo lo de vista se queda en `localStorage` (ver `lib/filters.svelte`):
+ *  esto es sólo para lo que no puede. Un saco, no un esquema — nadie lo
+ *  consulta ni lo filtra, sólo su dueña lo lee y lo escribe. */
+export type Prefs = {
+  /** cómo ve el planeador: por módulos (burbujas) o por tareas (hilos) */
+  planner?: 'bubbles' | 'tasks';
+  /** qué forma tiene el tablero: la línea de ejecución o el kanban. Sólo
+   *  significa algo con la función de secuencia encendida. */
+  view?: 'sequence' | 'kanban';
+};
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */
 export type AgentsRole = 'planner' | 'operators';
@@ -659,6 +743,85 @@ class Api {
     return this.update<Features>('features', id, fields);
   }
 
+  // ---- las preferencias de quien mira ----
+  //
+  // La fila nace la primera vez que se guarda algo, no al entrar: alguien que
+  // nunca cambió nada no necesita una fila que diga que no cambió nada. Por eso
+  // leer sin fila devuelve `{}` y no es un error.
+
+  /** El id de mi fila, cacheado para no preguntarlo en cada guardado. */
+  private prefRow = '';
+
+  /** Una página de una de las dos columnas laterales de la secuencia.
+   *
+   *  Paginado de verdad y no un recorte en el cliente: lo terminado de un
+   *  departamento crece sin techo, y `/api/board` compone el conjunto ENTERO
+   *  para poder clasificarlo por calor. Esa respuesta es la correcta para un
+   *  tablero que se lee de un vistazo, y la equivocada para una lista que se
+   *  recorre. */
+  queue(opts: {
+    kind: 'threads' | 'bubbles';
+    state: 'open' | 'done';
+    page?: number;
+  }): Promise<QueuePage> {
+    const q = new URLSearchParams({
+      kind: opts.kind,
+      state: opts.state,
+      page: String(opts.page ?? 1),
+    });
+    return this.call<QueuePage>(`/api/queue?${q}`);
+  }
+
+  /** Lo que pasa en una fecha y no es trabajo. Del departamento, como los
+   *  objetivos: lo escribe el lead global y lo ve todo el mundo. */
+  async calendarEvents(): Promise<CalendarEvent[]> {
+    const out = await this.call<{ items: CalendarEvent[] }>(
+      '/api/collections/calendar_events/records?perPage=500&sort=start',
+    );
+    return out.items;
+  }
+
+  /** Las columnas del tablero de tareas, en orden. Vacío es una respuesta: el
+   *  lead todavía no ha definido ninguna. */
+  async threadStages(): Promise<ThreadStage[]> {
+    const out = await this.call<{ items: ThreadStage[] }>(
+      '/api/collections/thread_stages/records?perPage=200&sort=position,created',
+    );
+    return out.items;
+  }
+
+  async prefs(): Promise<Prefs> {
+    if (!this.me) return {};
+    try {
+      const out = await this.call<{ items: { id: string; value?: Prefs }[] }>(
+        '/api/collections/prefs/records?perPage=1',
+      );
+      const row = out.items[0];
+      this.prefRow = row?.id ?? '';
+      return row?.value ?? {};
+    } catch {
+      // Sin preferencias se ve lo de siempre. Una lista que falla no es motivo
+      // para no dejar entrar a nadie.
+      return {};
+    }
+  }
+
+  /** Guarda el saco entero. Quien llame manda lo que quiere que quede, no un
+   *  parche: son cuatro campos y fusionarlos en el servidor pediría leer antes
+   *  de escribir en cada cambio. */
+  async setPrefs(value: Prefs): Promise<void> {
+    if (!this.me) return;
+    if (this.prefRow) {
+      await this.update('prefs', this.prefRow, { value });
+      return;
+    }
+    const row = await this.call<{ id: string }>('/api/collections/prefs/records', {
+      method: 'POST',
+      body: JSON.stringify({ user: this.me.id, value }),
+    });
+    this.prefRow = row.id;
+  }
+
   // ---- AGENTS.md del departamento ----
 
   /** La versión vigente de un rol: la más reciente. `null` si todavía no hay. */
@@ -800,8 +963,8 @@ class Api {
 
   /** Cuánto cabe en cada campo de texto, `colección.campo` → caracteres. Lo
    *  dice el esquema del servidor; ver `lib/limits`. */
-  limits(): Promise<Record<string, number>> {
-    return this.call<Record<string, number>>('/api/limits');
+  limits(): Promise<Limits> {
+    return this.call<Limits>('/api/limits');
   }
 
   /** Qué está corriendo. Sin sesión: es la misma respuesta que mira el
@@ -1148,7 +1311,7 @@ class Api {
     const form = new FormData();
     form.append('file', file);
     if (name) form.append('name', name);
-    return this.call<{ path: string; url: string; bytes: number }>(
+    return this.call<{ path: string; url: string; bytes: number; image: boolean }>(
       `/api/workspaces/${workspace}/asset`,
       { method: 'POST', body: form },
     );

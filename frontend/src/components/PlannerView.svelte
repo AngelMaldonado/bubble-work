@@ -79,7 +79,12 @@
     title = 'Planeador',
     onpickevent,
     filterBar,
+    cardsAreTasks = false,
   }: {
+    /** Las tarjetas del tablero son TAREAS, no módulos. Cambia una sola cosa
+     *  aquí: abrir una tarjeta lleva a su hilo en vez de abrir la hoja de la
+     *  burbuja, que es de otra fila y editaría los campos equivocados. */
+    cardsAreTasks?: boolean;
     /** La barra de filtros, encima del tablero. La dibuja quien tiene los datos
      *  —los proyectos, la gente, los objetivos— en vez de pasarle cuatro listas
      *  a esta pantalla para que los dibuje ella. Sin ella, no hay barra: la
@@ -565,6 +570,10 @@
         <Kanban
           bind:columns
           onopen={(c) => {
+            if (cardsAreTasks) {
+              onopenthread?.(c.id);
+              return;
+            }
             cardFace = 'plan';
             backScroll = 0;
             open = c;

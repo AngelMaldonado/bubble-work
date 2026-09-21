@@ -1081,8 +1081,17 @@ chk ">>> ...y el calendario la lee de ahí" \
 ARG="{\"bubble\":\"$NBUB\",\"due\":\"31/12/2026\"}"
 chk ">>> una fecha mal formada se rechaza en vez de guardarse rara" \
   "$(mcptext "$A" set_bubble "$ARG" | grep -c "a due date is a day")" 1
-chk ">>> un thread ya no tiene fecha propia" \
-  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | python3 -c 'import sys,json;print("due_date" in json.load(sys.stdin))')" False
+# La fecha de la BURBUJA es el compromiso; la de la tarea es cómo se reparte, y
+# son independientes a propósito. Con cinco tareas dentro de una burbuja que
+# vence el 30, las cinco parecen vencer el 30 y la que bloquea a las otras el
+# martes no se distingue.
+chk ">>> una tarea vuelve a tener fecha propia" \
+  "$(curl -s -X PATCH "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"due_date":"2026-12-24 00:00:00.000Z"}' \
+     | python3 -c 'import sys,json;print(json.load(sys.stdin)["due_date"][:10])')" 2026-12-24
+chk ">>> ...y NO toca la de su burbuja: una es el compromiso, la otra el reparto" \
+  "$(curl -s "$API/api/collections/bubbles/records/$NBUB" -H "Authorization: $A" \
+     | python3 -c 'import sys,json;print(json.load(sys.stdin)["due_date"][:10])')" 2026-12-31
 
 ARG="{\"note\":\"el portal tarda en cargar\"}"
 chk ">>> capturar en el inbox por MCP" \
@@ -1572,6 +1581,78 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ3'))")" 1
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
+
+# ------------------------------- las columnas del tablero de TAREAS ----
+#
+# Propias, y no las de las burbujas: una burbuja en «Corto plazo» con sus hilos
+# en «Largo plazo» es un estado que nadie sabe leer. Nacen vacías porque qué
+# columnas hay lo decide quien orquesta, no una migración.
+TSTAGES="$API/api/collections/thread_stages/records"
+echo
+chk ">>> el tablero de tareas nace SIN columnas: eso lo decide el lead" \
+  "$(curl -s "$TSTAGES" -H "Authorization: $A" | j "['totalItems']")" 0
+chk ">>> un lead de workspace NO crea una: el tablero es del departamento" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$TSTAGES" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d '{"name":"Por hacer","position":10}')" 400
+TCOL=$(curl -s -X POST "$TSTAGES" -H "Authorization: $C" -H 'Content-Type: application/json' \
+  -d '{"name":"Por hacer","position":10}' | j "['id']")
+TDONE=$(curl -s -X POST "$TSTAGES" -H "Authorization: $C" -H 'Content-Type: application/json' \
+  -d '{"name":"Hecha","position":20,"done":true}' | j "['id']")
+chk ">>> el lead global sí" "$(test -n "$TCOL" && echo si || echo no)" si
+chk ">>> ...y marca cuál es la del final, sin depender de cómo se llame" \
+  "$(curl -s "$TSTAGES/$TDONE" -H "Authorization: $A" | j "['done']")" True
+chk ">>> las lee cualquiera que trabaje aquí" \
+  "$(curl -s "$TSTAGES" -H "Authorization: $B" | j "['totalItems']")" 2
+chk ">>> anónimo no" "$(curl -s "$TSTAGES" | j "['totalItems']")" 0
+
+chk ">>> una tarea se coloca en una columna, y eso NO es orquestar" \
+  "$(curl -s -X PATCH "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d "{\"stage\":\"$TCOL\"}" | j "['stage']")" "$TCOL"
+chk ">>> borrar la columna NO borra la tarea que estaba dentro" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$TSTAGES/$TCOL" -H "Authorization: $C")" 204
+chk ">>> ...que vuelve a «Sin planear»" \
+  "$(curl -s "$API/api/collections/threads/records/$NTID" -H "Authorization: $A" | j "['stage']")" ""
+
+# ------------------------------------- las preferencias de quien mira ----
+#
+# Casi todo lo de vista se queda en el navegador. Esto es para lo que tiene que
+# seguir a la persona entre dispositivos, y por eso es una fila — con la regla
+# que hace que sea SUYA.
+PREFS="$API/api/collections/prefs/records"
+echo
+chk ">>> sin fila, no hay preferencias, y eso no es un error" \
+  "$(curl -s "$PREFS?perPage=1" -H "Authorization: $A" | j "['totalItems']")" 0
+PREFID=$(curl -s -X POST "$PREFS" -H "Authorization: $A" -H 'Content-Type: application/json' \
+  -d "{\"user\":\"$AID\",\"value\":{\"planner\":\"tasks\"}}" | j "['id']")
+chk ">>> alice guarda cómo quiere ver el planeador" "$(test -n "$PREFID" && echo si || echo no)" si
+chk ">>> ...y la lee de vuelta" \
+  "$(curl -s "$PREFS?perPage=1" -H "Authorization: $A" | j "['items'][0]['value']['planner']")" tasks
+chk ">>> bob NO ve la fila de alice" \
+  "$(curl -s "$PREFS?perPage=1" -H "Authorization: $B" | j "['totalItems']")" 0
+chk ">>> ...ni por id" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$PREFS/$PREFID" -H "Authorization: $B")" 404
+chk ">>> ni el lead global: no hay ninguna razón para leer la vista de otro" \
+  "$(curl -s -o /dev/null -w '%{http_code}' "$PREFS/$PREFID" -H "Authorization: $C")" 404
+chk ">>> bob no le escribe las preferencias a alice" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PREFS" -H "Authorization: $B" \
+     -H 'Content-Type: application/json' -d "{\"user\":\"$AID\",\"value\":{}}")" 400
+# 404 y no 403: tras el cambio la fila ya no pasaría su propia regla, así que
+# para quien pide deja de existir. Es la misma forma en que el resto de la API
+# contesta a «eso no es tuyo».
+chk ">>> ...y alice no regala la suya cambiándole el dueño" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$PREFS/$PREFID" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d "{\"user\":\"$BID\"}")" 404
+chk ">>> una segunda fila para la misma persona se rechaza" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PREFS" -H "Authorization: $A" \
+     -H 'Content-Type: application/json' -d "{\"user\":\"$AID\",\"value\":{}}")" 400
+chk ">>> guardar otra vez sobreescribe el saco" \
+  "$(curl -s -X PATCH "$PREFS/$PREFID" -H "Authorization: $A" -H 'Content-Type: application/json' \
+     -d '{"value":{"planner":"bubbles"}}' | j "['value']['planner']")" bubbles
+# 403 y no 404: la fila existe y se puede ver, lo que no existe es la puerta.
+chk ">>> nadie borra una fila de preferencias: se sobreescribe" \
+  "$(curl -s -o /dev/null -w '%{http_code}' -X DELETE "$PREFS/$PREFID" -H "Authorization: $A")" 403
+chk ">>> anónimo no las ve" \
+  "$(curl -s "$PREFS?perPage=1" | j "['totalItems']")" 0
 
 # ------------------------------------------------ canales del inbox ----
 echo

@@ -1732,6 +1732,36 @@ Lo que se descartó:
 **Hecho cuando:** los tests en vivo de `agents_md` pasan, y el lead guarda una
 versión de cada documento desde la app y la ve leída por un agente.
 
+## Las fechas vuelven a bajar: una tarea tiene la suya *(built)*
+
+`1788508000_dates_move_up.go` quitó `threads.due_date` y subió los valores a las
+burbujas. Media razón sigue en pie: lo que el lead pone en el calendario es
+cuándo tiene que estar un CUERPO de trabajo, y eso es de la burbuja. La otra
+mitad —que repartir ese plazo entre las piezas no necesita un campo— no se
+sostuvo.
+
+**Sí lo necesita.** Sin fecha por pieza no se puede decir «esto vence el jueves»
+de nada más pequeño que un módulo. Con cinco tareas dentro de una burbuja que
+vence el 30, las cinco parecen vencer el 30, y la que en realidad bloquea a las
+otras el martes no se distingue de las demás. Repartir el plazo en la cabeza de
+quien ejecuta es justo lo que se pierde cuando esa persona no está.
+
+**Las dos fechas son independientes a propósito.** La de la burbuja es el
+compromiso; la de la tarea es cómo se reparte. Se **rechaza** derivar la de la
+burbuja de sus tareas —que es lo que hacía el traspaso de aquella migración— por
+dos motivos: deja dos sitios diciendo el mismo plazo, uno de ellos calculado, y
+hace imposible decir «la burbuja entera vence el 30» cuando ninguna pieza suelta
+lo hace.
+
+**Los valores viejos no vuelven.** Aquella migración los subió y su `down` ya
+decía que no los devuelve. Lo que hay en las burbujas se queda; las tareas nacen
+sin fecha, que es la verdad — nadie ha repartido nada todavía.
+
+**El calendario lleva las dos, sin conmutador.** Son la misma pregunta —«¿qué
+vence?»— y esconder la mitad detrás de un interruptor que hay que recordar es
+cómo se llega tarde a algo que estaba escrito. Si se llena, lo que lo acota son
+los filtros del tablero, que valen para los dos.
+
 ## En `assets/` vive lo que se ADJUNTA, no sólo lo que se ve *(built)*
 
 `assets/` admitía sólo imágenes, así que un contrato en PDF o un CSV exportado

@@ -39,6 +39,10 @@
      *  planear»): no se renombra, no se borra y no se mueve. Ofrecerlo sería un
      *  menú que no hace nada, o un arrastre que al recargar vuelve atrás. */
     locked?: boolean;
+    /** nace estrecha. Para la columna de terminadas: lo hecho ya no pide nada,
+     *  y abierto le roba ancho a lo que falta. Es sólo el valor INICIAL —
+     *  quien la abra la deja abierta mientras mire este tablero. */
+    collapsed?: boolean;
   };
 </script>
 
@@ -250,6 +254,12 @@
    *  mismo ancho: el tablero se abre para recibirla en vez de pedir que se
    *  apunte a una raya de 3px. */
   let liftingCol = $state<string | null>(null);
+
+  /** Qué columnas ha abierto o cerrado quien mira, por encima de lo que la
+   *  columna trae. No se guarda: es una decisión de este rato, no una
+   *  preferencia — el orden de las columnas sí lo es, y por eso ese sí. */
+  let toggled = $state<Record<string, boolean>>({});
+  const shut = (col: Column) => toggled[col.id] ?? !!col.collapsed;
   let preview = $state<string[] | null>(null);
   const shown = $derived(preview ?? slots);
 
@@ -542,9 +552,21 @@
       class="col"
       class:over={over?.col === col.id}
       class:lifting={liftingCol === col.id}
+      class:shut={shut(col)}
       data-slot={col.id}
       style:order={shown.indexOf(col.id)}
       {@attach (el) => column(el, col.id)}>
+      {#if shut(col)}
+        <!-- Plegada sigue siendo destino de caída: soltar algo aquí es darlo por
+             terminado, que es el gesto que más se va a hacer con esta columna. -->
+        <button
+          class="shut-head"
+          title="{col.name} ({col.cards.length}) — clic para abrir"
+          onclick={() => (toggled[col.id] = false)}>
+          <span class="shut-name">{col.name}</span>
+          <span class="count">{col.cards.length}</span>
+        </button>
+      {:else}
       <header {@attach (el) => head(el, col.id)}>
         {#if renaming === col.id}
           <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
@@ -561,6 +583,11 @@
             {col.name}
           </button>
           <span class="count">{col.cards.length}</span>
+          {#if col.collapsed}
+            <button class="fold" title="Plegar la columna" onclick={() => (toggled[col.id] = true)}>
+              ›
+            </button>
+          {/if}
           {#if col.manual}
             <!-- Que se VEA que el orden es de alguien. La columna ordenada sola
                  no dice nada: lo normal no necesita etiqueta. -->
@@ -674,6 +701,7 @@
       <button class="add" onclick={() => onadd?.(col.id)}>
         <PlusIcon class="size-4" /> tarjeta
       </button>
+      {/if}
     </section>
     {/if}
   {/each}
@@ -697,6 +725,33 @@
     overflow-x: auto;
     align-items: flex-start;
   }
+  /* Plegada: lo que mide su botón, no una columna vacía. Sigue siendo destino
+     de caída — soltar algo aquí es darlo por terminado. */
+  .col.shut {
+    flex: 0 0 auto;
+    min-height: 0;
+    padding: 0.35rem;
+  }
+  .shut-head {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+    padding: 0.2rem 0.3rem;
+    color: var(--muted);
+    font-size: 0.78rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .shut-head:hover { color: var(--text); }
+  .fold {
+    padding: 0 0.3rem;
+    border-radius: 6px;
+    color: var(--faint);
+    font-size: 0.9rem;
+    line-height: 1;
+  }
+  .fold:hover { background: var(--hover); color: var(--text); }
+
   .col {
     flex: 0 0 272px;
     display: flex;

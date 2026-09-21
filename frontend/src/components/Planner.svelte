@@ -25,6 +25,7 @@
     type Stage,
     type ThreadRecord,
     type ThreadHeat,
+    type ThreadStage,
     avatarUrl,
   } from '../lib/api';
   import PlannerView, { type Objective } from './PlannerView.svelte';
@@ -34,12 +35,13 @@
   import type { Note } from './InboxSheet.svelte';
   import { priorityMap, priorityMeaning } from '../lib/priority';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
-  import { tooLong } from '../lib/limits.svelte';
+  import { limited, tooLong } from '../lib/limits.svelte';
   import type { SheetThread } from './CardSheet.svelte';
   import type { SeqThread } from './SequencePane.svelte';
   import { ago } from '../lib/when';
   import { plannerFilters, NO_FILTERS, type PlannerFilters } from '../lib/filters.svelte';
   import { bandFace, bandName } from '../lib/bands';
+  import Crumbs from './Crumbs.svelte';
 
   let {
     onback,
@@ -81,6 +83,29 @@
   // muestra. Las fechas son de la ejecución.
   let bubbles = $state<BubbleRecord[]>([]);
   let stageRows = $state<Stage[]>([]);
+  // Las columnas del tablero de TAREAS, que son otras: un módulo y una tarea no
+  // están en el mismo sitio del plan. Vacío es una respuesta — el lead no ha
+  // definido ninguna todavía — y entonces todo cae en «Sin planear».
+  let taskStages = $state<ThreadStage[]>([]);
+
+  /** Cómo se ve el planeador: por módulos (burbujas) o por tareas (hilos).
+   *
+   *  Por PERSONA y en el servidor, no en el navegador como el resto de la
+   *  vista: abrir el portátil y encontrarse el tablero en el otro modo es tener
+   *  que volver a tomar una decisión ya tomada. Ver `prefs` en la API.
+   *
+   *  Arranca en burbujas mientras las preferencias llegan: es lo que había, y
+   *  un tablero que cambia de forma medio segundo después de abrirse marea. */
+  let mode = $state<'bubbles' | 'tasks'>('bubbles');
+  const tasksMode = $derived(mode === 'tasks');
+
+  function setMode(next: 'bubbles' | 'tasks') {
+    if (next === mode) return;
+    mode = next;
+    // Se guarda y no se espera: la vista ya cambió, y que el guardado tarde no
+    // es motivo para que el tablero se quede quieto.
+    api.setPrefs({ planner: next }).catch(() => {});
+  }
   let threads = $state<ThreadRecord[]>([]);
   let objectiveRows = $state<ObjectiveRecord[]>([]);
   let notes = $state<InboxItem[]>([]);
@@ -134,9 +159,10 @@
 
   async function load() {
     try {
-      const [bu, st, th, ob, inb, pr, ws] = await Promise.all([
+      const [bu, st, ts, th, ob, inb, pr, ws] = await Promise.all([
         api.allBubbles(),
         api.stages(),
+        api.threadStages(),
         api.allThreads(),
         api.objectives(),
         api.inbox(),
@@ -145,6 +171,7 @@
       ]);
       bubbles = bu;
       stageRows = st;
+      taskStages = ts;
       threads = th;
       places = Object.fromEntries(ws.map((w) => [w.id, w.name]));
       slugs = Object.fromEntries(ws.map((w) => [w.id, w.slug]));
@@ -158,6 +185,14 @@
     }
   }
   load();
+
+  // Las preferencias, una vez. Si fallan o no hay, se ve lo de siempre.
+  api
+    .prefs()
+    .then((p) => {
+      if (p.planner === 'tasks' || p.planner === 'bubbles') mode = p.planner;
+    })
+    .catch(() => {});
 
   async function loadHeat() {
     try {
@@ -306,6 +341,44 @@
     });
   }
 
+  /** Los hilos que pasan el filtro, para el tablero en modo tareas.
+   *
+   *  Los MISMOS filtros que las burbujas, leídos sobre un hilo: su proyecto es
+   *  el suyo, su responsable es quien lo tiene asignado, y su objetivo es el de
+   *  su burbuja — un hilo no tiene objetivo propio, a propósito. */
+  const shownThreads = $derived.by(() => {
+    const q = filters.q.trim().toLowerCase();
+    const objOf = (id?: string) => (id ? (bubbles.find((b) => b.id === id)?.objective ?? '') : '');
+    return heated.filter(
+      (t) =>
+        (!q || t.name.toLowerCase().includes(q)) &&
+        (!filters.project || t.workspace === filters.project) &&
+        (!filters.owner || (t.assignees ?? []).includes(filters.owner)) &&
+        (!filters.objective ||
+          (filters.objective === 'none' ? !objOf(t.bubble) : objOf(t.bubble) === filters.objective)) &&
+        (!filters.band || t.heat.lifecycle === filters.band),
+    );
+  });
+
+  /** Cómo se ordena una columna de TAREAS.
+   *
+   *  Derivado, y sin `rank`: primero la prioridad que el lead ya les puso, luego
+   *  el paso de la secuencia —las dos cosas que existen justamente para decir
+   *  qué va antes— y al final el nombre, para que dos iguales no bailen entre
+   *  recargas. Añadir un orden a mano aquí sería un tercer sistema diciendo lo
+   *  mismo.  */
+  function sortTasks(rows: ThreadHeat[]): ThreadHeat[] {
+    return [...rows].sort((a, b) => {
+      const pa = a.priority || 'P9';
+      const pb = b.priority || 'P9';
+      if (pa !== pb) return pa < pb ? -1 : 1;
+      const sa = a.sequence || Number.MAX_SAFE_INTEGER;
+      const sb = b.sequence || Number.MAX_SAFE_INTEGER;
+      if (sa !== sb) return sa - sb;
+      return a.name.localeCompare(b.name);
+    });
+  }
+
   /** Cuántos threads tiene cada burbuja: lo que una tarjeta dice sin abrirse.
    *
    *  No es el detalle —eso vive en los threads y es de quien opera— sino su
@@ -316,7 +389,42 @@
     return n;
   });
 
-  const columns = $derived<Column[]>(
+  /** El tablero por TAREAS: las mismas columnas sintéticas y el mismo «Sin
+   *  planear», con hilos dentro en vez de burbujas.
+   *
+   *  Son los hilos de TODOS los proyectos, como el tablero de burbujas es del
+   *  departamento entero. Cada tarjeta dice de qué proyecto y de qué módulo es
+   *  —para eso está `where`— y para acotarlo están los filtros. */
+  const taskColumns = $derived<Column[]>(
+    [
+      { id: UNSTAGED, name: 'Sin planear', locked: true },
+      ...taskStages.map((st) => ({ id: st.id, name: st.name, done: !!st.done })),
+    ].map((col) => ({
+      ...col,
+      // Lo hecho no pide nada y nace plegado, para que no le robe ancho a lo
+      // que falta. Si el lead no marcó ninguna columna como final, no hay
+      // ninguna plegada y no pasa nada.
+      collapsed: 'done' in col ? (col as { done?: boolean }).done : false,
+      cards: sortTasks(shownThreads.filter((t) => (t.stage ?? '') === col.id)).map(
+        (t): Card => ({
+          id: t.id,
+          title: t.name,
+          prio: t.priority || undefined,
+          // De qué proyecto y de qué módulo es. Un hilo no tiene objetivo
+          // propio —es de su burbuja— ni impacto ni urgencia, así que la
+          // tarjeta no finge tenerlos.
+          where: places[t.workspace],
+          ws: t.workspace,
+          owners: t.assignees ?? [],
+          due: t.due_date || undefined,
+          pieces: 0,
+          notes: '',
+        }),
+      ),
+    })),
+  );
+
+  const bubbleColumns = $derived<Column[]>(
     [
       { id: UNSTAGED, name: 'Sin planear', locked: true },
       ...stageRows.map((st) => ({ id: st.id, name: st.name })),
@@ -350,6 +458,8 @@
     ),
   );
 
+  const columns = $derived(tasksMode ? taskColumns : bubbleColumns);
+
   const inbox = $derived<Note[]>(
     notes
       // Fuera las triadas, sea a un thread o a una burbuja: ya son de algún
@@ -369,16 +479,48 @@
   // El calendario enseña lo PLANEADO: cada burbuja con fecha, el día que tiene
   // que estar. Leía las fechas de los threads, y enseñaba piezas sueltas en vez
   // de los cuerpos de trabajo que el kanban de al lado organiza.
-  const events = $derived<CalEvent[]>(
-    bubbles
+  /** El calendario: los módulos con plazo y las tareas con fecha, juntos.
+   *
+   *  Juntos y sin conmutador: son la misma pregunta —«¿qué vence?»— y esconder
+   *  la mitad detrás de un interruptor que hay que recordar es cómo se llega
+   *  tarde a algo que estaba escrito. Se distinguen por el prefijo y por la
+   *  prioridad, y si el calendario se llena, lo que lo acota son los filtros
+   *  del tablero, que valen para los dos.
+   *
+   *  Una tarea terminada no aparece: su fecha ya es historia, no plazo. */
+  const events = $derived<CalEvent[]>([
+    ...shownBubbles
       .filter((b) => b.due_date && !b.closed_at)
       .map((b) => ({
         id: b.id,
         title: b.name,
         start: b.due_date!.slice(0, 10),
         allDay: true,
+        prio: prios[b.id] || undefined,
       })),
-  );
+    ...shownThreads
+      .filter((t) => t.due_date && t.heat.lifecycle !== 'closed')
+      .map((t) => ({
+        id: t.id,
+        title: `🧵 ${t.name}`,
+        start: t.due_date!.slice(0, 10),
+        allDay: true,
+        prio: t.priority || undefined,
+      })),
+  ]);
+
+  /** Arrastrar un evento a otro día. El calendario lleva módulos y tareas, así
+   *  que hay que preguntar de qué es el id ANTES de escribir: escribir la fecha
+   *  de una tarea en la fila de una burbuja no fallaría con un error claro —
+   *  guardaría el plazo equivocado en el sitio equivocado. */
+  function moveEvent(id: string, day: string) {
+    const stamp = day ? `${day} 00:00:00.000Z` : '';
+    if (heated.some((t) => t.id === id)) {
+      heatWrite(() => api.update('threads', id, { due_date: stamp }));
+      return;
+    }
+    write(() => api.update('bubbles', id, { due_date: stamp }));
+  }
 
   // Every write reloads rather than patching the local copy. The server decides
   // the seq, the default state and what a rule refuses; guessing all three in
@@ -405,6 +547,16 @@
    *  Los rangos van de diez en diez sin más motivo que dejar hueco a la vista
    *  cuando alguien mire la base a mano. */
   function moveCard(id: string, column: string, before: string | null = null) {
+    // En modo tareas la columna es lo único que se guarda: no hay orden a mano
+    // dentro de una columna de tareas, se deriva de la prioridad y de la
+    // secuencia (ver `sortTasks`). Un `rank` aquí sería un tercer sistema
+    // diciendo qué va antes.
+    if (tasksMode) {
+      const was = heated.find((t) => t.id === id)?.stage ?? '';
+      if (was === column) return;
+      write(() => api.update('threads', id, { stage: column }));
+      return;
+    }
     const col = columns.find((c) => c.id === column);
     if (!col) return;
     const order = col.cards.map((c) => c.id).filter((x) => x !== id);
@@ -474,9 +626,28 @@
     });
   }
 
-  const addCard = (column: string, title: string) => ask(title, column);
+  const addCard = (column: string, title: string) => {
+    // Una TAREA nace dentro de un módulo, y elegirlo es el flujo de dos pasos
+    // del inbox. Mientras ese no exista, se dice por qué en vez de crear una
+    // tarea colgando de nada.
+    if (tasksMode) {
+      error = 'Una tarea nace dentro de un módulo: ábrelo y créala ahí, o promuévela desde el inbox.';
+      return;
+    }
+    ask(title, column);
+  };
 
   const deleteCard = (id: string) => {
+    if (tasksMode) {
+      const t = heated.find((x) => x.id === id);
+      doom = {
+        title: `¿Borrar la tarea «${t?.name ?? id}»?`,
+        body: 'Se va la tarea y su documento del repositorio. Lo escrito sigue en la historia de git, que es de donde se recupera si hacía falta.',
+        crumbs: [places[t?.workspace ?? ''] ?? '', bubbleName(t?.bubble)],
+        go: () => write(() => api.deleteThread(id)),
+      };
+      return;
+    }
     const b = bubbles.find((x) => x.id === id);
     const n = pieces[id] ?? 0;
     doom = {
@@ -517,7 +688,70 @@
 
   /** Triage: the note becomes a thread, and that is where its project is
    *  decided — which is the question an inbox exists to defer. */
-  const promote = (note: Note) => ask(note.text, '', note);
+  const promote = (note: Note) => {
+    if (tasksMode) {
+      promoting = {
+        note,
+        // Con un solo proyecto no hay nada que elegir, así que se salta el
+        // primer paso — igual que hace el modo módulos.
+        ws: Object.keys(places).length === 1 ? Object.keys(places)[0] : '',
+        bubble: '',
+        fresh: '',
+      };
+      return;
+    }
+    ask(note.text, '', note);
+  };
+
+  /** Promover una nota a TAREA: proyecto, y después módulo.
+   *
+   *  Dos pasos y no dos listas encadenadas en un solo diálogo: con muchos
+   *  módulos la segunda lista es larga, y haber elegido mal el proyecto
+   *  obligaría a rehacer la elección entera dentro de la misma pantalla.
+   *
+   *  Una tarea NO nace colgando de nada: un hilo sin burbuja no aparece en el
+   *  plan de nadie y es exactamente el trabajo que se pierde. */
+  let promoting = $state<{ note: Note; ws: string; bubble: string; fresh: string } | null>(null);
+
+  const promotingBubbles = $derived(
+    promoting?.ws ? bubbles.filter((b) => b.workspace === promoting!.ws && !b.closed_at) : [],
+  );
+
+  async function promoteToTask() {
+    const p = promoting;
+    if (!p || !p.ws) return;
+    const name = p.note.text.trim();
+    const long = tooLong('threads.name', name);
+    if (long) {
+      promoting = null;
+      error = `No pasó al tablero: el título se vuelve el nombre de la tarea. ${long}`;
+      return;
+    }
+    promoting = null;
+    await write(async () => {
+      // El módulo, si hay que crearlo antes. Sin outcome: lo pone quien
+      // orquesta, y inventarle uno aquí sería escribir el contrato por él.
+      let bubble = p.bubble;
+      if (!bubble && p.fresh.trim()) {
+        const made = await api.create<BubbleRecord>('bubbles', {
+          workspace: p.ws,
+          name: p.fresh.trim(),
+        });
+        bubble = made.id;
+      }
+      if (!bubble) return;
+      const t = await api.createThread({ workspace: p.ws, bubble, name });
+      // Lo que se entendió de la nota viaja al documento de la tarea. La nota
+      // NO se borra: guarda a qué se convirtió, y sale del inbox por eso.
+      const body = p.note.body?.trim();
+      if (body) {
+        const doc = await api.readThread(t.id);
+        await api.patchThread(t.id, { base: doc.hash, content: `${body}\n` });
+      }
+      await api.update('inbox_items', p.note.id, { thread: t.id });
+    });
+    await loadHeat();
+  }
 
   /** Abrir una tarjeta ya no pide nada: la descripción de una burbuja es su
    *  outcome, y viene con la fila. Antes había que ir a buscar el documento del
@@ -546,6 +780,11 @@
       const n = fields.obj as number | undefined;
       out.objective = n ? (objectiveAt(n)?.id ?? '') : '';
     }
+    // En modo tareas no se abre la hoja de la burbuja —una tarjeta lleva a su
+    // hilo—, así que esto no corre. La guarda está por si alguien cablea otra
+    // puerta: escribir campos de burbuja con el id de un hilo no fallaría con un
+    // error claro, guardaría en la fila equivocada.
+    if (tasksMode) return;
     if (Object.keys(out).length) write(() => api.update('bubbles', id, out));
   }
 
@@ -560,17 +799,25 @@
   /** Una etapa nueva entra ANTES de la de terminado: «Hecho» es el final del
    *  tablero, y una columna añadida detrás de él sería trabajo después de
    *  acabado. Sin columna de terminado, al final. */
+  /** La colección y las filas de las columnas del tablero que se está mirando.
+   *  Los cuatro verbos de abajo son los mismos en los dos modos; lo único que
+   *  cambia es dónde escriben. */
+  const colTable = $derived(tasksMode ? 'thread_stages' : 'stages');
+  const colRows = $derived<{ id: string; name: string; position?: number; done?: boolean }[]>(
+    tasksMode ? taskStages : stageRows,
+  );
+
   const addStage = () =>
     write(async () => {
-      const rows = [...stageRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      const rows = [...colRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
       const end = rows.findIndex((r) => r.done);
       const at = end < 0 ? rows.length : end;
       // Los de detrás se corren uno, del último al primero.
       for (const r of rows.slice(at).reverse()) {
-        await api.update('stages', r.id, { position: (r.position ?? 0) + 1 });
+        await api.update(colTable, r.id, { position: (r.position ?? 0) + 1 });
       }
-      await api.create('stages', {
-        name: 'Etapa nueva',
+      await api.create(colTable, {
+        name: tasksMode ? 'Columna nueva' : 'Etapa nueva',
         position: at < rows.length ? (rows[at].position ?? at) : (rows.at(-1)?.position ?? -1) + 1,
       });
     });
@@ -580,7 +827,7 @@
    *  reescriben las posiciones que cambiaron, de 0 en adelante. */
   const moveStage = (id: string, before: string | null) => {
     if (id === UNSTAGED) return;
-    const rows = [...stageRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const rows = [...colRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     const moving = rows.find((r) => r.id === id);
     if (!moving) return;
     const rest = rows.filter((r) => r.id !== id);
@@ -592,26 +839,30 @@
     else rest.splice(at, 0, moving);
     write(async () => {
       for (const [i, r] of rest.entries()) {
-        if ((r.position ?? -1) !== i) await api.update('stages', r.id, { position: i });
+        if ((r.position ?? -1) !== i) await api.update(colTable, r.id, { position: i });
       }
     });
   };
 
   const renameStage = (id: string, name: string) => {
     if (id === UNSTAGED) return;
-    write(() => api.update('stages', id, { name }));
+    write(() => api.update(colTable, id, { name }));
   };
 
   const deleteStage = (id: string) => {
     if (id === UNSTAGED) return;
-    const st = stageRows.find((x) => x.id === id);
-    const n = bubbles.filter((b) => b.stage === id).length;
+    const st = colRows.find((x) => x.id === id);
+    const n = tasksMode
+      ? heated.filter((t) => t.stage === id).length
+      : bubbles.filter((b) => b.stage === id).length;
+    const what = tasksMode ? 'columna' : 'etapa';
+    const things = tasksMode ? 'tareas' : 'burbujas';
     doom = {
-      title: `¿Borrar la etapa «${st?.name ?? id}»?`,
+      title: `¿Borrar la ${what} «${st?.name ?? id}»?`,
       body: n
-        ? `Sus ${n} burbujas NO se borran: vuelven a «Sin planear», que es exactamente lo que pasó.`
-        : 'Sale del tablero. No hay burbujas en ella.',
-      go: () => write(() => api.remove('stages', id)),
+        ? `Sus ${n} ${things} NO se borran: vuelven a «Sin planear», que es exactamente lo que pasó.`
+        : `Sale del tablero. No hay ${things} en ella.`,
+      go: () => write(() => api.remove(colTable, id)),
     };
   };
 
@@ -647,6 +898,87 @@
     {error}
     <button onclick={() => (error = '')} aria-label="cerrar">×</button>
   </p>
+{/if}
+
+{#if promoting}
+  <!-- Dos pasos: proyecto, y después módulo. Con vuelta atrás, que es la mitad
+       del argumento para que sean dos. -->
+  <Dialog open onOpenChange={() => (promoting = null)}>
+    <Portal>
+      <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
+      <Dialog.Positioner
+        class="fixed inset-0 flex items-center justify-center p-4"
+        style="z-index: var(--z-drawer)">
+        <Dialog.Content class="card bg-surface-100-900 w-full max-w-sm space-y-4 p-5 shadow-xl">
+          <div>
+            <Crumbs parts={[places[promoting.ws] ?? '']} />
+            <Dialog.Title class="text-lg font-bold">
+              {promoting.ws ? '¿En qué módulo?' : '¿En qué proyecto nace?'}
+            </Dialog.Title>
+          </div>
+          <Dialog.Description class="muted text-sm">
+            «{promoting.note.text}» — una tarea vive dentro de un módulo, y su
+            documento en el repositorio de su proyecto.
+          </Dialog.Description>
+
+          {#if !promoting.ws}
+            <ul class="places">
+              {#each Object.entries(places) as [id, name] (id)}
+                <li>
+                  <button class="place" onclick={() => (promoting = { ...promoting!, ws: id })}>
+                    {name}
+                  </button>
+                </li>
+              {/each}
+            </ul>
+          {:else}
+            <ul class="places">
+              {#each promotingBubbles as b (b.id)}
+                <li>
+                  <button
+                    class="place"
+                    class:on={promoting.bubble === b.id}
+                    onclick={() => (promoting = { ...promoting!, bubble: b.id, fresh: '' })}>
+                    {b.name}
+                  </button>
+                </li>
+              {/each}
+              {#if !promotingBubbles.length}
+                <li><p class="muted text-sm">Este proyecto no tiene ningún módulo todavía.</p></li>
+              {/if}
+            </ul>
+            <input
+              class="input"
+              placeholder="…o escribe un módulo nuevo"
+              autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+              value={promoting.fresh}
+              oninput={(e) =>
+                (promoting = { ...promoting!, fresh: e.currentTarget.value, bubble: '' })}
+              {@attach limited('bubbles.name')} />
+          {/if}
+
+          <div class="flex justify-end gap-2">
+            {#if promoting.ws && Object.keys(places).length > 1}
+              <button
+                class="btn btn-sm preset-tonal-surface mr-auto"
+                onclick={() => (promoting = { ...promoting!, ws: '', bubble: '', fresh: '' })}>
+                ← Proyecto
+              </button>
+            {/if}
+            <button class="btn btn-sm preset-tonal-surface" onclick={() => (promoting = null)}>
+              Cancelar
+            </button>
+            <button
+              class="btn btn-sm preset-filled-primary-500"
+              onclick={promoteToTask}
+              disabled={!promoting.ws || (!promoting.bubble && !promoting.fresh.trim())}>
+              Crear la tarea
+            </button>
+          </div>
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Portal>
+  </Dialog>
 {/if}
 
 {#if born}
@@ -720,7 +1052,7 @@
     heatWrite(() => Promise.all(changes.map((c) => api.setSequence(c.id, c.sequence))))}
   oncompletethread={(id) => heatWrite(() => api.completeThread(id))}
   ondropbubble={dropBubble}
-  onmoveevent={(id, day) => patchCard(id, { due: day })}
+  onmoveevent={moveEvent}
   onmovecard={moveCard}
   onautoorder={autoOrder}
   onaddcard={addCard}
@@ -738,11 +1070,30 @@
   onaddcolumn={addStage}
   onrenamecolumn={renameStage}
   ondeletecolumn={deleteStage}
-  onmovecolumn={moveStage}>
+  onmovecolumn={moveStage}
+  cardsAreTasks={tasksMode}>
   <!-- La barra vive aquí, donde están los datos que llena: los proyectos, la
        gente y los objetivos ya están cargados para el tablero. -->
   {#snippet filterBar()}
     <div class="filters" class:on={filtering}>
+      <!-- El mismo planeador, visto de dos maneras. La elección es de la
+           persona y vive en el servidor: abrir el portátil y encontrarse el
+           tablero en el otro modo es volver a tomar una decisión ya tomada. -->
+      <div class="mode" role="radiogroup" aria-label="Cómo ver el planeador">
+        <button
+          class="seg"
+          class:on={!tasksMode}
+          aria-pressed={!tasksMode}
+          title="Las tarjetas son módulos"
+          onclick={() => setMode('bubbles')}>Módulos</button>
+        <button
+          class="seg"
+          class:on={tasksMode}
+          aria-pressed={tasksMode}
+          title="Las tarjetas son tareas"
+          onclick={() => setMode('tasks')}>Tareas</button>
+      </div>
+
       <input
         class="input q"
         type="search"
@@ -785,7 +1136,10 @@
         <!-- Decir CUÁNTAS se están escondiendo, y no sólo que hay un filtro: un
              tablero con la mitad de las tarjetas fuera y ninguna señal es cómo
              alguien concluye que se perdió su trabajo. -->
-        <span class="hid">{bubbles.length - shownBubbles.length} escondidas</span>
+        <span class="hid">
+          {tasksMode ? heated.length - shownThreads.length : bubbles.length - shownBubbles.length}
+          escondidas
+        </span>
         <button class="clear" onclick={() => (filters = { ...NO_FILTERS })}>Limpiar</button>
       {/if}
     </div>
@@ -803,6 +1157,24 @@
   }
   /* Filtrando, la barra se nota: es la explicación de por qué falta algo. */
   .filters.on { border-left: 2px solid var(--accent); }
+  .mode {
+    display: flex;
+    flex: none;
+    gap: 1px;
+    padding: 1px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+  }
+  .seg {
+    padding: 0.15rem 0.5rem;
+    border-radius: 7px;
+    color: var(--faint);
+    font-size: 0.74rem;
+    font-weight: 700;
+  }
+  .seg:hover { color: var(--text); }
+  .seg.on { background: var(--accent); color: var(--surface-solid); }
+
   .filters .q { flex: 1 1 9rem; min-width: 7rem; }
   .filters .q,
   .filters .select {

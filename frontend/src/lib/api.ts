@@ -37,6 +37,21 @@ export type ThreadHeat = {
   /** su lugar en la línea viva de todo el departamento: 1 = ahora; 0 si no
    *  está en la secuencia o ya terminó */
   step?: number;
+  /** en qué columna del tablero de TAREAS está; vacío es «Sin planear» */
+  stage?: string;
+  /** cuándo vence ESTA pieza, un día. Independiente del plazo de su burbuja:
+   *  aquél es el compromiso, éste es cómo se reparte. */
+  due_date?: string;
+};
+
+/** Una columna del tablero de TAREAS. Del departamento, como `Stage`, pero de
+ *  hilos: un módulo y una tarea no están en el mismo sitio del plan. */
+export type ThreadStage = {
+  id: string;
+  name: string;
+  position?: number;
+  /** la columna donde una tarea se da por terminada */
+  done?: boolean;
 };
 
 export type BubbleHeat = {
@@ -195,6 +210,16 @@ export type Person = {
 
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
 export type Features = { id: string; sequence: boolean; updated?: string };
+
+/** Lo que una persona eligió y tiene que seguirla entre dispositivos.
+ *
+ *  Casi todo lo de vista se queda en `localStorage` (ver `lib/filters.svelte`):
+ *  esto es sólo para lo que no puede. Un saco, no un esquema — nadie lo
+ *  consulta ni lo filtra, sólo su dueña lo lee y lo escribe. */
+export type Prefs = {
+  /** cómo ve el planeador: por módulos (burbujas) o por tareas (hilos) */
+  planner?: 'bubbles' | 'tasks';
+};
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */
 export type AgentsRole = 'planner' | 'operators';
@@ -657,6 +682,56 @@ class Api {
 
   setFeatures(id: string, fields: Partial<Omit<Features, 'id' | 'updated'>>) {
     return this.update<Features>('features', id, fields);
+  }
+
+  // ---- las preferencias de quien mira ----
+  //
+  // La fila nace la primera vez que se guarda algo, no al entrar: alguien que
+  // nunca cambió nada no necesita una fila que diga que no cambió nada. Por eso
+  // leer sin fila devuelve `{}` y no es un error.
+
+  /** El id de mi fila, cacheado para no preguntarlo en cada guardado. */
+  private prefRow = '';
+
+  /** Las columnas del tablero de tareas, en orden. Vacío es una respuesta: el
+   *  lead todavía no ha definido ninguna. */
+  async threadStages(): Promise<ThreadStage[]> {
+    const out = await this.call<{ items: ThreadStage[] }>(
+      '/api/collections/thread_stages/records?perPage=200&sort=position,created',
+    );
+    return out.items;
+  }
+
+  async prefs(): Promise<Prefs> {
+    if (!this.me) return {};
+    try {
+      const out = await this.call<{ items: { id: string; value?: Prefs }[] }>(
+        '/api/collections/prefs/records?perPage=1',
+      );
+      const row = out.items[0];
+      this.prefRow = row?.id ?? '';
+      return row?.value ?? {};
+    } catch {
+      // Sin preferencias se ve lo de siempre. Una lista que falla no es motivo
+      // para no dejar entrar a nadie.
+      return {};
+    }
+  }
+
+  /** Guarda el saco entero. Quien llame manda lo que quiere que quede, no un
+   *  parche: son cuatro campos y fusionarlos en el servidor pediría leer antes
+   *  de escribir en cada cambio. */
+  async setPrefs(value: Prefs): Promise<void> {
+    if (!this.me) return;
+    if (this.prefRow) {
+      await this.update('prefs', this.prefRow, { value });
+      return;
+    }
+    const row = await this.call<{ id: string }>('/api/collections/prefs/records', {
+      method: 'POST',
+      body: JSON.stringify({ user: this.me.id, value }),
+    });
+    this.prefRow = row.id;
   }
 
   // ---- AGENTS.md del departamento ----

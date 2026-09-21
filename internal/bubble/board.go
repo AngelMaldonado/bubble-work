@@ -9,6 +9,7 @@ import (
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/apis"
 	"github.com/pocketbase/pocketbase/core"
+	"github.com/pocketbase/pocketbase/tools/types"
 
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
 )
@@ -90,6 +91,23 @@ type ThreadHeat struct {
 	// todos los proyectos a la vez —una línea es una—, así que un cajón que sólo
 	// ve una burbuja puede decir igual en qué paso va cada hilo.
 	Step int `json:"step,omitempty"`
+	// Cuándo vence ESTA pieza. Independiente del plazo de su burbuja: aquélla
+	// es el compromiso, ésta es cómo se reparte entre las piezas.
+	Due string `json:"due_date,omitempty"`
+	// En qué columna del tablero de TAREAS está (`thread_stages`), o vacío para
+	// «Sin planear». Viaja aquí y no en una segunda llamada porque el planeador
+	// en modo tareas dibuja los hilos de TODOS los proyectos, y esta es la
+	// respuesta que ya los trae juntos y en un solo instante.
+	Stage string `json:"stage,omitempty"`
+}
+
+// day is a stored date as the ten characters a calendar reads. Empty stays
+// empty: a zero time printed in full would read as a deadline in year one.
+func day(t types.DateTime) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.String()[:10]
 }
 
 // BubbleHeat is one bubble, banded by its hottest OPEN thread.
@@ -239,6 +257,8 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 			At:        at.UTC().Format(time.RFC3339),
 			Priority:  planned[r.Id].priority,
 			Sequence:  planned[r.Id].sequence,
+			Stage:     r.GetString("stage"),
+			Due:       day(r.GetDateTime("due_date")),
 			Step:      stepOf(steps, planned[r.Id].sequence, completedState(app, r.GetString("state"))),
 		})
 	}

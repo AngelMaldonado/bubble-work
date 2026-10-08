@@ -16,6 +16,12 @@ mantiene el lead y se lee en vivo: la versión que llega es la vigente, y manda
 sobre lo que recuerdes y sobre esta sección. Al lead le llega la de quien planea;
 a los demás, la de quien opera.
 
+**Lo tuyo va en tu hilo, no en el inbox.** Lo que encuentres, decidas o dejes a
+medias sobre el trabajo que tienes en curso se escribe en el documento de SU
+hilo (`edit`): eso es el trabajo y es lo que calienta. El inbox es de las
+personas: no hay tool para escribir en él ni para leerlo. Lo que no pertenece a
+ningún hilo, díselo a la persona con la que trabajas.
+
 **Antes de la primera escritura de la sesión, lee `guide`:** es el protocolo del
 servidor que corre ahora —el hash, qué hace un conflicto, dónde viven los
 archivos.

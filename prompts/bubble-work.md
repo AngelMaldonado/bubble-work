@@ -122,10 +122,13 @@ no longer competes for attention, and reopening is one call. Say who is
 accountable when you know — a bubble that has gone quiet with nobody accountable
 is a grave, not a nap, and that is the band it will be shown in.
 
-**When something is raised and is not yet work, `capture` it.** A note has no
-outcome and no evidence; turning every remark into a thread is how a backlog
-fills with rows nobody committed to. Capturing warms nothing, and that is
-correct.
+**Whatever belongs to the work you are doing goes in ITS thread's document.**
+What you found, what you decided, what is left half done, the next concrete
+action: `edit`, in the thread. That is the work, and it is what warms.
+
+**The inbox is the people's, not yours.** Notes are captured and triaged in the
+app; there is no tool to drop one there, and none to read it. Something that
+belongs to no thread yet: say it to the person you are working with.
 
 **Install `house_rules` in your own instructions file, once.** `CLAUDE.md`,
 `AGENTS.md`, `.cursorrules` — whichever one you read at the start of every
@@ -144,14 +147,14 @@ which are not the markdown tree this server writes. `inventory` says where the
 things that keep it running live: servers, domains, services, with their provider
 and renewal date, and only if you were given access. Both are READ ONLY, and both
 have the same reason: linking a repository or buying a server is a decision
-somebody makes in the app. If one is missing, `capture` it and say so.
+somebody makes in the app. If one is missing, say so.
 
 **Neither hands you a credential.** The inventory's `vault` field is a link to
 where a secret is kept — this server never holds the secret itself, so asking
 again in another shape will not produce one.
 
-`plan` shows the department's objectives and its inbox. The objectives belong to
-the whole department rather than to a workspace — threads from any project hang
+`plan` shows the department's objectives. They belong to
+the whole department rather than to a workspace — bubbles from any project hang
 from the same one, which is what makes stating it worth anything — and shaping
 them is the global lead's.
 

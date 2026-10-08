@@ -36,10 +36,10 @@ fuera de la tumba y no lo despierta, así que `comment` es exactamente lo que
 tienes que usar para decir qué encontraste, o que no encontraste nada, sin
 fingir que produjiste algo.
 
-**Lo que no es trabajo todavía, `capture`.** Una idea, un pendiente que surgió a
-medias, un repositorio o un servidor que falta en el inventario: va al inbox y
-alguien lo tría. Convertir cada comentario en un thread es cómo se llena un
-backlog de filas que nadie asumió.
+**Lo que no es trabajo todavía, no es tuyo.** El inbox es de las personas: se
+captura y se tría en la aplicación, y no hay tool para escribir en él. Una idea o
+un pendiente que surgió a medias, díselo a la persona; convertir cada comentario
+en un thread es cómo se llena un backlog de filas que nadie asumió.
 
 **Las convenciones de este equipo están en su sitio, no aquí.** `read` del
 `README.md` del workspace antes de escribir nada: si hay convenciones, están

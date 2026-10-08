@@ -894,7 +894,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "agents_md,board,capture,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,next,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
+  "agents_md,board,comment,comments,complete_thread,create_bubble,create_thread,create_workspace,delete_page,edit,guide,house_rules,inventory,link,next,plan,read,repos,search,set_bubble,set_objective,set_thread,timeline,tree,workspaces"
 # Los dos documentos que no describen el sistema sino qué hacer con él: el que un
 # agente se pega en SUS instrucciones, y la plantilla que una persona copia para
 # configurar su asistente. Markdown servido, no cadenas dentro del código.
@@ -1100,9 +1100,12 @@ chk ">>> ...y NO toca la de su burbuja: una es el compromiso, la otra el reparto
   "$(curl -s "$API/api/collections/bubbles/records/$NBUB" -H "Authorization: $A" \
      | python3 -c 'import sys,json;print(json.load(sys.stdin)["due_date"][:10])')" 2026-12-31
 
-ARG="{\"note\":\"el portal tarda en cargar\"}"
-chk ">>> capturar en el inbox por MCP" \
-  "$(mcptext "$B" capture "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin).get("id") else "no")')" si
+# El inbox es de las PERSONAS: se captura y se tría en la aplicación. Un agente
+# que trabaja desde el inbox trabaja fuera de la pieza que alguien asumió, así que
+# la puerta no existe — ni para escribir ni para leer.
+chk ">>> un agente NO captura: la tool no existe" \
+  "$(mcptext "$B" capture "{\"note\":\"el portal tarda en cargar\"}" | python3 -c 'import sys,json
+d=json.load(sys.stdin); print("error" if "error" in d or not d.get("result",{}).get("content") else "creada")')" error
 
 ARG="{\"name\":\"Soporte sin fricción\",\"outcome\":\"nadie escribe dos veces\"}"
 chk ">>> el lead global crea un objetivo" \
@@ -1115,8 +1118,8 @@ chk ">>> el plan: los objetivos son del lead global" \
   "$(mcptext "$C" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]) >= 1)')" True
 chk ">>> ...quien no lo es ve el plan sin objetivos" \
   "$(mcptext "$A" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["objectives"]))')" 0
-chk ">>> ...pero sí la nota que capturó" \
-  "$(mcptext "$B" plan "{}" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)["inbox"]) >= 1)')" True
+chk ">>> ...y el inbox NO cruza el MCP, ni el suyo" \
+  "$(mcptext "$B" plan "{}" | python3 -c 'import sys,json;print("inbox" in json.load(sys.stdin))')" False
 
 # Comentar es PULSO: mantiene al thread fuera de la tumba y NO lo calienta. Es
 # justo lo que permite que un agente diga "busqué y no había nada" sin fingir

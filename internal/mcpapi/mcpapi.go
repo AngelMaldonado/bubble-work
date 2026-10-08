@@ -223,7 +223,7 @@ func build() *mcp.Server {
 		Name: "repos",
 		Description: "Where this workspace's CODE lives: the GitHub repositories linked to it. " +
 			"Not the workspace's own markdown tree — that is `tree`. Read only: linking one " +
-			"is the lead's decision, made in the app. Found one that is missing? `capture` it.",
+			"is the lead's decision, made in the app. Found one that is missing? Say so.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in wsArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -557,10 +557,9 @@ func build() *mcp.Server {
 
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "plan",
-		Description: "The department's strategic layer: its objectives — what the work " +
-			"is FOR — and the inbox, what has been captured and not yet decided about. " +
-			"The objectives are the global lead's to read; a note is read by whoever " +
-			"captured it.",
+		Description: "The department's objectives — what the work is FOR. The global " +
+			"lead's to read. An objective is served with BUBBLES: that is where a piece " +
+			"of work hangs from one.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ struct{}) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -570,12 +569,12 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonOut(p), nil, nil
+		// El inbox NO cruza esta puerta. Es la bandeja de las PERSONAS: se captura
+		// y se tría en la aplicación, y un agente que lo lee acaba trabajando desde
+		// ahí en vez de desde su hilo. Lo que un agente toca son burbujas e hilos.
+		return jsonOut(map[string]any{"objectives": p.Objectives}), nil, nil
 	})
 
-	type captureArg struct {
-		Note string `json:"note"`
-	}
 	mcp.AddTool(s, &mcp.Tool{
 		Name: "inventory",
 		Description: "Where the things that keep all of this running live: servers, domains, " +
@@ -593,24 +592,6 @@ func build() *mcp.Server {
 			return nil, nil, err
 		}
 		return jsonOut(out), nil, nil
-	})
-
-	mcp.AddTool(s, &mcp.Tool{
-		Name: "capture",
-		Description: "Put a note in the department's inbox — something raised and not " +
-			"yet work. It has no outcome and no evidence, and making it a thread on the " +
-			"way in is how a backlog fills with rows nobody committed to. Capturing " +
-			"warms nothing.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in captureArg) (*mcp.CallToolResult, any, error) {
-		c, err := from(ctx)
-		if err != nil {
-			return nil, nil, err
-		}
-		n, err := bubble.Capture(c.app, c.auth, in.Note)
-		if err != nil {
-			return nil, nil, err
-		}
-		return jsonOut(map[string]any{"id": n.Id, "note": n.GetString("note")}), nil, nil
 	})
 
 	type objectiveArg struct {

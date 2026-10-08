@@ -182,3 +182,64 @@ export async function showAttachments(el: HTMLElement, token: string): Promise<v
     }),
   );
 }
+
+/** Pictures arrive folded: a one-line chip that opens them in place.
+ *
+ *  A screenshot drawn at full width pushes the writing off the screen, and a
+ *  document with five of them is mostly pictures nobody asked to see right now.
+ *  So every raster image becomes a chip — its alt text, or its file name when the
+ *  writer gave none — and a click opens it where it stands; another closes it.
+ *
+ *  Diagrams are NOT folded: mermaid and excalidraw are the part of a document
+ *  people read first, and they are not <img> anyway.
+ *
+ *  Nothing is remembered: {@html} replaces the nodes on every render, and every
+ *  render starts folded. That is the point, not a limitation. Idempotent, so a
+ *  second pass over the same nodes changes nothing.
+ */
+export function foldImages(el: HTMLElement): void {
+  for (const img of el.querySelectorAll<HTMLImageElement>('img')) {
+    if (img.dataset.folded !== undefined) continue;
+    img.dataset.folded = '';
+    img.hidden = true;
+    const chip = document.createElement('button');
+    chip.type = 'button';
+    chip.className = 'img-chip';
+    chip.setAttribute('aria-expanded', 'false');
+    chip.textContent = `🖼 ${imageLabel(img)}`;
+    chip.addEventListener('click', (e) => {
+      // The article's own click delegation is for checkboxes; a chip is not one.
+      e.stopPropagation();
+      img.hidden = !img.hidden;
+      chip.setAttribute('aria-expanded', String(!img.hidden));
+    });
+    img.before(chip);
+  }
+}
+
+/** alt text, else the file name — of `assets/x.png` inside a `?path=` too. */
+export function imageLabel(img: HTMLImageElement): string {
+  const alt = img.getAttribute('alt')?.trim();
+  if (alt) return alt;
+  const src = img.getAttribute('src') ?? '';
+  try {
+    const u = new URL(src, location.origin);
+    const p = u.searchParams.get('path') ?? u.pathname;
+    return decodeURIComponent(p.split('/').pop() || '') || 'imagen';
+  } catch {
+    return 'imagen';
+  }
+}
+
+/** The derived table of contents scrolls like the heading rail does, instead of
+ *  writing a `#fragment` into an address that names a screen. */
+export function wireToc(el: HTMLElement): void {
+  for (const a of el.querySelectorAll<HTMLAnchorElement>('details.doc-toc a[href^="#"]')) {
+    a.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      const id = decodeURIComponent(a.getAttribute('href')!.slice(1));
+      document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    });
+  }
+}

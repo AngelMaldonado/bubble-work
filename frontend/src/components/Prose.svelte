@@ -13,10 +13,12 @@
   import {
     enableCheckboxes,
     extractHeadings,
+    foldImages,
     renderExcalidraw,
     renderMermaid,
     showAttachments,
     showImages,
+    wireToc,
     type Heading,
   } from '../lib/prose';
   import { api } from '../lib/api';
@@ -65,6 +67,8 @@
     if (!node) return;
     requestAnimationFrame(() => {
       enableCheckboxes(node);
+      foldImages(node);
+      wireToc(node);
       void (async () => {
         await showImages(node, api.token);
         await showAttachments(node, api.token);
@@ -208,6 +212,53 @@
     border-radius: 10px;
     box-shadow: 0 18px 48px var(--shadow);
   }
+  /* A picture is folded into a chip until somebody opens it (lib/prose.ts). */
+  .prose :global(button.img-chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    max-width: 100%;
+    margin: 0.3em 0.4em 0.3em 0;
+    padding: 0.25em 0.7em;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 0.82em;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prose :global(button.img-chip:hover),
+  .prose :global(button.img-chip[aria-expanded='true']) {
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
+  }
+  .prose :global(button.img-chip + img) { margin-top: 10px; }
+  /* `display: block` above would beat the attribute: say it outright. */
+  .prose :global(img[hidden]) { display: none; }
+
+  /* The derived table of contents: one line until it is opened. */
+  .prose :global(details.doc-toc) {
+    margin: 0 0 1.4em;
+    padding: 0.35em 0.9em;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-family: var(--sans);
+    font-size: 0.86em;
+  }
+  .prose :global(details.doc-toc > summary) {
+    cursor: pointer;
+    color: var(--muted);
+    font-weight: 650;
+  }
+  .prose :global(details.doc-toc ul) { margin: 0.3em 0; padding-left: 1.1em; }
+  .prose :global(details.doc-toc li) { margin: 0.1em 0; }
+  .prose :global(details.doc-toc a) { text-decoration: none; }
+
   /* Plane description images can't be fetched via the API — link to Plane instead */
   .prose :global(a.plane-img) {
     display: inline-flex;

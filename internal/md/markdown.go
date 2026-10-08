@@ -10,6 +10,8 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/parser"
 	gmhtml "github.com/yuin/goldmark/renderer/html"
+	"github.com/yuin/goldmark/text"
+	"go.abhg.dev/goldmark/toc"
 )
 
 // gm is the shared Markdown→HTML renderer — the same engine (goldmark GFM) the
@@ -32,6 +34,63 @@ func RenderHTML(markdown string) string {
 		return ""
 	}
 	return buf.String()
+}
+
+// tocMin is how many headings a document needs before it earns a table of
+// contents. Below it the document fits in a glance and a TOC is noise.
+const tocMin = 3
+
+// RenderThreadHTML is RenderHTML plus a table of contents on top, for the
+// documents a THREAD owns — the ones that grow until nobody can find anything
+// in them.
+//
+// The TOC is DERIVED from the headings on every render and never written into
+// the file. One an agent writes goes stale on the next edit and costs tokens on
+// every write; this one cannot disagree with the document, because it is read
+// from the same parse that renders it — the anchors are the ids goldmark just
+// gave those headings.
+//
+// It arrives as a closed <details>: one line until somebody opens it. An
+// always-open TOC is the same space problem as an always-open image.
+func RenderThreadHTML(markdown string) string {
+	if strings.TrimSpace(markdown) == "" {
+		return ""
+	}
+	src := []byte(markdown)
+	doc := gm.Parser().Parse(text.NewReader(src))
+
+	var body bytes.Buffer
+	if err := gm.Renderer().Render(&body, src, doc); err != nil {
+		return ""
+	}
+
+	tree, err := toc.Inspect(doc, src, toc.MaxDepth(3), toc.Compact(true))
+	if err != nil || countTOC(tree.Items) < tocMin {
+		return body.String()
+	}
+	list := toc.RenderList(tree)
+	if list == nil {
+		return body.String()
+	}
+	var out bytes.Buffer
+	out.WriteString(`<details class="doc-toc"><summary>Contenido</summary>`)
+	if err := gm.Renderer().Render(&out, src, list); err != nil {
+		return body.String()
+	}
+	out.WriteString("</details>\n")
+	out.Write(body.Bytes())
+	return out.String()
+}
+
+func countTOC(items toc.Items) int {
+	n := 0
+	for _, it := range items {
+		if len(it.ID) > 0 {
+			n++
+		}
+		n += countTOC(it.Items)
+	}
+	return n
 }
 
 // Todo is one logbook / DoD checklist item.

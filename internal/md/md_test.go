@@ -2,6 +2,7 @@ package md
 
 import (
 	"errors"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -220,5 +221,37 @@ func TestWindow(t *testing.T) {
 	// Un documento vacío no tiene líneas, y decir «1 de 1» sería inventarse una.
 	if _, _, _, n := Window("", 1, 10); n != 0 {
 		t.Errorf("el vacío mide %d líneas", n)
+	}
+}
+
+// A thread's document earns a table of contents at three headings, derived from
+// the same parse that renders it: the links point at the ids the headings got.
+func TestRenderThreadHTMLTOC(t *testing.T) {
+	long := "# Portar\n\n## Por qué\n\ntexto\n\n## Plan\n\n### Fase 1\n\n- [ ] algo\n"
+	html := RenderThreadHTML(long)
+	if !strings.HasPrefix(html, `<details class="doc-toc">`) {
+		t.Fatalf("expected a TOC first, got:\n%s", html)
+	}
+	links := regexp.MustCompile(`href="#([^"]+)"`).FindAllStringSubmatch(html, -1)
+	if len(links) != 4 {
+		t.Fatalf("expected 4 entries (h1, two h2, h3), got %d:\n%s", len(links), html)
+	}
+	for _, l := range links {
+		if !strings.Contains(html, `id="`+l[1]+`"`) {
+			t.Errorf("TOC entry %q points at no heading:\n%s", l[1], html)
+		}
+	}
+	if strings.Contains(RenderHTML(long), "doc-toc") {
+		t.Error("RenderHTML must not add a TOC: only thread documents get one")
+	}
+}
+
+func TestRenderThreadHTMLShortDocHasNoTOC(t *testing.T) {
+	short := "## Por qué\n\ntexto\n\n## Plan\n"
+	if strings.Contains(RenderThreadHTML(short), "doc-toc") {
+		t.Error("two headings fit in a glance; no TOC")
+	}
+	if RenderThreadHTML(short) != RenderHTML(short) {
+		t.Error("without a TOC the render must be identical to RenderHTML")
 	}
 }

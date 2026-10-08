@@ -127,9 +127,19 @@ func ReadDoc(app core.App, t *tree.Tree, ws *core.Record, repo, path string) (Do
 	threadID, _ := ownerOf(app, ws, path)
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: content, HTML: withAssets(md.RenderHTML(content), ws.Id),
+		Hash: hash, Content: content, HTML: withAssets(renderDoc(content, threadID), ws.Id),
 		Done: md.CountDone(content),
 	}, nil
+}
+
+// renderDoc renders a document the way its owner needs it: a thread's writing
+// grows until nobody finds anything in it, so it gets a derived table of contents
+// on top; a wiki page has its own navigation and does not.
+func renderDoc(content, threadID string) string {
+	if threadID != "" {
+		return md.RenderThreadHTML(content)
+	}
+	return md.RenderHTML(content)
 }
 
 // Edit is one surgical change: quote what is there, give what replaces it.
@@ -246,7 +256,7 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: next, HTML: withAssets(md.RenderHTML(next), ws.Id),
+		Hash: hash, Content: next, HTML: withAssets(renderDoc(next, threadID), ws.Id),
 		Done: md.CountDone(next),
 	}, nil
 }

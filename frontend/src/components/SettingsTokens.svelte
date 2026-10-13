@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import Icon from './Icon.svelte';
   // Tokens: las llaves con que los agentes de una persona entran al MCP.
   //
   // Un token es del agente, no de la sesión: se revoca uno sin cerrar nada más,
@@ -150,7 +152,7 @@
         {#each EXPIRY as x (x.days)}<option value={x.days}>{x.label}</option>{/each}
       </select>
       <button class="btn btn-sm preset-filled-primary-500" type="submit" disabled={creating || !name.trim()}>
-        {creating ? '…' : 'Generar'}
+        {#if creating}<Loading compact label="Generando token" />{:else}Generar{/if}
       </button>
     </div>
   </form>
@@ -158,7 +160,7 @@
   {#if fresh?.token}
     <!-- La única vez que el token existe fuera del servidor. -->
     <div class="set-card fresh" role="status">
-      <h3>🔑 «{fresh.name}»</h3>
+      <h3><Icon of="key" /> «{fresh.name}»</h3>
       <p class="help">
         Cópialo ahora: no se vuelve a enseñar. Lo más directo es copiar el prompt y pegarlo en tu
         asistente, que se configura solo.
@@ -187,7 +189,7 @@
     </div>
 
     {#if !loaded}
-      <p class="faint text-sm">leyendo…</p>
+      <Loading label="Leyendo tokens" />
     {:else if !shown.length}
       <p class="faint text-sm">
         Ninguno todavía. Un agente conectado con tu sesión en vez de un token sigue funcionando,

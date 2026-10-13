@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import Glyphs from './Glyphs.svelte';
   export type SeqThread = {
     id: string;
     /** el #N del hilo dentro de su proyecto. Un MÓDULO no tiene: es una fila de
@@ -7,6 +8,8 @@
     name: string;
     /** el NOMBRE del proyecto, para leerlo */
     project: string;
+    /** id del proyecto: el color personal se busca por él */
+    workspace?: string;
     /** el nombre de la burbuja; puede venir vacío */
     bubble: string;
     /** 'P1'..'P4', o nada */
@@ -28,6 +31,8 @@
 </script>
 
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import type { Snippet } from 'svelte';
   import BoardCard from './BoardCard.svelte';
   // La secuencia de ejecución del departamento: UNA línea, la que decide quien
   // lleva todo. Cada paso es un valor de `sequence`, y los hilos que lo
@@ -59,7 +64,10 @@
     completeLabel = '✓ Terminar',
     what = 'hilos',
     headless = false,
+    modes,
   }: {
+    /** un conmutador en la cabecera, junto al título: qué se ordena */
+    modes?: Snippet;
     threads?: SeqThread[];
     /** sólo mirar: sin arrastre, sin «Terminar» y sin la bandeja de lo que no
      *  está secuenciado. Es la secuencia de la columna, no la del planeador. */
@@ -331,7 +339,7 @@
          perdona. Como snippet hijo, para que vea el `t` de esta fila. -->
     {#snippet footer()}
       {#if !t.done && oncomplete && !readonly}
-        <button class="finish" onclick={() => oncomplete?.(t.id)}>{completeLabel}</button>
+        <button class="finish" onclick={() => oncomplete?.(t.id)}><Glyphs text={completeLabel} /></button>
       {/if}
       {#if t.done && onreview}
         <!-- Revisar lo saca de la columna para siempre: es lo que la convierte
@@ -362,8 +370,9 @@
 <div class="pane" {@attach monitor}>
   {#if !headless}
     <header class="head">
-      <span class="pane-name">{title}</span>
+      <span class="pane-name"><Glyphs text={title} tint /></span>
       <span class="count" title="pasos en la secuencia">{steps.length}</span>
+      {#if modes}{@render modes()}{/if}
       {#if onnew && !readonly}
         <button class="new" onclick={onnew} title="Crear y meter en la línea">+</button>
       {/if}
@@ -396,7 +405,7 @@
               <p class="hint">Todo lo abierto ya está en la línea.</p>
             {/if}
             <div class="more" {@attach sentinel(queueMore, onqueuemore)}>
-              {#if queueMore}<span class="hint">cargando…</span>{/if}
+              {#if queueMore}<Loading compact label="Cargando pendientes" />{/if}
             </div>
           </div>
         {/if}
@@ -463,7 +472,7 @@
             {#each done as t (t.id)}{@render threadCard(t, true)}{/each}
             {#if !done.length}<p class="hint">Todavía no hay nada terminado.</p>{/if}
             <div class="more" {@attach sentinel(doneMore, ondonemore)}>
-              {#if doneMore}<span class="hint">cargando…</span>{/if}
+              {#if doneMore}<Loading compact label="Cargando terminados" />{/if}
             </div>
           </div>
         {/if}

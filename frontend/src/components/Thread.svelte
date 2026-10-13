@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // A thread, against the real server.
   //
   // `ThreadView` draws; this holds the document, the hash it was read at, and
@@ -11,12 +12,15 @@
   // banner offering a reload rather than a save that quietly wins.
   import { ApiError, api, type Doc, type State, type ThreadHeat, type Workspace } from '../lib/api';
   import { bandName } from '../lib/bands';
+  import { readTreeSelection, saveTreeSelection } from '../lib/treeSelection';
   import ThreadView from './ThreadView.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
   import Comments from './Comments.svelte';
   import { live } from '../lib/live.svelte';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import Crumbs from './Crumbs.svelte';
+  import { lastOpenBubble } from '../lib/filters.svelte';
+  import { boardUrl } from '../lib/routes';
 
   let {
     thread,
@@ -24,6 +28,7 @@
     onback,
     onsearch,
     onchanged,
+    onnavigate,
   }: {
     thread: ThreadHeat;
     workspace: Workspace;
@@ -31,6 +36,7 @@
     onsearch?: () => void;
     /** the thread's row changed — the board is stale now */
     onchanged?: () => void;
+    onnavigate?: (url:string)=>void;
   } = $props();
 
   // The workflow and the bubbles, for the two verbs that need them. Fetched
@@ -157,43 +163,61 @@
     }
   }
   let openPage = $state('');
+  let restoredTree = '';
+  const selectionScope = $derived(`thread.${workspace.id}.${thread.id}`);
+  function pickPage(page: string) {
+    if (page && !pages.some((p) => p.path === page)) return;
+    restoredTree = selectionScope;
+    saveTreeSelection(api.me?.id ?? 'local', selectionScope, page ? `page:${page}` : 'doc');
+    openPage = page;
+  }
 
   const pagesDir = $derived(mainPath.replace(/\.md$/, ''));
 
   async function loadPages() {
     if (!mainPath) return;
+    const owner = workspace.id, who = thread.id, main = mainPath, scope = selectionScope;
     try {
-      const { entries } = await api.tree(workspace.id);
-      const dir = mainPath.replace(/\.md$/, '') + '/';
+      const { entries } = await api.tree(owner);
+      if (owner !== workspace.id || who !== thread.id || main !== mainPath) return;
+      const dir = main.replace(/\.md$/, '') + '/';
       pages = entries
         .filter((e) => !e.dir && e.path.startsWith(dir))
         .map((e) => ({ path: e.path, name: e.title || e.name }));
+      if (restoredTree !== scope) {
+        const selected = readTreeSelection(api.me?.id ?? 'local', scope, ['doc', ...pages.map((p) => `page:${p.path}`)]);
+        pickPage(selected === 'doc' ? '' : selected.slice(5));
+      } else if (openPage && !pages.some((p) => p.path === openPage)) pickPage('');
     } catch {
-      pages = [];
+      if (owner === workspace.id && who === thread.id) pages = [];
     }
   }
 
+  let readGeneration = 0;
   async function load() {
+    const generation = ++readGeneration, selected = openPage, who = thread.id, owner = workspace.id;
     try {
-      const next = openPage
-        ? await api.readPath(workspace.id, openPage)
-        : await api.readThread(thread.id);
+      const next = selected ? await api.readPath(owner, selected) : await api.readThread(who);
+      if (generation !== readGeneration || selected !== openPage || who !== thread.id || owner !== workspace.id) return;
       doc = next;
       // The thread's own path is what names its folder, so it is remembered
       // even while another page is open.
-      if (!openPage) mainPath = next.path;
+      if (!selected) mainPath = next.path;
       error = '';
       elsewhere = false;
     } catch (e) {
-      error = (e as Error).message;
+      if (generation === readGeneration) error = (e as Error).message;
     }
   }
 
-  // Opening another thread starts on ITS document, not on the page that was
-  // open in the last one.
+  // Each thread owns its remembered file. Restore it only after its current
+  // file list arrives; never reuse the previous thread's pages or selection.
+  let openedThread = '';
   $effect(() => {
-    thread.id;
-    openPage = '';
+    const who = selectionScope;
+    if (openedThread !== who) {
+      openedThread = who; restoredTree = ''; mainPath = ''; pages = []; doc = null; openPage = '';
+    }
   });
   $effect(() => {
     thread.id;
@@ -226,7 +250,7 @@
         message: `born: ${at}`,
       });
       await loadPages();
-      openPage = at;
+      pickPage(at);
     } catch (e) {
       error = (e as Error).message;
     }
@@ -240,7 +264,7 @@
       go: async () => {
         try {
           await api.removePath(workspace.id, at);
-          if (openPage === at) openPage = '';
+          if (openPage === at) pickPage('');
           await loadPages();
           await load();
         } catch (e) {
@@ -248,6 +272,21 @@
         }
       },
     };
+  }
+
+  async function tickTodo(index: number, done: boolean) {
+    if (!doc || saving || elsewhere || doc.thread !== thread.id || doc.workspace !== workspace.id || doc.path !== (openPage || mainPath)) throw new Error('Espera o recarga el documento antes de marcar otro checkbox.');
+    const before = doc, who = thread.id, page = openPage;
+    saving = true;
+    try {
+      const patch = { base: before.hash, todo: { index, done } };
+      const next = page ? await api.patchPath(workspace.id, page, patch) : await api.patchThread(who, patch);
+      if (thread.id === who && openPage === page) { readGeneration++; doc = next; }
+      onchanged?.();
+    } catch (e) {
+      if (e instanceof ApiError && e.conflict) elsewhere = true;
+      throw e;
+    } finally { saving = false; }
   }
 
   async function save(markdown: string) {
@@ -285,11 +324,15 @@
 {#if error}
   <p class="card glass m-6 p-4 text-sm text-error-500">{error}</p>
 {:else if !doc}
-  <p class="faint p-6 text-sm">…</p>
+  <Loading viewport label="Leyendo documento" />
 {:else}
   <ThreadView
+    scrollKey={`${doc.workspace}/${doc.path}`}
+    ontodo={tickTodo}
     seq={thread.seq}
     title={thread.name}
+    context={[{name:workspace.name,href:boardUrl(workspace.slug)},{name:thread.bubble ? bubbleName || 'Módulo' : 'Sin módulo',href:thread.bubble ? boardUrl(workspace.slug)+'?bubble='+thread.bubble : undefined}]}
+    oncontext={(href)=>{if(href.includes('?bubble=')&&thread.bubble)lastOpenBubble.set(thread.bubble);const target=boardUrl(workspace.slug);if(onnavigate)onnavigate(target);else location.assign(target);}}
     lifecycle={thread.heat.lifecycle}
     reason={thread.heat.reason}
     priority={bubblePriority}
@@ -329,7 +372,7 @@
     pages={pages.map((p) => ({ ...p, churn: churn[p.path] }))}
     mainChurn={churn[mainPath]}
     {openPage}
-    onopenpage={(p) => (openPage = p)}
+    onopenpage={pickPage}
     onnewpage={newPage}
     ondeletepage={askRemovePage}
     onreload={load}

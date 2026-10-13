@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // Una fecha de entrega, con el calendario de Skeleton.
   //
   // Un componente y no una copia: el `DatePicker` de Skeleton se arma pieza a
@@ -59,9 +60,9 @@
   locale="es-MX"
   startOfWeek={1}>
   {#if label}<DatePicker.Label class="cap">{label}</DatePicker.Label>{/if}
-  <DatePicker.Control class="dp-control">
-    <DatePicker.Input {placeholder} autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
-    <DatePicker.Trigger>🗓</DatePicker.Trigger>
+  <DatePicker.Control class="dp-control input">
+    <DatePicker.Input {placeholder} aria-label={label || 'Fecha'} autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
+    <DatePicker.Trigger><Icon of="calendar" /></DatePicker.Trigger>
   </DatePicker.Control>
   <!-- SIN portal, al revés que el resto de los popups. Un diálogo modal apaga
        los eventos de puntero fuera de sí y los devuelve capa a capa; un

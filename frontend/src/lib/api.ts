@@ -37,8 +37,6 @@ export type ThreadHeat = {
   /** su lugar en la línea viva de todo el departamento: 1 = ahora; 0 si no
    *  está en la secuencia o ya terminó */
   step?: number;
-  /** en qué columna del tablero de TAREAS está; vacío es «Sin planear» */
-  stage?: string;
   /** cuándo vence ESTA pieza, un día. Independiente del plazo de su burbuja:
    *  aquél es el compromiso, éste es cómo se reparte. */
   due_date?: string;
@@ -97,22 +95,10 @@ export type QueuePage = {
   more: boolean;
 };
 
-/** Una columna del tablero de TAREAS. Del departamento, como `Stage`, pero de
- *  hilos: un módulo y una tarea no están en el mismo sitio del plan. */
-export type ThreadStage = {
-  id: string;
-  name: string;
-  position?: number;
-  /** la columna donde una tarea se da por terminada */
-  done?: boolean;
-};
-
 export type BubbleHeat = {
   id: string;
   workspace: string;
   name: string;
-  /** en qué punto del plan la puso el lead */
-  stage?: string;
   /** para qué sirve este cuerpo de trabajo */
   objective?: string;
   /** derivada de impacto × urgencia. Nunca mezclada con la banda: una dice si
@@ -129,6 +115,7 @@ export type BubbleHeat = {
   /** su paso en la línea de MÓDULOS, que es otra que la de los hilos: aquélla
    *  ordena piezas y ésta cuerpos de trabajo. 0 o ausente, fuera de ella. */
   sequence?: number;
+  due_date?: string;
   heat: Heat;
 };
 
@@ -151,12 +138,6 @@ export type BoardWorkspace = { id: string; slug: string; name: string };
 
 export type Workspace = { id: string; name: string; slug: string };
 
-/** Una etapa del plan: en qué punto está una burbuja, según quien orquesta.
- *
- *  No es un `State`: los estados son del workspace y los pone quien ejecuta;
- *  las etapas son del departamento y son el vocabulario común que permite mirar
- *  seis proyectos en el mismo tablero. */
-export type Stage = { id: string; name: string; position?: number; done?: boolean };
 
 /** Una burbuja como fila: lo que el planeador organiza. */
 export type BubbleRecord = {
@@ -165,16 +146,12 @@ export type BubbleRecord = {
   name: string;
   outcome?: string;
   owners?: string[];
-  stage?: string;
   objective?: string;
   impact?: string;
   urgency?: string;
   /** cuándo tiene que estar este cuerpo de trabajo. Es de la burbuja y no de sus
    *  threads: el plazo lo decide quien orquesta. */
   due_date?: string;
-  /** el sitio que el lead le dio a mano dentro de su columna. Cero —o ausente—
-   *  es «ninguno»: entonces la columna se ordena sola, por prioridad. */
-  rank?: number;
   closed_at?: string;
   closure?: string;
   /** cuándo nació. Lo pone el servidor, y es lo que la tarjeta cuenta como edad */
@@ -201,10 +178,6 @@ export type ThreadRecord = {
   workspace: string;
   bubble?: string;
   state?: string;
-  /** el sitio que alguien le dio a mano dentro de su columna del planeador.
-   *  Cero —o ausente— es «ninguno»: entonces la columna se ordena sola, por la
-   *  prioridad que el servidor deriva. */
-  rank?: number;
   completed_at?: string;
   /** su propia prioridad, P1…P4 */
   priority?: string;
@@ -275,9 +248,12 @@ export type Features = { id: string; sequence: boolean; updated?: string };
 export type Prefs = {
   /** cómo ve el planeador: por módulos (burbujas) o por tareas (hilos) */
   planner?: 'bubbles' | 'tasks';
+  /** Accesos personales a hilos; no alteran calor, prioridad ni secuencia. */
+  thread_pins?: string[];
+  project_colors?: Record<string,string>;
   /** qué forma tiene el tablero: la línea de ejecución o el kanban. Sólo
    *  significa algo con la función de secuencia encendida. */
-  view?: 'sequence' | 'kanban';
+  view?: 'sequence' | 'pool';
 };
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */
@@ -452,6 +428,82 @@ export function avatarUrl(p: Pick<Person, 'id' | 'avatar'> | null | undefined, t
   return `/api/files/users/${p.id}/${encodeURIComponent(p.avatar)}${q}`;
 }
 
+/** Ephemeral artifacts: thinking before the work exists. A grill is the first kind. */
+export interface ArtifactAnswer {
+  verdict: 'accepted' | 'override';
+  text?: string;
+  via: 'app' | 'harness';
+  at?: string;
+  /** rendered by the server (same engine as a thread) */
+  html?: string;
+}
+export interface ArtifactQuestion {
+  id: string;
+  round: number;
+  title: string;
+  body: string;
+  choices?: string[];
+  recommendation: string;
+  depends_on?: string[];
+  answer?: ArtifactAnswer;
+  state: 'answered' | 'frontier' | 'blocked';
+  body_html?: string;
+  recommendation_html?: string;
+}
+export interface ArtifactEntry {
+  seq: number;
+  type: string;
+  data: Record<string, unknown>;
+  author?: string;
+  via?: string;
+  at?: string;
+  html?: string;
+}
+export interface Artifact {
+  id: string;
+  kind: string;
+  title: string;
+  status: 'open' | 'handed_off';
+  pinned: boolean;
+  inbox_item: string;
+  creator: string;
+  touched_at: string;
+  expires_at?: string;
+  live: boolean;
+  /** an agent is blocked right now, waiting for these answers */
+  watched: boolean;
+  url?: string;
+  total: number;
+  answered: number;
+  waiting: number;
+  questions?: ArtifactQuestion[];
+  entries?: ArtifactEntry[];
+  document?: { filename: string; seq: number; markdown?: string; html?: string };
+}
+export interface AgentStatus {
+  live: boolean;
+  last_used_at: string;
+}
+
+/** Lo que se le dice a la IA (pantalla Prompts). */
+export interface PersonalNote {id:string;owner:string;workspace:string;title:string;body:string;color:string;updated:string;x:number;y:number;w:number;h:number;}
+export interface PersonalAsset {id:string;collectionId:string;owner:string;workspace:string;note:string;name:string;file:string;}
+
+export interface PromptInfo {
+  key: string;
+  title: string;
+  group: 'agentes' | 'sistema' | 'tools';
+  hint: string;
+  edited: boolean;
+  /** el original del binario cambió desde que se escribió la versión vigente */
+  stale: boolean;
+  updated?: string;
+  author?: string;
+  editable: boolean;
+  content?: string;
+  original?: string;
+}
+
 class Api {
   token = localStorage.getItem(TOKEN) ?? '';
   me: Person | null = null;
@@ -565,6 +617,10 @@ class Api {
     });
   }
 
+  deleteBubble(id: string) {
+    return this.call<unknown>(`/api/collections/bubbles/records/${id}`, { method: 'DELETE' });
+  }
+
   deleteThread(id: string) {
     return this.call<unknown>(`/api/collections/threads/records/${id}`, { method: 'DELETE' });
   }
@@ -608,15 +664,6 @@ class Api {
   async allPriorities() {
     const out = await this.call<{ items: { id: string; priority: string }[] }>(
       '/api/collections/bubble_priority/records?perPage=500',
-    );
-    return out.items;
-  }
-
-  /** Las etapas del plan, en su orden. Del departamento: son el vocabulario
-   *  común que permite mirar seis proyectos en el mismo tablero. */
-  async stages() {
-    const out = await this.call<{ items: Stage[] }>(
-      '/api/collections/stages/records?perPage=200&sort=position,created',
     );
     return out.items;
   }
@@ -750,7 +797,7 @@ class Api {
   // leer sin fila devuelve `{}` y no es un error.
 
   /** El id de mi fila, cacheado para no preguntarlo en cada guardado. */
-  private prefRow = '';
+  private prefWrite: Promise<void> = Promise.resolve();
 
   /** Una página de una de las dos columnas laterales de la secuencia.
    *
@@ -781,62 +828,64 @@ class Api {
     return out.items;
   }
 
-  /** Las columnas del tablero de tareas, en orden. Vacío es una respuesta: el
-   *  lead todavía no ha definido ninguna. */
-  async threadStages(): Promise<ThreadStage[]> {
-    const out = await this.call<{ items: ThreadStage[] }>(
-      '/api/collections/thread_stages/records?perPage=200&sort=position,created',
-    );
-    return out.items;
-  }
-
-  async prefs(): Promise<Prefs> {
+  async prefs(strict = false): Promise<Prefs> {
     if (!this.me) return {};
     try {
       const out = await this.call<{ items: { id: string; value?: Prefs }[] }>(
         '/api/collections/prefs/records?perPage=1',
       );
       const row = out.items[0];
-      this.prefRow = row?.id ?? '';
       return row?.value ?? {};
-    } catch {
+    } catch (e) {
+      if (strict) throw e;
       // Sin preferencias se ve lo de siempre. Una lista que falla no es motivo
       // para no dejar entrar a nadie.
       return {};
     }
   }
 
-  /** Guarda el saco entero. Quien llame manda lo que quiere que quede, no un
-   *  parche: son cuatro campos y fusionarlos en el servidor pediría leer antes
-   *  de escribir en cada cambio. */
-  async setPrefs(value: Prefs): Promise<void> {
-    if (!this.me) return;
-    if (this.prefRow) {
-      await this.update('prefs', this.prefRow, { value });
-      return;
-    }
-    const row = await this.call<{ id: string }>('/api/collections/prefs/records', {
-      method: 'POST',
-      body: JSON.stringify({ user: this.me.id, value }),
+  /** Parche personal. Se relee antes de escribir y se serializan los cambios
+   *  de esta app: elegir Módulos no debe borrar los pins (ni al revés). Un fallo
+   *  al leer aborta el guardado; nunca sustituye las preferencias por {}. */
+  async setPrefs(patch: Prefs): Promise<void> {
+    const user = this.me?.id;
+    if (!user) return;
+    const write = this.prefWrite.catch(() => {}).then(async () => {
+      if (this.me?.id !== user) return;
+      const out = await this.call<{ items: { id: string; value?: Prefs }[] }>(
+        '/api/collections/prefs/records?perPage=1',
+      );
+      if (this.me?.id !== user) return;
+      const row = out.items[0];
+      const value = { ...row?.value, ...patch };
+      if (row) await this.update('prefs', row.id, { value });
+      else {
+        await this.create('prefs', { user, value });
+      }
     });
-    this.prefRow = row.id;
+    this.prefWrite = write;
+    await write;
+  }
+
+  threadRecord(id: string) {
+    return this.call<ThreadRecord>(`/api/collections/threads/records/${encodeURIComponent(id)}`);
   }
 
   // ---- AGENTS.md del departamento ----
 
   /** La versión vigente de un rol: la más reciente. `null` si todavía no hay. */
-  async agentsDoc(role: AgentsRole): Promise<AgentsVersion | null> {
-    const out = await this.call<{ items: (AgentsVersion & { expand?: { author?: Person } })[] }>(
-      `/api/collections/agents_md/records?perPage=1&sort=-created&expand=author` +
-        `&filter=${encodeURIComponent(`role='${role}'`)}`,
-    );
-    const r = out.items[0];
-    return r ? { ...r, authorName: named(r.expand?.author, '') } : null;
+  async prompts() {
+    return this.call<PromptInfo[]>('/api/prompts');
   }
-
-  /** Guardar es crear una versión nueva: las anteriores no se tocan. */
-  saveAgentsDoc(role: AgentsRole, content: string) {
-    return this.create<AgentsVersion>('agents_md', { role, content, author: this.me?.id });
+  async prompt(key: string) {
+    return this.call<PromptInfo>(`/api/prompt?key=${encodeURIComponent(key)}`);
+  }
+  /** Guardar es una versión nueva; `reset` vuelve al original del binario. */
+  savePrompt(key: string, content: string, reset = false) {
+    return this.call<PromptInfo>('/api/prompt', {
+      method: 'POST',
+      body: JSON.stringify({ key, content, reset }),
+    });
   }
 
   // ---- tokens de agente ----
@@ -1268,6 +1317,51 @@ class Api {
     return this.call<{ hits: any[] }>(
       `/api/workspaces/${workspace}/search?q=${encodeURIComponent(q)}`,
     );
+  }
+
+  /** Mine by default; the global lead can read the department inbox's TTLs. */
+  readPlanner() {
+    return this.call<{ board: Board; inbox: InboxItem[]; artifacts: Artifact[] }>('/api/planner/read');
+  }
+
+  personalNotes() { return this.call<{items:PersonalNote[]}>('/api/collections/personal_notes/records?perPage=500&sort=-updated'); }
+  personalAssets() { return this.call<{items:PersonalAsset[]}>('/api/collections/personal_assets/records?perPage=500&sort=-created'); }
+  fileToken() { return this.call<{token:string}>('/api/files/token',{method:'POST'}); }
+  uploadPersonal(file:File,workspace='',note='') {
+    const form=new FormData();form.set('owner',this.me?.id??'');form.set('workspace',workspace);form.set('note',note);form.set('name',file.name.slice(0,200));form.set('file',file);
+    return this.call<PersonalAsset>('/api/collections/personal_assets/records',{method:'POST',body:form});
+  }
+  personalFile(a:PersonalAsset,token:string,download=false) {return `/api/files/${a.collectionId}/${a.id}/${encodeURIComponent(a.file)}?token=${encodeURIComponent(token)}${download?'&download=1':''}`;}
+
+  async artifacts(scope?: 'inbox') {
+    return this.call<{ agent: AgentStatus; artifacts: Artifact[] }>(
+      '/api/artifacts' + (scope ? '?scope=inbox' : ''),
+    );
+  }
+
+  async artifact(id: string) {
+    return this.call<Artifact>(`/api/artifacts/${id}`);
+  }
+
+  deleteArtifact(id: string) {
+    return this.call(`/api/artifacts/${id}`, { method: 'DELETE' });
+  }
+
+  async answerArtifact(
+    id: string,
+    answers: { question: string; verdict: 'accepted' | 'override'; text?: string }[],
+  ) {
+    return this.call<Artifact>(`/api/artifacts/${id}/answers`, {
+      method: 'POST',
+      body: JSON.stringify({ answers }),
+    });
+  }
+
+  async pinArtifact(id: string, pinned: boolean) {
+    return this.call<Artifact>(`/api/artifacts/${id}/pin`, {
+      method: 'POST',
+      body: JSON.stringify({ pinned }),
+    });
   }
 
   /** Markdown → HTML by the server's renderer. The browser has none, and a

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The theme switch, floating and always reachable.
   //
   // It used to live in the board's header, which meant that every screen without
@@ -34,7 +35,7 @@
         {...attributes}
         onclick={() => theme.set(next)}
         aria-label="tema: {name[theme.mode]}">
-        <span aria-hidden="true">{face[theme.mode]}</span>
+        <Icon of={face[theme.mode]} size="1.6rem" tint />
       </button>
     {/snippet}
   </Tooltip.Trigger>

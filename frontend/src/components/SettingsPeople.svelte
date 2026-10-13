@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import Icon from './Icon.svelte';
   // Usuarios: el lead global da de alta, cambia el rol, borra y restaura.
   //
   // Borrar es MARCAR: la persona deja de poder entrar, sus sesiones y sus
@@ -119,7 +121,7 @@
 <section class="set-section">
   <p class="set-lead">
     Quién tiene cuenta. Borrar a alguien no borra lo que hizo: deja de entrar, y lo que escribió
-    sigue firmado con su nombre. Para darle acceso a un proyecto, invítala desde 👥 en ese proyecto.
+    sigue firmado con su nombre. Para darle acceso a un proyecto, invítala desde <Icon of="people" /> en ese proyecto.
   </p>
 
   {#if error}<p class="set-err" role="alert">{error}</p>{/if}
@@ -139,7 +141,7 @@
           <option value="lead">lead global</option>
         </select>
         <button class="btn btn-sm preset-filled-primary-500" type="submit" disabled={creating || !email.trim() || password.length < 8}>
-          {creating ? '…' : 'Dar de alta'}
+          {#if creating}<Loading compact label="Creando persona" />{:else}Dar de alta{/if}
         </button>
       </div>
     </div>
@@ -173,7 +175,7 @@
     </div>
 
     {#if !loaded}
-      <p class="faint text-sm">leyendo…</p>
+      <Loading label="Leyendo personas" />
     {:else}
       <ul class="list">
         {#each shown as p (p.id)}

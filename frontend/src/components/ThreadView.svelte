@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   import PriorityBadge from './PriorityBadge.svelte';
   import { bandFace, bandName } from '../lib/bands';
   // A thread's interior — a faithful port of v0's ThreadView.
@@ -22,7 +23,9 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import type { Lifecycle } from '../lib/api';
   import DocEditor from './DocEditor.svelte';
+  import { rowSquare } from '../lib/rowSquare';
   import SideTree, { type TreeNode } from './SideTree.svelte';
+  import TreePanel from './TreePanel.svelte';
   import ThreadToc from './ThreadToc.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import type { Heading } from '../lib/prose';
@@ -31,6 +34,8 @@
   let {
     seq,
     title,
+    context = [],
+    oncontext,
     lifecycle,
     reason = '',
     priority = '',
@@ -44,7 +49,8 @@
     markdown = '',
     html = '',
     revisions = [],
-    pinned = false,
+    scrollKey,
+    ontodo,
     elsewhere = false,
     onback,
     onsave,
@@ -67,6 +73,8 @@
   }: {
     seq: number;
     title: string;
+    context?: {name:string;href?:string}[];
+    oncontext?: (href:string)=>void;
     lifecycle: Lifecycle;
     reason?: string;
     priority?: string;
@@ -89,7 +97,8 @@
     /** the SERVER's render of that same markdown */
     html?: string;
     revisions?: { id: string; title: string }[];
-    pinned?: boolean;
+    scrollKey?: string;
+    ontodo?: (index: number, done: boolean) => void | Promise<void>;
     elsewhere?: boolean;
     onback?: () => void;
     /** hand the edited markdown back. The caller owns the write, the hash and
@@ -127,12 +136,7 @@
   let addingPage = $state(false);
   let freshPage = $state('');
   let editing = $state(false);
-  // Seeded from the prop and owned locally afterwards: pinning is the reader's
-  // decision, and it should not blink back when the parent re-renders.
-  let isPinned = $state(false);
-  $effect(() => {
-    isPinned = pinned;
-  });
+
   // The table of contents comes from the RENDERED document, not from parsing the
   // markdown a second time: the ids it links to are the ones goldmark produced,
   // and re-deriving them here is how a link ends up pointing at nothing.
@@ -203,6 +207,15 @@
     <button class="back" onclick={onback} aria-label="volver al board">
       <span aria-hidden="true">←</span> board
     </button>
+    <!-- La ruta va en la misma barra, delante del nombre: proyecto / módulo /
+         #N nombre. Cada nivel es un botón (un enlace con forma de botón, para
+         que ⌘/Ctrl+clic siga abriendo otra pestaña). Una segunda barra repetía
+         el título. -->
+    {#if context.length}
+      <nav class="crumbs" aria-label="Ubicación de la tarea">
+        {#each context as c (c.name)}{#if c.href}<a class="crumb" href={c.href} title={c.name} onclick={(e)=>{if(oncontext&&!e.metaKey&&!e.ctrlKey&&!e.shiftKey&&!e.altKey){e.preventDefault();oncontext(c.href!);}}}>{c.name}</a>{:else}<span class="crumb still" title={c.name}>{c.name}</span>{/if}<span class="sep" aria-hidden="true">/</span>{/each}
+      </nav>
+    {/if}
     <span class="seq">#{seq}</span>
     <!-- The title is the thread's NAME, a property of the record rather than
          content inside it, so it is renamed on its own path and never through
@@ -214,23 +227,23 @@
       role="textbox"
       aria-label="renombrar"
       tabindex="0"
-      spellcheck="false"
+      spellcheck="true" lang="es"
       title="clic para renombrar">{title}</h2>
+    {#if openPage}<span class="crumbs page"><span class="sep" aria-hidden="true">/</span><span class="crumb still">{pages.find((p) => p.path === openPage)?.name ?? openPage}</span></span>{/if}
 
     <div class="chips">
       {#each labels as l (l)}<span class="chip">{l}</span>{/each}
-      <button class="chip add" onclick={() => {}} title="editar etiquetas">
-        {labels.length ? '✎' : '+ etiquetas'}
-      </button>
       <!-- The thread's own buoyancy, which subsumes open/closed. -->
       <span class="chip lvl lvl-{lifecycle}" title={reason}>
-        {bandFace(lifecycle)} {bandName(lifecycle)}
+        <Icon of={bandFace(lifecycle)} tint /> {bandName(lifecycle)}
       </span>
-      {#if threadState}<span class="chip who" title="estado">{threadState}</span>{/if}
+      {#if threadState && threadState.toLocaleLowerCase() !== bandName(lifecycle).toLocaleLowerCase()}
+        <span class="chip who" title="estado">{threadState}</span>
+      {/if}
       <!-- Dos prioridades, y se dicen las dos: la de este hilo (su badge) y la
            de la burbuja que lo lleva, que es otra pregunta. -->
       <PriorityBadge value={threadPriority} canEdit={!!onpriority} onchange={(p) => onpriority?.(p)} />
-      {#if priority}<span class="chip" title="prioridad de la burbuja">burbuja {priority}</span>{/if}
+      {#if priority && priority !== threadPriority}<span class="chip" title="prioridad de la burbuja">burbuja {priority}</span>{/if}
       <!-- Cuándo vence ESTA pieza, separada del plazo de su burbuja: aquél es
            el compromiso, ésta es cómo se reparte. -->
       {#if ondue}
@@ -238,19 +251,11 @@
           <DueDate value={due} placeholder="sin entrega" onchange={(d) => ondue?.(d)} />
         </span>
       {:else if due}
-        <span class="chip" title="entrega de este hilo">📅 {due}</span>
+        <span class="chip" title="entrega de este hilo"><Icon of="calendar" /> {due}</span>
       {/if}
       {#if assignees.length}<span class="chip who">{assignees.join(', ')}</span>{/if}
     </div>
 
-    <button
-      class="pin-btn"
-      class:on={isPinned}
-      onclick={() => (isPinned = !isPinned)}
-      aria-pressed={isPinned}
-      title={isPinned ? 'quitar el pin' : 'fijar este artefacto'}>
-      <span aria-hidden="true">📌</span>
-    </button>
   </div>
 
   <div class="body">
@@ -259,6 +264,7 @@
          ours, and the two layouts it already has — `sidebar` and `rail`. The
          rail is not a narrower sidebar, it is its own layout: square icon
          triggers, no labels, and it animates its own width. -->
+    <TreePanel name="thread" collapsed={sideCollapsed}>
     <Navigation
       layout={sideCollapsed ? 'rail' : 'sidebar'}
       class="side {sideCollapsed ? '' : 'grid grid-rows-[auto_1fr] gap-2'}">
@@ -289,6 +295,7 @@
           <Navigation.Group class="thread-tree">
             <SideTree
               nodes={tree}
+              selected={openPage ? `page:${openPage}` : 'doc'}
               onselect={(node) => {
                 if (node.id === 'doc') onopenpage?.('');
                 else if (node.id.startsWith('page:')) onopenpage?.(node.id.slice(5));
@@ -297,6 +304,7 @@
                 {#if node.id.startsWith('page:') && ondeletepage}
                   <button
                     class="pin-x"
+                    {@attach (el) => rowSquare(el, '.row')}
                     aria-label="borrar {node.name}"
                     onclick={() => ondeletepage?.(node.id.slice(5))}>×</button>
                 {/if}
@@ -344,6 +352,7 @@
         {/if}
       </Navigation.Content>
     </Navigation>
+    </TreePanel>
 
     <!-- The heading rail: where you are in the document, and what else is in
          it, without opening the sidebar. -->
@@ -360,7 +369,7 @@
           <Tooltip.Trigger>
             {#snippet element(attributes: Record<string, unknown>)}
               <button class="hud-btn {a.tone ?? ''}" {...attributes} onclick={a.go}>
-                <span aria-hidden="true">{a.face}</span>
+                <Icon of={a.face} size="1.35rem" tint />
               </button>
             {/snippet}
           </Tooltip.Trigger>
@@ -382,6 +391,8 @@
     {ondiff}
         {markdown}
         {html}
+        {scrollKey}
+        {ontodo}
         {elsewhere}
         bind:editing
         {onsave}
@@ -392,6 +403,20 @@
 </div>
 
 <style>
+  .crumbs { display: flex; align-items: center; gap: 0.3rem; min-width: 0; color: var(--muted); font-size: 0.8rem; white-space: nowrap; }
+  /* Cada nivel, una píldora como «← board»; un nombre largo se corta con «…» y
+     queda entero en el title. */
+  .crumb {
+    flex: 0 1 auto; min-width: 2.5rem; max-width: 14rem;
+    padding: 0.2rem 0.65rem; border-radius: 999px;
+    border: 1px solid var(--line); background: var(--surface-solid); color: var(--text);
+    font-weight: 600; text-decoration: none;
+    overflow: hidden; text-overflow: ellipsis;
+  }
+  a.crumb:hover { background: var(--hover); }
+  a.crumb:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .crumb.still { background: transparent; border-color: transparent; color: var(--muted); font-weight: 500; }
+  .sep { flex: none; color: var(--faint); font-weight: 600; }
   /* The shell holds still and the DOCUMENT scrolls, the same way the board
      works: the tree and the top bar are not in the scrolling box, so they stay
      put because of where they are rather than because they are pinned on top of
@@ -468,7 +493,6 @@
     text-transform: lowercase;
     white-space: nowrap;
   }
-  .chip.add { background: none; cursor: pointer; }
 
   /* El calendario de Skeleton, con la forma de los chips de esta fila. Skeleton
      lo dibuja por `[data-part]`, así que el estilo cruza la frontera del
@@ -523,25 +547,6 @@
   .chip.lvl { text-transform: none; font-weight: 600; color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
   .chip.who { text-transform: none; }
 
-  .pin-btn {
-    flex: none;
-    display: inline-grid;
-    place-content: center;
-    width: 1.9rem;
-    height: 1.9rem;
-    border-radius: 999px;
-    border: 1px solid transparent;
-    background: transparent;
-    cursor: pointer;
-    font-size: 0.9rem;
-    filter: grayscale(1) opacity(0.55);
-  }
-  .pin-btn:hover { background: var(--hover); filter: grayscale(0.4) opacity(0.9); }
-  .pin-btn.on {
-    filter: none;
-    background: color-mix(in oklab, var(--accent) 18%, transparent);
-    border-color: color-mix(in oklab, var(--accent) 35%, transparent);
-  }
 
   /* `items-stretch`, as Skeleton's own example does it: Navigation asks for
      `height: 100%`, which means nothing unless the row lets it stretch. */

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The design system, on one page: the tokens and the controls, nothing else.
   //
   // Not decoration: a theme is a claim that every control looks like it belongs
@@ -96,7 +97,7 @@
       {#each bands as b}
         <div class="card glass band-{b.k} flex items-center gap-3 p-3">
           <span class="dot"></span>
-          <span class="text-lg">{b.face}</span>
+          <span class="text-lg"><Icon of={b.face} /></span>
           <div class="min-w-0">
             <div class="text-sm font-medium">{bandName(b.k)}</div>
             <div class="faint text-xs">{b.why}</div>
@@ -109,10 +110,10 @@
       <span class="text-sm">…y lo hundido se dessatura, para leerse sin etiqueta</span>
     </div>
     <p class="faint text-xs">
-      Eran cinco: entre 🔥 y 😴 estaban <i>tibio</i> y <i>enfriando</i>, un gradiente
+      Eran cinco: entre <Icon of="fire" /> y <Icon of="dormant" /> estaban <i>tibio</i> y <i>enfriando</i>, un gradiente
       sobre el que nadie actuaba — «produjo el ciclo pasado» y «no produjo ninguno»
       llevan a la misma mañana. Cada banda que queda nombra una <b>acción distinta</b>,
-      y 🪦 es banda propia y no un adorno de 😴: callada con responsable es alguien a
+      y <Icon of="tombstone" /> es banda propia y no un adorno de <Icon of="dormant" />: callada con responsable es alguien a
       quien preguntar; callada sin responsable es una decisión que tomar.
     </p>
   </section>

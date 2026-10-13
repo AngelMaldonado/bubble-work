@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // Mi usuario: el nombre con el que se firma lo que escribo, mi cara y mi
   // contraseña. El correo se ve y no se cambia: hacerlo bien pide verificar el
   // nuevo por correo, y esta instancia no manda correos.
@@ -129,7 +130,7 @@
           onchange={(e) => upload(e.currentTarget.files?.[0])} />
         <div class="set-row">
           <button class="link" onclick={() => fileInput?.click()} disabled={uploading}>
-            {uploading ? 'subiendo…' : me.avatar ? 'cambiar' : 'poner foto'}
+            {#if uploading}<Loading compact label="Subiendo avatar" />{:else}{me.avatar ? 'cambiar' : 'poner foto'}{/if}
           </button>
           {#if me.avatar}<button class="link" onclick={removeAvatar} disabled={uploading}>quitar</button>{/if}
         </div>
@@ -155,7 +156,7 @@
               class="btn btn-sm preset-filled-primary-500"
               onclick={saveName}
               disabled={savingName || name.trim() === (me.display_name ?? '')}>
-              {savingName ? '…' : 'Guardar'}
+              {#if savingName}<Loading compact label="Guardando nombre" />{:else}Guardar{/if}
             </button>
           </span>
           <span class="help">Con él se firma lo que escribes y se te pone a cargo. Vacío, se usa tu correo.</span>
@@ -194,7 +195,7 @@
           class="btn btn-sm preset-filled-primary-500"
           type="submit"
           disabled={savingPass || !oldPass || !newPass || newPass !== again || !!passProblem}>
-          {savingPass ? 'cambiando…' : 'Cambiar contraseña'}
+          {#if savingPass}<Loading compact label="Cambiando contraseña" />{:else}Cambiar contraseña{/if}
         </button>
         {#if passProblem}<span class="set-err">{passProblem}</span>{/if}
         {#if passMsg}<span class="set-ok">{passMsg}</span>{/if}

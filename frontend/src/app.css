@@ -99,6 +99,19 @@
    of statuses cannot make it. Hot floats to the top and reads bright; what has
    gone cold sinks and desaturates. */
 
+/* Ritmo común de los modales. `space-y-*` no basta cuando una regla local
+   resetea el margin de un párrafo o una lista: gap pertenece al contenedor y
+   no desaparece al renderizar los componentes de Skeleton. La búsqueda es
+   compacta a propósito y conserva su propia distribución. */
+[data-scope='dialog'][data-part='content'].card:not(.omni) {
+  display: flex;
+  flex-direction: column;
+  row-gap: 1.25rem;
+}
+[data-scope='dialog'][data-part='content'].card:not(.omni) > * {
+  margin-block: 0;
+}
+
 /* Every floating part of every component, above the drawer. Attribute-based so a
    component added later is covered without anybody remembering to.
  *
@@ -167,19 +180,26 @@
   z-index: var(--z-toast);
 }
 
-body {
-  margin: 0;
-  /* A board is read at arm's length on a big screen. 15px was the browser
-     default doing the deciding. */
-  font-size: 16px;
+/* Paint the fixed backdrop on the root canvas, not a body's first viewport.
+   Long standalone documents must never fall onto a different html background. */
+html {
   background:
     radial-gradient(60rem 40rem at 15% -10%, var(--glow-1), transparent 60%),
     radial-gradient(50rem 35rem at 85% 0%, var(--glow-2), transparent 55%),
     linear-gradient(var(--bg), var(--bg-2));
   background-attachment: fixed;
+}
+body {
+  margin: 0;
+  /* A board is read at arm's length on a big screen. 15px was the browser
+     default doing the deciding. */
+  font-size: 16px;
+  background: transparent;
   color: var(--text);
   min-height: 100vh;
 }
+
+#app { min-height: 100dvh; }
 
 /* Fine film-grain over the gradient — a fixed SVG turbulence layer, ported from
    v0. It is what stops a big flat gradient from reading as a screenshot of a
@@ -227,21 +247,78 @@ body::before {
   --cur-arrow: url("data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='30' height='30' viewBox='-27 -28 571 571'><path d='M56 55 L461 199 L347 248 Q288 273 262 336 L211 457 Z' fill='%23111318' stroke='%23111318' stroke-width='154' stroke-linejoin='round'/><path d='M56 55 L461 199 L347 248 Q288 273 262 336 L211 457 Z' fill='%23f2f4f8' stroke='%23f2f4f8' stroke-width='110' stroke-linejoin='round'/></svg>") 4 4, auto;
 }
 
-/* One cursor. Not "ours plus the system's where the system insists" — every
- * element, every state, including the I-beam a text field would otherwise show
- * and the barred circle a disabled control would.
- *
- * `*` with `!important` because there is no other way to say it. Every
- * component writes `cursor: pointer` from its own stylesheet at its own
- * specificity; no selector out-ranks all of them, and a page that shows our
- * arrow in some places and a system cursor in others is worse than either one
- * alone. The cost is real and worth naming: a text field no longer says it is a
- * text field with its cursor, so it has to say it with its border. */
-*,
-*::before,
-*::after {
-  cursor: var(--cur-arrow) !important;
+/* The same rounded, contrasting alphabet: arrow, finger, hand and resize.
+   Native fallbacks remain when a browser refuses an image cursor. */
+:root {
+  --cur-pointer: url('/cursors/pointer-light.png') 12 4, pointer;
+  --cur-grab: url('/cursors/grab-light.png') 17 17, grab;
+  --cur-grabbing: url('/cursors/grabbing-light.png') 17 17, grabbing;
+  --cur-resize: url('/cursors/resize-light.png') 17 17, col-resize;
+  --cur-corner: url('/cursors/corner-light.png') 16 16, nwse-resize;
+  --cur-vresize: url('/cursors/vresize-light.png') 16 16, ns-resize;
 }
+:root[data-mode='dark'] {
+  --cur-pointer: url('/cursors/pointer-dark.png') 12 4, pointer;
+  --cur-grab: url('/cursors/grab-dark.png') 17 17, grab;
+  --cur-grabbing: url('/cursors/grabbing-dark.png') 17 17, grabbing;
+  --cur-resize: url('/cursors/resize-dark.png') 17 17, col-resize;
+  --cur-corner: url('/cursors/corner-dark.png') 16 16, nwse-resize;
+  --cur-vresize: url('/cursors/vresize-dark.png') 16 16, ns-resize;
+}
+/* Retina: 64 physical pixels, still 32 CSS pixels and the same hotspot.
+   Keep the plain 1x URLs above for browsers without cursor image-set support. */
+@supports (cursor: image-set(url('/cursors/grab-light.png') 1x, url('/cursors/grab-light@2x.png') 2x) 17 17, grab) {
+  :root {
+    --cur-pointer: image-set(url('/cursors/pointer-light.png') 1x, url('/cursors/pointer-light@2x.png') 2x) 12 4, pointer;
+    --cur-grab: image-set(url('/cursors/grab-light.png') 1x, url('/cursors/grab-light@2x.png') 2x) 17 17, grab;
+    --cur-grabbing: image-set(url('/cursors/grabbing-light.png') 1x, url('/cursors/grabbing-light@2x.png') 2x) 17 17, grabbing;
+    --cur-resize: image-set(url('/cursors/resize-light.png') 1x, url('/cursors/resize-light@2x.png') 2x) 17 17, col-resize;
+    --cur-corner: image-set(url('/cursors/corner-light.png') 1x, url('/cursors/corner-light@2x.png') 2x) 16 16, nwse-resize;
+    --cur-vresize: image-set(url('/cursors/vresize-light.png') 1x, url('/cursors/vresize-light@2x.png') 2x) 16 16, ns-resize;
+  }
+  :root[data-mode='dark'] {
+    --cur-pointer: image-set(url('/cursors/pointer-dark.png') 1x, url('/cursors/pointer-dark@2x.png') 2x) 12 4, pointer;
+    --cur-grab: image-set(url('/cursors/grab-dark.png') 1x, url('/cursors/grab-dark@2x.png') 2x) 17 17, grab;
+    --cur-grabbing: image-set(url('/cursors/grabbing-dark.png') 1x, url('/cursors/grabbing-dark@2x.png') 2x) 17 17, grabbing;
+    --cur-resize: image-set(url('/cursors/resize-dark.png') 1x, url('/cursors/resize-dark@2x.png') 2x) 17 17, col-resize;
+    --cur-corner: image-set(url('/cursors/corner-dark.png') 1x, url('/cursors/corner-dark@2x.png') 2x) 16 16, nwse-resize;
+    --cur-vresize: image-set(url('/cursors/vresize-dark.png') 1x, url('/cursors/vresize-dark@2x.png') 2x) 16 16, ns-resize;
+  }
+}
+html { cursor: var(--cur-arrow) !important; }
+/* Descendants and pseudo-elements inherit the affordance of the hit target.
+   Resetting every child to arrow made menu text and icons different from their
+   button's edge, and explicit grab descendants overrode buttons on a canvas. */
+*, *::before, *::after { cursor: inherit !important; }
+:is([data-cursor='grab'], [draggable='true'], [data-part='drag-trigger']) { cursor: var(--cur-grab) !important; }
+:is(a[href], button:not(:disabled), summary, label[for], [role='button']:not([aria-disabled='true']), [role='radio'], [role='option'], [role='treeitem'], [role='tab'], [role='switch'], [role^='menuitem'], [data-scope='menu'][data-part='item'], .ec-event, .clickable,
+    input:not(:disabled):is([type='checkbox'], [type='radio'], [type='range'], [type='color'], [type='file'], [type='button'], [type='submit'], [type='reset'])) { cursor: var(--cur-pointer) !important; }
+/* Something you drag shows the hand even when it is also a button (a sidebar
+   trigger). The pointer rule above weighs (0,2,1) through its `input…` arm;
+   this one matches that weight and wins by coming later. */
+html :is([data-cursor='grab'][data-cursor], [draggable='true'][draggable]) { cursor: var(--cur-grab) !important; }
+:is([data-cursor='resize'], [role='separator'][aria-orientation='vertical']) { cursor: var(--cur-resize) !important; }
+body.resizing-cols, body.resizing-cols * { cursor: var(--cur-resize) !important; }
+/* Where you can type, the I-beam says so. Without this the inherit rule above
+   gave every field the arrow (or a canvas's hand), and nothing looked editable. */
+:is([data-cursor='text'], textarea, [contenteditable=''], [contenteditable='true'], .cm-content,
+    input:not([type]), input:is([type='text'], [type='search'], [type='email'], [type='url'], [type='number'], [type='password'], [type='tel'])):not(:disabled) { cursor: text !important; }
+/* Resizing a box on its edge: one cursor per axis. While the gesture lasts the
+   canvas holds it in `data-cursor-lock`, so it does not flicker off the edge. */
+[data-cursor='ew-resize'] { cursor: var(--cur-resize) !important; }
+[data-cursor='ns-resize'] { cursor: var(--cur-vresize) !important; }
+[data-cursor='nwse-resize'] { cursor: var(--cur-corner) !important; }
+html:root:has([data-cursor-lock='ew-resize']) * { cursor: var(--cur-resize) !important; }
+html:root:has([data-cursor-lock='ns-resize']) * { cursor: var(--cur-vresize) !important; }
+html:root:has([data-cursor-lock='nwse-resize']) * { cursor: var(--cur-corner) !important; }
+html:root:has([data-cursor='grabbing']) *, html:root:has([data-cursor='grabbing']) *::before,
+html:root:has([data-cursor='grabbing']) *::after { cursor: var(--cur-grabbing) !important; }
+:disabled, [aria-disabled='true'] { cursor: var(--cur-arrow) !important; }
+/* Styled WebKit/Blink scrollbars avoid switching back to the native arrow.
+   OS-owned overlay scrollbars may still ignore CSS cursor declarations. */
+*::-webkit-scrollbar { width: 10px; height: 10px; cursor: var(--cur-arrow) !important; }
+*::-webkit-scrollbar-track { background: transparent; cursor: var(--cur-arrow) !important; }
+*::-webkit-scrollbar-thumb { background: color-mix(in oklab, var(--text) 28%, transparent); border: 2px solid transparent; border-radius: 10px; background-clip: padding-box; cursor: var(--cur-pointer) !important; }
 
  /* Skeleton owns `.card` — shape and an interactive hover, composed with a
     preset for colour. Ours is the SURFACE, so it is named for what it is and the
@@ -326,6 +403,7 @@ body::before {
    controls either: a button in a display face is a button people misread. */
 .display {
   font-family: var(--font-display);
+  line-height: 1.2;
   /* Boogaloo has ONE weight. Asking for bold makes the browser synthesise it —
      smearing the outline sideways — and on a display face that reads as a
      rendering bug rather than emphasis. So weight is fixed here and `font-bold`
@@ -334,6 +412,15 @@ body::before {
   font-weight: 400;
   letter-spacing: 0;
 }
+
+/* Boogaloo needs more optical size than the body face. Keep the hierarchy,
+   enlarge only existing display uses rather than all headings/body text. */
+.display.text-sm { font-size: 1.125rem; }
+.display.text-base { font-size: 1.25rem; }
+.display.text-xl { font-size: 1.5rem; }
+.display.text-2xl { font-size: 1.875rem; }
+.display.text-3xl { font-size: 2.25rem; }
+.display.text-4xl { font-size: 3rem; }
 
 /* Sinking is legible without reading the label. */
 .sunk { opacity: 0.62; filter: saturate(0.7); }
@@ -385,6 +472,20 @@ body::before {
   gap: 0.6rem;
 }
 .floats .float-btn { position: static; }
+
+/* La esquina de abajo a la izquierda del pane: la caja de repositorios y, a su
+   derecha, lo que se está pensando. Una fila que se empaca, como .floats: si no
+   hay caja, el cerebro ocupa la esquina en vez de dejar su hueco. Contra el
+   PANE, no la ventana (ver Shell: `corner`). */
+.corner-dock {
+  position: absolute;
+  left: 1rem;
+  bottom: 1rem;
+  z-index: var(--z-chrome);
+  display: flex;
+  align-items: flex-end;
+  gap: 0.9rem;
+}
 
 /* The mock still places its three by hand: it is the only screen with a
    planner, and its stack is what the row above is measured against. */
@@ -531,3 +632,38 @@ textarea[aria-invalid='true'] {
 @media (prefers-reduced-motion: reduce) {
   .limit-hint.nudge { animation: none; }
 }
+
+/* ---- Icon: barro en reposo, color bajo el cursor (components/Icon.svelte) ---- */
+.icon {
+  display: inline-grid;
+  width: var(--icon-size, 1.25em);
+  height: var(--icon-size, 1.25em);
+  vertical-align: -0.25em;
+  flex: none;
+}
+.icon img {
+  grid-area: 1 / 1;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  transition: opacity 0.16s ease, transform 0.16s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+.icon .glow { opacity: 0; }
+.icon.lit .still,
+.icon:hover .still,
+:is(button, a, [role='button'], summary, label):hover > .icon .still,
+:is(button, a, [role='button'], summary, label):hover > * > .icon .still,
+:is(button, a, [role='button']):focus-visible .icon .still { opacity: 0; }
+.icon.lit .glow,
+.icon:hover .glow,
+:is(button, a, [role='button'], summary, label):hover > .icon .glow,
+:is(button, a, [role='button'], summary, label):hover > * > .icon .glow,
+:is(button, a, [role='button']):focus-visible .icon .glow { opacity: 1; }
+:is(button, a, [role='button']):hover > .icon img { transform: scale(1.08); }
+@media (prefers-reduced-motion: reduce) {
+  .icon img { transition: opacity 0.16s ease; }
+  :is(button, a, [role='button']):hover > .icon img { transform: none; }
+}
+/* Siempre a color (variante natural): bajo el cursor sólo crece un poco. */
+.icon.tinted img { opacity: 1; }
+:is(button, a, [role='button']):hover .icon.tinted img { transform: scale(1.08); }

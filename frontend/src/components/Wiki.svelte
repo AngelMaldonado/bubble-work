@@ -11,10 +11,11 @@
   import FolderIcon from '@lucide/svelte/icons/folder';
   import WikiView from './WikiView.svelte';
   import Crumbs from './Crumbs.svelte';
+  import { readTreeSelection, saveTreeSelection } from '../lib/treeSelection';
 
   let {
     workspace,
-    path = 'README.md',
+    path = '',
     onback,
     onopen,
     onsearch,
@@ -23,7 +24,7 @@
     path?: string;
     onback?: () => void;
     /** which page to go to. The caller owns it, because the page is in the URL */
-    onopen?: (page: string) => void;
+    onopen?: (page: string, replace?: boolean) => void;
     onsearch?: () => void;
   } = $props();
 
@@ -39,6 +40,10 @@
   // first rather than a save that quietly wins.
   let content = $state('');
   let hash = $state('');
+  let loadedPath = $state('');
+  let loadedOwner = $state('');
+  let readGeneration = 0;
+  let ticking = false;
   let naming = $state(false);
   let fresh = $state('');
   let doomed = $state(false);
@@ -74,9 +79,16 @@
     return roots;
   });
 
+  const selectionScope = $derived(`wiki.${workspace.id}`);
   async function loadTree() {
+    const owner = workspace.id;
     try {
-      entries = (await api.tree(workspace.id)).entries;
+      const freshEntries = (await api.tree(owner)).entries;
+      if (owner !== workspace.id) return;
+      entries = freshEntries;
+      const files = entries.filter((e) => !e.dir && e.area !== 'asset' && e.area !== 'thread').map((e) => e.path);
+      if (!path) onopen?.(readTreeSelection(api.me?.id ?? 'local', selectionScope, files.length ? files : ['README.md']), true);
+      else if (files.includes(path)) saveTreeSelection(api.me?.id ?? 'local', selectionScope, path);
       error = '';
     } catch (e) {
       error = (e as Error).message;
@@ -84,15 +96,31 @@
   }
 
   async function loadPage() {
+    if (!path) return;
+    const generation = ++readGeneration, selected = path, owner = workspace.id;
     try {
-      const doc = await api.readPath(workspace.id, path);
+      const doc = await api.readPath(owner, selected);
+      if (generation !== readGeneration || owner !== workspace.id || selected !== path) return;
       html = doc.html;
       content = doc.content;
       hash = doc.hash;
+      loadedPath = doc.path;
+      loadedOwner = doc.workspace;
+      if (entries.some((e) => e.path === selected && e.area !== 'thread' && e.area !== 'asset')) saveTreeSelection(api.me?.id ?? 'local', selectionScope, selected);
       error = '';
     } catch (e) {
-      error = (e as Error).message;
+      if (generation === readGeneration) error = (e as Error).message;
     }
+  }
+
+  async function tickTodo(index: number, done: boolean) {
+    if (ticking || !loadedPath || loadedOwner !== workspace.id || loadedPath !== path) throw new Error('Espera a que se lea o guarde este documento.');
+    ticking = true;
+    const at = loadedPath, owner = workspace.id;
+    try {
+      const out = await api.patchPath(owner, at, { base: hash, todo: { index, done } });
+      if (path === at && workspace.id === owner) { readGeneration++; html = out.html; content = out.content; hash = out.hash; }
+    } finally { ticking = false; }
   }
 
   async function save(markdown: string) {
@@ -140,9 +168,11 @@
     try {
       await api.removePath(workspace.id, path);
       await loadTree();
-      // Back to the README: the page that was on screen is gone, and leaving
-      // its address up would show an error where a document used to be.
-      onopen?.('README.md');
+      // Resolve the first remaining file rather than an unavailable saved id.
+      const files = entries.filter((e) => !e.dir && e.area !== 'asset' && e.area !== 'thread');
+      const first = files[0]?.path ?? 'README.md';
+      saveTreeSelection(api.me?.id ?? 'local', selectionScope, first);
+      onopen?.(first, true);
     } catch (e) {
       error = (e as Error).message;
     }
@@ -173,10 +203,13 @@
 {/if}
 
 <WikiView
+  loading={!hash && !error}
   workspace={workspace.name}
   {path}
   {html}
   markdown={content}
+  scrollKey={`${loadedOwner}/${loadedPath}`}
+  ontodo={tickTodo}
   tree={nodes}
   {onback}
   {onsearch}

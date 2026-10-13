@@ -1856,6 +1856,891 @@ el markdown lo referencia, no porque exista una fila en una lista de adjuntos.
 Borrar la referencia quita la cajita, que es lo que cualquiera espera. Una lista
 paralela acabaría discrepando de lo que el documento dice.
 
+## Artefactos efímeros: pensar antes de que exista el trabajo
+
+Lo que se piensa antes de escribir un hilo —un interrogatorio o un documento
+Markdown efímero— vive en `artifacts` + `artifact_entries`, cuelga de una nota del inbox y
+se ve en la aplicación mientras el agente pregunta desde la terminal. El primer
+`kind` es `grill`: preguntas estructuradas (`id`, ronda, cuerpo, opciones,
+recomendación, `depends_on`) que la persona acepta o cambia en
+`/artefacto/<id>`. El árbol y la frontera se DERIVAN de `depends_on`.
+
+- **Entradas que sólo se añaden**, no un JSON por artefacto: el agente escribe
+  una ronda mientras la persona contesta otra, y con un solo documento los dos
+  escribirían la misma fila. Escribe sólo el servidor (orden, autor, validación
+  por clase en Go).
+- **No calienta nada** y no entra en git: es pensar, no producir. Lo que vale
+  la pena pasa al hilo en el traspaso (`artifact_handoff`), que se escribe para
+  sostenerse solo —decisiones con lo que rechazaron— porque **el artefacto se
+  borra** `tuning.artifact_days` (30) después de su último movimiento, salvo que
+  se fije. La nota del inbox no caduca: es el backlog.
+- **Lo ven quien lo abrió y el lead global.** La caja de la esquina (en todas
+  las pantallas) lista los tuyos y dice si tu agente llamó al MCP en los últimos
+  5 minutos (`agent_tokens.last_used_at`).
+- **Protocolos del binario** (`prompts/grill.md`, adaptado de
+  `grilling` de mattpocock/skills, MIT, y `prompts/ephemeral-markdown.md`), que
+  viajan en cada respuesta de `agents_md` y se editan desde Prompts. Bubble no
+  corre ningún modelo.
+
+Rechazado: el interrogatorio dentro de la hoja del inbox (Q36) — se pidió una
+caja propia y una pantalla con dirección, que es el enlace que el agente da.
+Rechazado: dos prompts según si el harness tiene la skill instalada — el
+servidor no puede saberlo, y dos métodos se separan. Rechazado: dibujar el árbol
+el agente — un dibujo guardado es otra copia que puede mentir.
+
+**El agente se entera solo de que contestaste.** Ninguna IA se despierta desde
+fuera cuando ya terminó su turno, así que es el agente quien espera, con lo que
+tenga a la mano. Para un `grill` abierto, `artifact_append` devuelve un `watch_command`: un bucle de
+`curl` contra `GET /api/artifacts/{id}/wait` que imprime UNA línea por cada
+«Enviar» y sale cuando el artefacto se traspasa o desaparece. En Claude Code va con la tool
+`Monitor`, que entrega cada línea al agente; con otro shell, en primer plano; sin
+shell (apps de escritorio), `artifact_wait` por MCP en bucle de 45 s.
+
+El script no puede usar el token del agente —vive en la configuración del
+harness, y sólo abre `/mcp`— así que cada artefacto lleva una **llave de
+vigilancia** (`watch_key`, oculta) que sólo contesta «¿ya contestaron?» y muere
+con él. La aplicación dice «tu agente espera» mientras hay una espera abierta
+(en memoria: es un hecho de las conexiones de este proceso, no una fila).
+
+Rechazado: notificaciones MCP (`resources/subscribe`) — los clientes no
+despiertan al modelo con ellas. Rechazado: escribir «listo» en el panel del
+agente con tmux — sólo sirve en terminal y depende del multiplexor. Rechazado:
+abrir la API REST al token del agente para el script — rompe la regla de que ese
+token abre el MCP y nada más.
+
+El razonamiento completo, pregunta por pregunta, en
+`docs/grill/2026-10-08-field-feedback.md`.
+
+**Hecho cuando:** un interrogatorio real de Cuby llega del harness al traspaso
+contestado en la aplicación, y el usuario lo valida.
+
+## El kanban se quita; el planeador muestra lo capturado flotando *(built)*
+
+Probado en Cuby con un equipo de cuatro: las burbujas y los hilos salían más
+rápido de lo que un lead los colocaba en columnas, y el plan se pasó a una junta
+semanal. Se quitan las dos tablas de columnas (`stages`, `thread_stages`), el
+campo que colocaba cada fila (`stage`), el orden a mano dentro de una columna
+(`bubbles.rank`), la opción `stage` de `set_bubble` y el componente entero. En
+su sitio, el planeador elige UNA vista desde el selector inferior: Inbox,
+Calendario o Secuencia (si está encendida). Por defecto abre el inbox. Las notas
+flotan con la misma esfera de 84 px y el nombre debajo que el board principal,
+sin halo exterior. No hay barra de filtros ni campo de captura arriba.
+
+El TTL que se ve junto a una nota pertenece a sus **artefactos**, no a la nota:
+se muestra la caducidad más cercana (días, horas o minutos), o «fijado» si todos
+están fijados. El hover desglosa cada artefacto y aclara que la nota permanece.
+`/api/artifacts?scope=inbox` devuelve los del equipo sólo al lead global; la
+lista del cerebro, sin ese scope, sigue siendo personal.
+
+Esto deshace «El planeador orquesta BURBUJAS, en ETAPAS del departamento» y
+«El orden de una columna». `down` devuelve el esquema, no en qué columna estaba
+cada cosa. La vista larga que lo sustituye es la de objetivos (grill Q1),
+todavía sin construir.
+
+## La secuencia del planeador se arma en un canvas *(built)*
+
+El panel de columnas se sustituye por un lienzo punteado con pan y zoom que
+ocupa **todo el cuerpo**, debajo de la cabecera principal «← board / Planeador».
+Se descartó extenderlo detrás de esa cabecera: la navegación conserva su franja,
+y sólo el contenido es canvas. Toolbox y botones se superponen dentro del cuerpo;
+desplazar el lienzo no los mueve. El drag de fondo y de nodos no selecciona texto;
+el campo de búsqueda conserva su selección y edición normales.
+
+La caja de elementos sin secuenciar contiene el selector Módulos / Hilos, cuyo
+ancho se ajusta a sus botones, no se estira al ancho de la caja. Al cerrar se
+contrae con una animación que respeta `prefers-reduced-motion`, y su contenido
+queda inerte.
+
+Arrastrar coloca un nodo; en una línea vacía el primero inicia el paso 1.
+Mantener el «+» bajo A y soltarlo sobre B dice «B va después de A». Dos destinos
+desde A van en paralelo. Los pasos con varios elementos se dibujan dentro de
+una región común «En paralelo · Paso N», calculada desde sus posiciones; el
+mismo número también aparece en cada nodo. Moverlos a alturas diferentes no
+cambia su paso. La «×» saca un nodo de la línea y lo devuelve a la caja; el
+nombre abre su trabajo.
+
+Crear desde «+ nuevo» relee también la cola paginada, no sólo el board, y elige
+el modo correspondiente a lo que nació (hilo o módulo). Antes el registro se
+creaba pero no aparecía en el toolbox hasta cambiar de modo. El botón limpia
+la búsqueda de la caja para no ocultar con ella lo recién creado.
+
+**No cambia el registro**: `sequence` sigue siendo un número, compartido por
+los elementos de un mismo paso. Las flechas se derivan entre todos los nodos
+de pasos consecutivos: esto es una secuencia con paralelismo, **no un grafo de
+dependencias arbitrarias**. Se rechazó guardar aristas aparte en esta iteración:
+serían otro orden capaz de contradecir los pasos existentes. Dibujar una
+conexión hacia un nodo anterior lo recoloca, no crea un ciclo.
+
+Las posiciones, el encuadre y los ids colocados pero aún sin conectar se
+recuerdan por persona y modo en este navegador, no se comparten entre máquinas.
+Los nombres y el acceso se releen del servidor; no se guardan copias del trabajo
+localmente. Mientras se guarda el orden se bloquea otra conexión, para que dos
+gestos seguidos no sobrescriban los pasos desde una lectura vieja.
+
+Verificado con Chromium contra una base aislada: módulos e hilos, serie y
+paralelo, mover, quitar, abrir, cambiar de modo y persistir posiciones tras
+recargar. Verificadas además la creación por «+ nuevo» sin recargar, el cambio
+de modo al crear otra clase de trabajo, los controles fijos durante pan y los
+anchos intermedios de la animación. Doce pruebas del orden y de las regiones
+paralelas se ejecutan en `just check`.
+
+## Calendario de papel y accesos personales a hilos *(built)*
+
+Mes, semana y agenda comparten una hoja cálida con textura tenue, cantos,
+sombra y anillas, de hasta 1160 px de ancho, centrada en el cuerpo. Se reutiliza
+el icono 3D del calendario; no hay otra pila de rendering ni imagen que estirar
+con la grilla. La revisión siguiente hizo la hoja cuadrada (`aspect-ratio: 1`,
+con mínimo de 680 px para ventanas estrechas), en un contenedor principal con
+scroll y espacio inferior para el HUD. Su cabecera queda sticky: mes y año se
+eligen con `FilterPick`, también hay saltos de año por flechas. La colección del
+combobox se inicia con sus opciones, no vacía: el valor preseleccionado debe
+mostrar su etiqueta desde el primer render, no «cualquiera».
+
+Se rechazó el rango fijo de repeticiones «dos meses atrás / catorce adelante»:
+`datesSet` pasa la ventana visible al planner, de modo que saltar varios años
+también proyecte los eventos recurrentes en ese año. No se guarda una fila por
+ocurrencia. Las tres vistas, la hoja cuadrada, el clearance del dock, los
+controles sticky, saltos de mes/año y recurrencias a seis años fueron probados
+en Chromium, con ambas paletas y ventana estrecha.
+
+El papel tiene su paleta clara y oscura y el título sigue el rango visible al
+navegar. La prueba con fechas encontró otro fallo: el board
+buscaba `due_date` en la vista de evidencia, que no la proyecta. Ahora lee el
+plazo de la fila del hilo, junto con prioridad y secuencia, tanto para un
+workspace como para el board agregado. Dos pruebas live fijan ese contrato.
+
+El pin es un **acceso personal a un hilo**, no el pin de un artefacto que impide
+su caducidad. Se guarda sólo su id en `prefs.value.thread_pins`, privado incluso
+frente al lead global. La revisión siguiente revirtió la ubicación: el pin
+vive a la derecha del cerebro en el HUD, también dentro del hilo; ahí fija o
+quita el hilo actual y abre los accesos personales. Ya no hay otro pin en la
+cabecera. Los nombres, proyectos y
+permisos se releen; un hilo borrado o sin acceso no se muestra. Fijarlo no cambia
+calor, prioridad, secuencia ni producción.
+
+Se rechazó un flag compartido en `threads` y guardar nombres en localStorage:
+quien fija es el lector y su decisión debe seguirlo entre dispositivos, no
+cambiarle el tablero a los demás. `setPrefs` ahora recibe parches, relee el saco
+y serializa los guardados de esta app para que cambiar Módulos / Hilos no borre
+los pins. No es una transacción entre navegadores: dos cambios simultáneos del
+mismo campo en dispositivos distintos siguen siendo último guardado gana.
+Si falla la lectura inicial de pins no se permite sobrescribir a ciegas; se
+muestra el error con un botón para reintentar.
+
+La cabecera del hilo no repite el nombre de la banda como otro estado, ni la
+misma prioridad de hilo y burbuja; se quita el botón de etiquetas que no tenía
+acción. Un estado distinto o prioridades distintas conservan su información.
+
+Verificados en Chromium: las tres vistas y ambos temas, drag sin selección,
+ancho del selector, pin tras recargar, navegación por el acceso, quitarlo y
+cambiar de modo sin perderlo. El menú también se abre con teclado en el board
+y se mantiene dentro del viewport al estrechar la ventana. Probado un fallo de
+lectura de preferencias: muestra el error, no escribe y permite reintentar.
+Cuatro pruebas frontend cubren la fusión y los fallos de preferencias; tres
+live prueban persistencia y privacidad de pins.
+
+## Lectura persistente, checks y controles de atención *(built)*
+
+Los docks de repositorios, artefactos e hilos fijados usan el mismo lenguaje:
+objetos 3D sin un círculo detrás, barro blanco cuando están vacíos y colores
+naturales cuando contienen algo. Cerebro rosa, caja kraft y pin rojo; los dos
+assets nuevos se generaron con Codex CLI usando los originales como referencia.
+No es el color de la prioridad ni del calor. Se rechazó pintar el objeto por
+hover: ahora la presencia de contenido decide su color, y hover sólo lo eleva.
+
+Usuarios abre por hover, foco o click un roster del workspace. El `+` invita a
+personas existentes; `−` pide confirmación para quitar su membresía, no borrar a
+la persona. Leads pueden actuar; miembros sólo ven el roster. No se puede sacar
+al último lead. El editor de roles y del perfil sigue disponible desde la lista.
+«Conectar tu IA» queda en el menú de la barra lateral, no en el HUD. Las acciones
+laterales `…`, borrar página, quitar repo/pin e invitar/expulsar igualan el alto
+interior de su fila y siguen siendo cuadradas.
+
+La memoria de lectura pertenece al navegador: user + identidad del documento +
+contenedor de scroll. Se comparte por todos los `Prose`, incluidos los que
+usan el viewport, y el editor recuerda su propia posición. No hay preferencia
+ni evento en el servidor. Hilo, página auxiliar y wiki mantienen posiciones
+independientes; un documento nuevo comienza arriba. Se guarda la última posición
+observada, no el cero de desmontar el DOM, y restaurar cede a la interacción del
+lector o a un hash de navegación. Una actualización del hilo no debe cambiar
+la página auxiliar seleccionada; lecturas tardías de otro archivo se descartan.
+
+Los checks de documentos ahora guardan desde `DocEditor`: hilo/wiki hacen el
+PATCH quirúrgico con hash base; conflicto o fallo revierte el control y muestra
+el error. El render asigna `data-todo-index` desde el AST a la línea de fuente:
+no usa el orden de inputs visibles, porque un ejemplo cercado ocupa un índice
+en el motor de checklists actual pero no produce un input. Los checks sin una
+operación de guardado o sin dirección válida quedan deshabilitados. No se
+cambió el espacio de índices del motor ni se añadió un template.
+
+La columna general de lectura/edición llega a 1200 px sin forzar un mínimo que
+rompa móvil. Se quita el hard-wrap global del renderer: un salto lógico de fuente
+no introduce un `<br>`; los saltos explícitos de Markdown se conservan. El prompt
+compartido `markdown`, editable en Prompts y adjunto a cada `agents_md`, indica
+párrafos de una línea lógica, sin cortes a 72/80 columnas ni HTML/CSS para forzar
+ancho. Se rechazó pretender que Markdown controle el `min-width` de la UI.
+
+Probado en Chromium contra una base desechable: invitación/expulsión real,
+protección del último lead, miembro sin acciones, acceso desde el menú, pin junto
+al cerebro, check por mouse y teclado, rollback por conflicto y persistencia de
+scroll de hilo/auxiliar/wiki/Prompts/artefacto. Pruebas Go fijan dirección de
+checks (cercados, anidados, Unicode y CRLF) y saltos de línea; las live fijan
+persistencia del tick y que la guía va a ambos roles de `agents_md`. Verificación
+final: `just bundle`, `just check` (552 live y 23 frontend, sin fallos; Svelte
+sin errores ni warnings) y suite Chromium sin errores de página.
+
+## El archivo elegido se recuerda en el navegador *(built)*
+
+Hilos, Wiki y Prompts recuerdan el id del archivo elegido en localStorage,
+separado por usuario y contexto (workspace/hilo para Hilos, workspace para Wiki,
+departamento para Prompts). No se guarda contenido ni se escribe una preferencia
+compartida. Se valida contra la lista actual que devuelve el servidor: si falta,
+se borró o dejó de estar disponible, se elige el primer archivo. El filetree
+recibe explícitamente esa selección para marcarlo desde el primer render.
+
+La URL explícita de Wiki/Prompts tiene prioridad. Abrir la Wiki desde el HUD o
+su dirección sin archivo resuelve la memoria —o el primer archivo disponible— y
+reemplaza esa dirección por la página real, sin agregar un salto de historia.
+Hilos restaura su página auxiliar sólo después de conocer los archivos de ese
+hilo, nunca con la lista del anterior. Crear/seleccionar/borrar actualiza esa
+memoria. Se rechazó recordar una ruta sin validar ni forzar README como primer
+archivo: el primero es el que realmente aparece en ese árbol.
+
+La caja kraft tenía el mismo tamaño de `<img>` que la blanca, pero más margen
+transparente en el asset. Se normalizó el encuadre por el cuerpo visible, no por
+los píxeles casi transparentes: en la imagen de 400 px ambos cuerpos y centros
+difieren como máximo 3 px (menos de medio píxel en el dock). No se agrandó el
+botón ni se añadió otra transformación al hover.
+
+Verificado con Chromium: selección inicial, recarga y retorno al auxiliar,
+aislamiento entre hilos, archivo borrado, retorno a Wiki desde HUD, enlaces
+explícitos, Prompts y memoria inválida. También los bounds de ambos assets y
+capturas de la caja vacía/con repos. `just bundle` y `just check` pasan: 552 live,
+28 frontend; Svelte sin errores ni warnings. Cinco pruebas frontend cubren la
+selección, aislamiento, storage bloqueado y dirección de Wiki.
+
+## El menú pertenece al tile del proyecto *(built)*
+
+En el sidebar expandido, el tile completo del proyecto —navegación y `…`—
+pinta el fondo y el borde, con el mismo ancho y alineación que Todos/Secuencia.
+El menú sigue siendo un botón hermano, no un botón anidado: pulsarlo no debe
+navegar al proyecto. Se mantiene cuadrado y su hover se dibuja con un inset de
+3 px dentro del tile, sin un bloque suelto fuera de su borde. El hover/foco de
+cualquiera de los dos controles resalta toda la fila y conserva el baño cálido
+de un proyecto produciendo. En el rail estrecho queda el trigger original.
+
+Se rechazó encoger el área seleccionada para hacer sitio al menú fuera: el
+menú es parte de la fila, no otra columna. Verificado en Chromium: bounds
+iguales a Todos/Secuencia, menú contenido y cuadrado, hover cálido, oscuro/claro,
+nombre largo truncado, renombrado real y confirmación de borrar desde teclado.
+`just bundle` y `just check` pasan (552 live, 28 frontend, Svelte sin warnings).
+
+## Markdown efímero y planeador de lectura por participación *(built)*
+
+El segundo `kind` es `markdown`: el agente publica mediante MCP y la persona
+lee en `/artefacto/<id>`, sin editor ni checkboxes escribibles. Comparte cerebro,
+captura, permisos, caducidad, fijado y traspaso con el grill. La migración añade
+el valor al selector; no hay una colección ni un árbol git paralelo.
+
+Cada entrada `document` lleva `{filename, markdown, base}`: nombre plano `.md`,
+fuente completa de hasta 128 KiB y secuencia de la publicación que reemplaza
+(0 al principio). Se conservan las revisiones como entradas inmutables; una base
+vieja rechaza el lote entero. La vista se deriva de la última publicación,
+incluso con `artifact_read(since)`. La web usa goldmark + Prose, con diagramas,
+imágenes plegadas y memoria de lectura; MCP recibe fuente, no HTML. La puerta
+web de respuestas no escribe documentos y la API de registros sigue cerrada.
+Se revalida que el artefacto siga abierto dentro de la transacción de publicación,
+para no resucitarlo si se traspasó mientras el agente esperaba el lock.
+
+Rechazado: editar este documento en Bubble —se pidió sólo publicación del agente—;
+y tratar revisiones como notas acumuladas del grill: hay un documento vigente,
+no una conversación. Rechazado: meterlo en Wiki o Hilos para prestarle su UI,
+porque convertiría un borrador que caduca en producción. El protocolo nuevo se
+sirve en todos los `agents_md`, se edita desde Prompts y no propone watcher.
+
+El cerebro muestra **ocho** entradas como máximo; después `+N` abre
+`/planeador/inbox`, de sólo lectura incluso para un lead. Clic en el cerebro
+abre también ese Inbox; hover/foco siguen ofreciendo los accesos individuales.
+Ambas entradas conservan la ruta de origen para el botón volver. El contador usa todos
+los artefactos propios, no una lista truncada a cien. La captura ofrece enlaces
+a sus artefactos; sigue siendo navegable tras traspasarse mientras alguno viva.
+No hay formulario, promoción, descarte ni autosave en esta hoja read-only.
+
+El planeador para operadores deja de ser sólo Agenda: ofrece Inbox, calendario
+y secuencia si está habilitada. `GET /api/planner/read` recorta en el servidor:
+
+- Membresía del workspace como frontera exterior, incluso si hay una asignación.
+- Burbujas de las que es responsable o con al menos un hilo asignado a él.
+- Hilos asignados a él, incluidos los sueltos; también los hijos de módulos que
+  tiene a cargo. Estar asignado a un hijo no expone sus hermanos ajenos.
+- Capturas y artefactos propios, y sólo nombres de proyectos presentes en el
+  resultado. El lead global conserva su alcance departamental.
+- Fechas de ese trabajo; las juntas departamentales siguen siendo compartidas.
+
+El board que alimenta el buscador global usa esa misma proyección en estas
+rutas: no queda una lista general oculta detrás de la vista filtrada. Sus
+comandos de creación desaparecen y busca títulos del subconjunto, no el texto
+completo del workspace. Lecturas tardías de otro contexto se descartan. Este
+recorte es **del planeador de lectura**: no cambia los permisos ordinarios del
+board operativo ni la Wiki dentro de un workspace.
+
+Rechazado: esconder sólo tarjetas en Svelte manteniendo una respuesta general;
+y equiparar pertenecer a un workspace con participar en todas sus burbujas.
+Verificado: validación, base vieja y rollback de lote; fuente/HTML y read desde
+`since`; privacidad, ausencia de calor, captura tras handoff, responsables,
+asignados, hermanos y frontera de membresía. Chromium prueba ocho +3, Inbox
+para operador, documento con checkbox deshabilitado y Mermaid, secuencia
+personal, calendario, buscador acotado, ruta de lectura para lead y ausencia de
+escrituras al navegar. `just bundle` y `just check`: 575 live, 30 frontend,
+Svelte sin errores ni warnings. Sin commit ni despliegue.
+
+## Volver al contexto, canvas de lectura y affordances de interfaz *(built)*
+
+Los accesos del HUD (pins, artefactos y el Inbox de lectura) guardan una pila de
+retornos por usuario y sesión: destino y ruta desde la que se abrió. Volver
+consume sólo el destino actual; un pin de otro proyecto no sustituye el origen,
+y artefacto → pin → volver se deshace por niveles. Sobrevive a una recarga y
+rechaza URLs externas; si el navegador bloquea storage conserva memoria local.
+Rechazado: deducir el origen del workspace del elemento abierto, o del primer
+workspace al que pertenece la persona.
+
+El proyecto cambia la inicial por la ilustración de su banda, derivada de su
+burbuja más caliente; el tooltip muestra la última producción disponible de sus
+burbujas y se refresca cada minuto. Es un **Tooltip real sobre el ícono**, con
+120 ms de delay y portal, no el `title` nativo lento que se perdía con el del
+botón padre. Usa un span de trigger (sin botones anidados), conserva el clic de
+navegación y ofrece la misma información mediante `aria-describedby` en la fila.
+Sin evidencia, dice «Sin producción registrada», no inventa «ahora». No se
+almacena una clasificación de workspace. Chromium validado claro/oscuro y rail,
+con recencia relativa, ausencia de producción y navegación desde el ícono.
+
+`SequenceCanvas` admite lectura: pan, zoom, fit y navegación, pero sin toolbox,
+conexiones, completar, sacar ni mover nodos. Se reutiliza en `/secuencia` y el
+planeador de lectura. La secuencia de operador tiene Tareas/Módulos, conserva
+el alcance por participación en servidor, y el buscador global usa también ese
+alcance. Los leads conservan Organización/Lo mío. Rechazado: mantener la lista
+vertical como una segunda visualización del mismo modelo.
+
+En Todos se pide una vez el directorio autorizado para resolver responsables
+y asignados del drawer; no aparecen IDs como nombres ni hacen falta N rosters.
+Eliminar burbuja es una acción explícita con confirmación del nombre/proyecto,
+visible sólo para lead global o de ese workspace. Es la **última opción** del
+drawer, debajo de cerrar/reabrir, y del menú contextual del orbe; ambas puertas
+usan la misma confirmación y el ID objetivo, sin necesitar abrir el drawer para
+borrar desde clic derecho. La regla del servidor sigue siendo la autoridad. Eliminar **no** borra hilos ni documentos: quedan sueltos;
+cerrar conserva la burbuja y se puede deshacer. La acción puede abrirse desde
+Todos porque su objetivo es un ID y workspace concretos en la confirmación.
+
+Mes conserva la hoja cuadrada. Semana y agenda expanden la hoja con `height:
+auto` y usan el scroll del contenedor principal, no un segundo scroll interior.
+Mes/año tienen controles más anchos y los menús de FilterPick tienen altura
+máxima y scroll propios, acotados al viewport. Rechazado: limitar la franja de
+horas para ocultar el segundo scrollbar, porque quitaría parte del día.
+
+El cursor comparte una familia de trazo redondeado y contraste: flecha,
+dedo, mano abierta/cerrada y mano de redimensionado, en claro/oscuro. Las manos
+y el dedo se diseñan como SVG y se sirven rasterizados en PNG transparente de
+32×32 para no caer al cursor nativo cuando un navegador rechace cursores SVG. La mano
+abierta inicialmente tenía seis dedos: corregida a cuatro dedos y un pulgar y
+revisada visualmente a escala ampliada. Los scrollbars estilizados de Blink/
+WebKit también declaran el cursor; un scrollbar overlay controlado por el SO
+puede ignorar CSS, y no se promete poder sustituir esa affordance nativa.
+La regla universal ahora hereda el cursor del hit target: no vuelve a poner
+flecha sobre el texto, la imagen ni los pseudo-elementos de un botón/menuitem.
+Cubre globalmente botones, enlaces, menús en portales, opciones, tabs, árboles,
+checkboxes y demás inputs clickeables, eventos del calendario, arrastres y
+separadores de redimensionado. La auditoría de estilos computados en las vistas
+probadas no deja elementos visibles con cursor nativo; los ocho PNG decodifican
+con sus dimensiones correctas.
+Rechazado: forzar flecha en cada descendiente, que hacía que sólo la orilla del
+menú tuviera el dedo y que un botón dentro del canvas conservara la mano.
+
+Los contadores del dock son círculos de 18px para un dígito y píldoras fully
+rounded si necesitan más ancho. El pin abandona la clase global `badge`, cuyo
+padding de Skeleton lo convertía en un óvalo; todos declaran box-sizing,
+line-height y padding propios.
+
+Verificado en Chromium: retorno desde pin de otro proyecto, artefacto tras
+reload, ilustraciones, nombres en Todos, borrado conservando el hilo, canvas
+read-only con pan y cambio de modo, dropdown acotado/ancho, un solo scroll del
+calendario y cursores por contexto, incluyendo imágenes/texto/pseudo-elementos
+de los botones del HUD y del menú completo, y dimensiones/radio de los
+contadores de un dígito. `just check`: 575 live, 36 frontend, Svelte
+sin errores ni warnings. Bundle reconstruido; sin commit ni despliegue.
+
+## Brain por capas y cursores Retina *(built)*
+
+El anillo de conexión queda detrás del dibujo y del contador, no se pinta al
+final por ser `::after`: el botón aísla su stacking context; anillo z=0,
+ilustración z=1, número z=2. También conserva ese orden al hacer hover.
+
+Los PNG de cursor de 32×32 eran suficientes en 1x pero se pixelaban en Retina.
+Se rasterizaron los mismos SVG a 64×64 y se sirven con `image-set` de densidades
+1x/2x, sólo cuando el navegador soporta esa sintaxis para `cursor`. El cursor
+sigue midiendo 32 píxeles CSS y conserva su hotspot; el fallback 1x sigue siendo
+PNG. Rechazado: usar el PNG de 64 como un cursor de 64 CSS px, que lo agrandaría,
+o volver al SVG sin fallback y reintroducir el cursor nativo.
+
+Chromium verificado en DPR 1 y DPR 2: capas del anillo/brain/badge, carga de la
+imagen de la densidad correcta, 2x de 64×64, pan y ambos temas. Bundle
+reconstruido; `just check` pasa (575 live, 36 frontend, Svelte sin errores ni
+warnings). Sin commit ni despliegue.
+
+## Editor, contexto de módulo, secuencia entre módulos y Mi espacio *(built)*
+
+**Ortografía.** El editor Markdown (CodeMirror) y el título de la tarea ya no
+desactivan el corrector: `spellcheck`, `autocorrect` y `lang="es"`. Las
+sugerencias son las del navegador, con **clic derecho**, y la corrección pasa por
+el historial del editor y se guarda como cualquier escritura. Rechazado: un
+corrector propio con sugerencias al seleccionar o clic izquierdo — un segundo
+diccionario y otra UI para lo que el sistema ya ofrece.
+
+**Formato.** `/negrita`, `/cursiva`, `/subrayado` en el menú `/` (en línea, no
+abren bloque nuevo), `Ctrl/Cmd+B/I/U` y una barra B·I·U encima del editor de
+hilos, wiki, prompts y campos Markdown. Con selección envuelve; aplicarlo de nuevo
+lo quita; sin selección deja un marcador seleccionado. El subrayado es
+`++texto++`: extensión inline de goldmark que sólo emite `<u>`; el renderer sigue
+escapando HTML crudo y código. Rechazado: habilitar HTML (`<u>`) en Markdown.
+La guía `prompts/markdown.md` lo enseña a los agentes.
+
+**Dónde estoy.** El hilo lleva su ruta dentro de la barra que ya tenía, entre «←
+board» y el nombre editable, igual en renderizado, markdown y cambios:
+`Proyecto / Módulo / #N Tarea [/ página]`. Proyecto y módulo son botones en
+píldora, como «← board» (enlaces con forma de botón: ⌘/Ctrl+clic abre otra
+pestaña), separados por `/`; los largos se cortan con «…». Rechazado (a pedido
+del usuario): flechas «→» y enlaces de texto. Rechazado: una segunda barra encima, que repetía el título. Con
+proyecto y módulo navegables (el módulo abre el board con su cajón). Tareas sueltas
+dicen «Sin módulo». No se escribe en el documento: renombrar o mover la tarea no
+deja un encabezado viejo.
+
+**Secuencia entre módulos.** El modelo no cambia: `threads.sequence` es UNA
+línea compartida del departamento; valores iguales = paralelo; las flechas se
+derivan. En modo Hilos cualquier tarea se encadena con cualquier otra — del
+mismo módulo o de otros — con el `+`. Cada nodo muestra ahora
+`Proyecto · Módulo` en su propia línea (nodo 128 px) y el buscador del toolbox
+encuentra por módulo. Es orden, no dependencia: no bloquea nada. El lead la
+edita; la vista de quien opera es la misma secuencia, de lectura.
+
+**Mi espacio** (`/mi-espacio`). Escritorio personal: notas adhesivas Markdown
+con checkboxes, color de papel, proyecto opcional y adjuntos; archivos e imágenes
+sueltos; y colores personales por proyecto. Colecciones `personal_notes` y
+`personal_assets` (`1788529000_personal_space.go`) con reglas `owner =
+@request.auth.id` en lectura, escritura y borrado, **sin excepción para el lead
+global**; el dueño no se puede cambiar; sólo se asocia a proyectos donde se
+participa; los archivos son `Protected` y se sirven con token de archivo de su
+dueño (20 MB). Borrar una nota se lleva sus archivos. No calienta, no entra en
+git, no aparece en el board. Los colores viven en `prefs.project_colors` y tiñen
+calendario y secuencia **sólo para esa persona**; no sustituyen banda, calor ni
+prioridad. Rechazado: modelarlo como burbuja (una burbuja tiene resultado,
+dueño y muere; esto no) y guardar contraseñas (fuera de alcance).
+
+Validado: 611 live (privacidad frente a otro usuario y al lead global, token
+de archivo, cambio de dueño, proyecto ajeno, color inválido, cascada, no-heat,
+`++subrayado++`), 40 frontend (`formatEdit`, slash en línea), Go del subrayado
+(código, `+` sueltos, HTML escapado). Chromium: encadenar tarea del mismo módulo en
+paralelo con la de otro y luego una de otro módulo, etiquetas sin truncar, vista
+de lectura compartida, ruta del hilo en ambos modos y navegación al módulo,
+atributos de ortografía, atajo/barra/slash y su render, notas (Markdown, casilla,
+título, proyecto, colores, adjunto, imagen protegida, recarga, borrado), color en
+la secuencia, privacidad frente al lead, claro/oscuro/420 px. Sin commit ni
+despliegue.
+
+### Mi espacio como lienzo infinito *(built)*
+
+La rejilla de notas se veía como un formulario. Ahora Mi espacio es un lienzo
+infinito con los gestos del secuenciador:
+- arrastrar el fondo mueve la vista;
+- ⌘/Ctrl+rueda acerca alrededor del puntero;
+- hay controles −, %, + y «Ver todo».
+
+Cada nota es un post-it libre:
+- Arrastrarlo lo mueve; un clic sin mover lo abre para escribir.
+- Los bordes cambian el tamaño, cada uno con su cursor: el derecho el ancho (↔),
+  el inferior el alto (↕) y la esquina los dos (⤡). Durante el gesto el cursor
+  queda fijo (`data-cursor-lock`). Doble toque en el borde inferior o la esquina
+  devuelve el alto al del texto. Lo que no cabe se corta con «…» en vez de hacer
+  scroll; escribiendo se ve entero.
+- El cuerpo reserva al menos 5 rem con cursor de texto, para que se note que ahí
+  se escribe aunque la nota esté vacía.
+- Mientras se escribe, la nota se arrastra por su marco, y el lienzo se mueve con
+  arrastre y rueda sin cerrar el editor. Un clic quieto fuera de la nota lo
+  cierra.
+- Con el teclado: las flechas lo mueven 16 px (80 px con Shift), Alt+flechas
+  cambian su tamaño y Enter lo abre.
+- La última nota tocada queda arriba.
+
+El papel es el color de la nota y la franja superior es el color personal del
+proyecto. Color y proyecto se eligen en desplegables con la superficie y los
+bordes del tema:
+- La paleta tiene 12 pasteles con nombre, en una rejilla (←→ / ↑↓).
+- El color se abre desde su botón o con clic derecho en la nota. El clic derecho
+  abre el desplegable; no cambia el color.
+- Cada desplegable se mide en pantalla, ya con el zoom, y se abre hacia abajo si
+  cabe; si no, hacia el lado con más sitio.
+
+Al escribir, la nota se ensancha a 560 px. El editor (18 rem) va sobre la
+superficie del tema, para que en oscuro no quede texto claro sobre pastel, y
+tiene el mismo interruptor de vim que el resto (`:w` guarda, `:q` cierra).
+
+Sin caja de herramientas: su filtro guardado escondía notas sin que hubiera dónde
+quitarlo, y el resto no hacía falta en el lienzo. Su estado guardado se borra al
+cargar. Un archivo se adjunta soltándolo sobre una nota; soltado sobre el fondo,
+avisa en vez de subir un archivo suelto que no se vería. Sin notas, el mensaje de
+bienvenida vive en el 0,0 del mundo (se mueve con el lienzo) y «Ver todo» centra
+ese origen. En el sidebar, «Mi espacio» está en el grupo superior, antes de
+Secuencia.
+
+Cursores: `app.css` hace que todo herede (`* { cursor: inherit !important }`),
+así que ningún campo mostraba el I-beam y los `cursor:` de cada componente no
+llegaban. Ahora los campos editables (`input` de texto, `textarea`,
+`contenteditable`, `.cm-content` y `[data-cursor='text']`) muestran el I-beam en
+toda la app, y hay `data-cursor` por eje de resize.
+
+Si el servidor responde 200 sin un campo escrito (le falta la migración), la nota
+conserva el cambio en pantalla y avisa que se reinicie el servidor, en vez de
+deshacerlo sin razón.
+
+Arreglo de paso: `main.ts` bloqueaba en toda la app el menú contextual nativo
+salvo `[data-native-menu]`, que nadie usaba. Así, la ortografía por clic derecho
+de R20 nunca funcionó en editores ni títulos. Ahora `input`, `textarea`,
+`contenteditable` y `.cm-editor` recuperan el menú nativo.
+
+`x`, `y`, `w` y `h` viven en `personal_notes`:
+- `1788530000_personal_note_place.go`: posición ±1 000 000; las notas existentes
+  se acomodan en rejilla.
+- `1788531000_personal_note_size.go`: ancho hasta 1200 y alto 0–1600 (0 = el del
+  texto).
+
+Así el lienzo te sigue a otro equipo, y las reglas de dueño siguen sin excepción
+para el lead. Se guarda al soltar, no en cada movimiento. La vista (pan y zoom)
+es de cada navegador. Una vista guardada rota (`null`/`NaN`) se descarta y se
+reencuadra, y las coordenadas o tamaños no numéricos caen a un valor por defecto:
+un solo `NaN` en el `transform` trababa el pan y el arrastre. Rechazado: guardar
+la posición en `localStorage`, porque se perdería al cambiar de equipo.
+
+Validado: checks live de posición, tamaño (1000×420), alto y ancho fuera de rango
+(400) y el lead sin poder moverla (404). Chromium (`/tmp/bw-pw/r21.mjs`):
+- orden del sidebar; una vista corrupta y un filtro viejo se sanan; sin caja ni
+  «privado»;
+- mensaje en el 0,0 que se mueve con el lienzo;
+- editor grande; vim (persistido, conserva el texto, `A` y `:w`);
+- arrastre persistido;
+- desplegable de color: 12 nombres, foco en el actual, Escape devuelve el foco,
+  botón y clic derecho, teclado en rejilla; abre hacia arriba cerca del borde
+  inferior y hacia abajo con sitio; el de proyecto con el mismo tema;
+- menú nativo en título y editor, no en el fondo;
+- resize en las dos direcciones (pantalla = servidor), mínimos, corte con «…»,
+  doble toque, Alt+flechas; cursores por borde y fijos durante el gesto; borde
+  derecho solo ancho, inferior solo alto, y el alto persiste al recargar; I-beam en
+  cuerpo y título; nota vacía con al menos 5 rem para escribir;
+- editando: arrastrar la nota, el pan y la rueda no cierran; un clic fuera, sí;
+- un campo que el servidor descarta avisa en vez de revertir;
+- soltar sobre una nota y sobre el fondo; «Ver todo»;
+- claro, oscuro y 420 px; el lead no ve nada; borrado.
+
+### Cursores de resize, paleta de 24, alineación y la barra de Secuencia *(built)*
+
+- **Cursores propios:** esquina (`corner-*`, mano con ↖↘) y borde inferior
+  (`vresize-*`, mano con ↑↓), de la misma familia que `resize-*`: mismo trazo de
+  dos capas, claro y oscuro, PNG de 1x y 2x renderizados desde su SVG, con
+  hotspot 16,16. `--cur-corner` y `--cur-vresize` en `app.css`.
+- **Lo arrastrable muestra la mano aunque sea un botón:** la regla del puntero
+  pesa (0,2,1). La de la mano iguala ese peso con `html :is(…)` y gana por ir
+  después.
+- **Paleta de 24 pasteles** en orden de tono, incluidos los 12 anteriores, así
+  ninguna nota pierde su color:
+  - Rejilla de 4 columnas con el nombre de cada muestra en la letra display.
+  - Ancho propio de 21 rem, para que en una nota angosta no se encoja a una
+    columna con scroll.
+  - Teclado: ←→ de a uno, ↑↓ por fila.
+  - Las notas nuevas rotan entre los seis colores de siempre.
+- **Selección y alineación en Mi espacio:**
+  - Se selecciona con Shift/⌘/Ctrl+clic, con un marco (Shift+arrastre en el
+    fondo) o con ⌘/Ctrl+A. Esc o un clic quieto en el fondo sueltan la
+    selección.
+  - Con dos o más notas aparece una segunda fila del HUD para alinear a la
+    izquierda, al centro, a la derecha, arriba, al medio o abajo, contra la caja
+    que envuelve la selección.
+  - Repartir en horizontal o vertical pide tres o más y deja huecos iguales sin
+    mover los extremos.
+  - Arrastrar una nota seleccionada, o moverla con las flechas, mueve todas.
+  - La selección no se guarda; las posiciones sí, como siempre.
+- **La caja de Secuencia es la Navigation de Skeleton:** `layout="sidebar"`
+  abierta y `"rail"` plegada (con el contador), acoplada al borde izquierdo y a
+  todo el alto del lienzo.
+  - Cada tarjeta es un `Navigation.Trigger` arrastrable.
+  - La lista nunca hace scroll horizontal: el nombre usa hasta dos líneas y se
+    corta aunque no tenga espacios; «Proyecto · Módulo» se corta con «…», y el
+    texto entero queda en el `title`.
+  - En los nodos del lienzo, proyecto y módulo también se cortan con «…».
+  - En un teléfono empieza como rail.
+  - Rechazado: seguir con la caja flotante propia, que desbordaba con nombres
+    largos.
+
+Validado:
+- `/tmp/bw-pw/r21.mjs`: cursores por borde; paleta de 24 en 4 columnas, letra
+  display, sin scroll y con 21 rem en una nota de 180 px; selección por clic,
+  marco, ⌘A y Esc; cada alineación y reparto comprobados en el servidor;
+  arrastre y flechas en grupo.
+- `/tmp/bw-pw/r22.mjs`: ruta en una sola fila de la barra, con nombre editable y
+  el módulo navegable; sidebar acoplada, sin overflow con nombres larguísimos;
+  arrastrar al lienzo secuencia; rail con contador; oscuro; rail en 420 px.
+
+### WhatsApp entra al planeador, y la barra de Secuencia como la principal *(built)*
+
+- **Las entradas de WhatsApp son una tercera pestaña de la barra de Secuencia**
+  (Módulos · Hilos · WhatsApp, con contador). Son las mismas notas del inbox con
+  `source = whatsapp` sin hilo ni módulo, no una copia, y las ven quienes ya
+  las veían: quien encendió el canal y el lead global.
+  - Cada fila muestra qué llegó, quién lo mandó (`source_from`) y cuándo.
+  - Un clic la abre en la hoja de la nota, con su texto e imágenes.
+  - Arrastrarla al lienzo abre el diálogo de «organizar» (proyecto › módulo ›
+    nombre) con el nombre ya puesto. El hilo queda en el lienzo donde se soltó,
+    y la nota apunta a él, igual que al organizar desde el Inbox.
+  - Cancelar no crea nada. Parar en «Crear el módulo» triagea a módulo y no
+    deja nodo.
+  - Rechazado: que cada mensaje se vuelva hilo solo. Un mensaje no dice en qué
+    proyecto va, y adivinarlo es escribir el veredicto sin evidencia.
+- **Esto revierte en parte la Q55 del grill del 2026-10-08**, que quería purgar
+  WhatsApp y el framework de canales. El canal se queda porque ahora alimenta
+  la secuencia. Purgarlo queda abierto si deja de usarse.
+- **La barra tiene la apariencia del sidebar principal (`Shell.svelte`):**
+  - Es una columna aparte, ya no encima del lienzo, sin fondo propio y con una
+    línea a la derecha.
+  - Las filas van a todo el ancho, con icono de 26 px y texto del mismo tamaño
+    que en la principal; el pie queda fijo.
+  - En el rail, el icono va arriba y el nombre abajo, y la lista empieza arriba
+    (Skeleton la centra).
+  - Las vistas de sólo lectura (`/secuencia` y `/planeador/inbox`) no cambian:
+    allí no hay barra.
+
+Validado: `/tmp/bw-pw/r22.mjs` (columna aparte y transparente, tamaño de texto
+igual al de la principal medido en `/todos`, pestaña con contador, sólo las
+notas de WhatsApp, la hoja al hacer clic, cancelar sin efecto, soltar → hilo en
+el módulo elegido, nota enlazada, nodo donde se soltó, contador que baja, rail
+alineado arriba).
+
+## Tools `entidad_operacion` y un solo documento de entrada *(built)*
+
+Reemplaza lo que dicen «Tres documentos, y todos en `prompts/`» y las listas de tools de las fases anteriores: aquellas secciones quedan como historia.
+
+- **`agents_md` es la única entrada.** Devuelve un documento: la guía de Bubble para agentes (`prompts/bubble-work.md`, clave `agents_guide` en Prompts), la tabla de tools por categoría, cómo se escribe markdown y, al final, la forma de trabajar del departamento del rol, que manda si contradice lo anterior.
+  - La guía explica todas las entidades, incluidas la wiki, los artefactos temporales, los pines (de artefacto y de hilo), el inbox con WhatsApp y Mi espacio. También el ciclo de trabajo y el protocolo de escritura.
+  - La tabla se **genera del registro** (primera oración de la descripción vigente y su tipo): no puede nombrar una tool que no existe.
+  - Se quitaron las tools `guide` y `house_rules`, y la ruta `/api/house-rules`. La sección breve que un agente se instala vive dentro de `connect.md`. `/api/guide` sirve la guía nueva.
+  - La clave es nueva (`agents_guide`, no `guide`), para que una edición vieja no tape el texto nuevo. Las ediciones viejas de `guide`, `house_rules` y `tool/<nombre viejo>` quedan como historia y nadie las lee.
+- **Los protocolos llegan cuando se usan.** `artifact_create` devuelve el JSON de siempre y, en un segundo bloque de texto, el protocolo de su tipo (interrogatorio o markdown efímero). `agents_md` sólo dice cuándo ofrecer un interrogatorio. Rechazado: cargarlos en cada sesión, unas mil palabras que la mayoría no usa.
+- **Tools `entidad_operacion`, en inglés:** `project_*`, `bubble_*`, `thread_*`, `document_*`, `checkbox_toggle`, `evidence_add`, `comment_*`, `artifact_*`, `sequence_next`, `objective_*`, `repo_list`, `inventory_list` (33 en total; ver la sección siguiente, que las lleva a 64). Los parámetros siguen la misma idea: `project` en vez de `workspace`, y `bubble` para el módulo (la interfaz y la guía dicen «módulo»; las tools, `bubble`, igual que el JSON). En los datos el proyecto sigue siendo `workspace`, y la guía lo dice. Se probó `module_*` y se descartó a favor de `bubble_*`, el nombre del modelo y de los datos.
+  - Una forma por tool: `edit` se partió en `document_edit`, `document_replace` y `checkbox_toggle`; `set_bubble` en `bubble_update`, `bubble_close` (exige `closure`) y `bubble_reopen`; `set_objective` en `objective_create` y `objective_update`.
+  - Anotaciones MCP (`readOnlyHint`, `destructiveHint`, `idempotentHint`, `title`), para que un cliente pueda aprobar sólo lecturas o confirmar lo que borra.
+  - `agents_md` conserva su nombre: es la entrada, y hay hooks que lo llaman por nombre.
+  - Rechazado: nombres y parámetros en español (`hilo_crear`), que dejaban dos idiomas frente al JSON en inglés. Rechazado: una tool por entidad con un parámetro `operation`, que vuelve el esquema una unión y diluye las descripciones. Rechazado: alias de los nombres viejos, que duplicaban la lista.
+- **Todo lo que lee un agente está en español:** guía, protocolos, descripciones de tools y parámetros, y las frases de ayuda de las salidas. Los mensajes de error del servidor siguen en inglés porque los comparte la API REST; la guía cita los que importan tal como llegan.
+- **Corte duro.** Las secciones instaladas en otros repos nombran tools viejas: se actualizan pegando de nuevo el prompt de conexión, que reemplaza la sección completa.
+
+Validado: `just check` (624 live, 40 frontend). Las pruebas cubren:
+- la lista exacta de 33 tools y sus anotaciones;
+- la guía, las entidades, la tabla generada de 33 filas y la forma del departamento al final;
+- el protocolo de interrogatorio fuera de `agents_md` y dentro de `artifact_create`, para los dos tipos;
+- el prompt de conexión con la sección y sin `house_rules`;
+- `document_edit` vacío rechazado, y `bubble_close` sin frase rechazado;
+- una guía editada que se sirve, con la tabla todavía generada.
+
+## La IA alcanza todo lo que no es administración *(built)*
+
+Un token de agente sólo abre `/mcp`, así que las tools son todo lo que una IA ve. Pasan de 33 a 64. La regla nueva: **todo es AI driven salvo la administración**, que se queda a mano en la aplicación (personas, roles, tokens, membresías, canales, quién ve el inventario, prompts). Rechazado: dar tools de administración; un error ahí deja a alguien fuera, o a todos dentro.
+
+- **Inbox: ideas, no trabajo.** Revierte «el inbox es de las personas, ningún agente lo lee». `inbox_list`, `inbox_read`, `inbox_capture`, `inbox_update`, `inbox_triage` e `inbox_delete`, con la misma visibilidad que la aplicación (quien capturó, más el lead global; lo de WhatsApp lo captura quien encendió el canal).
+  - La guía y cada descripción repiten lo mismo: una idea no es un hilo, ni un módulo, ni un pendiente. No se ejecuta ni cuenta como avance. Se vuelve trabajo sólo cuando la PERSONA lo decide, y entonces `inbox_triage` anota a dónde fue, sin borrar la nota.
+  - `inbox_capture` es donde va lo que surge y no es de ningún hilo. Antes la guía decía «díselo a la persona».
+  - Capturar no produce eventos; está probado.
+  - Rechazado: que el agente «organice» solo, o que una idea abra un hilo. El riesgo que motivó la regla vieja era un agente trabajando desde el inbox en vez de desde su hilo, y eso se cuida con el texto, no ocultando el inbox.
+- **Mi espacio**: `space_note_list/create/update/arrange/delete`. Sólo las notas del dueño del token, ni siquiera las del lead global. Colores por nombre de la paleta (los mismos 24) o `#rrggbb`. Tamaños acotados como en la aplicación. `arrange` mueve varias de una vez, todas o ninguna.
+- **Pines de hilo**: `pin_list`, `pin_add`, `pin_remove`, sobre `prefs.value.thread_pins` del dueño.
+- **Repositorios**: `repo_link` y `repo_unlink`, sólo para el lead del proyecto o el lead global (la regla de `workspace_repos`). `repo_list` trae ids.
+- **Inventario**: `inventory_group_*` e `inventory_item_*`, sólo para el lead global. `vault` tiene que ser un enlace http(s); nunca una credencial. Un grupo con cosas no se borra; primero se vacía. `inventory_list` trae grupos e ids. Quién ve el inventario sigue a mano.
+  - Arreglo de paso: la nota de cada cosa salía siempre vacía, porque se leía `note` y el campo es `notes`.
+- **Personas, cambios, ficha y relaciones** (lo que faltaba para que la IA oriente y reparta):
+  - `people_list`: id, nombre, rol y cuál soy, sin correos.
+  - `change_list`: eventos de los proyectos visibles desde una fecha, con nombres y si calentaron.
+  - `thread_get`: estado y estados posibles con su grupo, asignados, etiquetas, plazo, relaciones, evidencia y pin.
+  - `thread_update` suma asignados, plazo, estado por nombre y etiquetas por nombre (las que faltan se crean). Llevar un hilo a un estado completado deja el mismo evento que completarlo.
+  - `thread_relate` y `thread_unrelate`: las dependencias van aquí, no en la secuencia.
+- **Artefactos y secuencia**: `artifact_list` (para retomar en otra sesión; `GET /api/artifacts` usa la misma función), `artifact_pin`, `artifact_delete`, y `sequence_set` sólo para el lead global.
+- Cada operación nueva está en `internal/bubble/agentops.go` y dice qué regla de colección refleja, porque `app.Save` no las aplica.
+
+Pendiente:
+- Mi espacio y los pines no se actualizan solos en una pestaña abierta; lo que cambia un agente aparece al volver a abrirlos.
+- Los objetivos siguen siendo sólo del lead global; un operador ve el id del objetivo en su módulo, no su nombre. Abrirlos es otra decisión.
+
+Validado: `just check` (688 live, 40 frontend). Las pruebas cubren:
+- la visibilidad del inbox por persona y del lead global, WhatsApp con remitente y mensaje, que capturar no produce eventos, el triaje y el descarte;
+- Mi espacio privado incluso frente al lead global, colores, posición por omisión, acotado y «todo o nada»;
+- los pines, idempotentes;
+- la ficha y la actualización completa de un hilo, incluido el evento de completar y las relaciones;
+- `change_list` sin fugas, `sequence_set` sólo del lead, repositorios por rol, artefactos;
+- el inventario: sólo el lead escribe, `vault` sólo enlaces, no se borra un grupo con cosas;
+- y que no exista ninguna tool de administración.
+
+Nota para las pruebas: en el bash 3.2 de macOS, un JSON escrito en línea dentro de `"$( … )"` con valores que llevan espacios llega partido. Va siempre en una variable (`ARG=…`), como ya decía el script.
+
+## Papelera en el menú del cerebro *(built)*
+
+Eliminar está también a la derecha de cada una de las ocho filas visibles del
+menú del cerebro, no sólo en el detalle. Nombre/progreso y papelera son botones
+hermanos: abrir conserva el retorno al origen; eliminar no abre ni cambia de
+pantalla por accidente. El icono mantiene el danger del tema, incluso en filas
+traspasadas. Rechazado: anidar otro botón dentro del botón que abría toda la fila.
+
+Usa la misma confirmación y `DELETE /api/artifacts/{id}`, con borradores/entradas
+perdidos y nota/trabajo duradero conservados. Durante la petición bloquea las
+papeleras y abrir la fila afectada, con logo compacto; un fallo deja la fila y
+muestra error para reintentar. Éxito quita sólo ese ID y actualiza lista, badge y
+`+N`, invalidando lecturas antiguas para que no lo repongan. Si se estaba leyendo
+ese mismo artefacto, vuelve al origen; si se borró otro, permanece donde estaba.
+La fila adapta el nombre/filename dejando espacio a sus cifras, caducidad y
+papelera; los nombres completos siguen accesibles y en tooltip.
+
+Chromium: posición derecha, objetivos independientes, ningún botón anidado,
+confirmar/cancelar, fallo/reintento, bloqueo/loading, borrado desde detalle y
+desde board, regreso correcto, documentos/notas intactos, badge/overflow,
+teclado, claro/oscuro y viewport de 400px sin papelera fuera de pantalla. Bundle
+reconstruido; `just check` pasa (592 live + 36 frontend; Svelte sin errores ni
+warnings). Sin commit ni despliegue.
+
+## Eliminar artefactos efímeros *(built)*
+
+La cabecera de `/artefacto/<id>` termina con **Eliminar artefacto**, con asset y
+color danger del tema y confirmación compartida. Sirve para Markdown y grills,
+abiertos o traspasados, incluso fijados. Advierte que se pierden publicaciones,
+preguntas/respuestas y borradores, sin recuperación, mientras la nota del Inbox
+y los hilos/documentos duraderos se conservan. Tras éxito vuelve al origen real
+(board o Inbox); si falla muestra el error y permite reintentar, sin navegar.
+
+`DELETE /api/artifacts/{id}` llama `ArtifactDelete`: creador o lead global,
+comprobado dentro de la transacción del borrado. No concede derechos al lead de
+un workspace ni abre el DeleteRule crudo. Entradas en cascada, nota y destinos
+intactos; no eventos, calor ni git. Rechazado: borrar la captura o el trabajo
+traspasado para quitar sólo su adjunto efímero; rechazado también ocultar el botón
+sin proteger la operación en servidor.
+
+La espera activa termina con `fin` al desaparecer el artefacto. El comando de
+watch también termina en 404 entre polls, sin repetir por siempre; errores de
+red/5xx siguen con backoff. Conserva una línea por respuesta y el siguiente seq
+sin el salto de línea del body. Lecturas/respuestas tardías en la vista se
+invalidan al borrar, cambiar de artefacto/usuario o desmontar; un 404 ya no deja
+mostrándose contenido viejo como si siguiera disponible.
+
+Validado: 17 checks live nuevos de sesión/propiedad/lead, cascade, notas y hash
+intactos, Markdown fijado/traspasado, grill abierto/traspasado, watcher y no-heat;
+tres casos de shell watch (desaparece antes/durante la espera y después de una
+respuesta). Chromium: confirmar/cancelar/Escape, fallo/reintento, loading compacto,
+retorno a board/Inbox, refresh del dock, permisos, ambos temas y ancho estrecho.
+`just check`: 592 live + 36 frontend, Svelte sin errores ni warnings; bundle
+reconstruido. Sin commit ni despliegue.
+
+## Loading, display y Secuencia a todo el contenedor *(built)*
+
+`Loading.svelte` reutiliza el logo flotante (`BrandOrb`) centrado en su región,
+con `role=status`, etiqueta accesible y reduced motion. Sustituye los puntos y
+«leyendo/cargando» en board, documentos, cambios, calendario, artefactos,
+ajustes, usuarios y fijados; tiene tamaño compacto para acciones pendientes y
+búsqueda. Los loaders de documento de wiki/prompts no heredan el padding inferior
+de lectura que los desplazaba del centro. Para una pantalla completa se usa
+`viewport`, sin fijar la altura de toda la aplicación y cortar documentos largos.
+No se reemplazan los puntos que son contenido, truncamiento o placeholders.
+
+La escala de `.display` crece manteniendo la jerarquía: body y nombres de trabajo
+no cambian de font. El wordmark pasa a 20px, títulos de board a 30px, calendario
+a 32px (28 en estrecho), y título flotante del canvas a 24px.
+
+`/secuencia` elimina la barra exterior: canvas y contenedor tienen el mismo
+rectángulo. Título, estado sólo lectura, alcance Organización/Lo mío y selector
+Tareas/Módulos quedan en HUD fijo, con errores/reintentar ahí también. El
+planeador conserva su cabecera. En el canvas edge-to-edge el zoom ocupa una
+segunda fila de HUD bajo la presencia, para que varios avatares no lo tapen; en
+móvil queda separado del dock inferior. No cambia el alcance de servidor ni
+aparece ninguna escritura de secuencia en la vista de lectura.
+
+El fondo fijo se pinta en `html`, sobre todo el canvas del documento, con body
+transparente: no termina al acabar su primera pantalla ni revela otro fondo al
+seguir scrolleando. Se conserva el scroll del documento (sin uno interno nuevo),
+el grano, y el apilamiento de portales. Rechazado: forzar `#app` a 100dvh o
+agrandar el body por un número arbitrario para esconder el corte.
+
+Chromium validado: centrado de loaders de secuencia/hilo/wiki/artefacto, loading
+compacto en login, reduced motion, tamaños de display, HUD y canvas sin barra,
+zoom sin intersección con presencia (también fila de varios avatares), ambos
+temas y viewport estrecho. Artefacto de 65 secciones: fondo al inicio/medio/final
+sin corte, con comparación de píxeles de fondo en claro/oscuro. Bundle
+reconstruido; `just check` pasa (575 live, 36 frontend, Svelte sin errores ni
+warnings). Sin commit ni despliegue.
+
+## Asset de eliminar en danger *(built)*
+
+El ícono de «Eliminar burbuja» usa `Icon danger`: parte del mismo render clay y
+lo colorea con el token `--color-error-500`, conservando el sombreado 3D y alpha
+mediante filtro SVG por instancia. El color no queda horneado en un PNG ni
+cambia al degradado de marca en hover. La confirmación y permisos no cambian.
+Chromium validado en claro/oscuro, hover y actualización del token de tema;
+Svelte sin errores ni warnings y 36 pruebas de frontend pasan. Bundle
+reconstruido; sin commit ni despliegue.
+
+## Cards del canvas: hover y apertura en toda la superficie *(built)*
+
+La card completa ofrece borde/sombra/fondo de hover y nombre en accent, también
+al recibir foco de teclado. No se mueve ni cambia de tamaño para dar ese feedback;
+respeta reduced motion. El título sigue siendo un botón accesible.
+
+Clic en el paso, badge de proyecto, personas, padding o cuerpo abre el mismo
+elemento que el título, tanto editable como read-only. Se conserva el ID del
+nodo al capturar el pointer, porque `pointerup` acaba dirigido al canvas. El
+umbral de arrastre son 4 píxeles de pantalla (independiente del zoom); si hubo
+arrastre no abre, aunque se vuelva al punto inicial. Editable mueve la card;
+read-only sólo panea. `×`, completar y `+` mantienen sus gestos propios.
+El cursor de mano cerrada durante el gesto gana al cursor de clic de la card.
+Rechazado: abrir en pointerdown, envolver botones en otro botón, o mover la
+card en hover y desalinear sus flechas.
+
+Chromium verificado: hover claro/oscuro, clic en footer y paso, teclado, arrastre
+editable sin apertura, pan read-only sin cambiar posiciones, apertura de hilo y
+módulo, y quitar/completar sin abrir. Bundle reconstruido; `just check` pasa
+(575 live, 36 frontend, Svelte sin errores ni warnings). Sin commit ni despliegue.
+
+## Más aire en los modales y ancho ajustable de los árboles *(built)*
+
+Los diálogos de formulario usan un gap vertical común, independiente del
+margin de párrafos y listas. Objetivos y Prioridades separan también sus filas.
+Fechas usa `DueDate` y `FilterPick`, sin controles nativos, en un diálogo más
+ancho; sus popups permanecen dentro de la capa modal para recibir clics.
+
+Prompts, Wiki y Hilos comparten `TreePanel`: el borde derecho se arrastra, el
+ancho se recuerda por persona y pantalla, las flechas de teclado lo ajustan y
+un doble clic lo restaura. La navegación colapsada conserva su rail. El tema
+no se dibuja globalmente encima del botón de una pantalla que ya tiene el suyo.
+
+Verificados los controles dentro del modal, el arrastre y la persistencia del
+árbol, y los temas claro y oscuro con capturas en Chromium.
+
+## Todo lo que se le dice a la IA se edita en «Prompts» *(built)*
+
+Una sola pantalla, con la experiencia de la wiki (DocEditor), para los dos
+AGENTS.md, los documentos del binario (`guide`, `house_rules`, `connect`,
+`grill`) y la descripción de cada tool MCP. El lead edita; los demás leen lo
+que su agente recibe (el AGENTS.md del planner sigue siendo sólo del lead).
+Cada guardado es una versión (`prompt_versions`, como `agents_md`); `reset`
+vuelve al texto del binario, que queda como el ORIGINAL. El servidor MCP se
+reconstruye cuando cambia un prompt, así que la siguiente llamada de un agente
+ya lee la descripción nueva.
+
+**Esto revierte una decisión de `prompts/embed.go`**: «una guía desplegada aparte
+del binario deriva de él, y entonces miente». El riesgo sigue: la guía promete
+cosas sobre la API. Se acota con la huella del original (`base`): si el binario
+cambia ese texto después de una edición, la pantalla avisa de que la versión
+editada se quedó atrás y ofrece restaurar. Rechazado: dejar fijos los prompts
+del sistema y editar sólo los AGENTS.md — se pidió editar todo lo que instruye
+a la IA, incluidas las tools.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

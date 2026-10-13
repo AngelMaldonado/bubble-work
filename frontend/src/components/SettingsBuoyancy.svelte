@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import Icon from './Icon.svelte';
   // Flotabilidad: la calibración con la que el servidor decide qué flota.
   //
   // Son cinco números en una fila de `tuning`, y cambiarlos recalibra el board
@@ -109,7 +111,7 @@
           <input class="input num" type="number" min="0.05" step="0.5" bind:value={cycleDays} /> días
           <span class="faint text-xs">= {hours} horas</span>
         </span>
-        <span class="help">La ventana contra la que se mide todo: lo que produjo evidencia dentro del ciclo está 🔥.</span>
+        <span class="help">La ventana contra la que se mide todo: lo que produjo evidencia dentro del ciclo está <Icon of="fire" />.</span>
       </label>
 
       <label class="field">
@@ -118,7 +120,7 @@
           <input class="input num" type="number" min="1" step="1" bind:value={dormant} /> ciclos sin evidencia
           <span class="faint text-xs">= {days(dormant)}</span>
         </span>
-        <span class="help">Cuánto silencio hace falta para pasar de 🔥 a 😴.</span>
+        <span class="help">Cuánto silencio hace falta para pasar de <Icon of="fire" /> a <Icon of="dormant" />.</span>
       </label>
 
       <label class="field">
@@ -147,17 +149,17 @@
           disabled={!canEdit || saving}
           onCheckedChange={(e: { checked: boolean }) => (ownerlessRip = e.checked)}>
           <Switch.Control><Switch.Thumb /></Switch.Control>
-          <Switch.Label>Sin nadie a cargo, lo dormido cae a 🪦</Switch.Label>
+          <Switch.Label>Sin nadie a cargo, lo dormido cae a <Icon of="tombstone" /></Switch.Label>
           <Switch.HiddenInput />
         </Switch>
-        <span class="help">Algo callado sin responsable no es una siesta: es una decisión pendiente. Lo que sigue produciendo se queda 🔥 igual.</span>
+        <span class="help">Algo callado sin responsable no es una siesta: es una decisión pendiente. Lo que sigue produciendo se queda <Icon of="fire" /> igual.</span>
       </div>
     </fieldset>
 
     {#if canEdit}
       <div class="set-row">
         <button class="btn btn-sm preset-filled-primary-500" onclick={save} disabled={!dirty || !!invalid || saving}>
-          {saving ? 'guardando…' : 'Guardar'}
+          {#if saving}<Loading compact label="Guardando ajustes" />{:else}Guardar{/if}
         </button>
         <button class="btn btn-sm preset-tonal-surface" onclick={() => saved && seed(saved)} disabled={!dirty || saving}>
           Descartar
@@ -167,7 +169,7 @@
       </div>
     {/if}
   {:else if !error}
-    <p class="faint text-sm">leyendo…</p>
+    <Loading label="Leyendo ajustes" />
   {/if}
 </section>
 

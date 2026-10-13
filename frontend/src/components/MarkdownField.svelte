@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import FormatBar from './FormatBar.svelte';
   // A markdown field that shows the DOCUMENT by default and the source when you
   // ask for it.
   //
@@ -182,8 +184,9 @@
           else attach(f);
         }
       }}>
+      <FormatBar {editor} />
       <div class="editor" bind:this={fieldEl} {@attach mount}></div>
-      {#if attaching}<span class="uploading">subiendo…</span>{/if}
+      {#if attaching}<span class="uploading"><Loading compact label="Subiendo archivo" /></span>{/if}
 
       <SlashMenu menu={slash} field={fieldEl} onpick={(c) => slash.run(editor, value, c)} />
     </div>

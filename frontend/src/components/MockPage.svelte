@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The whole interface, with invented data. Not a catalogue of controls —
   // that is /theme — but the product: the shell, the board, a bubble, a thread,
   // the wiki and the planner, reachable from each other the way they will be.
@@ -72,14 +73,10 @@
 
   // The planner's state, wired for real: dragging a card, capturing a note and
   // editing an objective all have to survive being looked at.
+  // Las tarjetas del planeador del mock: sin columnas desde que el kanban se
+  // quitó; siguen siendo lo que el calendario abre.
   let board = $state(
-    kanban.map((c, i) => ({
-      id: 'c' + i,
-      name: c.col,
-      // Spread, not a field list: picking fields by hand is how `notes` and the
-      // two axes were silently dropped on the way to the board.
-      cards: c.cards.map((x, j) => ({ ...x, id: `c${i}k${j}` })),
-    })),
+    kanban.flatMap((c, i) => c.cards.map((x, j) => ({ ...x, id: `c${i}k${j}` }))),
   );
   let notes = $state([...inbox]);
   let goals = $state(objectives.map((o) => ({ ...o })));
@@ -186,7 +183,7 @@
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
         <button class="float-btn planner-btn" {...attributes} onclick={() => toggle('planner')}>
-          <span aria-hidden="true">{view === 'planner' ? '←' : '🗓'}</span>
+          <Icon of={view === 'planner' ? '←' : 'calendar'} size="1.6rem" />
         </button>
       {/snippet}
     </Tooltip.Trigger>
@@ -202,7 +199,7 @@
   <Tooltip.Trigger>
     {#snippet element(attributes: Record<string, unknown>)}
       <button class="float-btn search-btn" {...attributes} onclick={() => search()}>
-        <span aria-hidden="true">🔍</span>
+        <Icon of="search" size="1.6rem" />
       </button>
     {/snippet}
   </Tooltip.Trigger>
@@ -221,7 +218,7 @@
   <Tooltip.Trigger>
     {#snippet element(attributes: Record<string, unknown>)}
       <button class="float-btn wiki-btn" {...attributes} onclick={() => toggle('wiki')}>
-        <span aria-hidden="true">{view === 'wiki' ? '←' : '📖'}</span>
+        <Icon of={view === 'wiki' ? '←' : 'book'} size="1.6rem" />
       </button>
     {/snippet}
   </Tooltip.Trigger>
@@ -257,7 +254,7 @@
   <div class="fixed inset-0" style="z-index: var(--z-view)">
     <PlannerView
       workspace={currentName}
-      bind:columns={board}
+      bind:cards={board}
       bind:inbox={notes}
       events={calEvents}
       bind:objectives={goals}

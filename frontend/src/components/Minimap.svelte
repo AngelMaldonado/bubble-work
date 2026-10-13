@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The minimap, ported from v0.
   //
   // Collapsed it is a column of coloured dashes: the SHAPE of the board at a
@@ -96,7 +97,7 @@
             class="sechead"
             onclick={() => goBand(g.band)}
             title="{bandName(g.band)} ({g.items.length})">
-            <span class="ico">{bandFace(g.band)}</span>
+            <span class="ico"><Icon of={bandFace(g.band)} tint /></span>
             <span class="lbl">{bandName(g.band)}</span>
             <span class="cnt">{g.items.length}</span>
           </button>

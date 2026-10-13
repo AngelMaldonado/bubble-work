@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import Icon from './Icon.svelte';
   import type { Lifecycle } from '../lib/api';
 
   /** One bubble, as the board needs it. Whatever produced it — the server or
@@ -17,6 +18,7 @@
     faces?: Record<string, string>;
     /** su workspace, cuando el board es de varios */
     project?: string;
+    canDelete?: boolean;
   };
 </script>
 
@@ -100,7 +102,7 @@
     {@const items = bubbles.filter((b) => b.life === band)}
     <section id="band-{band}" class="band band-{band}" class:empty={items.length === 0}>
       <header>
-        <span class="ico">{bandFace(band)}</span>
+        <span class="ico"><Icon of={bandFace(band)} tint /></span>
         <span class="band-name">{bandName(band)}</span>
         <span class="count">{items.length}</span>
       </header>
@@ -122,6 +124,7 @@
                 people={b.people ?? []}
                 faces={b.faces ?? {}}
                 project={b.project ?? ''}
+                canDelete={b.canDelete ?? false}
                 index={i}
                 onclick={() => onopen?.(b)}
                 onaction={onaction ? (what) => onaction(what, b) : undefined} />

@@ -94,11 +94,6 @@ type ThreadHeat struct {
 	// Cuándo vence ESTA pieza. Independiente del plazo de su burbuja: aquélla
 	// es el compromiso, ésta es cómo se reparte entre las piezas.
 	Due string `json:"due_date,omitempty"`
-	// En qué columna del tablero de TAREAS está (`thread_stages`), o vacío para
-	// «Sin planear». Viaja aquí y no en una segunda llamada porque el planeador
-	// en modo tareas dibuja los hilos de TODOS los proyectos, y esta es la
-	// respuesta que ya los trae juntos y en un solo instante.
-	Stage string `json:"stage,omitempty"`
 }
 
 // day is a stored date as the ten characters a calendar reads. Empty stays
@@ -112,6 +107,7 @@ func day(t types.DateTime) string {
 
 // BubbleHeat is one bubble, banded by its hottest OPEN thread.
 type BubbleHeat struct {
+	DueDate   string `json:"due_date,omitempty"`
 	ID        string `json:"id"`
 	Workspace string `json:"workspace"`
 	Name      string `json:"name"`
@@ -128,7 +124,6 @@ type BubbleHeat struct {
 	// llega junto a la banda y nunca mezclada con ella: una dice si la realidad
 	// está cambiando, la otra cuánto importa que cambie.
 	Objective string `json:"objective,omitempty"`
-	Stage     string `json:"stage,omitempty"`
 	Priority  string `json:"priority,omitempty"`
 	Closed    bool   `json:"closed"`
 	// How it ended, in the words of whoever closed it. Carried on the board so
@@ -213,16 +208,18 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 	prio := priorityOf(app, ws.Id)
 	// Lo que el lead decidió de cada hilo —su prioridad y su paso en la
 	// secuencia— vive en la tabla de hilos, no en la vista de evidencia: la vista
-	// cuenta lo que pasó, y esto no es algo que pasó.
+	// cuenta lo que pasó, y esto no es algo que pasó. Tampoco incluye el plazo:
+	// se lee de la misma fila que las otras decisiones sobre la pieza.
 	type plan struct {
 		priority string
 		sequence int
+		due      string
 	}
 	planned := map[string]plan{}
 	steps := liveSteps(app)
 	if recs, err := app.FindAllRecords("threads", dbx.HashExp{"workspace": ws.Id}); err == nil {
 		for _, t := range recs {
-			planned[t.Id] = plan{t.GetString("priority"), t.GetInt("sequence")}
+			planned[t.Id] = plan{t.GetString("priority"), t.GetInt("sequence"), day(t.GetDateTime("due_date"))}
 		}
 	}
 	byBubble := map[string][]heat.Result{}
@@ -260,8 +257,7 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 			At:        at.UTC().Format(time.RFC3339),
 			Priority:  planned[r.Id].priority,
 			Sequence:  planned[r.Id].sequence,
-			Stage:     r.GetString("stage"),
-			Due:       day(r.GetDateTime("due_date")),
+			Due:       planned[r.Id].due,
 			Step:      stepOf(steps, planned[r.Id].sequence, completedState(app, r.GetString("state"))),
 		})
 	}
@@ -283,11 +279,12 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 		}
 		out = append(out, BubbleHeat{
 			ID: b.Id, Workspace: ws.Id, Name: b.GetString("name"), Owners: owners,
+			DueDate: b.GetString("due_date"),
 			Outcome: b.GetString("outcome"), Closed: closed,
-			Objective: b.GetString("objective"), Stage: b.GetString("stage"),
-			Sequence: b.GetInt("sequence"),
-			Priority: prio[b.Id],
-			Closure:  b.GetString("closure"), WarmAt: stamp(warmest[b.Id]), Heat: res,
+			Objective: b.GetString("objective"),
+			Sequence:  b.GetInt("sequence"),
+			Priority:  prio[b.Id],
+			Closure:   b.GetString("closure"), WarmAt: stamp(warmest[b.Id]), Heat: res,
 		})
 	}
 	sort.SliceStable(out, func(i, j int) bool { return floats(out[i].Heat) > floats(out[j].Heat) })

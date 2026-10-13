@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Glyphs from './Glyphs.svelte';
+  import { untrack } from 'svelte';
   // Un filtro del tablero: el Combobox de Skeleton, no un `<select>` nativo.
   //
   // El menú de un `<select>` lo dibuja el sistema operativo, donde no llega
@@ -22,17 +24,28 @@
      *  que ser tan fácil como ponerlo. */
     any = 'cualquiera',
     label = '',
+    portal = true,
+    onchange,
+    allowEmpty = true,
+    menuMaxHeight = 'min(20rem, calc(100dvh - 6rem))',
   }: {
     items?: Item[];
     value?: string;
     any?: string;
     label?: string;
+    /** Dentro de un modal, el menú pertenece a su capa, no al body. */
+    portal?: boolean;
+    onchange?: (value: string) => void;
+    allowEmpty?: boolean;
+    menuMaxHeight?: string;
   } = $props();
 
-  const all = $derived<Item[]>([{ label: any, value: '' }, ...items]);
+  const all = $derived<Item[]>(allowEmpty ? [{ label: any, value: '' }, ...items] : items);
 
   // Lo que la lista enseña AHORA: todo, o lo que coincide con lo tecleado.
-  let shown = $state<Item[]>([]);
+  // The combobox resolves its initial label from the initial collection.
+  // An empty first collection leaves a preselected value showing the placeholder.
+  let shown = $state<Item[]>(untrack(() => all));
   $effect(() => {
     shown = all;
   });
@@ -46,12 +59,28 @@
   );
 </script>
 
+{#snippet menu()}
+  <Combobox.Positioner>
+    <Combobox.Content style={`max-height: ${menuMaxHeight}; overflow-y: auto;`}>
+      {#each shown as item (item.value)}
+        <Combobox.Item {item}>
+          <Combobox.ItemText><Glyphs text={item.label} /></Combobox.ItemText>
+          <Combobox.ItemIndicator />
+        </Combobox.Item>
+      {/each}
+    </Combobox.Content>
+  </Combobox.Positioner>
+{/snippet}
+
 <Combobox
   openOnClick
   positioning={{ sameWidth: false }}
   {collection}
   value={value ? [value] : ['']}
-  onValueChange={(e: { value: string[] }) => (value = e.value[0] ?? '')}
+  onValueChange={(e: { value: string[] }) => {
+    value = e.value[0] ?? '';
+    onchange?.(value);
+  }}
   onOpenChange={() => (shown = all)}
   onInputValueChange={(e: { inputValue: string }) => {
     const q = e.inputValue.toLowerCase();
@@ -68,16 +97,5 @@
       autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
     <Combobox.Trigger />
   </Combobox.Control>
-  <Portal>
-    <Combobox.Positioner>
-      <Combobox.Content>
-        {#each shown as item (item.value)}
-          <Combobox.Item {item}>
-            <Combobox.ItemText>{item.label}</Combobox.ItemText>
-            <Combobox.ItemIndicator />
-          </Combobox.Item>
-        {/each}
-      </Combobox.Content>
-    </Combobox.Positioner>
-  </Portal>
+  {#if portal}<Portal>{@render menu()}</Portal>{:else}{@render menu()}{/if}
 </Combobox>

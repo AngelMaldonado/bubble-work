@@ -13,13 +13,16 @@
   import {
     enableCheckboxes,
     extractHeadings,
+    foldImages,
     renderExcalidraw,
     renderMermaid,
     showAttachments,
     showImages,
+    wireToc,
     type Heading,
   } from '../lib/prose';
   import { api } from '../lib/api';
+  import { rememberMarkdownScroll } from '../lib/markdownScroll';
 
   let {
     html = '',
@@ -30,6 +33,8 @@
     onrendered,
     onclick,
     key,
+    scrollKey,
+    ontodo,
   }: {
     /** rendered HTML from the server. Ignored when `children` is given. */
     html?: string;
@@ -52,42 +57,66 @@
      * has to say when what is inside them changed.
      */
     key?: unknown;
+    scrollKey?: string;
+    ontodo?: (index: number, done: boolean) => void | Promise<void>;
   } = $props();
 
   let el = $state<HTMLElement | null>(null);
+  let checking = $state(false);
+  let checkError = $state('');
+  $effect(() => { if (el) enableCheckboxes(el, !!ontodo && !ticking && !checking); });
+  async function change(e: Event) {
+    const box = e.target;
+    if (!(box instanceof HTMLInputElement) || box.type !== 'checkbox') return;
+    if (!ontodo || checking || ticking) { box.checked = box.hasAttribute('checked'); return; }
+    checking = true; checkError = '';
+    try { await ontodo(Number(box.dataset.todoIndex), box.checked); }
+    catch (e) { checkError = (e as Error).message; }
+    finally { box.checked = box.hasAttribute('checked'); checking = false; }
+  }
 
   // Diagrams and heading extraction both need the DOM {@html} just produced, so
   // this waits a frame rather than reading during the update.
   $effect(() => {
     void html;
     void key;
+    const identity = scrollKey || location.pathname;
     const node = el;
     if (!node) return;
-    requestAnimationFrame(() => {
-      enableCheckboxes(node);
+    let active = true;
+    let release: (() => void) | undefined;
+    const frame = requestAnimationFrame(() => {
+      enableCheckboxes(node, !!ontodo && !ticking && !checking);
+      foldImages(node);
+      wireToc(node);
       void (async () => {
         await showImages(node, api.token);
         await showAttachments(node, api.token);
         await renderMermaid(node);
         await renderExcalidraw(node);
+        if (!active) return;
+        release = rememberMarkdownScroll(node, identity);
         onheadings?.(extractHeadings(node));
         onrendered?.();
       })();
     });
+    return () => { active = false; cancelAnimationFrame(frame); release?.(); };
   });
 </script>
 
+{#if checkError}<p class="check-error" role="alert">{checkError}</p>{/if}
 <!-- The click is for the todo checkboxes inside, which are themselves real
      focusable controls — the handler on the article is delegation, not a
      keyboard-inaccessible affordance of its own. -->
 <!-- svelte-ignore a11y_click_events_have_key_events -->
 <!-- svelte-ignore a11y_no_static_element_interactions -->
 <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-<article class="prose" class:ticking class:compact bind:this={el} {onclick}>
+<article class="prose" class:ticking={ticking || checking} class:compact bind:this={el} {onclick} onchange={change}>
   {#if children}{@render children()}{:else}{@html html}{/if}
 </article>
 
 <style>
+  .check-error { color: var(--color-error-500); font-size: 0.85rem; }
   /* `--wip` was v0's name for the accent and does not exist here. Ported
      unchanged, every rule that used it resolved to nothing: links, quotes,
      inline code and — the one that mattered — a TICKED checkbox, which was
@@ -97,7 +126,8 @@
     --code-bg: color-mix(in oklab, var(--text) 7%, transparent);
     --sans:
       Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-    max-width: 940px;
+    width: 100%;
+    max-width: 1200px;
     margin: 0 auto;
     font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, ui-serif, Georgia, Cambria,
       'Times New Roman', serif;
@@ -187,10 +217,16 @@
     text-decoration: none;
     vertical-align: middle;
   }
+  /* El clip es el ícono 3D: barro en reposo, color bajo el cursor. Un
+     pseudo-elemento no puede llevar un <img>, pero sí un fondo. */
   .prose :global(a[data-attachment])::before {
-    content: '📎';
-    font-size: 0.9em;
+    content: '';
+    width: 1.25em;
+    height: 1.25em;
+    flex: none;
+    background: url('/i3d/paperclip-clay.png') center / contain no-repeat;
   }
+  .prose :global(a[data-attachment]:hover)::before { background-image: url('/i3d/paperclip-color.png'); }
   .prose :global(a[data-attachment]:hover) { border-color: var(--accent); }
   /* El que no se pudo traer se dice, en vez de parecer un adjunto sano que no
      abre nada. */
@@ -198,7 +234,8 @@
     border-style: dashed;
     color: var(--faint);
   }
-  .prose :global(a[data-attachment='roto'])::before { content: '⚠️'; }
+  .prose :global(a[data-attachment='roto'])::before,
+  .prose :global(a[data-attachment='roto']:hover)::before { background-image: url('/i3d/warning-clay.png'); }
 
   .prose :global(img) {
     display: block;
@@ -208,6 +245,53 @@
     border-radius: 10px;
     box-shadow: 0 18px 48px var(--shadow);
   }
+  /* A picture is folded into a chip until somebody opens it (lib/prose.ts). */
+  .prose :global(button.img-chip) {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.4em;
+    max-width: 100%;
+    margin: 0.3em 0.4em 0.3em 0;
+    padding: 0.25em 0.7em;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    background: transparent;
+    color: var(--muted);
+    font-family: var(--sans);
+    font-size: 0.82em;
+    cursor: pointer;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .prose :global(button.img-chip:hover),
+  .prose :global(button.img-chip[aria-expanded='true']) {
+    color: var(--accent);
+    border-color: color-mix(in oklab, var(--accent) 55%, var(--line));
+    background: color-mix(in oklab, var(--accent) 8%, transparent);
+  }
+  .prose :global(button.img-chip + img) { margin-top: 10px; }
+  /* `display: block` above would beat the attribute: say it outright. */
+  .prose :global(img[hidden]) { display: none; }
+
+  /* The derived table of contents: one line until it is opened. */
+  .prose :global(details.doc-toc) {
+    margin: 0 0 1.4em;
+    padding: 0.35em 0.9em;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    font-family: var(--sans);
+    font-size: 0.86em;
+  }
+  .prose :global(details.doc-toc > summary) {
+    cursor: pointer;
+    color: var(--muted);
+    font-weight: 650;
+  }
+  .prose :global(details.doc-toc ul) { margin: 0.3em 0; padding-left: 1.1em; }
+  .prose :global(details.doc-toc li) { margin: 0.1em 0; }
+  .prose :global(details.doc-toc a) { text-decoration: none; }
+
   /* Plane description images can't be fetched via the API — link to Plane instead */
   .prose :global(a.plane-img) {
     display: inline-flex;
@@ -298,12 +382,23 @@
      stopped flowing as a sentence. Padding plus a negative margin gets the same
      hanging indent while leaving the content as ordinary inline text.
      1.55em = the checkbox's 1.05em width + its 0.5em right margin. */
-  .prose :global(li:has(> input[type='checkbox'])) {
+  /* La casilla va en el margen, centrada en la PRIMERA línea (`1lh` es la
+     altura de línea del propio <li>), así cuadra con cualquier tamaño de letra.
+     Y la lista "suelta" —con una línea en blanco entre elementos— mete la
+     casilla dentro de un <p>: sin el segundo selector, esa salía con viñeta Y
+     casilla. */
+  .prose :global(li:has(> input[type='checkbox'])),
+  .prose :global(li:has(> p:first-child > input[type='checkbox']:first-child)) {
+    position: relative;
     list-style: none;
-    padding-left: 1.55em;
+    padding-left: 1.6em;
   }
-  .prose :global(li:has(> input[type='checkbox']) > input[type='checkbox']) {
-    margin-left: -1.55em; /* pull the box out into the gutter it just made */
+  .prose :global(li > input[type='checkbox']),
+  .prose :global(li > p:first-child > input[type='checkbox']:first-child) {
+    position: absolute;
+    left: 0;
+    top: calc((1lh - 1.05em) / 2);
+    margin: 0;
   }
   /* custom task-list checkboxes (ported from mds) */
   .prose :global(input[type='checkbox']) {
@@ -361,10 +456,6 @@
   .prose :global(input[type='checkbox']) {
     cursor: pointer;
     accent-color: var(--accent);
-    width: 0.95em;
-    height: 0.95em;
-    margin-right: 0.35em;
-    vertical-align: -0.08em;
   }
   .prose.ticking :global(input[type='checkbox']) {
     cursor: progress;

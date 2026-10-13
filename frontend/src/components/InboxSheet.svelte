@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
+  import Prose from './Prose.svelte';
+  import { artifactUrl } from '../lib/routes';
   // An inbox item, opened.
   //
   // Deliberately thinner than a card: an inbox item has no objective, no impact
@@ -14,7 +17,11 @@
   import MarkdownField from './MarkdownField.svelte';
   import { limited, tooLong } from '../lib/limits.svelte';
 
-  export type Note = { id: string; text: string; from: string; when: string; body?: string };
+  export type Note = {
+    id: string; text: string; from: string; when: string; body?: string;
+    /** Caduca el artefacto, nunca la nota que lo contiene. */
+    artifacts?: { id: string; title: string; expires_at?: string; pinned: boolean }[];
+  };
 
   // Whether the description is being written in. The dialog stops listening for
   // Escape while it is: in vim that key leaves insert mode, and a modal that
@@ -29,6 +36,8 @@
     onsave,
     onpromote,
     ondelete,
+    readonly = false,
+    onopenartifact,
   }: {
     open?: boolean;
     note?: Note | null;
@@ -43,6 +52,8 @@
     /** send it to the board, where it acquires an objective and a priority */
     onpromote?: (note: Note) => void;
     ondelete?: (id: string) => void;
+    readonly?: boolean;
+    onopenartifact?: (id: string) => void;
   } = $props();
 
   const anim =
@@ -63,7 +74,7 @@
     }
   });
   $effect(() => {
-    if (note) note.body = body;
+    if (note && !readonly) note.body = body;
   });
 
   // Se guarda al dejar de escribir, no en cada tecla: una nota de dos párrafos
@@ -81,7 +92,7 @@
 
   let pending: ReturnType<typeof setTimeout> | null = null;
   function touched() {
-    if (!note) return;
+    if (!note || readonly) return;
     if (pending) clearTimeout(pending);
     pending = setTimeout(flush, 600);
   }
@@ -97,11 +108,23 @@
     if (!blocked) refused = false;
   });
 
+  let readHTML = $state('');
+  let readError = $state('');
+  $effect(() => {
+    if (!readonly || !note) return;
+    let current = true;
+    readHTML = ''; readError = '';
+    const source = note.body ?? '';
+    Promise.resolve(render?.(source) ?? '').then((html) => { if (current) readHTML = html; })
+      .catch((e) => { if (current) readError = String(e); });
+    return () => { current = false; };
+  });
+
   /** Guarda si cabe. `false` si no: nada se mandó. */
   function flush(): boolean {
     if (pending) clearTimeout(pending);
     pending = null;
-    if (!note) return true;
+    if (!note || readonly) return true;
     if (blocked) return false;
     onsave?.({ text: note.text, body });
     return true;
@@ -118,7 +141,7 @@
      sheet. -->
 <Dialog
   {open}
-  closeOnEscape={false}
+  closeOnEscape={readonly}
   onOpenChange={(e: { open: boolean }) => {
     if (!e.open && !leave()) return;
     open = e.open;
@@ -134,15 +157,19 @@
         {#if note}
           <header class="flex items-center justify-between gap-3">
             <Dialog.Title class="min-w-0 flex-1 text-lg font-bold">
-              <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} oninput={touched} onblur={flush} {@attach limited('inbox_items.note')} aria-label="qué llegó" />
+              {#if readonly}{note.text}{:else}<input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" class="ttl" bind:value={note.text} oninput={touched} onblur={flush} {@attach limited('inbox_items.note')} aria-label="qué llegó" />{/if}
             </Dialog.Title>
-            <Dialog.CloseTrigger class="btn-icon hover:preset-tonal">
+            <Dialog.CloseTrigger class="btn-icon hover:preset-tonal" aria-label="Cerrar" title="Cerrar">
               <XIcon class="size-4" />
             </Dialog.CloseTrigger>
           </header>
 
           <p class="who">{note.from} · {note.when}</p>
 
+          {#if readonly}
+            {#if readError}<p role="alert">{readError}</p>{/if}
+            <Prose html={readHTML} scrollKey={`inbox.${note.id}`} />
+          {:else}
           <MarkdownField
             bind:value={body}
             onattach={onattach && note ? (f) => onattach(note!.id, f) : undefined}
@@ -152,19 +179,30 @@
             minHeight="22rem"
             placeholder="¿qué pidió exactamente? ¿a quién afecta? lo que sepas, aunque esté a medias…" />
 
-          <footer>
+          {/if}
+          {#if note.artifacts?.length}
+            <nav class="artifacts" aria-label="Artefactos de la captura">
+              {#each note.artifacts as a (a.id)}
+                <a href={artifactUrl(a.id)} onclick={(e) => {
+                  if (!onopenartifact || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey || e.button !== 0) return;
+                  e.preventDefault(); onopenartifact(a.id);
+                }}>{a.title} <span>{a.pinned ? 'fijado' : 'efímero'}</span> →</a>
+              {/each}
+            </nav>
+          {/if}
+          {#if !readonly}<footer>
             {#if blocked}
               <p class="unsaved" class:nudge={refused} role="alert">
                 Esta nota no se está guardando. {blocked}
               </p>
             {/if}
             <button class="promote" disabled={!!blocked} onclick={() => { if (!leave()) return; onpromote?.(note); open = false; }}>
-              → al kanban
+              → organizar
             </button>
             <button class="danger" onclick={() => { ondelete?.(note.id); open = false; }}>
-              🗑 descartar
+              <Icon of="trash" /> descartar
             </button>
-          </footer>
+          </footer>{/if}
         {/if}
       </Dialog.Content>
     </Dialog.Positioner>
@@ -172,6 +210,10 @@
 </Dialog>
 
 <style>
+  .artifacts { display: flex; flex-direction: column; gap: 0.4rem; }
+  .artifacts a { padding: 0.65rem 0.8rem; border: 1px solid var(--border); border-radius: 10px; color: var(--accent); }
+  .artifacts a:hover { background: var(--surface-hover); }
+  .artifacts span { color: var(--faint); font-size: 0.75rem; margin-left: 0.5rem; }
   .unsaved {
     flex: 1 1 100%;
     margin: 0;

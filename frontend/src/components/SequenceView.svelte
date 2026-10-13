@@ -1,134 +1,70 @@
 <script lang="ts">
-  // La secuencia, desde la columna: qué va ahora y qué sigue.
-  //
-  // El planeador la ARMA; esta pantalla sólo la enseña. El lead global ve la de
-  // toda la organización y puede quedarse con lo suyo. Un member ve sólo «Lo
-  // mío»: viene a saber qué le toca hacer, no a supervisar la línea entera.
-  // Los números de paso son los de la línea completa, no los de lo filtrado:
-  // «ahora» es ahora para todos.
-  //
-  // «Lo mío» es un hilo asignado a quien mira o, si el hilo no tiene a nadie
-  // asignado, uno cuya burbuja está a su cargo: una pieza sin dueño propio es
-  // de quien responde por el cuerpo de trabajo.
+  import { onDestroy } from 'svelte';
   import { api, avatarUrl, type Board, type Person } from '../lib/api';
-  import SequencePane, { type SeqThread } from './SequencePane.svelte';
+  import { live } from '../lib/live.svelte';
+  import { lastOpenBubble } from '../lib/filters.svelte';
+  import SequenceCanvas from './SequenceCanvas.svelte';
+  import type { SeqThread } from './SequencePane.svelte';
 
-  let {
-    me,
-    onopen,
-  }: {
-    me: Person;
-    /** abrir un hilo, por su proyecto y su número */
-    onopen?: (slug: string, seq: number) => void;
-  } = $props();
-
+  let { me, onopen, onopenboard }: { me: Person; onopen?: (slug: string, seq: number) => void; onopenboard?: (slug: string) => void } = $props();
   const isLead = $derived(me.role === 'lead');
   // svelte-ignore state_referenced_locally
   let scope = $state<'all' | 'mine'>(me.role === 'lead' ? 'all' : 'mine');
-  // Un member no elige: sólo hay «Lo mío».
-  $effect(() => {
-    if (!isLead) scope = 'mine';
-  });
-
+  let mode = $state<'tasks' | 'bubbles'>('tasks');
+  $effect(() => { if (!isLead) scope = 'mine'; });
   let board = $state<Board | null>(null);
   let people = $state<Record<string, { name: string; avatar: string }>>({});
   let error = $state('');
-
-  $effect(() => {
-    Promise.all([api.allBoard(), api.people()])
-      .then(([b, ps]) => {
-        board = b;
-        people = Object.fromEntries(
-          ps.map((p) => [p.id, { name: p.display_name || p.email, avatar: avatarUrl(p, '64x64') }]),
-        );
-      })
-      .catch((e) => (error = (e as Error).message));
-  });
-
-  const threads = $derived<SeqThread[]>(
-    (board?.threads ?? [])
-      .filter((t) => (t.sequence ?? 0) > 0)
-      .filter((t) => scope === 'all' || isMine(t))
-      .map((t) => ({
-        id: t.id,
-        seq: t.seq,
-        name: t.name,
-        project: board?.workspaces.find((w) => w.id === t.workspace)?.name ?? '',
-        bubble: board?.bubbles.find((b) => b.id === t.bubble)?.name ?? '',
-        priority: t.priority ?? '',
-        sequence: t.sequence ?? 0,
-        step: t.step || undefined,
-        done: t.heat.lifecycle === 'closed',
-        assignees: (t.assignees ?? []).map((id) => ({
-          id,
-          name: people[id]?.name ?? '',
-          avatar: people[id]?.avatar || undefined,
-        })),
-      })),
-  );
-
-  function isMine(t: { assignees?: string[]; bubble?: string }) {
-    const assigned = t.assignees ?? [];
-    if (assigned.length) return assigned.includes(me.id);
-    return !!board?.bubbles.find((b) => b.id === t.bubble)?.owners?.includes(me.id);
+  let generation = 0;
+  let stopped = false;
+  async function load() {
+    const turn=++generation, owner=me.id, lead=isLead;
+    try {
+      const [b,ps] = await Promise.all([lead ? api.allBoard() : api.readPlanner().then((d) => d.board),api.people()]);
+      if (stopped || turn!==generation || owner!==me.id || lead!==isLead) return;
+      board=b; people=Object.fromEntries(ps.map((p) => [p.id,{name:p.display_name || p.email,avatar:avatarUrl(p,'64x64')}])); error='';
+    } catch (e) { if (!stopped && turn===generation) error=String(e); }
   }
-
-  function open(t: SeqThread) {
-    const th = board?.threads.find((x) => x.id === t.id);
-    const slug = board?.workspaces.find((w) => w.id === th?.workspace)?.slug;
-    if (th && slug) onopen?.(slug, th.seq);
+  $effect(() => { me.id; isLead; board=null; people={}; error=''; void load(); });
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const offs=['threads','bubbles','memberships'].map((c) => live.watch(c,() => {clearTimeout(timer);timer=setTimeout(load,180);}));
+  onDestroy(() => {stopped=true;generation++;clearTimeout(timer);offs.forEach((off) => off());});
+  const own = (id?: string) => !!board?.bubbles.find((b) => b.id===id)?.owners?.includes(me.id);
+  const mine = (t: { assignees?: string[]; bubble?: string }) => !!t.assignees?.includes(me.id) || own(t.bubble);
+  function persons(ids: string[]) { return ids.map((id) => ({id,name:people[id]?.name ?? 'Persona no disponible',avatar:people[id]?.avatar || undefined})); }
+  const rows = $derived<SeqThread[]>(mode==='tasks'
+    ? (board?.threads ?? []).filter((t) => scope==='all' || mine(t)).map((t) => ({id:t.id,seq:t.seq,name:t.name,project:board?.workspaces.find((w) => w.id===t.workspace)?.name ?? '',workspace:t.workspace,bubble:board?.bubbles.find((b) => b.id===t.bubble)?.name ?? '',priority:t.priority,sequence:t.sequence ?? 0,step:t.step,done:t.heat.lifecycle==='closed',due:t.due_date?.slice(0,10),assignees:persons(t.assignees ?? [])}))
+    : (board?.bubbles ?? []).filter((b) => scope==='all' || b.owners?.includes(me.id) || board?.threads.some((t) => t.bubble===b.id && t.assignees?.includes(me.id))).map((b) => ({id:b.id,name:b.name,project:board?.workspaces.find((w) => w.id===b.workspace)?.name ?? '',workspace:b.workspace,bubble:'',priority:b.priority,sequence:b.sequence ?? 0,done:b.closed,due:b.due_date?.slice(0,10),assignees:persons(b.owners ?? [])})));
+  function open(row: SeqThread) {
+    if (mode==='tasks') { const t=board?.threads.find((t) => t.id===row.id);const ws=board?.workspaces.find((w) => w.id===t?.workspace);if(t&&ws) onopen?.(ws.slug,t.seq); }
+    else { const b=board?.bubbles.find((b) => b.id===row.id);const ws=board?.workspaces.find((w) => w.id===b?.workspace);if(b&&ws) {lastOpenBubble.set(b.id);onopenboard?.(ws.slug);} }
   }
 </script>
-
-<div class="wrap">
-  <header class="head">
-    <h1 class="display text-2xl">🧭 Secuencia</h1>
-    <p class="faint text-sm">
-      {scope === 'all'
-        ? 'El orden de ejecución de toda la organización. Se arma en el planeador.'
-        : 'Lo que te toca, en el orden en que va: los hilos asignados a ti, y los sin asignar de las burbujas a tu cargo.'}
-    </p>
-    {#if isLead}
-      <div class="seg" role="group" aria-label="alcance">
-        <button class:on={scope === 'all'} aria-pressed={scope === 'all'} onclick={() => (scope = 'all')}>
-          Organización
-        </button>
-        <button class:on={scope === 'mine'} aria-pressed={scope === 'mine'} onclick={() => (scope = 'mine')}>
-          Lo mío
-        </button>
-      </div>
-    {/if}
-  </header>
-
-  {#if error}<p class="err" role="alert">{error}</p>{/if}
-
-  {#if board}
-    <div class="panel">
-      <SequencePane readonly title="Pasos" {threads} onopen={open} />
+{#snippet modes()}
+  <div class="reader-hud">
+    <span class="reader-state">Sólo lectura · {scope==='all' ? 'Organización' : 'Mi trabajo'}</span>
+    {#if isLead}<div class="seg" role="group" aria-label="alcance">
+      <button class:on={scope==='all'} aria-pressed={scope==='all'} onclick={() => scope='all'}>Organización</button>
+      <button class:on={scope==='mine'} aria-pressed={scope==='mine'} onclick={() => scope='mine'}>Lo mío</button>
+    </div>{/if}
+    <div class="seg" role="group" aria-label="Contenido de la secuencia">
+      <button class:on={mode==='tasks'} aria-pressed={mode==='tasks'} onclick={() => mode='tasks'}>Tareas</button>
+      <button class:on={mode==='bubbles'} aria-pressed={mode==='bubbles'} onclick={() => mode='bubbles'}>Módulos</button>
     </div>
-  {:else if !error}
-    <p class="faint text-sm">leyendo…</p>
-  {/if}
+    {#if error}<span class="reader-error" role="alert">{error} <button onclick={load}>Reintentar</button></span>{/if}
+  </div>
+{/snippet}
+<div class="sequence-reader">
+  <div class="panel">{#key `${mode}.${scope}`}<SequenceCanvas readonly edgeToEdge loading={!board && !error} threads={rows} onopen={open} {modes} what={mode==='tasks' ? 'hilos' : 'módulos'} />{/key}</div>
 </div>
-
 <style>
-  .wrap { max-width: 760px; margin: 0 auto; padding: 2rem 1.5rem 6rem; }
-  .head { display: flex; flex-direction: column; align-items: center; gap: 0.5rem; margin-bottom: 1.5rem; text-align: center; }
-  .head p { margin: 0; }
-  .seg {
-    display: inline-flex;
-    padding: 2px;
-    border: 1px solid var(--line);
-    border-radius: 9px;
-    background: var(--surface);
-  }
-  .seg button { padding: 0.2rem 0.7rem; border-radius: 7px; color: var(--faint); font-size: 0.8rem; }
-  .seg button.on { background: var(--hover); color: var(--text); font-weight: 600; }
-  .panel { min-height: 60vh; }
-  .err {
-    padding: 0.45rem 0.7rem;
-    border-radius: 8px;
-    background: color-mix(in oklab, var(--color-error-500) 12%, transparent);
-    font-size: 0.82rem;
-  }
+ .sequence-reader {height:100%;min-height:0;display:flex;flex-direction:column;}
+ .reader-hud {display:flex;flex-direction:column;align-items:flex-start;gap:0.5rem;max-width:100%;}
+ .reader-state {font-size:0.75rem;color:var(--muted);padding:0.2rem 0.5rem;border-radius:7px;background:var(--surface-solid);}
+ .reader-error {font-size:0.8rem;color:var(--color-error-500);padding:0.5rem;background:var(--surface-solid);border-radius:7px;max-width:100%;overflow-wrap:anywhere;}
+ .reader-error button {text-decoration:underline;}
+ .panel {flex:1;min-height:0;}
+ .seg {display:flex;flex-wrap:wrap;max-width:100%;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--surface-solid);}
+ .seg button {padding:0.3rem 0.7rem;border-radius:7px;font-size:0.85rem;}
+ .seg button.on {background:var(--hover);font-weight:700;}
 </style>

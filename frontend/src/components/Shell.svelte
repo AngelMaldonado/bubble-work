@@ -1,4 +1,9 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
+  import { onDestroy } from 'svelte';
+  import { bandFace } from '../lib/bands';
+  import type { Lifecycle } from '../lib/api';
+  import { ago } from '../lib/when';
   // The app's frame: the column of workspaces on the left, and one scrolling
   // pane on the right that every screen is drawn into.
   //
@@ -16,6 +21,7 @@
   import MoreVerticalIcon from '@lucide/svelte/icons/more-vertical';
   import BrandOrb from './BrandOrb.svelte';
   import { rail } from '../lib/filters.svelte';
+  import { rowSquare } from '../lib/rowSquare';
   import { narrow } from '../lib/viewport.svelte';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Snippet } from 'svelte';
@@ -28,6 +34,8 @@
     /** cuántas burbujas suyas están produciendo. Lo que hace que un proyecto
      *  flote en esta columna, y lo único que la tiñe. */
     hot?: number;
+    life?: Lifecycle;
+    warmAt?: string;
   };
 
   /** Something in the column that is NOT a workspace: a screen the whole app
@@ -99,6 +107,11 @@
     corner?: Snippet;
   } = $props();
 
+  let now = $state(Date.now());
+  const clock = setInterval(() => (now = Date.now()), 60_000);
+  onDestroy(() => clearInterval(clock));
+  function production(at = '') { const relative = ago(at, now); return relative ? relative[0].toUpperCase() + relative.slice(1) : 'Sin producción registrada'; }
+
   /** Los fijados se reparten: arriba del listado o al pie de la columna. */
   const head = $derived(pins.filter((p) => p.top));
   const foot = $derived(pins.filter((p) => !p.top));
@@ -167,7 +180,7 @@
         e.preventDefault();
         onpin(p.id);
       }}>
-      <span class="pin" aria-hidden="true">{p.face}</span>
+      <span class="pin"><Icon of={p.face} tint /></span>
       <!-- `data-layout` también en el TEXTO, no sólo en la fila: Skeleton pone
            el tamaño de fuente en `[data-part='trigger-text'][data-layout=…]`, y
            sin el atributo la regla no aplicaba — el texto de una fila fijada
@@ -255,25 +268,41 @@
                   if (e.key === 'Escape') editing = null;
                 }} />
             {:else}
-              <div class="proj" class:on={current === p.id} class:burning={!!p.hot}>
+              <div class="proj" class:tile={!shutByWidth && !!(onrename || ondelete)} class:on={current === p.id} class:burning={!!p.hot}>
                 <Navigation.Trigger
                   onclick={() => onselect?.(p.id)}
                   ondblclick={() => startRename(p.id, p.name)}
+                  aria-describedby={`project-production-${p.id}`}
                   title={p.hot
                     ? `${p.name} · ${p.hot} ${p.hot === 1 ? 'burbuja produciendo' : 'burbujas produciendo'}`
                     : p.hint
                       ? `${p.name} · ${p.hint}`
                       : p.name}>
-                  <span class="pin" aria-hidden="true">{p.name.slice(0, 1)}</span>
+                  <Tooltip positioning={{ placement: 'right' }} openDelay={120} closeDelay={60}>
+                    <Tooltip.Trigger>
+                      {#snippet element(attributes: Record<string, unknown>)}
+                        <span {...attributes} class="project-buoyancy" title=""><Icon of={bandFace(p.life ?? 'dormant')} size="26px" tint /></span>
+                      {/snippet}
+                    </Tooltip.Trigger>
+                    <Portal>
+                      <Tooltip.Positioner>
+                        <Tooltip.Content>{production(p.warmAt)}</Tooltip.Content>
+                      </Tooltip.Positioner>
+                    </Portal>
+                  </Tooltip>
                   <Navigation.TriggerText>{p.name}</Navigation.TriggerText>
                 </Navigation.Trigger>
+                <span id={`project-production-${p.id}`} class="sr-only">Última producción: {production(p.warmAt)}</span>
                 {#if !shutByWidth && (onrename || ondelete)}
                   <Menu onSelect={(e: { value: string }) => {
                     if (e.value === 'rename') startRename(p.id, p.name);
                     if (e.value === 'delete') ondelete?.(p.id);
                   }}>
                     <Menu.Trigger>
-                      <span class="proj-more" title="acciones"><MoreVerticalIcon class="size-4" /></span>
+                      {#snippet element(attributes: Record<string, unknown>)}
+                        <button {...attributes} class="proj-more" aria-label="Acciones de {p.name}"
+                          {@attach (el) => rowSquare(el, '.proj')}><MoreVerticalIcon class="size-4" /></button>
+                      {/snippet}
                     </Menu.Trigger>
                     <Portal>
                       <Menu.Positioner>
@@ -338,7 +367,7 @@
                     {/if}
                     {#each foot as p (p.id)}
                       <Menu.Item value={p.id}>
-                        <span class="face" aria-hidden="true">{p.face}</span>
+                        <span class="face"><Icon of={p.face} tint /></span>
                         <Menu.ItemText>{p.name}</Menu.ItemText>
                       </Menu.Item>
                     {/each}
@@ -346,7 +375,7 @@
                       <!-- Al final y separado: es de la SESIÓN, no un lugar. -->
                       <Menu.Separator />
                       <Menu.Item value="signout">
-                        <span class="face" aria-hidden="true">🚪</span>
+                        <span class="face"><Icon of="door" tint /></span>
                         <Menu.ItemText>Salir</Menu.ItemText>
                       </Menu.Item>
                     {/if}
@@ -438,6 +467,7 @@
   .shell :global(.shell-nav[data-layout='rail'] .projects) { scrollbar-width: none; }
   .shell :global(.shell-nav[data-layout='rail'] .projects::-webkit-scrollbar) { display: none; }
 
+  .project-buoyancy { display: inline-grid; place-items: center; flex: none; width: 28px; height: 28px; }
   .menu-row { border: none; background: transparent; text-align: left; cursor: pointer; }
   /* El menú está portado a <body>: se estiliza por su clase. */
   :global(.shell-menu) { min-width: 13rem; }
@@ -500,7 +530,7 @@
      dónde EMPIEZA y dónde acaba — que en una columna de filas sin separación es
      la diferencia entre una fila resaltada y una mancha. Va por dentro
      (`inset`), así que no mueve nada de sitio. */
-  .proj.on :global([data-scope='navigation'][data-part='trigger']) {
+  .proj.on:not(.tile) :global([data-scope='navigation'][data-part='trigger']) {
     background: var(--hover);
     box-shadow: inset 0 0 0 1px var(--line);
     font-weight: 600;
@@ -510,12 +540,30 @@
   .pin-row,
   .pin-row:visited { text-decoration: none; color: inherit; }
 
+  /* One full-width tile contains two sibling buttons: navigation and menu.
+     Never nest a menu button inside the navigation button. */
+  .proj.tile { gap: 0; border-radius: var(--radius-base, 8px); transition: background 0.12s ease; }
+  .proj.tile:hover, .proj.tile:focus-within, .proj.tile.on { background: var(--hover); }
+  .proj.tile.on { box-shadow: inset 0 0 0 1px var(--line); font-weight: 600; }
+  .proj.tile :global([data-scope='navigation'][data-part='trigger']),
+  .proj.tile :global([data-scope='navigation'][data-part='trigger']:hover) { background: transparent; box-shadow: none; }
+  .proj.tile.burning { background: color-mix(in oklab, var(--hot) 12%, transparent); }
+  .proj.tile.burning:hover, .proj.tile.burning:focus-within { background: color-mix(in oklab, var(--hot) 18%, transparent); }
+  .proj.tile.burning.on { background: color-mix(in oklab, var(--hot) 26%, transparent); box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--hot) 50%, transparent); }
+  .proj.tile.burning.on:hover, .proj.tile.burning.on:focus-within { background: color-mix(in oklab, var(--hot) 32%, transparent); }
+
   .proj-more {
+    position: relative;
+    isolation: isolate;
     flex: none;
     display: grid;
     place-content: center;
     width: 24px;
-    height: 28px;
+    height: 24px;
+    aspect-ratio: 1;
+    padding: 0;
+    border: none;
+    background: transparent;
     border-radius: 7px;
     color: var(--faint);
     cursor: pointer;
@@ -527,13 +575,14 @@
      opens; the affordance belongs to the row you are actually on. */
   .proj:hover .proj-more,
   .proj:focus-within .proj-more,
-  .proj.on .proj-more {
+  .proj.on .proj-more,
+  .proj-more[data-state='open'] {
     opacity: 1;
   }
-  .proj-more:hover {
-    background: var(--hover);
-    color: var(--text);
-  }
+  .proj-more::before { content: ''; position: absolute; inset: 3px; z-index: -1; border-radius: 5px; background: color-mix(in oklab, var(--text) 8%, transparent); opacity: 0; transition: opacity 0.12s ease; pointer-events: none; }
+  .proj-more:hover, .proj-more[data-state='open'] { color: var(--text); }
+  .proj-more:hover::before, .proj-more[data-state='open']::before { opacity: 1; }
+  .proj-more:focus-visible { outline: 2px solid var(--accent); outline-offset: -4px; }
   .pin {
     flex: none; display: grid; place-content: center;
     width: 22px; height: 22px; border-radius: 7px;
@@ -613,21 +662,21 @@
 
      Sin número. La columna contesta «¿dónde está pasando algo?», y cuántas
      burbujas arden es una pregunta del board, que está a un clic. */
-  .proj.burning :global([data-scope='navigation'][data-part='trigger']) {
+  .proj.burning:not(.tile) :global([data-scope='navigation'][data-part='trigger']) {
     background: color-mix(in oklab, var(--hot) 12%, transparent);
   }
   /* El hover sube el mismo baño. El de Skeleton, en claro, es casi blanco, y
      borraba la fila justo al señalarla. */
-  .proj.burning :global([data-scope='navigation'][data-part='trigger']:hover) {
+  .proj.burning:not(.tile) :global([data-scope='navigation'][data-part='trigger']:hover) {
     background: color-mix(in oklab, var(--hot) 18%, transparent);
   }
-  .proj.burning.on :global([data-scope='navigation'][data-part='trigger']) {
+  .proj.burning.on:not(.tile) :global([data-scope='navigation'][data-part='trigger']) {
     background: color-mix(in oklab, var(--hot) 26%, transparent);
     /* El borde, del mismo naranja: un gris sobre el baño cálido se lee como
        suciedad y no como un borde. */
     box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--hot) 50%, transparent);
   }
-  .proj.burning.on :global([data-scope='navigation'][data-part='trigger']:hover) {
+  .proj.burning.on:not(.tile) :global([data-scope='navigation'][data-part='trigger']:hover) {
     background: color-mix(in oklab, var(--hot) 32%, transparent);
   }
   .proj.burning :global([data-scope='navigation'][data-part='trigger'] .pin) {

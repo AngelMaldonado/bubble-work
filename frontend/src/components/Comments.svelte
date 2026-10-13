@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import Icon from './Icon.svelte';
   // Lo que se dijo sobre un thread, en un cajón.
   //
   // Un cajón y no un panel al lado del documento: leer un documento y leer una
@@ -120,7 +122,7 @@
     <Dialog.Positioner class="drawer-pos">
       <Dialog.Content class="drawer talk">
         <header class="flex items-start gap-3">
-          <span class="mt-0.5 text-xl" aria-hidden="true">💬</span>
+          <span class="mt-0.5"><Icon of="chat" size="1.6rem" /></span>
           <div class="min-w-0 flex-1">
             <Crumbs parts={crumbs} />
             <Dialog.Title class="truncate text-lg font-bold">
@@ -180,7 +182,7 @@
               e.currentTarget.form?.requestSubmit();
             }}></textarea>
           <button class="btn btn-sm preset-filled-primary-500" disabled={!draft.trim() || sending}>
-            {sending ? '…' : 'Comentar'}
+            {#if sending}<Loading compact label="Enviando comentario" />{:else}Comentar{/if}
           </button>
         </form>
       </Dialog.Content>

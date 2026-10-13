@@ -14,6 +14,7 @@
   // el mismo gesto: en reposo no compite con la pantalla, y bajo el cursor dice
   // que está viva.
   import { api, type Repo } from '../lib/api';
+  import { rowSquare } from '../lib/rowSquare';
   import Confirm, { type Doom } from './Confirm.svelte';
 
   let {
@@ -107,7 +108,7 @@
             <span class="tag">{label(r)}</span>
           </a>
           {#if canWrite}
-            <button class="drop" title="quitar" onclick={() => drop(r)} aria-label="Quitar">✕</button>
+            <button class="drop" {@attach (el) => rowSquare(el, '.row')} title="quitar" onclick={() => drop(r)} aria-label="Quitar">✕</button>
           {/if}
         </div>
       {/each}
@@ -148,11 +149,12 @@
          carpeta habría prometido archivos que aquí no existen. -->
     <button
       class="box"
+      class:has={repos.length > 0}
       aria-expanded={open}
       onclick={() => (open = !open)}
       title="Repositorios de {workspace.name}">
       <img class="still" src="/3dicons/clay/cube.png" alt="" />
-      <img class="lit" src="/3dicons/color/cube.png" alt="" aria-hidden="true" />
+      <img class="lit" src="/3dicons/tint/cube.png" alt="" aria-hidden="true" />
       {#if repos.length}<span class="count">{repos.length}</span>{/if}
     </button>
   </div>
@@ -165,10 +167,7 @@
      pantalla y ahí a la izquierda está la columna de proyectos. El contenedor
      lo pone el shell, que sabe dónde empieza el pane. */
   .repos {
-    position: absolute;
-    left: 1rem;
-    bottom: 1rem;
-    z-index: var(--z-chrome);
+    position: relative;
     display: flex;
     flex-direction: column;
     align-items: flex-start;
@@ -313,8 +312,9 @@
     transition: transform 0.18s cubic-bezier(0.2, 0.8, 0.3, 1), opacity 0.18s ease;
   }
   .lit { opacity: 0; }
-  .repos.open .still { opacity: 0; transform: scale(1.12) translateY(-2px); }
-  .repos.open .lit { opacity: 1; transform: scale(1.12) translateY(-2px); }
+  .box.has .still { opacity: 0; }
+  .box.has .lit { opacity: 1; }
+  .repos.open .box img { transform: scale(1.12) translateY(-2px); }
   .box:focus-visible { outline: 2px solid var(--accent); outline-offset: 4px; border-radius: 14px; }
 
   /* Cuántos hay, sin abrir la caja. */
@@ -324,10 +324,12 @@
     right: -2px;
     min-width: 18px;
     height: 18px;
-    padding: 0 4px;
+    padding: 0 3px;
+    box-sizing: border-box;
+    line-height: 1;
     display: grid;
     place-content: center;
-    border-radius: 999px;
+    border-radius: 9999px;
     background: var(--surface-solid);
     border: 1px solid var(--line);
     font-size: 0.66rem;

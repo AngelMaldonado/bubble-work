@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The planner, against the real server.
   //
   // `PlannerView` draws; this owns the data and every write. The mapping is the
@@ -22,33 +23,36 @@
     type BubbleRecord,
     type InboxItem,
     type Objective as ObjectiveRecord,
-    type Stage,
     type ThreadRecord,
     type ThreadHeat,
     type BubbleHeat,
     type QueueCard,
-    type ThreadStage,
     type CalendarEvent,
     type Tuning,
+    type Artifact,
     avatarUrl,
   } from '../lib/api';
   import PlannerView, { type Objective } from './PlannerView.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
-  import type { Card, Column } from './Kanban.svelte';
+  import type { Card } from '../lib/cards';
   import type { CalEvent } from './PlannerCalendar.svelte';
   import type { Note } from './InboxSheet.svelte';
   import { priorityMap, priorityMeaning } from '../lib/priority';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import { limited, tooLong } from '../lib/limits.svelte';
   import type { SheetThread } from './CardSheet.svelte';
-  import SequencePane, { type SeqThread } from './SequencePane.svelte';
+  import { type SeqThread } from './SequencePane.svelte';
+  import SequenceCanvas, { type SeqEntry } from './SequenceCanvas.svelte';
+  import { projectColors } from '../lib/projectColors.svelte';
   import { ago } from '../lib/when';
-  import { untrack } from 'svelte';
+  import { untrack, onDestroy } from 'svelte';
+  import { live } from '../lib/live.svelte';
+  import DueDate from './DueDate.svelte';
+  import FilterPick from './FilterPick.svelte';
   import { plannerFilters, NO_FILTERS, lastOpenBubble, type PlannerFilters } from '../lib/filters.svelte';
   import { bandFace, bandName } from '../lib/bands';
   import Crumbs from './Crumbs.svelte';
   import { occurrences, isoDay } from '../lib/repeat';
-  import FilterPick from './FilterPick.svelte';
 
   let {
     onback,
@@ -76,7 +80,7 @@
   // workspace's git repository, so something new has to be told where it lives —
   // and being asked once, out loud, is the honest version of a screen that used
   // to decide it for you.
-  let born = $state<{ title: string; stage: string; note?: Note } | null>(null);
+  let born = $state<{ title: string; note?: Note } | null>(null);
   let bornIn = $state('');
   // No bubble is asked for here, and that is the difference between the two
   // screens rather than an oversight. The board is the OPERATIVE surface: work
@@ -93,11 +97,6 @@
   // siguen aquí para una sola cosa: sus fechas, que es lo que el calendario
   // muestra. Las fechas son de la ejecución.
   let bubbles = $state<BubbleRecord[]>([]);
-  let stageRows = $state<Stage[]>([]);
-  // Las columnas del tablero de TAREAS, que son otras: un módulo y una tarea no
-  // están en el mismo sitio del plan. Vacío es una respuesta — el lead no ha
-  // definido ninguna todavía — y entonces todo cae en «Sin planear».
-  let taskStages = $state<ThreadStage[]>([]);
   let dates = $state<CalendarEvent[]>([]);
   // Cuánto dura un ciclo AHORA. El tablero dice «en silencio 2 ciclos» y sin
   // esto nadie sabe si eso son dos días o dos semanas: `cycle_hours` se
@@ -111,45 +110,38 @@
     return d % 7 === 0 ? `${d / 7} sem` : `${d} d`;
   });
 
-  /** Cómo se ve el planeador: por módulos (burbujas) o por tareas (hilos).
-   *
-   *  Por PERSONA y en el servidor, no en el navegador como el resto de la
-   *  vista: abrir el portátil y encontrarse el tablero en el otro modo es tener
-   *  que volver a tomar una decisión ya tomada. Ver `prefs` en la API.
-   *
-   *  Arranca en burbujas mientras las preferencias llegan: es lo que había, y
-   *  un tablero que cambia de forma medio segundo después de abrirse marea. */
+  /** La secuencia ordena módulos o hilos; se elige dentro de su toolbox.
+   *  Por persona y en el servidor (`prefs`): abrir el portátil y encontrarla
+   *  en el otro modo es volver a tomar una decisión ya tomada. */
   let mode = $state<'bubbles' | 'tasks'>('bubbles');
   const tasksMode = $derived(mode === 'tasks');
-
-  /** Qué forma tiene el tablero: la LÍNEA de ejecución o el kanban.
-   *
-   *  Con la secuencia encendida, la línea es el sitio por defecto y el kanban es
-   *  opt-in: si un departamento decidió que hay un orden de ejecución, lo que se
-   *  mira a diario es ese orden. Apagada, esto no significa nada y el planeador
-   *  es el tablero de siempre. */
-  let view = $state<'sequence' | 'kanban'>('sequence');
-  const seqView = $derived(sequenceEnabled && view === 'sequence');
-
   function setMode(next: 'bubbles' | 'tasks') {
     if (next === mode) return;
     mode = next;
-    savePrefs();
+    api.setPrefs({ planner: mode }).catch(() => {});
   }
+  api
+    .prefs()
+    .then((p) => {
+      if (p.planner === 'tasks' || p.planner === 'bubbles') mode = p.planner;
+    })
+    .catch(() => {});
 
-  function setView(next: 'sequence' | 'kanban') {
-    if (next === view) return;
-    view = next;
-    savePrefs();
-  }
+  /** La secuencia es una vista más del selector de abajo, si el departamento
+   *  la encendió; cuál se mira lo decide PlannerView. */
+  const seqView = $derived(sequenceEnabled);
 
-  // El saco entero, porque `setPrefs` guarda el saco entero. Se manda y no se
-  // espera: la vista ya cambió, y que el guardado tarde no es motivo para que
-  // el tablero se quede quieto.
-  const savePrefs = () => api.setPrefs({ planner: mode, view }).catch(() => {});
   let threads = $state<ThreadRecord[]>([]);
   let objectiveRows = $state<ObjectiveRecord[]>([]);
   let notes = $state<InboxItem[]>([]);
+  let artifacts = $state<Artifact[]>([]);
+  async function loadArtifacts() {
+    try { artifacts = (await api.artifacts('inbox')).artifacts; } catch { /* la nota sigue siendo legible */ }
+  }
+  loadArtifacts();
+  const offArtifacts = live.watch('artifacts', loadArtifacts);
+  const artifactTick = setInterval(loadArtifacts, 60_000);
+  onDestroy(() => { offArtifacts(); clearInterval(artifactTick); });
   // Priority is DERIVED, so it is read like any other server answer rather than
   // recomputed here from the same square the server used.
   let prios = $state<Record<string, string>>({});
@@ -167,13 +159,10 @@
   let heatedBubbles = $state<BubbleHeat[]>([]);
   let bands = $state<Record<string, string>>({});
 
-  // Lo que el tablero está escondiendo. Filtrar no es buscar: ⌘K te LLEVA a
-  // algo, esto esconde lo que no coincide sin moverte de sitio.
-  let filters = $state<PlannerFilters>(plannerFilters.get());
-  $effect(() => plannerFilters.set(filters));
-  const filtering = $derived(
-    !!(filters.q.trim() || filters.project || filters.owner || filters.objective || filters.band),
-  );
+  // Sin barra de filtros (se quitó): todo a la vista. Lo que alguien dejó
+  // filtrado antes se olvida, o escondería cosas sin forma de quitarlo.
+  const filters: PlannerFilters = { ...NO_FILTERS };
+  plannerFilters.set(filters);
 
   /** Las burbujas que pasan el filtro. En el cliente, sobre lo que ya se trajo:
    *  `allBubbles()` viene entero de una vez, y pedirle al servidor lo mismo
@@ -201,10 +190,8 @@
 
   async function load() {
     try {
-      const [bu, st, ts, ce, th, ob, inb, pr, ws] = await Promise.all([
+      const [bu, ce, th, ob, inb, pr, ws] = await Promise.all([
         api.allBubbles(),
-        api.stages(),
-        api.threadStages(),
         api.calendarEvents(),
         api.allThreads(),
         api.objectives(),
@@ -213,8 +200,6 @@
         api.workspaces(),
       ]);
       bubbles = bu;
-      stageRows = st;
-      taskStages = ts;
       dates = ce;
       threads = th;
       places = Object.fromEntries(ws.map((w) => [w.id, w.name]));
@@ -234,14 +219,6 @@
   api
     .tuning()
     .then((t) => (tuning = t))
-    .catch(() => {});
-
-  api
-    .prefs()
-    .then((p) => {
-      if (p.planner === 'tasks' || p.planner === 'bubbles') mode = p.planner;
-      if (p.view === 'kanban' || p.view === 'sequence') view = p.view;
-    })
     .catch(() => {});
 
   async function loadHeat() {
@@ -287,6 +264,7 @@
       seq: t.seq,
       name: t.name,
       project: places[t.workspace] ?? '',
+      workspace: t.workspace,
       bubble: bubbleName(t.bubble),
       priority: t.priority ?? '',
       sequence: t.sequence ?? 0,
@@ -312,6 +290,7 @@
       id: b.id,
       name: b.name,
       project: places[b.workspace] ?? '',
+      workspace: b.workspace,
       bubble: '',
       priority: b.priority ?? '',
       sequence: b.sequence ?? 0,
@@ -430,6 +409,7 @@
     seq: c.seq,
     name: c.name,
     project: places[c.workspace] ?? '',
+    workspace: c.workspace,
     bubble: c.bubble ? bubbleName(c.bubble) : '',
     priority: c.priority ?? '',
     sequence: 0,
@@ -502,34 +482,10 @@
     })),
   );
 
-  /** La primera columna: lo que nadie ha colocado en el plan todavía. Con
-   *  nombre y no escondida — una burbuja que existe y no está planeada es
-   *  justamente una de las dos cosas que esta pantalla sirve para ver. */
-  const UNSTAGED = '';
-
-  /** Cómo se ordena una columna.
-   *
-   *  Por defecto, sola: por la prioridad que el servidor deriva de impacto ×
-   *  urgencia, que es lo que el modelo dice — el orden se deriva, no se
-   *  administra. Empatan por fecha de vencimiento, y al final por nombre, para
-   *  que dos cargas iguales no bailen entre recargas.
-   *
-   *  Si alguien arrastró aquí, manda su orden. No es un segundo sistema: es una
-   *  excepción declarada, y la columna lo dice con un botón para deshacerla.
-   *  «Esto va primero porque el cliente llama el martes» no cabe en impacto ×
-   *  urgencia, y obligar a falsear la urgencia para colocar una tarjeta sería
-   *  peor — corrompe el dato con el que se calcula todo lo demás. */
-  function sortColumn(rows: BubbleRecord[]): BubbleRecord[] {
-    const manual = rows.some((t) => (t.rank ?? 0) > 0);
+  /** Las burbujas en el orden que deriva su prioridad, y por nombre al empatar,
+   *  para que dos iguales no bailen entre recargas. */
+  function sortBubbles(rows: BubbleRecord[]): BubbleRecord[] {
     return [...rows].sort((a, b) => {
-      if (manual) {
-        // Sin rango va al final: una tarjeta recién llegada a una columna
-        // ordenada a mano no tiene sitio asignado, y ponerla arriba sería
-        // inventarle uno.
-        const ra = a.rank || Number.MAX_SAFE_INTEGER;
-        const rb = b.rank || Number.MAX_SAFE_INTEGER;
-        if (ra !== rb) return ra - rb;
-      }
       const pa = prios[a.id] || 'P9';
       const pb = prios[b.id] || 'P9';
       if (pa !== pb) return pa < pb ? -1 : 1;
@@ -585,76 +541,78 @@
     return n;
   });
 
-  /** El tablero por TAREAS: las mismas columnas sintéticas y el mismo «Sin
-   *  planear», con hilos dentro en vez de burbujas.
-   *
-   *  Son los hilos de TODOS los proyectos, como el tablero de burbujas es del
-   *  departamento entero. Cada tarjeta dice de qué proyecto y de qué módulo es
-   *  —para eso está `where`— y para acotarlo están los filtros. */
-  const taskColumns = $derived<Column[]>(
-    [
-      { id: UNSTAGED, name: 'Sin planear', locked: true },
-      ...taskStages.map((st) => ({ id: st.id, name: st.name, done: !!st.done })),
-    ].map((col) => ({
-      ...col,
-      // Lo hecho no pide nada y nace plegado, para que no le robe ancho a lo
-      // que falta. Si el lead no marcó ninguna columna como final, no hay
-      // ninguna plegada y no pasa nada.
-      collapsed: 'done' in col ? (col as { done?: boolean }).done : false,
-      cards: sortTasks(shownThreads.filter((t) => (t.stage ?? '') === col.id)).map(
-        (t): Card => ({
-          id: t.id,
-          title: t.name,
-          prio: t.priority || undefined,
-          // De qué proyecto y de qué módulo es. Un hilo no tiene objetivo
-          // propio —es de su burbuja— ni impacto ni urgencia, así que la
-          // tarjeta no finge tenerlos.
-          where: places[t.workspace],
-          ws: t.workspace,
-          owners: t.assignees ?? [],
-          due: t.due_date || undefined,
-          pieces: 0,
-          notes: '',
-        }),
-      ),
+  /** Lo que el planeador puede abrir: las tareas, o los módulos. Ya no hay
+   *  columnas; esto es lo que el calendario y la secuencia abren por id. */
+  const taskCards = $derived<Card[]>(
+    sortTasks(shownThreads).map((t) => ({
+      id: t.id,
+      title: t.name,
+      prio: t.priority || undefined,
+      where: places[t.workspace],
+      ws: t.workspace,
+      owners: t.assignees ?? [],
+      due: t.due_date || undefined,
+      pieces: 0,
+      notes: '',
     })),
   );
 
-  const bubbleColumns = $derived<Column[]>(
-    [
-      { id: UNSTAGED, name: 'Sin planear', locked: true },
-      ...stageRows.map((st) => ({ id: st.id, name: st.name })),
-    ].map(
-      (col) => ({
-        ...col,
-        manual: bubbles.some((b) => (b.stage ?? '') === col.id && (b.rank ?? 0) > 0),
-        cards: sortColumn(shownBubbles.filter((b) => (b.stage ?? '') === col.id)).map(
-          (b): Card => ({
-            id: b.id,
-            title: b.name,
-            obj: b.objective ? objectiveRows.findIndex((o) => o.id === b.objective) + 1 : undefined,
-            objName: b.objective ? objectiveRows.find((o) => o.id === b.objective)?.name : undefined,
-            impact: b.impact,
-            urgency: b.urgency,
-            prio: prios[b.id] || undefined,
-            // El BRIEF: lo que el lead escribe al planear, con diagramas e
-            // imágenes. No el outcome, que es el contrato de una frase — estirado
-            // hasta ser el cuaderno del plan dejaría de leerse de un vistazo en
-            // el board.
-            notes: b.brief,
-            pieces: pieces[b.id] ?? 0,
-            where: places[b.workspace],
-            ws: b.workspace,
-            owners: b.owners ?? [],
-            born: b.created,
-            due: b.due_date?.slice(0, 10) || undefined,
-          }),
-        ),
-      }),
-    ),
+  const bubbleCards = $derived<Card[]>(
+    sortBubbles(shownBubbles).map((b) => ({
+      id: b.id,
+      title: b.name,
+      obj: b.objective ? objectiveRows.findIndex((o) => o.id === b.objective) + 1 : undefined,
+      objName: b.objective ? objectiveRows.find((o) => o.id === b.objective)?.name : undefined,
+      impact: b.impact,
+      urgency: b.urgency,
+      prio: prios[b.id] || undefined,
+      // El BRIEF: el cuaderno del plan, no el outcome de una frase.
+      notes: b.brief,
+      pieces: pieces[b.id] ?? 0,
+      where: places[b.workspace],
+      ws: b.workspace,
+      owners: b.owners ?? [],
+      born: b.created,
+      due: b.due_date?.slice(0, 10) || undefined,
+    })),
   );
 
-  const columns = $derived(tasksMode ? taskColumns : bubbleColumns);
+  const cards = $derived(tasksMode ? taskCards : bubbleCards);
+
+  /** Lo que entró por WhatsApp y sigue sin decidirse: la pestaña «WhatsApp» de
+   *  la barra de Secuencia. Son las MISMAS notas del inbox —quien las ve lo
+   *  dicen sus reglas: quien encendió el canal y el lead global—, no una copia. */
+  const whatsapp = $derived<SeqEntry[]>(
+    notes
+      .filter((n) => n.source === 'whatsapp' && !n.thread && !n.bubble)
+      .map((n) => ({ id: n.id, text: n.note, from: n.source_from || 'WhatsApp', when: new Date(n.created).toLocaleDateString() })),
+  );
+  /** Qué muestra la barra de Secuencia: lo que falta por secuenciar, o lo que
+   *  llegó por WhatsApp. Sólo de esta pantalla. */
+  let seqTray = $state<'queue' | 'whatsapp'>('queue');
+  /** Abrir una nota del inbox desde fuera de su vista (la barra de Secuencia). */
+  let peek = $state<{ note: Note; at: number } | null>(null);
+  function openEntry(id: string) {
+    const n = inbox.find((x) => x.id === id);
+    if (n) peek = { note: n, at: Date.now() };
+  }
+  /** Soltar una entrada en el lienzo: el mismo diálogo de «pasar al tablero»
+   *  (proyecto › módulo › nombre). Resuelve con el hilo creado, para que el
+   *  lienzo lo deje donde se soltó; con nada si se canceló o se paró en módulo. */
+  let seqResolve: ((id: string | null) => void) | null = null;
+  function entryToTask(id: string): Promise<string | null> {
+    const n = inbox.find((x) => x.id === id);
+    if (!n) return Promise.resolve(null);
+    seqResolve?.(null);
+    return new Promise((resolve) => {
+      seqResolve = resolve;
+      newTask = { note: n, title: n.text, onThread: false, ...blankWhere(), fresh: n.text };
+    });
+  }
+  // Cerrar el diálogo sin crear también contesta: el lienzo no se queda esperando.
+  $effect(() => {
+    if (!newTask && seqResolve) { const r = seqResolve; seqResolve = null; r(null); }
+  });
 
   const inbox = $derived<Note[]>(
     notes
@@ -669,6 +627,9 @@
         // la app, quién lo capturó.
         from: n.source_from || (n.captured_by === api.me?.id ? 'tú' : 'alguien'),
         when: new Date(n.created).toLocaleDateString(),
+        artifacts: artifacts.filter((a) => a.inbox_item === n.id).map((a) => ({
+          id: a.id, title: a.title, expires_at: a.expires_at, pinned: a.pinned,
+        })),
       })),
   );
 
@@ -686,17 +647,16 @@
    *  Una tarea terminada no aparece: su fecha ya es historia, no plazo. */
   /** La ventana en la que se despliegan las repeticiones.
    *
-   *  Un rango fijo y generoso en vez de preguntarle al calendario qué mes está
-   *  mirando: el componente no lo dice hacia fuera, y esto es barato —son
-   *  cuentas sobre un puñado de filas— mientras que cablear el rango a través
-   *  de dos componentes para ahorrarlas sería pagar en acoplamiento. */
-  const window = $derived.by(() => {
+   *  datesSet informa el rango visible, también al saltar de año. El rango
+   *  inicial es sólo un fallback mientras el calendario carga; no limita las
+   *  repeticiones a catorce meses ni guarda filas por ocurrencia. */
+  let window = $state((() => {
     const now = new Date();
     return {
       from: isoDay(new Date(now.getFullYear(), now.getMonth() - 2, 1)),
       to: isoDay(new Date(now.getFullYear() + 1, now.getMonth() + 2, 0)),
     };
-  });
+  })());
 
   const events = $derived<CalEvent[]>([
     // Lo que pasa en una fecha y NO es trabajo. Primero, porque es el marco:
@@ -719,6 +679,7 @@
         start: b.due_date!.slice(0, 10),
         allDay: true,
         prio: prios[b.id] || undefined,
+        color: projectColors.get(b.workspace) || undefined,
       })),
     ...shownThreads
       .filter((t) => t.due_date && t.heat.lifecycle !== 'closed')
@@ -728,6 +689,7 @@
         start: t.due_date!.slice(0, 10),
         allDay: true,
         prio: t.priority || undefined,
+        color: projectColors.get(t.workspace) || undefined,
       })),
   ]);
 
@@ -809,59 +771,11 @@
 
   // Moving a card says what the work is FOR. Not what state it is in: that is
   // the operative board's answer, and it belongs to the workspace that owns it.
-  /** Soltar una tarjeta: a qué columna, y en qué sitio.
-   *
-   *  La columna es el objetivo. El sitio se guarda con `rank`, y se escribe
-   *  para TODA la columna de destino: mezclar tarjetas con rango y sin él
-   *  dentro de la misma columna es tener dos órdenes a la vez y no saber cuál
-   *  gana. Con el primer arrastre, la columna entera pasa a ser suya — lo que
-   *  se ve antes de soltar es exactamente lo que queda después.
-   *
-   *  Los rangos van de diez en diez sin más motivo que dejar hueco a la vista
-   *  cuando alguien mire la base a mano. */
-  function moveCard(id: string, column: string, before: string | null = null) {
-    // En modo tareas la columna es lo único que se guarda: no hay orden a mano
-    // dentro de una columna de tareas, se deriva de la prioridad y de la
-    // secuencia (ver `sortTasks`). Un `rank` aquí sería un tercer sistema
-    // diciendo qué va antes.
-    if (tasksMode) {
-      const was = heated.find((t) => t.id === id)?.stage ?? '';
-      if (was === column) return;
-      write(() => api.update('threads', id, { stage: column }));
-      return;
-    }
-    const col = columns.find((c) => c.id === column);
-    if (!col) return;
-    const order = col.cards.map((c) => c.id).filter((x) => x !== id);
-    const at = before ? order.indexOf(before) : -1;
-    if (at < 0) order.push(id);
-    else order.splice(at, 0, id);
-
-    write(async () => {
-      // La etapa primero: si algo falla después, la burbuja ya está donde se la
-      // soltó y sólo queda mal el orden — el revés dejaría una tarjeta con sitio
-      // en una columna a la que no pertenece.
-      const was = bubbles.find((b) => b.id === id)?.stage ?? '';
-      if (was !== column) await api.update('bubbles', id, { stage: column });
-      await Promise.all(
-        order.map((bid, i) => api.update('bubbles', bid, { rank: (i + 1) * 10 })),
-      );
-    });
-  }
-
-  /** Devolver una columna a que se ordene sola. Cero es «ninguno»: la prioridad
-   *  derivada vuelve a mandar, que es el valor por defecto de todo esto. */
-  function autoOrder(column: string) {
-    const col = columns.find((c) => c.id === column);
-    if (!col) return;
-    write(() => Promise.all(col.cards.map((c) => api.update('bubbles', c.id, { rank: 0 }))));
-  }
-
   /** Ask where it is born — unless there is only one place it could be. */
-  function ask(title: string, stage: string, note?: Note) {
+  function ask(title: string, note?: Note) {
     const only = Object.keys(places);
     bornIn = only.length === 1 ? only[0] : bornIn || only[0] || '';
-    born = { title, stage, note };
+    born = { title, note };
     // With a single project there is nothing to choose, so nothing is asked.
     if (only.length === 1) create();
   }
@@ -874,7 +788,7 @@
     const long = tooLong('bubbles.name', b.title);
     if (long) {
       born = null;
-      error = `No pasó al kanban: el título se vuelve el nombre de la burbuja. ${long}`;
+      error = `No se creó: el título se vuelve el nombre de la burbuja. ${long}`;
       return;
     }
     born = null;
@@ -887,7 +801,6 @@
       const bub = await api.create<BubbleRecord>('bubbles', {
         workspace: bornIn,
         name: b.title,
-        stage: b.stage || '',
         brief: b.note?.body ?? '',
       });
       // Una nota triada guarda a qué se convirtió, y sale del inbox por eso —
@@ -898,18 +811,6 @@
       if (b.note) await api.update('inbox_items', b.note.id, { bubble: bub.id });
     });
   }
-
-  const addCard = (column: string, title: string) => {
-    // Una TAREA nace dentro de un módulo, así que el «+» del tablero pregunta lo
-    // mismo que promover del inbox: proyecto, y después módulo. La diferencia es
-    // que aquí también hay que ponerle nombre — al venir del inbox lo trae la
-    // nota — y que se queda en la columna donde se pulsó.
-    if (tasksMode) {
-      newTask = { title: '', stage: column === UNSTAGED ? '' : column, onThread: false, ...blankWhere() };
-      return;
-    }
-    ask(title, column);
-  };
 
   const deleteCard = (id: string) => {
     if (tasksMode) {
@@ -969,14 +870,13 @@
         title: note.text,
         // Lo capturado sirve de nombre para las dos cosas: quien lo triee como
         // módulo no tiene que volver a escribir la misma frase.
-        stage: '',
         onThread: false,
         ...blankWhere(),
         fresh: note.text,
       };
       return;
     }
-    ask(note.text, '', note);
+    ask(note.text, note);
   };
 
   /** Dónde empieza la elección. Con un solo proyecto no hay nada que elegir, así
@@ -1007,8 +907,6 @@
     note?: Note;
     /** el nombre del HILO, en el tercer paso */
     title: string;
-    /** la columna donde se pulsó «+», si fue ahí */
-    stage: string;
     ws: string;
     bubble: string;
     fresh: string;
@@ -1034,6 +932,15 @@
    *  igual en los dos casos, y dos copias de «cómo nace un módulo» acabarían
    *  naciendo distinto. */
   async function createTask(stop: 'module' | 'thread') {
+    // Si el diálogo vino de soltar una entrada en la secuencia, se le contesta
+    // con el hilo creado. Se toma antes de cerrar el diálogo.
+    const answer = seqResolve;
+    seqResolve = null;
+    let madeThread: string | null = null;
+    try { await createTaskInner(stop, (id) => (madeThread = id)); }
+    finally { answer?.(madeThread); }
+  }
+  async function createTaskInner(stop: 'module' | 'thread', made: (id: string) => void) {
     const p = newTask;
     if (!p || !p.ws) return;
     const name = (stop === 'module' ? p.fresh : p.title).trim();
@@ -1045,6 +952,7 @@
       return;
     }
     newTask = null;
+    let created = false;
     await write(async () => {
       // El módulo, si hay que crearlo. Sin outcome: el contrato lo pone quien
       // orquesta, e inventarle uno aquí sería escribirlo por él.
@@ -1055,13 +963,13 @@
           name: p.fresh.trim(),
         });
         bubble = made.id;
+        if (stop === 'module') created = true;
       }
       if (stop === 'module' || !bubble) return;
 
       const t = await api.createThread({ workspace: p.ws, bubble, name });
-      // La columna donde se pulsó «+». Se escribe después de crear, y no antes,
-      // porque `createThread` es la puerta que pone el número y la ruta.
-      if (p.stage) await api.update('threads', t.id, { stage: p.stage });
+      created = true;
+      made(t.id);
       if (p.note) {
         // Lo que se entendió de la nota viaja al documento de la tarea. La nota
         // NO se borra: guarda a qué se convirtió, y sale del inbox por eso.
@@ -1073,7 +981,11 @@
         await api.update('inbox_items', p.note.id, { thread: t.id });
       }
     });
+    if (created) setMode(stop === 'thread' ? 'tasks' : 'bubbles');
     await loadHeat();
+    // load() relee el board, no la cola paginada. Sin esto lo recién creado
+    // existía en el servidor pero no aparecía en la caja hasta cambiar de modo.
+    refillSides();
   }
 
 
@@ -1111,84 +1023,6 @@
     if (tasksMode) return;
     if (Object.keys(out).length) write(() => api.update('bubbles', id, out));
   }
-
-  // Las columnas del kanban son ETAPAS. Estos tres verbos seguían escribiendo
-  // en `objectives` desde cuando las columnas eran objetivos: renombrar una
-  // etapa pedía un objetivo con el id de la etapa, y el servidor contestaba que
-  // no existía.
-  //
-  // «Sin planear» no es una fila (es `UNSTAGED`, la burbuja sin etapa), así que
-  // no se renombra ni se borra.
-
-  /** Una etapa nueva entra ANTES de la de terminado: «Hecho» es el final del
-   *  tablero, y una columna añadida detrás de él sería trabajo después de
-   *  acabado. Sin columna de terminado, al final. */
-  /** La colección y las filas de las columnas del tablero que se está mirando.
-   *  Los cuatro verbos de abajo son los mismos en los dos modos; lo único que
-   *  cambia es dónde escriben. */
-  const colTable = $derived(tasksMode ? 'thread_stages' : 'stages');
-  const colRows = $derived<{ id: string; name: string; position?: number; done?: boolean }[]>(
-    tasksMode ? taskStages : stageRows,
-  );
-
-  const addStage = () =>
-    write(async () => {
-      const rows = [...colRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-      const end = rows.findIndex((r) => r.done);
-      const at = end < 0 ? rows.length : end;
-      // Los de detrás se corren uno, del último al primero.
-      for (const r of rows.slice(at).reverse()) {
-        await api.update(colTable, r.id, { position: (r.position ?? 0) + 1 });
-      }
-      await api.create(colTable, {
-        name: tasksMode ? 'Columna nueva' : 'Etapa nueva',
-        position: at < rows.length ? (rows[at].position ?? at) : (rows.at(-1)?.position ?? -1) + 1,
-      });
-    });
-
-  /** Arrastrar una columna es reordenar las etapas, y se guarda: antes el
-   *  tablero movía su propia copia y al recargar volvía todo a su sitio. Se
-   *  reescriben las posiciones que cambiaron, de 0 en adelante. */
-  const moveStage = (id: string, before: string | null) => {
-    if (id === UNSTAGED) return;
-    const rows = [...colRows].sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    const moving = rows.find((r) => r.id === id);
-    if (!moving) return;
-    const rest = rows.filter((r) => r.id !== id);
-    const at = before && before !== UNSTAGED ? rest.findIndex((r) => r.id === before) : -1;
-    // Delante de «Sin planear» es lo mismo que el principio: esa columna no es
-    // una etapa y siempre va primero.
-    if (before === UNSTAGED) rest.unshift(moving);
-    else if (at < 0) rest.push(moving);
-    else rest.splice(at, 0, moving);
-    write(async () => {
-      for (const [i, r] of rest.entries()) {
-        if ((r.position ?? -1) !== i) await api.update(colTable, r.id, { position: i });
-      }
-    });
-  };
-
-  const renameStage = (id: string, name: string) => {
-    if (id === UNSTAGED) return;
-    write(() => api.update(colTable, id, { name }));
-  };
-
-  const deleteStage = (id: string) => {
-    if (id === UNSTAGED) return;
-    const st = colRows.find((x) => x.id === id);
-    const n = tasksMode
-      ? heated.filter((t) => t.stage === id).length
-      : bubbles.filter((b) => b.stage === id).length;
-    const what = tasksMode ? 'columna' : 'etapa';
-    const things = tasksMode ? 'tareas' : 'burbujas';
-    doom = {
-      title: `¿Borrar la ${what} «${st?.name ?? id}»?`,
-      body: n
-        ? `Sus ${n} ${things} NO se borran: vuelven a «Sin planear», que es exactamente lo que pasó.`
-        : `Sale del tablero. No hay ${things} en ella.`,
-      go: () => write(() => api.remove(colTable, id)),
-    };
-  };
 
   const deleteObjectiveById = (id: string) => {
     if (!id) return; // "Sin objetivo" is not a row and cannot be deleted
@@ -1231,7 +1065,7 @@
       <Dialog.Positioner
         class="fixed inset-0 flex items-center justify-center p-4"
         style="z-index: var(--z-drawer)">
-        <Dialog.Content class="card bg-surface-100-900 w-full max-w-lg space-y-4 p-5 shadow-xl">
+        <Dialog.Content class="card bg-surface-100-900 w-full max-w-4xl space-y-4 p-6 shadow-xl">
           <Dialog.Title class="text-lg font-bold">Fechas del departamento</Dialog.Title>
           <Dialog.Description class="muted text-sm">
             Lo que pasa en una fecha y no es trabajo: una junta, un cierre, una
@@ -1247,22 +1081,15 @@
                   value={e.name}
                   onchange={(ev) => patchDate(e.id, { name: ev.currentTarget.value })}
                   {@attach limited('calendar_events.name')} />
-                <input
-                  class="input dwhen"
-                  type="date"
-                  value={e.start?.slice(0, 10) ?? ''}
-                  onchange={(ev) =>
-                    patchDate(e.id, {
-                      start: ev.currentTarget.value ? `${ev.currentTarget.value} 00:00:00.000Z` : '',
-                    })} />
-                <select
-                  class="select drep"
-                  value={e.repeat ?? ''}
-                  onchange={(ev) => patchDate(e.id, { repeat: ev.currentTarget.value })}>
-                  {#each Object.entries(repeatNames) as [v, label] (v)}
-                    <option value={v}>{label}</option>
-                  {/each}
-                </select>
+                <div class="dwhen">
+                  <DueDate value={e.start?.slice(0, 10) ?? ''}
+                    onchange={(day) => patchDate(e.id, { start: day ? `${day} 00:00:00.000Z` : '' })} />
+                </div>
+                <div class="drep">
+                  <FilterPick portal={false} any={repeatNames['']} label="Repetición"
+                    items={Object.entries(repeatNames).filter(([v]) => v).map(([value, label]) => ({ value, label }))}
+                    value={e.repeat ?? ''} onchange={(repeat) => patchDate(e.id, { repeat })} />
+                </div>
                 <button class="x" title="borrar" onclick={() => deleteDate(e.id)}>×</button>
               </li>
             {/each}
@@ -1278,12 +1105,15 @@
               autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
               bind:value={dateDraft.name}
               {@attach limited('calendar_events.name')} />
-            <input class="input dwhen" type="date" bind:value={dateDraft.start} />
-            <select class="select drep" bind:value={dateDraft.repeat}>
-              {#each Object.entries(repeatNames) as [v, label] (v)}
-                <option value={v}>{label}</option>
-              {/each}
-            </select>
+            <div class="dwhen">
+              <DueDate value={dateDraft.start} placeholder="Elegir fecha"
+                onchange={(day) => (dateDraft.start = day)} />
+            </div>
+            <div class="drep">
+              <FilterPick portal={false} any={repeatNames['']} label="Repetición"
+                items={Object.entries(repeatNames).filter(([v]) => v).map(([value, label]) => ({ value, label }))}
+                bind:value={dateDraft.repeat} />
+            </div>
             <button
               class="btn btn-sm preset-filled-primary-500"
               disabled={!dateDraft.name.trim() || !dateDraft.start}>Añadir</button>
@@ -1470,23 +1300,35 @@
 
 <Confirm bind:ask={doom} />
 
+{#snippet modeTabs()}
+  <!-- Qué contiene el toolbox: módulos (burbujas) o hilos. -->
+  <div class="mode" role="radiogroup" aria-label="Qué se ordena">
+    <button class="seg" class:on={!tasksMode && seqTray === 'queue'} role="radio" aria-checked={!tasksMode && seqTray === 'queue'}
+      onclick={() => { seqTray = 'queue'; setMode('bubbles'); }}><Icon of="bubble" tint /> Módulos</button>
+    <button class="seg" class:on={tasksMode && seqTray === 'queue'} role="radio" aria-checked={tasksMode && seqTray === 'queue'}
+      onclick={() => { seqTray = 'queue'; setMode('tasks'); }}><Icon of="thread" tint /> Hilos</button>
+    <!-- Lo que llega por WhatsApp se vuelve TAREA al soltarlo: el lienzo pasa a
+         hilos. -->
+    <button class="seg" class:on={seqTray === 'whatsapp'} role="radio" aria-checked={seqTray === 'whatsapp'}
+      title="Entradas de WhatsApp sin decidir"
+      onclick={() => { seqTray = 'whatsapp'; setMode('tasks'); }}><Icon of="chat" tint /> WhatsApp{#if whatsapp.length}<span class="seg-n">{whatsapp.length}</span>{/if}</button>
+  </div>
+{/snippet}
+
 {#snippet seqPane()}
-      <!-- La línea de ejecución como panel propio, no como una columna del
-           kanban: ordenar el trabajo y repartirlo en columnas son dos gestos
-           distintos, y meterlos en la misma pantalla obligaba a que la línea
-           cupiera en el ancho de una columna. -->
+      <!-- El canvas conserva los mismos pasos del servidor; sólo las
+           posiciones y la vista pertenecen a este navegador. -->
       <div class="seq-pane">
-        <SequencePane
-          title={tasksMode ? '🧭 Secuencia de tareas' : '🧭 Secuencia de módulos'}
+        {#key mode}
+        <SequenceCanvas
+          title="🧭 Secuencia"
+          modes={modeTabs}
           what={tasksMode ? 'tareas' : 'módulos'}
           completeLabel={tasksMode ? '✓ Terminar' : '🏆 Cerrar'}
           threads={tasksMode ? sequenceThreads : sequenceModules}
           queue={queueOpen.items.map((c) => asSeq(c, false))}
           queueMore={queueOpen.more}
           onqueuemore={() => pull(queueOpen, 'open')}
-          done={queueDone.items.map((c) => asSeq(c, true))}
-          doneMore={queueDone.more}
-          ondonemore={() => pull(queueDone, 'done')}
           onreorder={(changes) =>
             heatWrite(() =>
               Promise.all(
@@ -1499,20 +1341,19 @@
             )}
           oncomplete={(id) => (tasksMode ? heatWrite(() => api.completeThread(id)) : closeModule(id))}
           onopen={(t) => (tasksMode ? openThreadById(t.id) : openModule(t.id))}
-          onnew={() => (newTask = { title: '', stage: '', onThread: false, ...blankWhere() })}
-          onreopen={(id) => (tasksMode ? reopenThread(id) : reopenModule(id))}
-          onreview={(id) =>
-            heatWrite(() =>
-              api.update(tasksMode ? 'threads' : 'bubbles', id, {
-                reviewed_at: new Date().toISOString().replace('T', ' '),
-              }),
-            )} />
+          onnew={() => (newTask = { title: '', onThread: false, ...blankWhere() })}
+          entries={whatsapp}
+          entriesOn={seqTray === 'whatsapp'}
+          onentry={openEntry}
+          onentrydrop={entryToTask} />
+        {/key}
       </div>
 {/snippet}
 
 <PlannerView
-  {columns}
+  {cards}
   {inbox}
+  {peek}
   {events}
   {objectives}
   priorities={priorityMeaning.map((p) => [...p] as [string, string, string, string])}
@@ -1539,9 +1380,7 @@
       : undefined}
   onopenthread={openThreadById}
   onmoveevent={moveEvent}
-  onmovecard={moveCard}
-  onautoorder={autoOrder}
-  onaddcard={addCard}
+  oncalrange={(from, to) => { if (window.from !== from || window.to !== to) window = { from, to }; }}
   ondeletecard={deleteCard}
   oncapture={capture}
   onpromote={promote}
@@ -1553,136 +1392,20 @@
   }}
   onaddobjective={addObjective}
   ondeleteobjective={deleteObjective}
-  onaddcolumn={addStage}
-  onrenamecolumn={renameStage}
-  ondeletecolumn={deleteStage}
-  onmovecolumn={moveStage}
   cardsAreTasks={tasksMode}
   onopendates={isLead ? () => (datesOpen = true) : undefined}
   boardPane={seqView ? seqPane : undefined}>
-  <!-- La barra vive aquí, donde están los datos que llena: los proyectos, la
-       gente y los objetivos ya están cargados para el tablero. -->
-  {#snippet modeSwitch()}
-    <!-- En la cabecera y no entre los filtros: esto no esconde nada, cambia lo
-         que el tablero ES. Un conmutador de eso puesto entre los filtros se lee
-         como un filtro más. -->
-    <div class="mode" role="radiogroup" aria-label="Qué se ordena">
-      <button
-        class="seg"
-        class:on={!tasksMode}
-        aria-pressed={!tasksMode}
-        title="Módulos: cuerpos de trabajo"
-        onclick={() => setMode('bubbles')}>Módulos</button>
-      <button
-        class="seg"
-        class:on={tasksMode}
-        aria-pressed={tasksMode}
-        title="Tareas: las piezas"
-        onclick={() => setMode('tasks')}>Tareas</button>
-    </div>
-
-    {#if sequenceEnabled}
-      <!-- La forma del tablero. Sólo si el departamento encendió la secuencia:
-           un conmutador de algo apagado es enseñar una puerta cerrada. -->
-      <div class="mode" role="radiogroup" aria-label="Forma del tablero">
-        <button
-          class="seg"
-          class:on={view === 'sequence'}
-          aria-pressed={view === 'sequence'}
-          title="En qué orden se ejecuta"
-          onclick={() => setView('sequence')}>🧭 Secuencia</button>
-        <button
-          class="seg"
-          class:on={view === 'kanban'}
-          aria-pressed={view === 'kanban'}
-          title="Repartido en columnas"
-          onclick={() => setView('kanban')}>🗂 Kanban</button>
-      </div>
-    {/if}
-  {/snippet}
-
-  {#snippet filterBar()}
-    <div class="filters" class:on={filtering}>
-      <input
-        class="input q"
-        type="search"
-        placeholder="Filtrar el tablero…"
-        aria-label="filtrar por nombre"
-        autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-        bind:value={filters.q} />
-
-      <FilterPick
-        label="filtrar por proyecto"
-        any="todos los proyectos"
-        items={Object.entries(places).map(([id, name]) => ({ label: name, value: id }))}
-        bind:value={filters.project} />
-
-      <FilterPick
-        label="filtrar por responsable"
-        any="cualquier responsable"
-        items={Object.entries(people).map(([id, p]) => ({ label: p.name, value: id }))}
-        bind:value={filters.owner} />
-
-      <FilterPick
-        label="filtrar por objetivo"
-        any="cualquier objetivo"
-        items={[
-          ...objectiveRows.map((o, i) => ({ label: `${i + 1}. ${o.name}`, value: o.id })),
-          { label: 'sin objetivo', value: 'none' },
-        ]}
-        bind:value={filters.objective} />
-
-      <!-- Cuánto dura un ciclo, pegado al filtro que habla de bandas: las bandas
-           se miden en ciclos («en silencio 2 ciclos») y el número solo no dice
-           si eso son dos días o dos semanas. No es una rejilla del calendario
-           —el ciclo se cuenta desde el último calor de CADA burbuja, no desde
-           una fecha común— así que se dice como duración, que es lo que sí es. -->
-      <FilterPick
-        label="filtrar por banda"
-        any={cycleWords ? `cualquier banda · ciclo ${cycleWords}` : 'cualquier banda'}
-        items={(['hot', 'dormant', 'rip', 'closed'] as const).map((b) => ({
-          label: `${bandFace(b)} ${bandName(b)}`,
-          value: b,
-        }))}
-        bind:value={filters.band} />
-
-      {#if filtering}
-        <!-- Decir CUÁNTAS se están escondiendo, y no sólo que hay un filtro: un
-             tablero con la mitad de las tarjetas fuera y ninguna señal es cómo
-             alguien concluye que se perdió su trabajo. -->
-        <span class="hid" title="tarjetas escondidas por los filtros">
-          {tasksMode ? heated.length - shownThreads.length : bubbles.length - shownBubbles.length}
-          escondidas
-        </span>
-        <button class="clear" onclick={() => (filters = { ...NO_FILTERS })}>Limpiar</button>
-      {/if}
-    </div>
-  {/snippet}
 </PlannerView>
 
 <style>
-  /* En la cabecera, a la derecha de los conmutadores. Se encoge antes que nada
-     y nunca envuelve: la cabecera tiene una altura fija, así que una segunda
-     fila no cabría — lo que sobra se estrecha, y el texto se recorta con
-     puntos suspensivos en vez de salirse. */
-  .filters {
-    flex: 1 1 auto;
-    min-width: 0;
-    display: flex;
-    align-items: center;
-    justify-content: flex-end;
-    gap: 0.35rem;
+  .dates { display: flex; flex-direction: column; gap: 1rem; margin: 0; padding: 0; list-style: none; }
+  .date { display: grid; grid-template-columns: minmax(12rem, 1fr) 12rem 13rem auto; align-items: center; gap: 0.8rem; }
+  .date .dname, .date .dwhen, .date .drep { min-width: 0; }
+  .date :global([data-scope='combobox'][data-part='root']) { width: 100%; }
+  @media (max-width: 800px) {
+    .date { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto; }
+    .date .dname { grid-column: 1 / -1; }
   }
-  /* Filtrando, se nota: es la explicación de por qué falta algo. */
-  .filters.on :global([data-scope='combobox'][data-part='control']),
-  .filters.on .q {
-    border-color: color-mix(in oklab, var(--accent) 35%, var(--line));
-  }
-  .dates { display: flex; flex-direction: column; gap: 0.4rem; margin: 0; padding: 0; list-style: none; }
-  .date { display: flex; align-items: center; gap: 0.4rem; }
-  .date .dname { flex: 1 1 auto; min-width: 0; }
-  .date .dwhen { flex: 0 0 auto; width: auto; }
-  .date .drep { flex: 0 0 auto; width: auto; }
   .date .x {
     flex: none;
     padding: 0 0.4rem;
@@ -1691,102 +1414,40 @@
   }
   .date .x:hover { background: var(--hover); color: var(--text); }
 
-  /* La línea ocupa el panel entero, con su propio scroll dentro. */
-  .seq-pane { flex: 1; min-height: 0; padding: 0 0.6rem 0.6rem; }
-
+  /* Módulos / Hilos se ajusta a sus botones, no al ancho del toolbox. */
   .mode {
-    display: flex;
-    flex: none;
-    align-items: stretch;
-    gap: 1px;
+    display: inline-flex;
+    width: max-content;
+    max-width: 100%;
+    gap: 2px;
+    margin-left: 0;
     padding: 2px;
     border: 1px solid var(--line);
-    border-radius: 8px;
+    border-radius: 999px;
+    background: var(--surface-solid);
   }
   .seg {
-    padding: 0.15rem 0.6rem;
-    border-radius: 6px;
-    color: var(--faint);
-    font-size: 0.78rem;
+    display: inline-flex;
+    align-items: center;
+    gap: 0.3rem;
+    padding: 0.15rem 0.7rem;
+    border-radius: 999px;
+    color: var(--muted);
+    font-size: 0.8rem;
     font-weight: 700;
   }
   .seg:hover { color: var(--text); }
-  .seg.on { background: var(--accent); color: var(--surface-solid); }
+  .seg.on { background: color-mix(in oklab, var(--accent) 22%, var(--surface-solid)); color: var(--text); }
+  /* Dentro de la barra de Secuencia, las tres pestañas se reparten el ancho. */
+  :global(.seq-nav) .mode { display: flex; width: 100%; }
+  :global(.seq-nav) .seg { flex: 1 1 auto; min-width: 0; justify-content: center; padding: 0.2rem 0.4rem; white-space: nowrap; }
+  /* Tres pestañas con icono no caben en la barra; la cabecera ya lleva el
+     icono de lo que se ve. */
+  :global(.seq-nav) .seg > :global(:not(.seg-n)) { display: none; }
+  .seg-n { margin-left: 0.25rem; padding: 0 0.4rem; border-radius: 999px; background: var(--accent); color: white; font-size: 0.68rem; font-weight: 800; }
 
-  /* Todo en la barra es la misma caja y la misma altura, como en la fila de
-     datos de `CardSheet`: son la misma clase de cosa. `min-height` y no
-     `height`, para que nada se recorte si el texto crece. */
-  .filters .q {
-    flex: 1 1 8rem;
-    min-width: 4rem;
-    width: auto;
-    min-height: 2rem;
-    padding: 0.15rem 0.55rem;
-    font-size: 0.8rem;
-  }
-
-  /* Skeleton dibuja el combobox por `[data-part]`, así que el estilo tiene que
-     cruzar la frontera de `FilterPick`. Acotado a `.filters` para no tocar
-     ningún otro combobox de la aplicación.
-
-     Lo que hay que decirle es lo que no puede saber: que estos viven en una
-     FILA y no en una columna, así que no se estiran al 100% — sin esto cada uno
-     ocupaba un renglón entero. */
-  .filters :global([data-scope='combobox'][data-part='root']) {
-    /* Un ancho de partida explícito, no `auto`: con el control al 100% de la
-       raíz y la raíz ajustándose al control, el ancho se define en círculo y el
-       resultado depende de a qué llegue el navegador primero.
-       `min-width` pequeño a propósito: en una cabecera estrecha es mejor un
-       filtro recortado que uno fuera de la pantalla. */
-    flex: 1 1 10rem;
-    min-width: 4.5rem;
-  }
-  .filters :global([data-scope='combobox'][data-part='control']) {
-    display: flex;
-    align-items: center;
-    gap: 0.25rem;
-    width: 100%;
-    min-width: 0;
-    min-height: 2rem;
-    padding: 0.15rem 0.4rem;
-    border: 1px solid var(--line);
-    border-radius: 8px;
-    background: var(--surface);
-  }
-  .filters :global([data-scope='combobox'][data-part='control']:focus-within) {
-    border-color: color-mix(in oklab, var(--accent) 60%, transparent);
-  }
-  /* El CONTROL es el campo; el input es sólo el texto dentro. Con su borde y su
-     fondo propios se ve una caja dibujada dentro de otra. */
-  .filters :global([data-scope='combobox'][data-part='control'] input) {
-    min-width: 0;
-    width: 100%;
-    padding: 0.15rem 0.2rem;
-    border: none;
-    border-radius: 0;
-    background: transparent;
-    box-shadow: none;
-    color: var(--text);
-    font-size: 0.8rem;
-    /* Recortado con puntos, no cortado a medias palabra: un filtro estrecho
-       tiene que seguir diciendo de qué es. */
-    text-overflow: ellipsis;
-    outline: none;
-  }
-  .filters :global([data-scope='combobox'][data-part='trigger']) {
-    flex: none;
-    color: var(--faint);
-    font-size: 0.8rem;
-  }
-  .hid { flex: none; color: var(--faint); font-size: 0.72rem; white-space: nowrap; }
-  .clear {
-    flex: none;
-    padding: 0.15rem 0.45rem;
-    border-radius: 7px;
-    color: var(--faint);
-    font-size: 0.74rem;
-  }
-  .clear:hover { background: var(--hover); color: var(--text); }
+  /* La línea ocupa el panel entero, con su propio scroll dentro. */
+  .seq-pane { flex: 1; min-height: 0; }
 
   .places {
     display: flex;

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // The door. It is the first thing anybody sees, and until now it said the
   // product's name in a box with two fields — true, and indistinguishable from
   // every other login.
@@ -112,7 +113,7 @@
     <!-- The app's accent, not Skeleton's `primary`: primary is a cyan nothing
          else on any screen uses, and the one button on the first screen should
          be the colour the product actually is. -->
-    <button class="enter" disabled={busy}>{busy ? '…' : 'Entrar'}</button>
+    <button class="enter" disabled={busy}>{#if busy}<Loading compact label="Entrando" />{:else}Entrar{/if}</button>
   </form>
 </div>
 

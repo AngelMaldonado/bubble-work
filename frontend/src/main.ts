@@ -30,11 +30,16 @@ letEditorsKeepEscape();
 // `data-native-menu` on an element (or any ancestor) opts back in, for the day
 // something genuinely wants the browser's own menu — a field where copy and
 // paste matter more than the illusion of an application.
+//
+// Everything editable opts in by itself: the browser's spelling suggestions,
+// cut/copy/paste and "look up" live in that menu, and a field where you write
+// without them is worse than the illusion is worth.
+const NATIVE = '[data-native-menu], input, textarea, [contenteditable=""], [contenteditable="true"], .cm-editor';
 addEventListener(
   'contextmenu',
   (e) => {
     if (e.defaultPrevented) return;
-    if ((e.target as Element | null)?.closest?.('[data-native-menu]')) return;
+    if ((e.target as Element | null)?.closest?.(NATIVE)) return;
     e.preventDefault();
   },
   { capture: false },

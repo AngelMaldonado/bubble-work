@@ -26,6 +26,7 @@
     index = 0,
     onclick,
     onaction,
+    canDelete = false,
   }: {
     name: string;
     lifecycle: Lifecycle;
@@ -42,6 +43,7 @@
     index?: number;
     onclick?: () => void;
     onaction?: (what: string) => void;
+    canDelete?: boolean;
   } = $props();
 
   // Staggered so a band of orbs breathes instead of pulsing in unison. Seven
@@ -249,6 +251,7 @@
       <Menu.Item value="rename"><Menu.ItemText>Renombrar</Menu.ItemText></Menu.Item>
       <Menu.Separator />
       <Menu.Item value="close"><Menu.ItemText>Cerrar la burbuja</Menu.ItemText></Menu.Item>
+      {#if canDelete}<Menu.Separator /><Menu.Item value="delete"><Menu.ItemText>Eliminar burbuja</Menu.ItemText></Menu.Item>{/if}
     </Menu.Content>
     </Menu.Positioner>
   </Portal>

@@ -127,9 +127,19 @@ func ReadDoc(app core.App, t *tree.Tree, ws *core.Record, repo, path string) (Do
 	threadID, _ := ownerOf(app, ws, path)
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: content, HTML: withAssets(md.RenderHTML(content), ws.Id),
+		Hash: hash, Content: content, HTML: withAssets(renderDoc(content, threadID), ws.Id),
 		Done: md.CountDone(content),
 	}, nil
+}
+
+// renderDoc renders a document the way its owner needs it: a thread's writing
+// grows until nobody finds anything in it, so it gets a derived table of contents
+// on top; a wiki page has its own navigation and does not.
+func renderDoc(content, threadID string) string {
+	if threadID != "" {
+		return md.RenderThreadHTML(content)
+	}
+	return md.RenderHTML(content)
 }
 
 // Edit is one surgical change: quote what is there, give what replaces it.
@@ -246,7 +256,7 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 
 	return Doc{
 		Workspace: ws.Id, Path: path, Thread: threadID,
-		Hash: hash, Content: next, HTML: withAssets(md.RenderHTML(next), ws.Id),
+		Hash: hash, Content: next, HTML: withAssets(renderDoc(next, threadID), ws.Id),
 		Done: md.CountDone(next),
 	}, nil
 }
@@ -448,7 +458,6 @@ type BubbleEdit struct {
 	Owners    *[]string `json:"owners,omitempty" jsonschema:"user ids; empty means nobody is accountable"`
 	Closure   *string   `json:"closure,omitempty" jsonschema:"how it ended, in your words"`
 	Closed    *bool     `json:"closed,omitempty" jsonschema:"true closes it, false reopens it"`
-	Stage     *string   `json:"stage,omitempty" jsonschema:"a stage id — where the lead put it on the plan"`
 	Objective *string   `json:"objective,omitempty" jsonschema:"what this work is FOR; empty unfiles it"`
 	Impact    *string   `json:"impact,omitempty" jsonschema:"high, mid or low"`
 	Urgency   *string   `json:"urgency,omitempty" jsonschema:"high, mid or low"`
@@ -481,14 +490,6 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 	}
 	if in.Closure != nil {
 		b.Set("closure", *in.Closure)
-	}
-	if in.Stage != nil {
-		if *in.Stage != "" {
-			if _, err := app.FindRecordById("stages", *in.Stage); err != nil {
-				return nil, fmt.Errorf("no stage %q", *in.Stage)
-			}
-		}
-		b.Set("stage", *in.Stage)
 	}
 	if in.Objective != nil {
 		if *in.Objective != "" {
@@ -543,6 +544,12 @@ type ThreadEdit struct {
 	Name     *string `json:"name,omitempty" jsonschema:"renaming moves its file, and git follows"`
 	Bubble   *string `json:"bubble,omitempty" jsonschema:"a bubble id in the same workspace; empty takes it out"`
 	Priority *string `json:"priority,omitempty" jsonschema:"P1, P2, P3 or P4 — this piece's own priority, separate from its bubble's; empty clears it. Only the global lead sets it"`
+	// Lo demás que no es el documento: quién lo lleva, para cuándo, en qué
+	// estado y con qué etiquetas (por nombre; las que no existen se crean).
+	Assignees *[]string
+	Due       *string
+	State     *string
+	Labels    *[]string
 }
 
 var dayOnly = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}$`)
@@ -601,10 +608,20 @@ func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core
 		}
 		th.Set("priority", p)
 	}
+	completed, err := setThreadMore(app, auth, th, ws, in)
+	if err != nil {
+		return nil, err
+	}
 	// Renaming moves the file: the hook on the record request does it for the
 	// web, and this door goes through the same app, so it happens here too.
 	if err := app.Save(th); err != nil {
 		return nil, err
+	}
+	// Llegar a un estado completado ES terminar, por la puerta que sea: el hook
+	// que lo anota cuelga de la petición web, así que aquí se anota a mano,
+	// igual que en CompleteThread.
+	if completed {
+		record(app, ws.Id, "thread", th.Id, EvThreadCompleted, auth.Id, map[string]any{"name": th.GetString("name")})
 	}
 	return th, nil
 }
@@ -924,16 +941,15 @@ func Comment(app core.App, auth *core.Record, threadID, body string) (*core.Reco
 
 // Repo is where a workspace's code lives, as an agent needs to hear it.
 type Repo struct {
+	ID   string `json:"id"`
 	URL  string `json:"url"`
 	Name string `json:"name,omitempty"`
 }
 
 // Repos lists the repositories linked to a workspace.
 //
-// Read only, and deliberately: enlazar uno es una decisión del lead, es rara, y
-// una URL equivocada manda a la gente al código equivocado sin que nada falle.
-// Un agente que encuentre el repositorio lo propone con `capture`, que es el
-// camino de todo lo que se sugiere y no se decide.
+// Enlazar o quitar uno es de un lead (`RepoLink`, `RepoUnlink`): una URL
+// equivocada manda a la gente al código equivocado sin que nada falle.
 //
 // The boundary is already settled by the caller: `WorkspaceFor` refused if the
 // caller cannot see this workspace, and everybody who can see it can see these.
@@ -944,7 +960,7 @@ func Repos(app core.App, ws *core.Record) ([]Repo, error) {
 	}
 	out := []Repo{}
 	for _, r := range rows {
-		out = append(out, Repo{URL: r.GetString("url"), Name: r.GetString("name")})
+		out = append(out, Repo{ID: r.Id, URL: r.GetString("url"), Name: r.GetString("name")})
 	}
 	return out, nil
 }
@@ -955,8 +971,10 @@ func Repos(app core.App, ws *core.Record) ([]Repo, error) {
 // built on, and it is repeated here because this door is the one where somebody
 // would be tempted to answer "¿cuál es la contraseña?".
 type InvThing struct {
+	ID       string `json:"id"`
 	Name     string `json:"name"`
 	Group    string `json:"group"`
+	GroupID  string `json:"group_id"`
 	Provider string `json:"provider,omitempty"`
 	URL      string `json:"url,omitempty"`
 	Vault    string `json:"vault,omitempty"`
@@ -968,9 +986,8 @@ type InvThing struct {
 // Inventory reads the department's inventory, mirroring the rule the collections
 // carry: the global lead, or whoever was ASSIGNED a row of `inventory_access`.
 //
-// Reading only. El armario es del lead global y sus altas son deliberadas; lo
-// que hace falta a las tres de la mañana es saber en qué VPS corre esto, no
-// poder inventar uno nuevo.
+// Escribirlo es del lead global (`InvItemSave`, `InvGroupSave`); quién lo ve
+// (`inventory_access`) es administración y se asigna a mano en la aplicación.
 func Inventory(app core.App, auth *core.Record) ([]InvThing, error) {
 	if !SeesInventory(app, auth) {
 		return nil, ErrDenied
@@ -994,10 +1011,10 @@ func Inventory(app core.App, auth *core.Record) ([]InvThing, error) {
 			renews = at.String()[:10]
 		}
 		out = append(out, InvThing{
-			Name: i.GetString("name"), Group: named[i.GetString("group")],
+			ID: i.Id, Name: i.GetString("name"), Group: named[i.GetString("group")], GroupID: i.GetString("group"),
 			Provider: i.GetString("provider"), URL: i.GetString("url"),
 			Vault: i.GetString("vault"), Cost: i.GetString("cost"),
-			Renews: renews, Note: i.GetString("note"),
+			Renews: renews, Note: i.GetString("notes"),
 		})
 	}
 	return out, nil

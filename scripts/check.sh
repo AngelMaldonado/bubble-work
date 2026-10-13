@@ -30,7 +30,7 @@ echo "==> build";   scripts/build.sh
 # on a fresh clone, and the committed bundle means the binary builds without bun.
 if [[ -d frontend/node_modules ]]; then
   echo "==> svelte-check"
-  (cd frontend && bun run check) || exit 1
+  (cd frontend && bun run check && bun test tests) || exit 1
 else
   echo "==> svelte-check (skipped: frontend/node_modules missing — \`just install\`)"
 fi

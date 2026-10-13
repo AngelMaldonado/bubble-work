@@ -27,9 +27,13 @@ export interface Command {
   caret: number;
   /** Extra words to match on, so "checkbox" finds the to-do. */
   alias?: string;
+  inline?: boolean;
 }
 
 export const COMMANDS: Command[] = [
+  {id:'bold',label:'Negrita',glyph:'B',text:'****',caret:2,inline:true,alias:'negrita bold'},
+  {id:'italic',label:'Cursiva',glyph:'I',text:'**',caret:1,inline:true,alias:'cursiva italic'},
+  {id:'underline',label:'Subrayado',glyph:'U',text:'++++',caret:2,inline:true,alias:'subrayado underline'},
   { id: 'h1', label: 'Título', glyph: 'H1', text: '# ', caret: 2, alias: 'titulo heading h1' },
   { id: 'h2', label: 'Subtítulo', glyph: 'H2', text: '## ', caret: 3, alias: 'subtitulo heading h2' },
   { id: 'h3', label: 'Apartado', glyph: 'H3', text: '### ', caret: 4, alias: 'heading h3' },
@@ -104,7 +108,7 @@ export class SlashMenu {
     // Every one of these is a block, so it starts its own line — otherwise
     // "nota /todo" would render as one paragraph rather than a checkbox.
     const before = text.slice(0, s.at);
-    const lead = before === '' || before.endsWith('\n') ? '' : '\n';
+    const lead = c.inline || before === '' || before.endsWith('\n') ? '' : '\n';
     editor.replace(s.at, end, lead + c.text, lead.length + c.caret);
     this.open = null;
   }

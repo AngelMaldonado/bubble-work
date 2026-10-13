@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // The board, against the real server: the same component the mock draws, fed
   // by `/board` instead of by fixtures.
   //
@@ -6,7 +7,7 @@
   // them in, and clicking one opens the drawer rather than a page: the whole
   // point of the board is comparison, and a navigation costs you the thing you
   // were comparing against.
-  import { api, type Board, type BubbleHeat, type ThreadHeat, type Workspace } from '../lib/api';
+  import { api, avatarUrl, type Board, type BubbleHeat, type ThreadHeat, type Workspace } from '../lib/api';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
   import BubbleBoard, { type BoardBubble } from './BubbleBoard.svelte';
   import BubbleDrawer from './BubbleDrawer.svelte';
@@ -62,14 +63,16 @@
   // Who works here. Read once per workspace, for the one field on this screen
   // that needs a person: who is accountable for a bubble.
   //
-  //  En Todos no se pide: serían N peticiones para dibujar iniciales, y en un
-  //  board de varios proyectos lo que hace falta saber de un orbe no es quién
-  //  responde sino de dónde es. La insignia del proyecto ocupa ese sitio.
+  // En Todos el orbe lleva el proyecto, pero su drawer necesita nombres.
+  // Una lectura del directorio autorizado evita N peticiones de roster.
   let roster = $state<{ id: string; name: string; avatar?: string }[]>([]);
   $effect(() => {
     const id = workspace?.id;
     roster = [];
-    if (id) api.roster(id).then((r) => (roster = r)).catch(() => (roster = []));
+    let active = true;
+    const reading = id ? api.roster(id) : api.people().then((ps) => ps.map((p) => ({id:p.id,name:p.display_name || p.email,avatar:avatarUrl(p,'64x64')})));
+    reading.then((r) => { if (active) roster=r; }).catch(() => { if (active) error='No se pudieron cargar los nombres de los encargados.'; });
+    return () => { active=false; };
   });
   const nameOf = (id: string) => roster.find((p) => p.id === id)?.name ?? '';
 
@@ -99,6 +102,7 @@
       // an orb can carry without becoming a card.
       burning: threadsOf(b.id).filter((t) => t.heat.lifecycle === 'hot').length,
       priority: b.priority ?? '',
+      canDelete: mayDelete(b.workspace),
     })),
   );
 
@@ -149,6 +153,24 @@
   // a panel showing the snapshot would keep displaying what you just changed.
   const shown = $derived(board?.bubbles.find((b) => b.id === open?.id) ?? open);
   let drawer = $state(false);
+  let deleteRoles = $state<Record<string, boolean>>({});
+  const mayDelete = (ws: string) => api.me?.role === 'lead' || !!deleteRoles[ws];
+  $effect(() => {
+    const ids=board?.workspaces.map((w) => w.id) ?? [];
+    deleteRoles={};
+    let active=true;
+    if (api.me?.role !== 'lead') Promise.all(ids.map(async (id) => [id,await api.myRole(id)==='lead'] as const))
+      .then((roles) => {if(active) deleteRoles=Object.fromEntries(roles);});
+    return () => {active=false;};
+  });
+  const canDelete = $derived(!!shown && mayDelete(shown.workspace));
+  function removeBubble(b: BubbleHeat | null) {
+    if (!b || !mayDelete(b.workspace)) return;
+    doom={title:`¿Eliminar «${b.name}»?`,body:'Se elimina la burbuja, no sus hilos ni sus documentos. Sus hilos quedan sueltos y pueden asignarse a otra burbuja.',crumbs:[projectOf(b.workspace)],go:async () => {
+      try { await api.deleteBubble(b.id); if(open?.id===b.id) {drawer=false;open=null;lastOpenBubble.set('');} await load(); }
+      catch(e) {error=String(e);}
+    }};
+  }
   // How much of the cycle this bubble has left since it last produced. The
   // window is the workspace's calibration, so the bar means the same thing the
   // bands do — recalibrating moves both, and neither is stored.
@@ -211,6 +233,7 @@
   function act(what: string, b: BoardBubble) {
     const bubble = board?.bubbles.find((x) => x.id === b.id) ?? null;
     if (!bubble) return;
+    if (what === 'delete') { removeBubble(bubble); return; }
     // En Todos el menú del orbe abre, y nada más. Renombrar o cerrar una burbuja
     // desde una pantalla que no es la de su proyecto es escribir a ciegas: lo
     // que cambia no está delante.
@@ -266,7 +289,7 @@
 {/if}
 
 {#if !board}
-  <p class="faint p-6 text-sm">…</p>
+  <Loading />
 {:else}
   <BubbleBoard
     title={workspace?.name ?? 'Todos los proyectos'}
@@ -289,6 +312,7 @@
     closed={shown?.closed ?? false}
     closure={shown?.closure ?? ''}
     people={roster}
+    ondelete={canDelete ? () => removeBubble(shown) : undefined}
     threads={threadsOf(shown?.id ?? '').map((t) => ({
       seq: t.seq,
       title: t.name,

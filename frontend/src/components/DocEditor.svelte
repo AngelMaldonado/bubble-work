@@ -1,4 +1,7 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import FormatBar from './FormatBar.svelte';
+  import Icon from './Icon.svelte';
   // A document, read or written — the pane a thread has always had, extracted so
   // the wiki has the SAME one.
   //
@@ -22,6 +25,8 @@
   import { vimPref } from '../lib/vim.svelte';
   import type { MarkdownEditor } from '../lib/editor';
   import type { Heading } from '../lib/prose';
+  import { toggleMarkdownTodo } from '../lib/markdownTodo';
+  import { rememberMarkdownScroll } from '../lib/markdownScroll';
 
   let {
     markdown = '',
@@ -34,8 +39,12 @@
     onreload,
     onheadings,
     onattach,
+    ontodo,
+    scrollKey,
   }: {
     markdown?: string;
+    scrollKey?: string;
+    ontodo?: (index: number, done: boolean) => void | Promise<void>;
     html?: string;
     editing?: boolean;
     elsewhere?: boolean;
@@ -92,6 +101,10 @@
     // old text on screen — the reload appeared to do nothing.
     editor?.setDoc(markdown);
   });
+
+  async function tickFromMarkdown(index: number, done: boolean) {
+    await onsave?.(toggleMarkdownTodo(markdown, index, done));
+  }
 
   /** Saving is explicit and cheap to trigger: ⌘S, `:w`, and leaving the editor.
    *  A document that only saves on a button is a document somebody loses. */
@@ -176,7 +189,9 @@
     // reason: it changes on every keystroke, and tracking it would tear the
     // editor down and build a new one per character.
     const useVim = vimPref.on;
+    const identity = scrollKey || location.pathname;
     const doc = untrack(() => draft);
+    let releaseScroll: (() => void) | undefined;
 
     let live = true;
     let made: MarkdownEditor | null = null;
@@ -214,9 +229,12 @@
         made = made_;
         editor = made_;
         made_.focus();
+        const content = el.querySelector<HTMLElement>('.cm-content');
+        if (content) releaseScroll = rememberMarkdownScroll(content, identity + '.markdown');
       });
     return () => {
       live = false;
+      releaseScroll?.();
       caretAt = made?.cursor() ?? caretAt;
       slash.open = null;
       made?.destroy();
@@ -256,7 +274,7 @@
          markdown en el documento. Arrastrar y pegar hacen lo mismo; el botón
          está para quien no sabe que puede. -->
     <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar un archivo">
-      {attaching ? '…' : '📎'}
+      {#if attaching}<Loading compact label="Subiendo archivo" />{:else}<Icon of="paperclip" />{/if}
     </button>
     <input
       class="hidden-file"
@@ -303,7 +321,7 @@
 {#if mode === 'diff'}
   <div class="editors-wrap">
     {#if loadingDiff}
-      <p class="faint p-4 text-sm">…</p>
+      <Loading label="Leyendo cambios" />
     {:else if patch && patch.diff}
       <div class="editors" {@attach mountDiff}></div>
     {:else}
@@ -315,6 +333,7 @@
     {/if}
   </div>
 {:else if editing}
+  <FormatBar {editor} />
   <!-- The menu is a SIBLING of the editor, in a box that positions it: the
        editor's own box clips its overflow (that is what keeps CodeMirror inside
        its rounded corner), and a menu inside it would be cut off the moment the
@@ -334,7 +353,7 @@
     <SlashMenu menu={slash} field={editorBox} onpick={(c) => slash.run(editor, draft, c)} />
   </div>
 {:else}
-  <Prose {html} {onheadings} />
+  <Prose {html} {onheadings} {scrollKey} ontodo={ontodo || (onsave ? tickFromMarkdown : undefined)} />
 {/if}
 
 <style>
@@ -376,7 +395,7 @@
      menu one margin to the left. */
   .editors-wrap {
     position: relative;
-    max-width: 940px;
+    max-width: 1200px;
     margin-inline: auto;
   }
   .editors {

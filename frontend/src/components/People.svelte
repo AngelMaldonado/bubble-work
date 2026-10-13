@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // Who is in this workspace, and how somebody else gets in.
   //
   // Belonging was a row nobody could write from the product: the rules have
@@ -15,19 +16,36 @@
   import { api, type Member, type Person, type Workspace } from '../lib/api';
   import Confirm, { type Doom } from './Confirm.svelte';
   import { limited } from '../lib/limits.svelte';
+  import { tick } from 'svelte';
+  import Icon from './Icon.svelte';
+  import { rowSquare } from '../lib/rowSquare';
 
   let {
     open = $bindable(false),
     workspace,
     onchanged,
+    hover = false,
   }: {
     open?: boolean;
+    hover?: boolean;
     workspace: Workspace;
     /** somebody joined or left — the roster the board reads is stale */
     onchanged?: () => void;
   } = $props();
 
   let members = $state<Member[]>([]);
+  let details = $state(false);
+  let busy = $state(false);
+  let loading = $state(false);
+  let root = $state<HTMLElement>();
+  let shift = $state(0);
+  function fitPopup() {
+    const box = root?.querySelector('.people-panel')?.getBoundingClientRect();
+    if (!box) return;
+    const base = box.left - shift;
+    shift = Math.max(16, Math.min(base, window.innerWidth - box.width - 16)) - base;
+  }
+  $effect(() => { if (hover && open) void tick().then(fitPopup); });
   let people = $state<Person[]>([]);
   let error = $state('');
   let doom = $state<Doom>(null);
@@ -67,29 +85,35 @@
   );
 
   async function load() {
+    const id = workspace.id;
+    loading = true;
     try {
-      [members, people] = await Promise.all([api.members(workspace.id), api.people()]);
+      const [roster, everyone] = await Promise.all([api.members(id), api.people()]);
+      if (workspace.id !== id) return;
+      members = roster; people = everyone;
       error = '';
     } catch (e) {
       error = (e as Error).message;
-    }
+    } finally { loading = false; }
   }
 
   $effect(() => {
-    if (open) {
+    if (open || details) {
       workspace.id;
       load();
     }
   });
 
   async function write(run: () => Promise<unknown>) {
+    if (busy) return;
+    busy = true;
     try {
       await run();
       await load();
       onchanged?.();
     } catch (e) {
       error = (e as Error).message;
-    }
+    } finally { busy = false; }
   }
 
   function invite() {
@@ -118,7 +142,52 @@
   }
 </script>
 
-<Dialog {open} onOpenChange={(e: { open: boolean }) => (open = e.open)}>
+<svelte:window onresize={() => { if (open) fitPopup(); }} onkeydown={(e) => { if (e.key === 'Escape') open = false; }} />
+{#if hover}
+  <div class="people-hover" role="group" aria-label="Usuarios de {workspace.name}" bind:this={root}
+    onmouseenter={() => (open = true)} onmouseleave={() => { if (!root?.contains(document.activeElement)) open = false; }}
+    onfocusin={() => (open = true)} onfocusout={(e) => { if (!root?.contains(e.relatedTarget as Node)) open = false; }}>
+    <button class="float-btn" aria-label="Usuarios de {workspace.name}" aria-expanded={open} onclick={() => (open = true)}><Icon of="people" size="1.6rem" tint /></button>
+    {#if open}
+      <div class="people-bridge" style:transform={`translateX(${shift}px)`}>
+        <section class="people-panel" aria-label="Lista de usuarios">
+          <h3><Icon of="people" tint /> Usuarios · {workspace.name}</h3>
+          {#if error}<p class="err" role="alert">{error}</p>{/if}
+          {#if loading}<Loading size={32} label="Cargando usuarios" />{/if}
+          <div class="people-list">
+            <ul>
+              {#each members as m (m.id)}
+                <li class="person-row">
+                  <span class="face" aria-hidden="true">{#if m.avatar}<img src={m.avatar} alt="" />{:else}{m.name.slice(0, 1).toUpperCase()}{/if}</span>
+                  <span class="identity"><b>{m.name}</b><small>{m.role === 'lead' ? 'Lead' : 'Miembro'}{m.user === api.me?.id ? ' · tú' : ''}</small></span>
+                  {#if canInvite}<button class="person-action" {@attach (el) => rowSquare(el, '.person-row')}
+                    disabled={busy || loading || (m.role === 'lead' && leads <= 1)}
+                    aria-label="Expulsar {m.name}" title={m.role === 'lead' && leads <= 1 ? 'No se puede expulsar al último lead' : `Expulsar ${m.name}`} onclick={() => drop(m)}>−</button>{/if}
+                </li>
+              {/each}
+            </ul>
+            {#if canInvite}
+              <h4>Invitar al board</h4>
+              <input class="input" aria-label="Buscar usuario para invitar" placeholder="Buscar usuario…" bind:value={hunting} />
+              <ul>
+                {#each outsiders as p (p.id)}
+                  <li class="person-row">
+                    <span class="face" aria-hidden="true">{nameOf(p).slice(0, 1).toUpperCase()}</span>
+                    <span class="identity"><b>{nameOf(p)}</b><small>{p.email}</small></span>
+                    <button class="person-action" {@attach (el) => rowSquare(el, '.person-row')} disabled={busy || loading} aria-label="Invitar {nameOf(p)}" onclick={() => write(() => api.invite(workspace.id, p.id))}>+</button>
+                  </li>
+                {:else}<li class="muted text-sm p-2">No hay usuarios por invitar con ese nombre.</li>{/each}
+              </ul>
+            {/if}
+          </div>
+          <button class="link people-more" onclick={() => (details = true)}>Roles y mi perfil</button>
+        </section>
+      </div>
+    {/if}
+  </div>
+{/if}
+
+<Dialog open={hover ? details : open} onOpenChange={(e: { open: boolean }) => { if (hover) details = e.open; else open = e.open; }}>
   <Portal>
     <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
     <Dialog.Positioner
@@ -248,6 +317,22 @@
 <Confirm bind:ask={doom} />
 
 <style>
+  .people-hover { position: relative; }
+  .people-bridge { position: absolute; right: 0; bottom: 100%; padding-bottom: 0.6rem; z-index: var(--z-float); }
+  .people-panel { width: 22rem; max-width: calc(100vw - 2rem); background: var(--surface-solid); border: 1px solid var(--line); border-radius: 14px; padding: 0.7rem; box-shadow: 0 14px 40px rgb(0 0 0 / 0.23); }
+  .people-panel h3 { display: flex; align-items: center; gap: 0.4rem; font-size: 0.85rem; font-weight: 750; margin: 0 0 0.5rem; }
+  .people-panel h4 { font-size: 0.8rem; font-weight: 700; margin: 0.6rem 0; }
+  .people-list { max-height: min(50vh, 25rem); overflow-y: auto; }
+  .people-list ul { padding: 0; margin: 0; list-style: none; }
+  .person-row { display: flex; gap: 0.5rem; align-items: center; }
+  .identity { flex: 1; min-width: 0; padding: 0.5rem 0; display: flex; flex-direction: column; gap: 0.15rem; }
+  .identity b, .identity small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .identity b { font-size: 0.82rem; }
+  .identity small { color: var(--muted); font-size: 0.7rem; }
+  .person-action { flex: none; width: 28px; height: 28px; aspect-ratio: 1; padding: 0; border: none; border-radius: 8px; background: transparent; color: var(--accent); font-size: 1.35rem; cursor: pointer; }
+  .person-action:hover:not(:disabled) { background: var(--hover); }
+  .person-action:disabled { color: var(--faint); opacity: 0.5; cursor: not-allowed; }
+  .people-more { display: block; margin-top: 0.7rem; font-size: 0.8rem; }
   /* La cara de alguien en una fila: su foto, o su inicial. */
   .face {
     display: grid;

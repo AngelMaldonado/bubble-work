@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Glyphs from './Glyphs.svelte';
+  import Icon from './Icon.svelte';
   // A planner card, opened, in Trello's shape: the list above the title, the
   // facts in one row, then sections with their own Edit.
   //
@@ -25,7 +27,7 @@
   import { bandFace, bandName } from '../lib/bands';
   import type { Lifecycle } from '../lib/api';
   import { limited, tooLong } from '../lib/limits.svelte';
-  import type { Card } from './Kanban.svelte';
+  import type { Card } from '../lib/cards';
   import Crumbs from './Crumbs.svelte';
   import DueDate from './DueDate.svelte';
 
@@ -57,9 +59,6 @@
     priorityMap,
     render,
     onattach,
-    columns = [],
-    columnId = '',
-    onmove,
     ondelete,
     onpatch,
     choosePriority = true,
@@ -84,10 +83,6 @@
     render?: (md: string, card?: Card | null) => string | Promise<string>;
     /** guardar una imagen pegada en esta tarjeta y decir cómo se la cita */
     onattach?: (card: Card, file: File) => Promise<{ path: string } | null | void>;
-    /** where the card can go, and where it is */
-    columns?: { id: string; name: string }[];
-    columnId?: string;
-    onmove?: (cardId: string, columnId: string) => void;
     ondelete?: (id: string) => void;
     /** Where an edited field GOES, when the card is a row on a server. Without
      *  it the sheet only edits the object it was handed, which is exactly right
@@ -333,7 +328,6 @@
     wasEditing = editingNotes;
   });
 
-  const column = $derived(columns.find((c) => c.id === columnId));
 
   /** The map's labels, in the two words the server stores. It reads the axes
    *  from `impact` and `urgency`; the table says them in Spanish and at three
@@ -424,31 +418,11 @@
           {#if refused && blocked}
             <p class="unsaved" role="alert">No se guardó ni se cerró: {blocked}</p>
           {/if}
-          <!-- Where it is, first — Trello puts the list above the title because
-               a card's column is the loudest thing about it. -->
           <div class="toprow">
-            {#if column}
-              <Menu onSelect={(e: { value: string }) => onmove?.(card.id, e.value)}>
-                <Menu.Trigger>
-                  <span class="lista">🗂 {column.name} <ChevronIcon class="size-3.5" /></span>
-                </Menu.Trigger>
-                <Portal>
-                  <Menu.Positioner>
-                    <Menu.Content>
-                      {#each columns as c (c.id)}
-                        <Menu.Item value={c.id}>
-                          <Menu.ItemText>{c.id === columnId ? '· ' : ''}{c.name}</Menu.ItemText>
-                        </Menu.Item>
-                      {/each}
-                    </Menu.Content>
-                  </Menu.Positioner>
-                </Portal>
-              </Menu>
-            {/if}
             {#if threadsOf}
               <!-- Le da la vuelta a la tarjeta: detrás del plan, sus hilos. -->
               <button class="flipbtn" class:on={face === 'hilos'} onclick={() => flip(face === 'plan' ? 'hilos' : 'plan')}>
-                {face === 'plan' ? `🧵 Hilos (${threadRows.length})` : '← Plan'}
+                <Glyphs text={face === 'plan' ? `🧵 Hilos (${threadRows.length})` : '← Plan'} />
               </button>
             {/if}
           </div>
@@ -489,7 +463,7 @@
                         <span class="min-w-0 flex-1 truncate">{t.name}</span>
                       </span>
                       <span class="faint hsub">
-                        {bandFace(t.lifecycle)} {bandName(t.lifecycle)}{t.owner ? ` · ${t.owner}` : ''}{t.age ? ` · ${t.age}` : ''}
+                        <Icon of={bandFace(t.lifecycle)} tint /> {bandName(t.lifecycle)}{t.owner ? ` · ${t.owner}` : ''}{t.age ? ` · ${t.age}` : ''}
                       </span>
                     </button>
                     <PriorityBadge
@@ -680,7 +654,7 @@
                   {#each card.owners ?? [] as id (id)}
                     <li class="chip">
                       {#if someone(id)?.avatar}<img class="chip-face" src={someone(id)?.avatar} alt="" />{/if}
-                      {someone(id)?.name ?? '…'}
+                      {someone(id)?.name ?? 'Persona no disponible'}
                       <button
                         aria-label="quitar a {someone(id)?.name ?? 'esta persona'}"
                         onclick={() => set({ owners: (card!.owners ?? []).filter((x) => x !== id) })}>×</button>
@@ -688,7 +662,7 @@
                   {/each}
                 </ul>
               {:else}
-                <p class="faint mt-1 text-xs">nadie a cargo · si se enfría, cae a 🪦</p>
+                <p class="faint mt-1 text-xs">nadie a cargo · si se enfría, cae a <Icon of="tombstone" /></p>
               {/if}
 
           <section>
@@ -729,7 +703,7 @@
 
           <footer>
             <button class="danger" onclick={() => { ondelete?.(card.id); open = false; }}>
-              🗑 borrar
+              <Icon of="trash" /> borrar
             </button>
           </footer>
           {/if}

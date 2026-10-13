@@ -39,6 +39,7 @@ func Register(app core.App, t *tree.Tree) {
 	registerDocuments(app, t)
 	registerEvidence(app)
 	registerBoard(app)
+	registerReadPlanner(app)
 	registerPresence(app)
 	registerAssets(app, t)
 	registerLimits(app)
@@ -46,6 +47,8 @@ func Register(app core.App, t *tree.Tree) {
 	registerPeople(app)
 	registerSequence(app)
 	registerQueue(app)
+	registerArtifacts(app)
+	registerPrompts(app)
 }
 
 // getenv is here rather than inline so the one place that reads the environment is

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
   import { api } from '../lib/api';
   import { limited } from '../lib/limits.svelte';
 
@@ -65,5 +66,5 @@
 
   <button
     class="btn btn-sm preset-filled-primary-500 mt-4"
-    disabled={busy || !name.trim() || !slug}>{busy ? '…' : 'Crear'}</button>
+    disabled={busy || !name.trim() || !slug}>{#if busy}<Loading compact label="Creando proyecto" />{:else}Crear{/if}</button>
 </form>

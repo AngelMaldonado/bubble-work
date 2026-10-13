@@ -92,9 +92,9 @@ export function extractHeadings(el: HTMLElement): Heading[] {
  * toggles boxes ANYWHERE, so scoping them here would make live controls look
  * dead for no reason.
  */
-export function enableCheckboxes(el: HTMLElement): void {
-  for (const box of el.querySelectorAll<HTMLInputElement>('input[type=checkbox][disabled]')) {
-    box.disabled = false;
+export function enableCheckboxes(el: HTMLElement, writable = false): void {
+  for (const box of el.querySelectorAll<HTMLInputElement>('input[type=checkbox]')) {
+    box.disabled = !writable || !box.hasAttribute('data-todo-index');
   }
 }
 
@@ -206,7 +206,19 @@ export function foldImages(el: HTMLElement): void {
     chip.type = 'button';
     chip.className = 'img-chip';
     chip.setAttribute('aria-expanded', 'false');
-    chip.textContent = `🖼 ${imageLabel(img)}`;
+    // El ícono 3D de imagen, como en el resto de la aplicación: lo enciende el
+    // hover del botón (app.css, `.icon`).
+    const icon = document.createElement('span');
+    icon.className = 'icon';
+    icon.setAttribute('aria-hidden', 'true');
+    for (const v of ['clay', 'color']) {
+      const pic = document.createElement('img');
+      pic.className = v === 'clay' ? 'still' : 'glow';
+      pic.src = `/i3d/image-${v}.png`;
+      pic.alt = '';
+      icon.append(pic);
+    }
+    chip.append(icon, document.createTextNode(imageLabel(img)));
     chip.addEventListener('click', (e) => {
       // The article's own click delegation is for checkboxes; a chip is not one.
       e.stopPropagation();

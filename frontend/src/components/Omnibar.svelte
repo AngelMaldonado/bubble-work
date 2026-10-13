@@ -1,4 +1,5 @@
 <script lang="ts" module>
+  import Icon from './Icon.svelte';
   export type Hit = {
     id: string;
     kind: string;
@@ -20,6 +21,7 @@
 </script>
 
 <script lang="ts">
+  import Loading from './Loading.svelte';
   // One field that finds a thread, a bubble or a page — and, when something is
   // waiting on a pick, hands it back instead of navigating.
   //
@@ -207,7 +209,7 @@
             onkeydown={keys}
             placeholder={prompt || 'Buscar, o «/» para un comando…'}
             {@attach (el: HTMLInputElement) => el.focus()} />
-          {#if searching}<span class="wait" aria-label="buscando">…</span>{/if}
+          {#if searching}<span class="wait"><Loading compact label="Buscando" /></span>{/if}
           <kbd>esc</kbd>
         </label>
 
@@ -219,7 +221,7 @@
               {@const i = index(r)}
               <li>
                 <button class="hit" class:on={i === cursor} onmouseenter={() => hover(i)} onclick={() => run(r)}>
-                  <span class="ico" aria-hidden="true">{r.cmd.icon}</span>
+                  <span class="ico"><Icon of={r.cmd.icon} /></span>
                   <span class="t">
                     {#each pieces(r.cmd.title, r.ranges) as p}<span class:hi={p.on}>{p.text}</span>{/each}
                   </span>
@@ -231,7 +233,7 @@
               {@const i = index(r)}
               <li>
                 <button class="hit" class:on={i === cursor} onmouseenter={() => hover(i)} onclick={() => run(r)}>
-                  <span class="ico" aria-hidden="true">{r.hit.icon}</span>
+                  <span class="ico"><Icon of={r.hit.icon} /></span>
                   <span class="t">
                     {#each pieces(r.hit.title, r.ranges) as p}<span class:hi={p.on}>{p.text}</span>{/each}
                   </span>

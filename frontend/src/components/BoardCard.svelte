@@ -20,7 +20,7 @@
   import SproutIcon from '@lucide/svelte/icons/sprout';
   import type { Snippet } from 'svelte';
   import { ago, when } from '../lib/when';
-  import type { Card } from './Kanban.svelte';
+  import type { Card } from '../lib/cards';
 
   let {
     card,

@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Loading from './Loading.svelte';
+  import Icon from './Icon.svelte';
   import { bandFace, bandName } from '../lib/bands';
   // The bubble's interior, as a drawer from the right.
   //
@@ -46,6 +48,7 @@
     onowners,
     onclose,
     onreopen,
+    ondelete,
     loadBrief,
     renderBrief,
     saveBrief,
@@ -85,6 +88,7 @@
     onowners?: (ids: string[]) => void;
     onclose?: () => void;
     onreopen?: () => void;
+    ondelete?: () => void;
     /** El brief que el planeador escribió, en markdown; vacío si no hay. Se
      *  pide al abrirlo y no antes: es largo y casi nunca se lee. */
     loadBrief?: (bubble: string) => Promise<string>;
@@ -128,7 +132,7 @@
   const fade = edgeFade();
 
   let fresh = $state('');
-  const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? id;
+  const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? 'Persona no disponible';
 
   // Skeleton's Combobox, multiple. Not a native `<select multiple>`, which on a
   // Mac is a scrolling box you ⌘-click into and on every platform is a control
@@ -260,7 +264,7 @@
       <header class="flex items-start gap-3">
         <!-- The band, first: it is the thing you came to find out, and it reads
              before the name does. -->
-        <span class="mt-0.5 text-xl" title={reason}>{bandFace(lifecycle)}</span>
+        <span class="mt-0.5 text-xl" title={reason}><Icon of={bandFace(lifecycle)} size="1.6rem" tint /></span>
         <div class="min-w-0 flex-1">
           <Crumbs parts={[project]} />
           <Dialog.Title class="truncate text-lg font-bold">{name}</Dialog.Title>
@@ -269,7 +273,7 @@
       </header>
 
       {#if closed && closure}
-        <p class="closed-note mt-2">🏆 {closure}</p>
+        <p class="closed-note mt-2"><Icon of="trophy" /> {closure}</p>
       {/if}
 
       {#if reading}
@@ -279,7 +283,7 @@
           {#if editingPlan}
             <button class="back" onclick={() => (editingPlan = false)} disabled={saving}>Cancelar</button>
             <button class="btn btn-sm preset-filled-primary-500" onclick={finishEdit} disabled={saving}>
-              {saving ? 'guardando…' : 'Listo'}
+              {#if saving}<Loading compact label="Guardando burbuja" />{:else}Listo{/if}
             </button>
           {:else if saveBrief && md !== null}
             <button class="back" onclick={editBrief}>editar plan</button>
@@ -297,7 +301,7 @@
               fill
               placeholder="el plan de esto: por qué, qué incluye, lo que se sabe — pega imágenes o escribe /mermaid" />
           {:else if md === null && !failed}
-            <p class="faint text-sm">leyendo…</p>
+            <Loading label="Leyendo burbuja" />
           {:else if html}
             <Prose compact {html} />
           {:else if md !== null}
@@ -325,7 +329,7 @@
 
       {#if onowners}
         <!-- Quién está a cargo no es decoración: sin nadie, una burbuja que se
-             enfría cae a 🪦 en vez de a 😴, porque no hay a quién preguntarle.
+             enfría cae a <Icon of="tombstone" /> en vez de a <Icon of="dormant" />, porque no hay a quién preguntarle.
              Por eso se dice aquí lo que cuesta dejarlo vacío. -->
         <div class="owners mt-2">
           <span class="faint shrink-0">a cargo</span>
@@ -377,7 +381,7 @@
             {/each}
           </ul>
         {:else}
-          <p class="faint mt-1 text-xs">nadie a cargo · si se enfría, cae a 🪦</p>
+          <p class="faint mt-1 text-xs">nadie a cargo · si se enfría, cae a <Icon of="tombstone" /></p>
         {/if}
       {:else if owners.length}
         <p class="faint mt-2 text-sm">a cargo: {owners.map(nameOf).join(', ')}</p>
@@ -406,7 +410,7 @@
         {#if inLine || order === 'sequence'}
           <div class="seg" role="group" aria-label="orden">
             <button class:on={order === 'recent'} aria-pressed={order === 'recent'} onclick={() => (order = 'recent')}>Recientes</button>
-            <button class:on={order === 'sequence'} aria-pressed={order === 'sequence'} onclick={() => (order = 'sequence')}>🧭 Secuencia</button>
+            <button class:on={order === 'sequence'} aria-pressed={order === 'sequence'} onclick={() => (order = 'sequence')}><Icon of="compass" tint /> Secuencia</button>
           </div>
         {/if}
       </div>
@@ -427,7 +431,7 @@
                 <span class="faint shrink-0 tabular-nums">#{t.seq}</span>
                 <span class="min-w-0 flex-1 truncate text-sm">{t.title}</span>
                 {#if t.step}
-                  <span class="step" class:now={t.step === 1} title="su lugar en la secuencia del departamento">🧭 {stepText(t.step)}</span>
+                  <span class="step" class:now={t.step === 1} title="su lugar en la secuencia del departamento"><Icon of="compass" /> {stepText(t.step)}</span>
                 {/if}
                 <PriorityBadge
                   size="xs"
@@ -440,7 +444,7 @@
                    card sits in some other tool, and the band already answers
                    whether this is moving. -->
               <span class="faint mt-0.5 block truncate text-xs">
-                {bandFace(t.lifecycle)} {bandName(t.lifecycle)}{t.owner
+                <Icon of={bandFace(t.lifecycle)} tint /> {bandName(t.lifecycle)}{t.owner
                   ? ` · ${t.owner}`
                   : ''}{t.age ? ` · ${t.age}` : ''}
               </span>
@@ -502,12 +506,15 @@
         {/if}
       </div>
       {/if}
+      {#if ondelete}<button class="delete-bubble" onclick={ondelete}><Icon of="trash" danger /> Eliminar burbuja</button>{/if}
     </Dialog.Content>
     </Dialog.Positioner>
   </Portal>
 </Dialog>
 
 <style>
+  .delete-bubble { display: flex; align-items: center; justify-content: center; width: 100%; gap: 0.35rem; margin-top: 0.5rem; font-size: 0.8rem; color: var(--color-error-500); border: 1px solid var(--border); padding: 0.5rem; border-radius: 8px; }
+  .delete-bubble:hover { background: color-mix(in oklab, var(--color-error-500) 10%, transparent); }
 
   .closed-note {
     margin: 0;

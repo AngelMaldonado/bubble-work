@@ -1,17 +1,17 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The planner — the strategic layer, in one screen.
   //
-  // Three panes side by side, each one shown or hidden from the HUD, the way
-  // Trello does it: the kanban is the view, and the inbox and the calendar are
-  // things you pull alongside it while you decide. Objectives and priorities are
-  // MODALS rather than panes, because they are not worked in — they are agreed
-  // on once and consulted after.
+  // Una vista a la vez: inbox, calendario o canvas de secuencia, elegidos
+  // desde el HUD. Objetivos y prioridades son modales: se acuerdan y consultan,
+  // no compiten por el espacio de la vista de trabajo.
   //
   // Focused, like a thread or the wiki: no project column, its own way back.
   import { Dialog, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import PlusIcon from '@lucide/svelte/icons/plus';
   import XIcon from '@lucide/svelte/icons/x';
-  import Kanban, { type Card, type Column } from './Kanban.svelte';
+  import type { Card } from '../lib/cards';
+  import InboxPool from './InboxPool.svelte';
   import type { SheetThread } from './CardSheet.svelte';
   import { plannerReturn } from '../lib/filters.svelte';
   import CardSheet from './CardSheet.svelte';
@@ -19,7 +19,6 @@
   import type { Snippet } from 'svelte';
   import PlannerCalendar, { type CalEvent } from './PlannerCalendar.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
-  import { edgeFade } from '../lib/fade.svelte';
   import { limited } from '../lib/limits.svelte';
 
   // Skeleton ships no CSS for Dialog; its parts are styled with utilities, and
@@ -34,8 +33,9 @@
 
   let {
     workspace = '',
-    columns = $bindable([]),
+    cards = $bindable([]),
     inbox = $bindable([]),
+    peek = null,
     events = [],
     objectives = $bindable([]),
     priorities = $bindable([]),
@@ -46,10 +46,8 @@
     onback,
     onsearch,
     onopencard,
-    onmovecard,
-    onautoorder,
     onmoveevent,
-    onaddcard,
+    oncalrange,
     ondeletecard,
     oncapture,
     onpromote,
@@ -65,30 +63,22 @@
     onthreadpriority,
     onnewthread,
     onopenthread,
-    onaddcolumn,
-    onrenamecolumn,
-    ondeletecolumn,
-    onmovecolumn,
     choosePriority = true,
     readonly = false,
+    inboxOnly = false,
+    onopenartifact,
     title = 'Planeador',
     onpickevent,
     filterBar,
     cardsAreTasks = false,
     onopendates,
-    modeSwitch,
     boardPane,
   }: {
     /** Qué va en el panel del tablero. Con la función de secuencia encendida,
-     *  la LÍNEA de ejecución; sin ella —o con el kanban elegido— este hueco se
-     *  queda vacío y se dibuja el kanban. Un snippet y no una bandera porque lo
-     *  que va dentro lo arma quien tiene los datos. */
+     *  la LÍNEA de ejecución; sin ella —o con el inbox elegido— este hueco se
+     *  queda vacío y se dibuja el pool de lo capturado. Un snippet y no una
+     *  bandera porque lo que va dentro lo arma quien tiene los datos. */
     boardPane?: Snippet;
-    /** Qué mira el planeador entero: módulos o tareas. Va en la CABECERA y no
-     *  en la barra de filtros porque no filtra nada — cambia lo que el tablero
-     *  ES, igual que el título de al lado dice en qué pantalla estás. Un
-     *  conmutador de eso entre los filtros se lee como un filtro más. */
-    modeSwitch?: Snippet;
     /** Abrir el editor de fechas del departamento (juntas, cierres). Lo dibuja
      *  quien tiene los datos; esta pantalla sólo pone el botón. */
     onopendates?: () => void;
@@ -105,10 +95,11 @@
      *  is the department's, and a project's name up there says it is that
      *  project's — which is exactly what it is not. */
     workspace?: string;
-    /** One board, whose columns are yours to define. More than one board is a
-     *  question for when a single one is actually in the way. */
-    columns?: Column[];
+    /** lo que se puede abrir: módulos o tareas (calendario y secuencia) */
+    cards?: Card[];
     inbox?: Note[];
+    /** Abrir esta nota en su hoja, pedido desde fuera de la vista Inbox. */
+    peek?: { note: Note; at: number } | null;
     events?: CalEvent[];
     objectives?: Objective[];
     priorities?: Priority[];
@@ -125,19 +116,9 @@
     onback?: () => void;
     onsearch?: () => void;
     onopencard?: (card: Card) => void;
-    /** Where a change GOES, when there is a server behind this screen.
-     *
-     *  Given one, this view stops moving its own arrays and lets whoever owns
-     *  the data do the write and hand the result back. Two copies of the same
-     *  list —one optimistic here, one authoritative there— is the bug this
-     *  avoids: the mock keeps its local behaviour precisely because it passes
-     *  none of these. */
-    onmovecard?: (cardId: string, columnId: string, before: string | null) => void;
-    /** devolver una columna al orden que deriva la prioridad */
-    onautoorder?: (columnId: string) => void;
     /** an event dragged to another day — the thread's due date */
     onmoveevent?: (id: string, day: string) => void;
-    onaddcard?: (columnId: string, title: string) => void;
+    oncalrange?: (from: string, to: string) => void;
     ondeletecard?: (cardId: string) => void;
     oncapture?: (text: string) => void;
     onpromote?: (note: Note) => void;
@@ -160,11 +141,6 @@
     /** abrir un hilo a pantalla completa. Antes, esta pantalla anota a dónde
      *  volver: la tarjeta, por su cara de hilos, y el scroll de la lista. */
     onopenthread?: (threadId: string) => void;
-    /** the columns, when they are rows somebody owns — see Kanban */
-    onaddcolumn?: () => void;
-    onrenamecolumn?: (id: string, name: string) => void;
-    ondeletecolumn?: (id: string) => void;
-    onmovecolumn?: (id: string, before: string | null) => void;
     /** passed through to the card sheet — see there */
     choosePriority?: boolean;
     /** The same screen for somebody who does not run the plan: only the
@@ -173,147 +149,49 @@
      *  DATES are somebody's week, and the person whose week it is should be
      *  able to look at it in the same place. */
     readonly?: boolean;
+    inboxOnly?: boolean;
+    onopenartifact?: (id: string) => void;
     title?: string;
     /** where a click on an event goes when nothing here may be edited */
     onpickevent?: (id: string) => void;
   } = $props();
 
-  // The kanban is on by default and cannot be the only thing turned off: it is
-  // the view, not a panel of it.
+  // UNA vista a la vez, elegida abajo a la derecha: el inbox (lo capturado,
+  // flotando), el calendario o la secuencia. Eran paneles que se encendían a la
+  // vez y se repartían el ancho; con el kanban fuera, cada uno pide la pantalla
+  // entera y tenerlos juntos era repartir poco espacio entre tres cosas que no
+  // se miran a la vez.
   //
-  // Remembered per browser, because which panes you keep open is a working
-  // habit rather than a setting: somebody who plans with the inbox beside the
-  // board should not turn it on every morning. Local, not on the server — it is
-  // about this screen on this machine, and it is not worth a round trip.
-  const PANES = 'bubble.planner.panes';
-  const kept = (() => {
-    try {
-      return JSON.parse(localStorage.getItem(PANES) ?? 'null') as
-        | { inbox: boolean; cal: boolean; board: boolean }
-        | null;
-    } catch {
-      return null; // private mode, or something else wrote nonsense there
-    }
-  })();
-  // Read-only, the panes are not a choice: there is one thing to show. Leído
-  // una sola vez a propósito — el modo no cambia mientras la pantalla vive, y
-  // un `$derived` aquí impediría encender y apagar paneles después.
+  // Recordada por navegador: es una costumbre de trabajo, no un ajuste.
+  type View = 'inbox' | 'cal' | 'sequence';
+  const VIEW = 'bubble.planner.view';
   // svelte-ignore state_referenced_locally
-  let showInbox = $state(readonly ? false : (kept?.inbox ?? false));
-  // svelte-ignore state_referenced_locally
-  let showCal = $state(readonly ? true : (kept?.cal ?? false));
-  // svelte-ignore state_referenced_locally
-  let showBoard = $state(readonly ? false : (kept?.board ?? true));
-  // ---- ancho de cada panel ----
-  //
-  // Arrastrables por el borde que los separa, y recordados igual que qué
-  // paneles hay abiertos: quien planea con un calendario ancho lo quiere ancho
-  // mañana. Un ancho sin fijar (0) deja el reparto por defecto del CSS; el
-  // último panel visible nunca lleva ancho: se queda con lo que sobra, que es lo
-  // que hace que la fila llene la pantalla sea cual sea la ventana.
-  type Pane = 'inbox' | 'cal' | 'board';
-  const SIZES = 'bubble.planner.sizes';
-  const MIN = 200;
-  // svelte-ignore state_referenced_locally
-  let sizes = $state<Record<Pane, number>>(
-    (() => {
-      try {
-        const got = JSON.parse(localStorage.getItem(SIZES) ?? 'null');
-        return {
-          inbox: Number(got?.inbox) || 0,
-          cal: Number(got?.cal) || 0,
-          board: Number(got?.board) || 0,
-        };
-      } catch {
-        return { inbox: 0, cal: 0, board: 0 };
-      }
-    })(),
+  let view = $state<View>(
+    readonly
+      ? 'inbox'
+      : (() => {
+          try {
+            const v = localStorage.getItem(VIEW);
+            return v === 'cal' || v === 'sequence' ? v : 'inbox';
+          } catch {
+            return 'inbox';
+          }
+        })(),
   );
+  // La secuencia sólo existe si el departamento la encendió.
+  const shownView = $derived<View>(inboxOnly || (view === 'sequence' && !boardPane) ? 'inbox' : view);
   $effect(() => {
     if (readonly) return;
     try {
-      localStorage.setItem(SIZES, JSON.stringify(sizes));
+      localStorage.setItem(VIEW, view);
     } catch {
-      // igual que los paneles: no poder recordarlo no impide el cambio
-    }
-  });
-
-  let panesEl = $state<HTMLElement | null>(null);
-  const els: Record<Pane, HTMLElement | null> = $state({ inbox: null, cal: null, board: null });
-  const visible = $derived(
-    ([['inbox', showInbox], ['cal', showCal], ['board', showBoard]] as [Pane, boolean][])
-      .filter(([, on]) => on)
-      .map(([k]) => k),
-  );
-  /** El `style` de un panel: fijo si alguien le dio ancho y no es el último. */
-  const paneStyle = (k: Pane) =>
-    k !== visible[visible.length - 1] && sizes[k] > 0 ? `flex: 0 0 ${sizes[k]}px` : '';
-
-  /** Cuánto puede medir `k` sin dejar a los demás paneles por debajo del mínimo. */
-  function clampWidth(k: Pane, w: number) {
-    const total = panesEl?.getBoundingClientRect().width ?? Infinity;
-    const others = visible.filter((x) => x !== k);
-    const room = total - others.length * MIN;
-    return Math.round(Math.max(MIN, Math.min(w, room)));
-  }
-
-  /** Arrastrar el borde derecho de `k`. */
-  function drag(k: Pane, e: PointerEvent) {
-    const el = els[k];
-    if (!el || e.button !== 0) return;
-    e.preventDefault();
-    const handle = e.currentTarget as HTMLElement;
-    handle.setPointerCapture(e.pointerId);
-    const startX = e.clientX;
-    const startW = el.getBoundingClientRect().width;
-    const move = (ev: PointerEvent) => {
-      sizes[k] = clampWidth(k, startW + ev.clientX - startX);
-    };
-    const up = () => {
-      handle.removeEventListener('pointermove', move);
-      handle.removeEventListener('pointerup', up);
-      handle.removeEventListener('pointercancel', up);
-      document.body.classList.remove('resizing-cols');
-    };
-    document.body.classList.add('resizing-cols');
-    handle.addEventListener('pointermove', move);
-    handle.addEventListener('pointerup', up);
-    handle.addEventListener('pointercancel', up);
-  }
-
-  /** Con el teclado: flechas de 24 en 24; Inicio vuelve al reparto por defecto. */
-  function nudge(k: Pane, e: KeyboardEvent) {
-    const el = els[k];
-    if (!el) return;
-    if (e.key === 'Home') {
-      e.preventDefault();
-      sizes[k] = 0;
-      return;
-    }
-    const step = e.key === 'ArrowLeft' ? -24 : e.key === 'ArrowRight' ? 24 : 0;
-    if (!step) return;
-    e.preventDefault();
-    sizes[k] = clampWidth(k, el.getBoundingClientRect().width + step);
-  }
-
-  $effect(() => {
-    if (readonly) return; // no es una preferencia, es la única vista
-    try {
-      localStorage.setItem(
-        PANES,
-        JSON.stringify({ inbox: showInbox, cal: showCal, board: showBoard }),
-      );
-    } catch {
-      // not being able to remember it is not a reason to refuse the change
+      // no poder recordarlo no impide el cambio
     }
   });
 
   // The card being read. It is the SAME object the board holds, not a copy, so
   // editing the sheet moves the board underneath it — which is the point.
   let open = $state<Card | null>(null);
-  // Which column it is in. Kept beside the card because a card does not know:
-  // its column is the board's arrangement of it, not a property of the work.
-  let openIn = $state('');
   let cardOpen = $state(false);
   let cardFace = $state<'plan' | 'hilos'>('plan');
   let backScroll = $state(0);
@@ -327,7 +205,7 @@
   }
   $effect(() => {
     const back = plannerReturn.peek();
-    if (!back || !columns.some((c) => c.cards.some((x) => x.id === back.card))) return;
+    if (!back || !cards.some((x) => x.id === back.card)) return;
     plannerReturn.clear();
     openById(back.card, back.face, back.scroll);
   });
@@ -346,7 +224,7 @@
   let writing = $state(false);
   $effect(() => {
     if (!open) return;
-    const fresh = columns.flatMap((c) => c.cards).find((c) => c.id === open!.id);
+    const fresh = cards.find((c) => c.id === open!.id);
     if (!fresh) return;
     for (const k of ['obj', 'prio', 'due', 'impact', 'urgency'] as const) {
       if (open[k] !== fresh[k]) (open as Card)[k] = fresh[k] as never;
@@ -362,66 +240,36 @@
    *  data can fetch a document but it cannot open a dialog that belongs to this
    *  component, which is why the click did nothing at all. */
   function openById(id: string, face: 'plan' | 'hilos' = 'plan', scroll = 0) {
-    const card = columns.flatMap((c) => c.cards).find((c) => c.id === id);
+    const card = cards.find((c) => c.id === id);
     if (!card) return;
     cardFace = face;
     backScroll = scroll;
     open = card;
-    openIn = columns.find((c) => c.cards.includes(card))?.id ?? '';
     cardOpen = true;
     onopencard?.(card);
   }
 
-  function moveCard(cardId: string, to: string, before: string | null = null) {
-    if (onmovecard) {
-      openIn = to;
-      return onmovecard(cardId, to, before);
-    }
-    let card: Card | undefined;
-    const next = columns.map((c) => ({
-      ...c,
-      cards: c.cards.filter((x) => {
-        if (x.id !== cardId) return true;
-        card = x;
-        return false;
-      }),
-    }));
-    if (!card) return;
-    next.find((c) => c.id === to)?.cards.push(card);
-    columns = next;
-    openIn = to;
-  }
-
-  function addCard(columnId: string) {
-    // A thread needs a name and nothing else; asking for it here rather than
-    // creating "Tarjeta nueva" is the difference between a board of work and a
-    // board of placeholders.
-    if (onaddcard) return onaddcard(columnId, 'Trabajo nuevo');
-    const c: Card = { id: 'k' + Date.now(), title: 'Tarjeta nueva' };
-    openIn = columnId;
-    columns = columns.map((x) => (x.id === columnId ? { ...x, cards: [...x.cards, c] } : x));
-    open = c;
-    cardOpen = true;
-  }
   function dropCard(id: string) {
     if (ondeletecard) return ondeletecard(id);
-    columns = columns.map((x) => ({ ...x, cards: x.cards.filter((c) => c.id !== id) }));
+    cards = cards.filter((c) => c.id !== id);
   }
 
   // The note being read. Same object the list holds, so editing moves the list.
   let note = $state<Note | null>(null);
   let noteOpen = $state(false);
+  // Una nota pedida desde fuera (la barra de Secuencia): la misma hoja.
+  $effect(() => {
+    if (peek) { note = peek.note; noteOpen = true; }
+  });
 
   function promote(n: Note) {
     if (onpromote) {
       noteOpen = false;
       return onpromote(n);
     }
-    // An inbox item becomes a card in the FIRST column — the one where things
-    // are still undecided — carrying whatever was written about it.
+    // Sin servidor (el mock): la nota pasa a ser una tarjeta, con lo escrito.
     const c: Card = { id: 'k' + Date.now(), title: n.text, notes: n.body };
-    openIn = columns[0]?.id ?? '';
-    columns = columns.map((x, i) => (i === 0 ? { ...x, cards: [c, ...x.cards] } : x));
+    cards = [c, ...cards];
     inbox = inbox.filter((x) => x.id !== n.id);
     open = c;
     cardOpen = true;
@@ -430,31 +278,24 @@
   let objOpen = $state(false);
   let prioOpen = $state(false);
 
-  let draft = $state('');
-  const inboxFade = edgeFade();
 
-  function capture(e: SubmitEvent) {
-    e.preventDefault();
-    const text = draft.trim();
+  function capture(raw: string) {
+    const text = raw.trim();
     if (!text) return;
-    if (oncapture) {
-      draft = '';
-      return oncapture(text);
-    }
+    if (oncapture) return oncapture(text);
     // Straight to the top: what you just typed is what you are still thinking
     // about, and burying it under a week of older notes is how an inbox stops
     // being used.
     inbox = [{ id: 'i' + Date.now(), text, from: 'tú', when: 'ahora' }, ...inbox];
-    draft = '';
   }
 
-  const panes = $derived(
-    readonly
+  const views = $derived(
+    inboxOnly
       ? []
       : [
-          { k: 'inbox', face: '📥', label: 'Inbox', on: showInbox, go: () => (showInbox = !showInbox) },
-          { k: 'cal', face: '🗓', label: 'Calendario', on: showCal, go: () => (showCal = !showCal) },
-          { k: 'board', face: '🗂', label: 'Kanban', on: showBoard, go: () => (showBoard = !showBoard) },
+          { k: 'inbox' as const, face: '📥', label: 'Inbox' },
+          { k: 'cal' as const, face: '🗓', label: 'Calendario' },
+          ...(boardPane ? [{ k: 'sequence' as const, face: '🧭', label: 'Secuencia' }] : []),
         ],
   );
   const opens = $derived(
@@ -488,7 +329,7 @@
   }
 </script>
 
-<div class="screen" aria-label="planeador">
+<div class="screen" class:full-canvas={shownView === 'sequence'} aria-label="planeador">
   <div class="topbar">
     <!-- Un enlace de verdad, interceptado: el clic normal lo maneja la
          aplicación, ⌘/ctrl/medio lo deja al navegador, y si el manejador no
@@ -497,152 +338,64 @@
       <span aria-hidden="true">←</span> board
     </button>
     <h2 class="ttl">{title}</h2>
-    {#if modeSwitch}{@render modeSwitch()}{/if}
-    <!-- Los filtros, en la cabecera y no encima del tablero: valen para los dos
-         paneles —la línea y el kanban— y para el calendario, así que colgarlos
-         de uno de ellos decía que eran suyos. -->
-    {#if filterBar}{@render filterBar()}{/if}
 
     {#if workspace}<span class="ws">{workspace}</span>{/if}
   </div>
 
-  <div class="panes" bind:this={panesEl}>
-    {#if showInbox}
-      <section class="pane inbox" bind:this={els.inbox} style={paneStyle('inbox')}>
-        <header><span class="pane-name">📥 Inbox</span><span class="count">{inbox.length}</span></header>
-        <!-- The field is FIRST and always there. An inbox exists to be dumped
-             into; asking somebody to press "+" before they can type is asking
-             them to decide they are capturing something. -->
-        <form onsubmit={capture}>
-          <input autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={draft} {@attach limited('inbox_items.note')} placeholder="Escribe y Enter…" />
-        </form>
-        <ul class="items" style={inboxFade.style} {@attach inboxFade.attach}>
-          {#each inbox as it (it.id)}
-            <li>
-              <button onclick={() => { note = it; noteOpen = true; }}>
-                <span class="what">{it.text}</span>
-                <span class="from">{it.from} · {it.when}</span>
-              </button>
-            </li>
-          {/each}
-        </ul>
-        <p class="hint">Entra vago. Sale con objetivo, impacto y urgencia — y de ahí sale su prioridad.</p>
+  <div class="panes">
+    {#if shownView === 'inbox'}
+      <section class="pane board">
+        <div class="board-wrap">
+          <InboxPool notes={inbox} {readonly} onopen={(n) => { note = n; noteOpen = true; }} />
+        </div>
       </section>
-    {/if}
-    {#if visible.indexOf('inbox') > -1 && visible.indexOf('inbox') < visible.length - 1}
-      <!-- Separador arrastrable. Doble clic (o Inicio) vuelve al ancho por defecto.
-           Un `separator` enfocable es el patrón de ARIA para dividir ventanas;
-           el lint de Svelte no lo distingue de uno decorativo. -->
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div
-        class="resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="ancho de el inbox"
-        tabindex="0"
-        onpointerdown={(e) => drag('inbox', e)}
-        onkeydown={(e) => nudge('inbox', e)}
-        ondblclick={() => (sizes.inbox = 0)}></div>
-    {/if}
-
-    {#if showCal}
-      <section class="pane cal" bind:this={els.cal} style={paneStyle('cal')}>
+    {:else if shownView === 'cal'}
+      <section class="pane cal">
         <PlannerCalendar
           {events}
+          onrange={oncalrange}
           {readonly}
           onmove={readonly ? undefined : onmoveevent}
           onpick={readonly ? onpickevent : openById} />
       </section>
-    {/if}
-    {#if visible.indexOf('cal') > -1 && visible.indexOf('cal') < visible.length - 1}
-      <!-- Separador arrastrable. Doble clic (o Inicio) vuelve al ancho por defecto.
-           Un `separator` enfocable es el patrón de ARIA para dividir ventanas;
-           el lint de Svelte no lo distingue de uno decorativo. -->
-      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-      <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-      <div
-        class="resizer"
-        role="separator"
-        aria-orientation="vertical"
-        aria-label="ancho de el calendario"
-        tabindex="0"
-        onpointerdown={(e) => drag('cal', e)}
-        onkeydown={(e) => nudge('cal', e)}
-        ondblclick={() => (sizes.cal = 0)}></div>
-    {/if}
-
-
-    {#if showBoard}
-      <section class="pane board" bind:this={els.board} style={paneStyle('board')}>
-        {#if boardPane}
-          {@render boardPane()}
-        {:else}
-        <!-- El tablero mide `height: 100%`, así que con la barra encima necesita
-             su propia caja: si no, el 100% se cuenta contra el panel entero y
-             se sale por abajo justo lo que mide la barra. -->
-        <div class="board-wrap">
-        <Kanban
-          bind:columns
-          onopen={(c) => {
-            if (cardsAreTasks) {
-              onopenthread?.(c.id);
-              return;
-            }
-            cardFace = 'plan';
-            backScroll = 0;
-            open = c;
-            openIn = columns.find((x) => x.cards.includes(c))?.id ?? '';
-            cardOpen = true;
-            onopencard?.(c);
-          }}
-          onadd={addCard}
-          ondeletecard={dropCard}
-          onmovecard={moveCard}
-          {onautoorder}
-          {onaddcolumn}
-          {onrenamecolumn}
-          {ondeletecolumn}
-          {onmovecolumn}
-          orderKey="bubble.planner.columns" />
-        </div>
-        {/if}
-      </section>
-    {/if}
-
-    {#if !showInbox && !showCal && !showBoard}
-      <p class="empty">Todos los paneles están ocultos. Enciende uno abajo a la derecha.</p>
+    {:else if boardPane}
+      <section class="pane board">{@render boardPane()}</section>
     {/if}
   </div>
 </div>
 
 <!-- The HUD: the panes first, then what opens over them, then the theme. -->
 <div class="hud">
-  {#each panes as t (t.k)}
-    <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
-      <Tooltip.Trigger>
-        {#snippet element(attributes: Record<string, unknown>)}
-          <button class="hud-btn" class:on={t.on} aria-pressed={t.on} {...attributes} onclick={t.go}>
-            <span aria-hidden="true">{t.face}</span>
-          </button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Portal>
-        <Tooltip.Positioner>
-          <Tooltip.Content>{t.on ? `Ocultar ${t.label}` : `Mostrar ${t.label}`}</Tooltip.Content>
-        </Tooltip.Positioner>
-      </Portal>
-    </Tooltip>
-  {/each}
-
-  {#if panes.length}<span class="sep" aria-hidden="true"></span>{/if}
+  {#if views.length}
+    <!-- Selección ÚNICA: una vista a la vez. -->
+    <div class="views" role="radiogroup" aria-label="Qué mirar">
+      {#each views as t (t.k)}
+        <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
+          <Tooltip.Trigger>
+            {#snippet element(attributes: Record<string, unknown>)}
+              <button class="hud-btn" class:on={shownView === t.k} role="radio"
+                aria-checked={shownView === t.k} aria-label={t.label} {...attributes} onclick={() => (view = t.k)}>
+                <Icon of={t.face} size="1.35rem" tint />
+              </button>
+            {/snippet}
+          </Tooltip.Trigger>
+          <Portal>
+            <Tooltip.Positioner>
+              <Tooltip.Content>{t.label}</Tooltip.Content>
+            </Tooltip.Positioner>
+          </Portal>
+        </Tooltip>
+      {/each}
+    </div>
+    <span class="sep" aria-hidden="true"></span>
+  {/if}
 
   {#each opens as a (a.k)}
     <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
       <Tooltip.Trigger>
         {#snippet element(attributes: Record<string, unknown>)}
-          <button class="hud-btn" {...attributes} onclick={a.go}>
-            <span aria-hidden="true">{a.face}</span>
+          <button class="hud-btn" {...attributes} aria-label={a.label} onclick={a.go}>
+            <Icon of={a.face} size="1.35rem" tint />
           </button>
         {/snippet}
       </Tooltip.Trigger>
@@ -668,9 +421,6 @@
   {priorityMap}
   {render}
   onattach={onattachcard}
-  columns={columns.map((c) => ({ id: c.id, name: c.name }))}
-  columnId={openIn}
-  onmove={moveCard}
   ondelete={dropCard}
   onpatch={onpatchcard}
   {loadPeople}
@@ -689,6 +439,8 @@
 <InboxSheet
   bind:open={noteOpen}
   bind:note
+  {readonly}
+  {onopenartifact}
   render={render ? (md) => render(md) : undefined}
   onattach={onattachnote}
   onpromote={promote}
@@ -715,7 +467,7 @@
           </Dialog.CloseTrigger>
         </header>
         <p class="lead">
-          El orden es la prioridad. Cada tarjeta del kanban apunta a uno de estos, y
+          El orden es la prioridad. Cada módulo apunta a uno de estos, y
           una que no apunta a ninguno es trabajo que nadie pidió.
         </p>
         <ul class="rows">
@@ -837,6 +589,10 @@
     background: color-mix(in oklab, var(--bg) 82%, transparent);
     backdrop-filter: blur(8px);
   }
+  /* Se conserva la cabecera principal. Sólo el cuerpo es el canvas: los
+     controles se superponen dentro de él y no descuentan otra franja. */
+  .topbar { flex: none; }
+  .full-canvas .pane.board { padding-bottom: 0; }
   .back {
     display: flex;
     align-items: center;
@@ -901,54 +657,13 @@
 
   /* The inbox is a column you scan; the other two are surfaces you work on, and
      the calendar takes whatever the kanban does not need. */
-  .inbox { flex: 0 0 288px; padding: 0.75rem; }
-  .cal { flex: 3 1 0; }
-  .board { flex: 2 1 0; }
+  .cal, .board { flex: 1 1 0; }
+  /* La barra de botones flota abajo a la derecha: el calendario y la secuencia
+     dejan su alto libre, o la última fila queda debajo de los botones. */
+  .pane.board { padding-bottom: 72px; }
+  .pane.cal { overflow-y: auto; padding-bottom: 0; }
   .board-wrap { flex: 1; min-height: 0; }
   .empty { margin: auto; color: var(--faint); font-size: 0.85rem; }
-
-  .inbox > header { display: flex; align-items: center; gap: 0.5rem; padding-bottom: 0.5rem; }
-  .pane-name { font-size: 0.78rem; font-weight: 700; color: var(--muted); }
-  .count {
-    margin-left: auto;
-    padding: 0 0.4rem;
-    border-radius: 999px;
-    background: var(--hover);
-    color: var(--faint);
-    font-size: 0.68rem;
-  }
-  .inbox input {
-    width: 100%;
-    padding: 0.45rem 0.6rem;
-    border: 1px solid var(--line);
-    border-radius: 9px;
-    background: var(--surface);
-    color: var(--text);
-    font-size: 0.85rem;
-  }
-  .items {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    margin: 0.5rem 0 0;
-    padding: 0;
-    list-style: none;
-    display: flex;
-    flex-direction: column;
-    gap: 0.4rem;
-  }
-  .items li { border-radius: 9px; background: var(--hover); }
-  .items button {
-    display: block;
-    width: 100%;
-    padding: 0.5rem 0.6rem;
-    border-radius: 9px;
-    text-align: left;
-  }
-  .items button:hover { background: var(--surface-solid); }
-  .what { display: block; font-size: 0.85rem; line-height: 1.35; color: var(--text); }
-  .from { display: block; margin-top: 0.25rem; color: var(--faint); font-size: 0.72rem; }
-  .hint { margin: 0.6rem 0 0; color: var(--faint); font-size: 0.72rem; line-height: 1.4; }
 
   .hud {
     position: fixed;
@@ -982,15 +697,43 @@
     box-shadow: 0 6px 20px rgb(0 0 0 / 0.18), inset 0 0 0 2px color-mix(in oklab, var(--accent) 35%, transparent);
   }
 
+  /* El selector de vista: una píldora con tres botones, uno encendido. Que se
+     lea como UNA elección y no como tres interruptores sueltos. */
+  .views {
+    display: flex;
+    gap: 0.2rem;
+    padding: 0.22rem;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    background: var(--surface-solid);
+    box-shadow: 0 6px 20px rgb(0 0 0 / 0.18);
+  }
+  .views .hud-btn {
+    width: 38px;
+    height: 38px;
+    border-color: transparent;
+    background: transparent;
+    box-shadow: none;
+  }
+  .views .hud-btn.on {
+    border-color: color-mix(in oklab, var(--accent) 60%, transparent);
+    background: color-mix(in oklab, var(--accent) 20%, var(--surface-solid));
+    box-shadow: none;
+  }
+
   .lead { margin: 0; color: var(--faint); font-size: 0.82rem; line-height: 1.45; }
-  .rows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 0.45rem; }
+  .rows { margin: 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 1rem; }
   .rows li { display: flex; align-items: center; gap: 0.6rem; }
   .n { flex: none; color: var(--faint); font-size: 0.8rem; font-weight: 700; }
-  .fields { flex: 1; min-width: 0; display: flex; gap: 0.4rem; }
+  .fields { flex: 1; min-width: 0; display: flex; gap: 0.65rem; }
+  @media (max-width: 640px) {
+    .fields { flex-direction: column; }
+    .rows li { align-items: flex-start; }
+  }
   .fields input {
     flex: 1;
     min-width: 0;
-    padding: 0.35rem 0.55rem;
+    padding: 0.55rem 0.7rem;
     border: 1px solid var(--line);
     border-radius: 8px;
     background: var(--surface);

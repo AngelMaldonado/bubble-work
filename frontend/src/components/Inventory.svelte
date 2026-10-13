@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // El inventario: dónde vive lo que hace funcionar todo esto.
   //
   // VPS, dominios, servicios contratados, licencias. No es trabajo —documentar
@@ -392,7 +393,7 @@
 </div>
 
 <div class="hud">
-  <button class="hud-btn" onclick={onsearch} title="Buscar · ⌘K"><span aria-hidden="true">🔍</span></button>
+  <button class="hud-btn" onclick={onsearch} title="Buscar · ⌘K"><Icon of="search" size="1.35rem" tint /></button>
   <ThemeToggle floating={false} />
 </div>
 
@@ -515,7 +516,7 @@
                      dentro del campo, y una etiqueta suelta desalineaba la fila. -->
                 <DatePicker.Control class="input dp-control">
                   <DatePicker.Input placeholder="Se renueva" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />
-                  <DatePicker.Trigger>🗓</DatePicker.Trigger>
+                  <DatePicker.Trigger><Icon of="calendar" /></DatePicker.Trigger>
                 </DatePicker.Control>
                 <!-- Sin portal, como en la tarjeta del planeador: un diálogo
                      modal apaga los eventos fuera de sí y los devuelve capa por

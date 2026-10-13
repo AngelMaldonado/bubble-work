@@ -1,17 +1,26 @@
 <script lang="ts">
+  import Loading from './components/Loading.svelte';
+  import Icon from './components/Icon.svelte';
   import { api, type Board as BoardData, type Features, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { isEditable } from './lib/keys';
-  import { agentsUrl, allUrl, boardUrl, inventoryUrl, parse, plannerUrl, sequenceUrl, settingsUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { promptsUrl, allUrl, artifactUrl, boardUrl, inventoryUrl, parse, plannerUrl, readonlyInboxUrl, sequenceUrl, settingsUrl, spaceUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
   import Board from './components/Board.svelte';
   import Thread from './components/Thread.svelte';
   import Wiki from './components/Wiki.svelte';
   import Planner from './components/Planner.svelte';
-  import Agenda from './components/Agenda.svelte';
+  import ReadPlanner from './components/ReadPlanner.svelte';
+  import { rememberAttentionReturn, takeAttentionReturn } from './lib/attentionReturn';
+  import { workspaceBuoyancy } from './lib/workspaceBuoyancy';
   import Inventory from './components/Inventory.svelte';
-  import AgentsDoc from './components/AgentsDoc.svelte';
+  import PromptsView from './components/PromptsView.svelte';
   import Repos from './components/Repos.svelte';
+  import ArtifactOrb from './components/ArtifactOrb.svelte';
+  import ThreadPins from './components/ThreadPins.svelte';
+  import ArtifactView from './components/ArtifactView.svelte';
+  import PersonalSpace from './components/PersonalSpace.svelte';
+  import { projectColors } from './lib/projectColors.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
@@ -65,6 +74,9 @@
   // rellenarlo con el primero haría que los verbos —crear, renombrar, la wiki—
   // escribieran en un proyecto que nadie eligió.
   const isAll = $derived(route.kind === 'all');
+  const readPlanning = $derived(route.kind === 'sequence' || (route.kind === 'planner' && (me?.role !== 'lead' || !!route.inboxOnly)));
+  /** las pantallas que dibuja el shell, y por eso tienen esquina */
+  const onShell = $derived(route.kind === 'board' || route.kind === 'all' || route.kind === 'sequence' || route.kind === 'space');
   const current = $derived(
     isAll
       ? null
@@ -107,6 +119,7 @@
       api.features().then((f) => (features = f));
       api.version().then((v) => (serverVersion = devLatest(v)));
       loadHeat();
+      projectColors.load().catch(() => {});
     }
     ready = true;
   }
@@ -121,27 +134,36 @@
   // the server holds both.
   let board = $state<BoardData | null>(null);
   let loadingBoard = $state(false);
+  let boardGeneration = 0;
   async function loadBoard() {
+    const turn = ++boardGeneration;
+    const owner = api.me?.id;
     const ws = current;
-    if (!ws && !isAll) return;
+    const browsing = readPlanning;
+    const aggregate = isAll;
+    if (!ws && !aggregate && !browsing) return;
     loadingBoard = true;
     try {
       // El de todos lo compone el SERVIDOR. Pedir el board de cada workspace
       // desde aquí serían N respuestas calculadas en N instantes, y el calor es
       // función del tiempo: dos burbujas medidas contra dos «ahora» no se
       // pueden comparar, que es lo único que esta pantalla hace.
-      board = isAll ? await api.allBoard() : await api.board(ws!.id);
+      const got = browsing ? (await api.readPlanner()).board : aggregate ? await api.allBoard() : await api.board(ws!.id);
+      if (turn !== boardGeneration || owner !== api.me?.id || browsing !== readPlanning || aggregate !== isAll || ws?.id !== current?.id) return;
+      board = got;
       loadHeat();
       error = '';
     } catch (e) {
-      error = (e as Error).message;
+      if (turn === boardGeneration) error = (e as Error).message;
     } finally {
-      loadingBoard = false;
+      if (turn === boardGeneration) loadingBoard = false;
     }
   }
   $effect(() => {
+    me?.id;
     current?.id;
     isAll;
+    readPlanning;
     board = null;
     loadBoard();
   });
@@ -156,14 +178,16 @@
   // Se pide aparte del board de la pantalla porque la columna está siempre, se
   // esté mirando lo que se esté mirando.
   let burning = $state<Record<string, number>>({});
+  let projectBuoyancy = $state<ReturnType<typeof workspaceBuoyancy>>({});
   async function loadHeat() {
     try {
-      const all = await api.allBoard();
+      const all = readPlanning ? (await api.readPlanner()).board : await api.allBoard();
       const by: Record<string, number> = {};
       for (const b of all.bubbles) {
         if (b.heat.lifecycle === 'hot') by[b.workspace] = (by[b.workspace] ?? 0) + 1;
       }
       burning = by;
+      projectBuoyancy = workspaceBuoyancy(all);
     } catch {
       // Sin esto la columna sigue funcionando: ordena por nombre y no pinta
       // nada. Una lista que desaparece porque un cálculo falló es peor que una
@@ -216,8 +240,13 @@
     },
   };
 
+  function attentionGo(to: string) {
+    rememberAttentionReturn(api.me?.id ?? 'local', path, to);
+    go(to);
+  }
+
   function back() {
-    const to = route.kind === 'thread' ? backTo.take() : '';
+    const to = takeAttentionReturn(api.me?.id ?? 'local', path) || (route.kind === 'thread' ? backTo.take() : '');
     if (to) {
       go(to);
       return;
@@ -450,13 +479,13 @@
     me = null;
   }
 
-  const openWiki = (page: string) => current && go(wikiUrl(current.slug, page));
+  const openWiki = (page = '', replace = false) => current && go(wikiUrl(current.slug, page), replace);
   /** La dirección de un thread se hace del slug de SU workspace, que en el board
    *  de todos no es el de la pantalla — ahí no hay ninguno. Por eso cada fila
    *  viene diciendo de dónde es. */
   function openThread(t: ThreadHeat) {
-    const slug =
-      current?.slug ?? (board?.workspaces ?? []).find((w) => w.id === t.workspace)?.slug;
+    const slug = (board?.workspaces ?? []).find((w) => w.id === t.workspace)?.slug ??
+      (current?.id === t.workspace ? current.slug : undefined);
     // Abierto desde el board: su vuelta es el board, aunque quedara anotada
     // otra de un hilo abierto antes desde el planeador.
     backTo.take();
@@ -500,11 +529,11 @@
     // Los cuatro primeros necesitan saber DÓNDE aterrizan, así que en Todos no
     // se listan. Un comando que se ofrece y no hace nada enseña que la paleta no
     // es de fiar, y entonces deja de usarse para todo lo demás.
-    ...(current
+    ...(current && !readPlanning
       ? [
           { id: 'new-bubble', icon: '🫧', title: 'Nueva burbuja', hint: 'una agrupación de trabajo', run: () => (naming = 'bubble') },
           { id: 'new-thread', icon: '🧵', title: 'Nuevo hilo', hint: 'una unidad de trabajo', run: () => (naming = 'thread') },
-          { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki('README.md') },
+          { id: 'wiki', icon: '📖', title: 'Abrir la wiki', hint: 'docs/', run: () => openWiki() },
           { id: 'people', icon: '👥', title: 'Personas de este proyecto', hint: 'invitar · roles', run: () => (crew = true) },
     ...(seesInv
       ? [{ id: 'inventory', icon: '🗄', title: 'Abrir el inventario', hint: 'VPS · dominios · servicios', run: () => go(inventoryUrl) }]
@@ -512,9 +541,7 @@
         ]
       : []),
     { id: 'all', icon: '∗', title: 'Todos los proyectos', hint: 'un board · Shift+Tab', run: () => go(allUrl) },
-    isLead
-      ? { id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: 'inbox · calendario · kanban', run: openPlanner }
-      : { id: 'planner', icon: '🗓', title: 'Abrir el calendario', hint: 'lo que tiene fecha', run: openPlanner },
+    { id: 'planner', icon: '🗓', title: 'Abrir el planeador', hint: isLead ? 'inbox · calendario · secuencia' : 'sólo lectura · mi trabajo', run: openPlanner },
     { id: 'board', icon: '🫧', title: 'Volver al board', run: back },
     // The same three states the floating control cycles, named so they can be
     // reached directly: from the keyboard, picking is faster than cycling.
@@ -532,9 +559,15 @@
   // One request per pause, and the last one wins: an answer that arrives after
   // the query moved on is an answer to a question nobody is asking any more.
   let asked = 0;
+  $effect(() => {
+    readPlanning;
+    asked++;
+    found = [];
+    searching = false;
+  });
   async function query(q: string) {
     const mine = ++asked;
-    if (!current || q.length < 2) {
+    if (readPlanning || !current || q.length < 2) {
       found = [];
       searching = false;
       return;
@@ -542,7 +575,7 @@
     searching = true;
     try {
       const out = await api.search(current.id, q);
-      if (mine !== asked) return;
+      if (mine !== asked || readPlanning) return;
       found = out.hits.map((h: { path: string; title: string; line: number; text: string }) => ({
         id: `p:${h.path}:${h.line}`,
         kind: h.path.startsWith('threads/') ? 'hilo' : 'página',
@@ -599,6 +632,10 @@
     }
   }
 
+  function artifactDeleted(id: string) {
+    if (route.kind==='artifact' && route.id===id) back();
+  }
+
   /** Lo que se puede decir de un error, en orden de utilidad. Nunca vacío. */
   function crashText(error: unknown): string {
     const e = error as Error | undefined;
@@ -612,7 +649,11 @@
 <svelte:window onkeydowncapture={hotkeys} />
 
 
-<ThemeToggle />
+<!-- Estas pantallas ponen el tema en su HUD; el global quedaba debajo y
+     dibujaba un segundo círculo (visible especialmente en el planeador). -->
+{#if !(signedIn && ready && ['planner', 'thread', 'wiki', 'inventory', 'mock'].includes(route.kind))}
+  <ThemeToggle />
+{/if}
 
 <!-- Shift+Tab, para workspaces. Vuelve de v0 con la propiedad que lo hacía
      valer: el anillo va por RECENCIA con el actual primero, así que la segunda
@@ -650,7 +691,7 @@
     <button class="btn btn-sm preset-tonal-surface" onclick={() => go('/')}>← volver</button>
   </div>
   <ThemePage />
-{:else if route.kind === 'planner' && isLead}
+{:else if route.kind === 'planner' && isLead && !route.inboxOnly}
   <!-- The strategic layer gets a screen, not a tab inside the operative one —
        and no workspace: the plan is the department's, not this project's. -->
   <Planner
@@ -667,15 +708,15 @@
       go(boardUrl(slug));
     }} />
 {:else if route.kind === 'planner' && signedIn}
-  <!-- Guarded at the ADDRESS, not only at the sidebar — but what a member gets
-       is not a refusal. The objectives, the inbox and the kanban of the whole
-       department are the lead's; the DATES are not strategy, they are somebody's
-       week, and the person whose week it is should be able to look at it. Same
-       screen, same calendar, read-only. -->
-  <Agenda
+  <!-- Participation and personal Inbox are projected by /api/planner/read. -->
+  <ReadPlanner
+    inboxOnly={route.inboxOnly}
+    sequenceEnabled={features.sequence}
     onback={back}
     onsearch={() => (omni = true)}
-    onopen={(slug) => go(boardUrl(slug))} />
+    onopenartifact={(id) => attentionGo(artifactUrl(id))}
+    onopenthread={(slug, seq) => { backTo.set(route.kind === 'planner' && route.inboxOnly ? readonlyInboxUrl : plannerUrl); go(threadUrl(slug, seq)); }}
+    onopenboard={(slug) => { backTo.set(route.kind === 'planner' && route.inboxOnly ? readonlyInboxUrl : plannerUrl); go(boardUrl(slug)); }} />
 {:else if route.kind === 'settings' && signedIn && me}
   <!-- Como el planeador: su propia barra y su vuelta. La tab va en la
        dirección, y cambiarla REEMPLAZA la entrada: el botón de atrás vuelve al
@@ -695,18 +736,19 @@
        galería vacía porque el servidor no le manda nada — así que además se lo
        decimos. -->
   <Inventory onback={back} onsearch={() => (omni = true)} canWrite={isLead} />
-{:else if route.kind === 'agents' && signedIn && (isLead || route.role === 'operators')}
-  <!-- La forma de trabajar del departamento. El lead edita los dos; quien opera
-       LEE el suyo — el mismo que su agente recibe por MCP. Guardado en la
-       DIRECCIÓN además de en el menú: la regla de la colección ya rechaza la
-       versión de otro, pero una pantalla de edición que no se puede guardar es
-       una pantalla que miente. -->
-  <AgentsDoc role={route.role} canWrite={isLead} onback={back} onsearch={() => (omni = true)} />
-{:else if route.kind === 'agents' && signedIn && me}
-  <p class="card glass m-6 p-4 text-sm">
-    El AGENTS.md de quien planea es del lead. El tuyo es el de operadores.
-    <button class="link" onclick={() => go(agentsUrl('operators'), true)}>abrir AGENTS.md (operators)</button>
-  </p>
+{:else if route.kind === 'prompts' && signedIn}
+  <!-- Todo lo que se le dice a la IA: los AGENTS.md, los prompts del binario y
+       la descripción de cada tool. El lead edita; los demás leen lo que su
+       agente recibe. Cambiar de prompt REEMPLAZA la entrada del historial. -->
+  <PromptsView
+    key={route.key}
+    onback={back}
+    onsearch={() => (omni = true)}
+    onpick={(k) => go(promptsUrl(k), true)} />
+{:else if route.kind === 'artifact' && signedIn}
+  <!-- Un artefacto efímero, donde se contesta. Su propia pantalla y su propia
+       dirección: es el enlace que el agente le da a la persona. -->
+  <ArtifactView id={route.id} onback={back} />
 {:else if route.kind === 'thread'}
   <!-- Full screen: the thread carries its own bar, and the board behind it is
        noise while reading. It is resolved from the address, so this is also
@@ -718,9 +760,10 @@
       workspace={current}
       onback={back}
       onchanged={loadBoard}
+      onnavigate={(url) => go(url)}
       onsearch={() => (omni = true)} />
   {:else if loadingBoard || !board}
-    <p class="faint p-6 text-sm">…</p>
+    <Loading viewport />
   {:else}
     <p class="card glass m-6 p-4 text-sm">
       No hay un hilo #{route.seq} en {current?.name ?? 'este proyecto'}.
@@ -736,12 +779,12 @@
     onopen={(page) => openWiki(page)}
     onsearch={() => (omni = true)} />
 {:else if !ready}
-  <p class="faint p-6 text-sm">…</p>
+  <Loading viewport />
 {:else if !signedIn}
   <SignIn onDone={boot} />
 {:else}
   <Shell
-    items={sorted.map((w) => ({ id: w.id, name: w.name, hint: w.slug, hot: burning[w.id] ?? 0 }))}
+    items={sorted.map((w) => ({ id: w.id, name: w.name, hint: w.slug, hot: burning[w.id] ?? 0, life: projectBuoyancy[w.id]?.life ?? 'dormant', warmAt: projectBuoyancy[w.id]?.at ?? '' }))}
     pins={[
       // Todos ARRIBA DEL LISTADO: es el board entero, y los workspaces que
       // siguen son sus partes — leerlo como el primero de ellos dice esa
@@ -750,23 +793,29 @@
       { id: 'all', name: 'Todos', face: '∗', href: allUrl, top: true },
       // Junto a Todos: también es una vista de TODO, sólo que en el orden en
       // que se ejecuta. Cada quien la ve con su alcance.
+      // Tu lienzo personal: arriba, con lo que se mira a diario, y antes de la
+      // secuencia del departamento porque es lo tuyo.
+      { id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true },
       ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
-      { id: 'planner', name: isLead ? 'Planeador' : 'Calendario', face: '🗓', href: plannerUrl },
+      { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
       // La forma de trabajar que leen los agentes: el lead edita la de cada rol.
       // Quien opera ve sólo el suyo, para leerlo.
-      ...(isLead ? [{ id: 'agents-planner', name: 'AGENTS.md (planner)', face: '🗺', href: agentsUrl('planner') }] : []),
-      { id: 'agents-operators', name: 'AGENTS.md (operators)', face: '🛠', href: agentsUrl('operators') },
+      // Todo lo que se le dice a la IA, en una sola entrada.
+      { id: 'prompts', name: 'Prompts', face: '📜', href: promptsUrl() },
+      { id: 'connect', name: 'Conectar tu IA', face: '🤖', href: settingsUrl('tokens') },
       { id: 'settings', name: 'Ajustes', face: '⚙', href: settingsUrl() },
     ]}
-    pinned={route.kind === 'planner'
+    pinned={route.kind === 'space'
+      ? 'space'
+      : route.kind === 'planner'
       ? 'planner'
       : route.kind === 'sequence'
         ? 'sequence'
         : route.kind === 'inventory'
         ? 'inventory'
-        : route.kind === 'agents'
-        ? `agents-${route.role}`
+        : route.kind === 'prompts'
+        ? 'prompts'
         : isAll
           ? 'all'
           : ''}
@@ -776,16 +825,20 @@
           ? allUrl
           : id === 'sequence'
             ? sequenceUrl
+          : id === 'space'
+            ? spaceUrl
             : id === 'inventory'
               ? inventoryUrl
-              : id === 'agents-planner' || id === 'agents-operators'
-              ? agentsUrl(id === 'agents-planner' ? 'planner' : 'operators')
+              : id === 'prompts'
+              ? promptsUrl()
+              : id === 'connect'
+                ? settingsUrl('tokens')
               : id === 'settings'
                 ? settingsUrl()
                 : plannerUrl,
       )}
     onsignout={signOut}
-    current={route.kind === 'sequence' ? '' : (current?.id ?? '')}
+    current={route.kind === 'sequence' || route.kind === 'space' ? '' : (current?.id ?? '')}
     label="Proyectos"
     newLabel="Nuevo proyecto"
     version={updating || versionLabel}
@@ -800,9 +853,12 @@
     onrename={renameWorkspace}
     ondelete={deleteWorkspace}
     oncreate={createWorkspace}>
-    {#if route.kind === 'sequence' && me && features.sequence}
+    {#if route.kind === 'space' && me}
+      {#key me.id}<PersonalSpace workspaces={sorted} />{/key}
+    {:else if route.kind === 'sequence' && me && features.sequence}
       <SequenceView
         {me}
+        onopenboard={(slug) => { backTo.set(sequenceUrl); go(boardUrl(slug)); }}
         onopen={(slug, seq) => {
           backTo.set(sequenceUrl);
           go(threadUrl(slug, seq));
@@ -826,7 +882,7 @@
         <p class="muted mb-5 text-sm">
           Un proyecto es un cuerpo de trabajo: sus burbujas, sus hilos y su wiki. Puedes
           empezar uno — quien lo funda queda como su lead — o pedirle a alguien que ya tenga el
-          suyo que te invite desde 👥.
+          suyo que te invite desde <Icon of="people" />.
         </p>
         <NewWorkspace onDone={boot} />
       </div>
@@ -838,9 +894,13 @@
          abierto: un repositorio pertenece a uno, y en TODOS no hay cuál
          enseñar. -->
     {#snippet corner()}
-      {#if current && route.kind !== 'sequence'}
-        <Repos workspace={current} canWrite={hereLead} />
-      {/if}
+      <div class="corner-dock">
+        {#if current && route.kind !== 'sequence' && route.kind !== 'space'}
+          <Repos workspace={current} canWrite={hereLead} />
+        {/if}
+        <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />
+        <ThreadPins left onopen={attentionGo} />
+      </div>
     {/snippet}
   </Shell>
 
@@ -852,48 +912,14 @@
 
 
   <div class="floats">
-  {#if current}
-    <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
-      <Tooltip.Trigger>
-        {#snippet element(attributes: Record<string, unknown>)}
-          <button class="float-btn" {...attributes} onclick={() => (crew = true)}>
-            <span aria-hidden="true">👥</span>
-          </button>
-        {/snippet}
-      </Tooltip.Trigger>
-      <Portal>
-        <Tooltip.Positioner>
-          <Tooltip.Content>Personas de {current.name}</Tooltip.Content>
-        </Tooltip.Positioner>
-      </Portal>
-    </Tooltip>
-  {/if}
+  {#if current}<People hover bind:open={crew} workspace={current} onchanged={loadBoard} />{/if}
 
-  <!-- Conectar un agente es un VERBO, y los verbos viven aquí. Junto a
-       personas: las dos contestan "quién más entra a esto" — una con nombre y
-       otra con un token. -->
-  <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
-    <Tooltip.Trigger>
-      {#snippet element(attributes: Record<string, unknown>)}
-        <button class="float-btn" {...attributes} onclick={connectAgent}>
-          <span aria-hidden="true">🤖</span>
-        </button>
-      {/snippet}
-    </Tooltip.Trigger>
-    <Portal>
-      <Tooltip.Positioner>
-        <Tooltip.Content>
-          Conectar tu IA: genera un token y copia el prompt
-        </Tooltip.Content>
-      </Tooltip.Positioner>
-    </Portal>
-  </Tooltip>
 
   <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
         <button class="float-btn search-btn" {...attributes} onclick={() => (omni = true)}>
-          <span aria-hidden="true">🔍</span>
+          <Icon of="search" size="1.6rem" tint />
         </button>
       {/snippet}
     </Tooltip.Trigger>
@@ -909,8 +935,8 @@
     <Tooltip positioning={{ placement: 'top' }} openDelay={120} closeDelay={60}>
       <Tooltip.Trigger>
         {#snippet element(attributes: Record<string, unknown>)}
-          <button class="float-btn wiki-btn" {...attributes} onclick={() => openWiki('README.md')}>
-            <span aria-hidden="true">📖</span>
+          <button class="float-btn wiki-btn" {...attributes} onclick={() => openWiki()}>
+            <Icon of="book" size="1.6rem" tint />
           </button>
         {/snippet}
       </Tooltip.Trigger>
@@ -923,16 +949,23 @@
   {/if}
   </div>
 
-  {#if current}
-    <!-- Reloading the board after a change to the roster: who is a member
-         decides what the server answers, and a bubble's owner is a person from
-         this list. -->
-    <People bind:open={crew} workspace={current} onchanged={loadBoard} />
-  {/if}
 
   <!-- Signing out is not a floating button: it is rare, and a rare verb next to
        the two you press all day is the one you press by accident. It lives in
        the omnibar, behind `/`. -->
+{/if}
+
+<!-- Lo que se está pensando ahora, en todas las pantallas: un artefacto es del
+     departamento, no de un workspace. Fuera de la cadena de pantallas a
+     propósito, para que ninguna se olvide de dibujarlo. -->
+<!-- En las pantallas del shell vive en su esquina, junto al cubo; en las que
+     no tienen esquina (planeador, hilo, artefacto, ajustes) flota sobre el
+     botón del tema. -->
+{#if signedIn && ready && !onShell && path !== '/theme' && path !== '/theme/mock'}
+  <div class="attention-dock">
+    <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />
+    <ThreadPins thread={route.kind === 'thread' && open ? { id: open.id, name: open.name } : undefined} onopen={attentionGo} />
+  </div>
 {/if}
 
   {#snippet failed(error: unknown, reset: () => void)}
@@ -1005,7 +1038,7 @@
                         class="one"
                         class:on={intoBubble === b.id}
                         onclick={() => (intoBubble = b.id)}>
-                        <span aria-hidden="true">{bandFace(b.heat.lifecycle)}</span>
+                        <Icon of={bandFace(b.heat.lifecycle)} tint />
                         {b.name}
                       </button>
                     </li>
@@ -1070,6 +1103,8 @@
 {/if}
 
 <style>
+  .attention-dock { position: fixed; right: 1rem; bottom: 4.1rem; z-index: var(--z-chrome); display: flex; align-items: center; gap: 0.5rem; }
+  .attention-dock :global(.orb.docked .fan) { left: auto; right: 0; padding: 0.35rem 0 0.5rem 3rem; align-items: flex-end; }
   /* El accidente, legible: encima de todo, con el rastro completo. */
   .crash {
     position: fixed;

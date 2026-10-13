@@ -1,4 +1,6 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
+  import Loading from './Loading.svelte';
   // The wiki, in a thread's clothes.
   //
   // Same shell on purpose: a top bar that gets you back, the tree on the left,
@@ -18,6 +20,7 @@
   import ThreadToc from './ThreadToc.svelte';
   import ThemeToggle from './ThemeToggle.svelte';
   import SideTree, { type TreeNode } from './SideTree.svelte';
+  import TreePanel from './TreePanel.svelte';
   import type { Heading } from '../lib/prose';
 
   let {
@@ -25,10 +28,13 @@
     path,
     html = '',
     markdown = '',
+    loading = false,
     tree = [],
     onback,
     onopen,
     onsave,
+    ontodo,
+    scrollKey,
     onattach,
     ondiff,
     onsearch,
@@ -41,11 +47,14 @@
     html?: string;
     /** the page's markdown — the record; `html` is the SERVER's render of it */
     markdown?: string;
+    loading?: boolean;
     tree?: TreeNode[];
     onback?: () => void;
     onopen?: (id: string) => void;
     /** hand the edited markdown back; the caller owns the write and its hash */
     onsave?: (markdown: string) => void;
+    ontodo?: (index: number, done: boolean) => void | Promise<void>;
+    scrollKey?: string;
     /** adjuntar una imagen al workspace, desde el editor */
     onattach?: (file: File) => Promise<{ path: string } | null | void>;
     /** qué cambió en este documento — lo calcula git, del lado del servidor */
@@ -110,6 +119,7 @@
   </div>
 
   <div class="body">
+    <TreePanel name="wiki" collapsed={sideCollapsed}>
     <Navigation
       layout={sideCollapsed ? 'rail' : 'sidebar'}
       class="side {sideCollapsed ? '' : 'grid grid-rows-[auto_1fr] gap-2'}">
@@ -136,7 +146,7 @@
           </Navigation.Group>
         {:else}
           <Navigation.Group class="wiki-tree">
-            <SideTree nodes={tree} onselect={(n) => onopen?.(n.id)} />
+            <SideTree nodes={tree} selected={path} onselect={(n) => onopen?.(n.id)} />
           </Navigation.Group>
         {/if}
 
@@ -154,6 +164,7 @@
         </Navigation.Footer>
       </Navigation.Content>
     </Navigation>
+    </TreePanel>
 
     <ThreadToc {headings} scroller={contentEl} />
 
@@ -163,7 +174,7 @@
           <Tooltip.Trigger>
             {#snippet element(attributes: Record<string, unknown>)}
               <button class="hud-btn" {...attributes} onclick={a.go}>
-                <span aria-hidden="true">{a.face}</span>
+                <Icon of={a.face} size="1.35rem" tint />
               </button>
             {/snippet}
           </Tooltip.Trigger>
@@ -177,19 +188,23 @@
       <ThemeToggle floating={false} />
     </div>
 
-    <main class="content" bind:this={contentEl}>
+    <main class="content" class:pending={loading} bind:this={contentEl}>
       <!-- The SAME pane a thread uses. A page and a thread's document are the
            same kind of thing — markdown in a repository, rendered by the server
            — so they are read and written by the same component rather than by
            two that drift. -->
+      {#if loading}<Loading label="Leyendo página" />{:else}
       <DocEditor
     {onattach}
     {ondiff}
         {markdown}
         {html}
+        {ontodo}
+        {scrollKey}
         bind:editing
         onsave={(md) => onsave?.(md)}
         onheadings={(h) => (headings = h)} />
+      {/if}
     </main>
   </div>
 </div>
@@ -314,6 +329,7 @@
   }
 
   .content { flex: 1; min-width: 0; overflow-y: auto; padding: 1rem 1.5rem 4rem; }
+  .content.pending { padding: 0; display: flex; }
 
   .hud {
     position: fixed;

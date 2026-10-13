@@ -21,6 +21,7 @@ import { HighlightStyle, syntaxHighlighting } from '@codemirror/language';
 import { EditorState, Prec, type Extension } from '@codemirror/state';
 import { drawSelection, EditorView, keymap, placeholder as cmPlaceholder } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import { formatEdit } from './formatEdit';
 // What to do with an Escape that was taken away from this editor, keyed by the
 // editor's element. See `lib/escape.ts` for why the key is caught at the window.
 import { escapeHandlers } from './escape';
@@ -209,6 +210,7 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
 
   const commands = keymap.of([
     { key: 'Mod-s', preventDefault: true, run: () => (opts.onSave(), true) },
+    ...[['Mod-b','**'],['Mod-i','*'],['Mod-u','++']].map(([key,marker])=>({key,preventDefault:true,run:()=>{api.wrap(marker,'texto');return true;}})),
     // In vim, Escape means "leave insert mode" and belongs to vim. Leaving the
     // editor is `:q` there, which is what a vim user reaches for anyway.
     ...(opts.vim ? [] : [{ key: 'Escape', run: () => (opts.onEscape(), true) }]),
@@ -268,8 +270,9 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
   view.contentDOM.setAttribute('data-bwignore', '');
   view.contentDOM.setAttribute('data-form-type', 'other');
   view.contentDOM.setAttribute('autocomplete', 'off');
-  view.contentDOM.setAttribute('autocorrect', 'off');
-  view.contentDOM.setAttribute('spellcheck', 'false');
+  view.contentDOM.setAttribute('autocorrect', 'on');
+  view.contentDOM.setAttribute('spellcheck', 'true');
+  view.contentDOM.setAttribute('lang', 'es');
 
   const api: MarkdownEditor = {
     destroy: () => {
@@ -312,14 +315,8 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
 
     wrap(marker, fallback) {
       const { from, to } = view.state.selection.main;
-      const chosen = view.state.sliceDoc(from, to) || fallback;
-      view.dispatch({
-        changes: { from, to, insert: marker + chosen + marker },
-        selection: {
-          anchor: from + marker.length,
-          head: from + marker.length + chosen.length,
-        },
-      });
+      const next=formatEdit(view.state.doc.toString(),from,to,marker,fallback);
+      view.dispatch({changes:{from:next.from,to:next.to,insert:next.text},selection:{anchor:next.anchor,head:next.head}});
       view.focus();
     },
 

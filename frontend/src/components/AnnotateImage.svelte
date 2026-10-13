@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // Anotar una imagen antes de pegarla: trazos a mano alzada y texto, en el
   // color que se elija.
   //
@@ -349,7 +350,7 @@
           <div class="tools">
             <div class="group" role="radiogroup" aria-label="Herramienta">
               <button class="chip" class:on={tool === 'pen'} onclick={() => ((tool = 'pen'), commitText())}
-                title="Mano alzada">✏️ Trazo</button>
+                title="Mano alzada"><Icon of="pencil" /> Trazo</button>
               <button class="chip" class:on={tool === 'text'} onclick={() => (tool = 'text')}
                 title="Clic en la imagen para escribir">🔤 Texto</button>
               <button class="chip" class:on={tool === 'crop'} onclick={() => ((tool = 'crop'), commitText())}

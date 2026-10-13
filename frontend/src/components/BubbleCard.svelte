@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   import { bandFace, bandName } from '../lib/bands';
   import type { BubbleHeat, ThreadHeat } from '../lib/api';
 
@@ -23,7 +24,7 @@
         <p class="faint mt-0.5 line-clamp-2 text-sm">{bubble.outcome}</p>
       {/if}
     </div>
-    <span class="text-lg" title={bubble.heat.reason}>{bandFace(bubble.heat.lifecycle)}</span>
+    <span class="text-lg" title={bubble.heat.reason}><Icon of={bandFace(bubble.heat.lifecycle)} tint /></span>
   </header>
 
   <!-- The reason, not just the verdict: a band nobody can explain is a band
@@ -41,7 +42,7 @@
             <span class="dot"></span>
             <span class="faint tabular-nums">#{t.seq}</span>
             <span class="min-w-0 flex-1 truncate">{t.name}</span>
-            {#if t.pulse}<span class="faint text-xs" title="somebody commented recently">💬</span>{/if}
+            {#if t.pulse}<span class="faint text-xs" title="somebody commented recently"><Icon of="chat" /></span>{/if}
           </button>
         </li>
       {/each}

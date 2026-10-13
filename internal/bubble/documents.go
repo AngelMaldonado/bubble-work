@@ -15,7 +15,6 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 
 	"github.com/AngelMaldonado/bubble-work/internal/tree"
-	"github.com/AngelMaldonado/bubble-work/prompts"
 )
 
 // The document half: a thread's markdown is a FILE, and the row only says where.
@@ -324,13 +323,15 @@ func registerDocuments(app core.App, t *tree.Tree) {
 		// curl and the web UI reach the same bytes the MCP prompt does.
 		se.Router.GET("/api/guide", func(e *core.RequestEvent) error {
 			e.Response.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-			_, err := e.Response.Write([]byte(prompts.Guide))
+			_, err := e.Response.Write([]byte(SystemPrompt(e.App, "agents_guide")))
 			return err
 		})
 
-		// Lo que un agente se pega a sí mismo, y la plantilla que una persona
-		// copia para configurar el suyo. Markdown como la guía, por la misma
-		// razón: un navegador, un curl y la aplicación leen los mismos bytes.
+		// La plantilla que una persona copia para configurar su asistente; lleva
+		// dentro la sección breve que el agente se instala (antes era
+		// `/api/house-rules`, una segunda copia de lo mismo). Markdown como la
+		// guía, por la misma razón: un navegador, un curl y la aplicación leen
+		// los mismos bytes.
 		//
 		// `connect.md` sale SIN rellenar. Los dos huecos —la URL del servidor y
 		// el token— los pone el cliente, que sabe con certeza por qué dirección
@@ -338,15 +339,9 @@ func registerDocuments(app core.App, t *tree.Tree) {
 		// que ponga el proxy de enfrente, y un prompt con la URL equivocada es
 		// un prompt que configura un servidor que no existe. Y el token no
 		// vuelve a viajar por una respuesta que nadie necesitaba.
-		se.Router.GET("/api/house-rules", func(e *core.RequestEvent) error {
-			e.Response.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-			_, err := e.Response.Write([]byte(prompts.House))
-			return err
-		})
-
 		se.Router.GET("/api/connect", func(e *core.RequestEvent) error {
 			e.Response.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-			_, err := e.Response.Write([]byte(prompts.Connect))
+			_, err := e.Response.Write([]byte(SystemPrompt(e.App, "connect")))
 			return err
 		})
 

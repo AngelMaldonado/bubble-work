@@ -1,169 +1,107 @@
-# Bubble Work
+# Bubble Work — guía para agentes
 
-A place to plan work, write it down, and see what has gone cold.
+Bubble Work es donde este departamento planea el trabajo, lo escribe y ve qué se ha enfriado. Tú trabajas aquí por MCP, en nombre de la persona dueña de tu token: lo que escribes queda firmado con su nombre y sólo ves lo que ella ve.
 
-## The model
+Al final de este documento está la **forma de trabajar del departamento**, la que escribe el lead. Si algo de allí contradice esta guía, manda la del departamento.
 
-- **Workspace** — the boundary for a body of work. Everything below belongs to one.
-- **Bubble** — a durable grouping of related work; the unit of *attention*. It has
-  an outcome and can die.
-- **Thread** — one executable unit of work. It carries a markdown document.
-- **Heat** — evidence that *reality changed*. Not activity.
+## Cómo empezar una sesión
 
-## What warms, and what does not
+1. `sequence_next`: qué toca ahora en la secuencia del departamento y cuál es el primer hilo que es tuyo.
+2. Antes de crear nada, busca lo que ya existe: `project_board` y `document_search`. Casi nada es nuevo; lo normal es que ya haya un hilo a medias con el contexto de por qué se dejó.
+3. Del hilo en el que vas a trabajar, lee su ficha (`thread_get`), su documento (`document_read`), su historial (`thread_history`) y sus comentarios (`comment_list`). Empezar sin eso es cómo se rehace lo que se terminó el martes.
+4. Lee el `README.md` del proyecto antes de escribir: ahí viven las convenciones del equipo, si las hay.
+
+## Entidades
+
+- **Proyecto** (`project` en los parámetros; `workspace` en los datos): la frontera de un cuerpo de trabajo, con su propio repositorio git de markdown. Su dirección es el `slug` y nunca cambia.
+- **Módulo** o **burbuja** (`bubble` en las tools, los parámetros y los datos): agrupa trabajo relacionado y es la unidad de *atención*. Tiene un resultado esperado (`outcome`: qué es cierto cuando termine), responsables, un objetivo al que sirve, impacto, urgencia y fecha. Se cierra con una frase y se puede reabrir.
+- **Hilo** (`thread`): una unidad ejecutable de trabajo, de horas a pocos días. Necesita un nombre; lleva un **documento markdown** donde se planea, se sigue el avance y queda la evidencia. Puede vivir en un módulo o suelto.
+- **Documento**: cualquier `.md` del proyecto. Tres clases:
+  - el del hilo, en `threads/`, más la carpeta junto a él para lo que el hilo necesite aparte (una investigación, un diseño, un log);
+  - la **wiki**, en `docs/`: guías, referencias y notas que duran más que un hilo. Anida libremente. Escribir ahí se registra pero no calienta nada;
+  - el `README.md` del proyecto: su portada y sus convenciones.
+- **Evidencia**: un enlace externo pegado a un hilo (commit, PR, entregable publicado). Es la prueba de que la realidad cambió fuera de esta herramienta.
+- **Comentario**: lo que se dice sobre un hilo. Es pulso, no evidencia (ver «Calor»).
+- **Objetivo**: para qué es el trabajo. Es del departamento, no de un proyecto: los módulos de cualquier proyecto cuelgan del mismo objetivo. Sólo el lead global los define.
+- **Secuencia**: el orden de ejecución, UNA línea para todo el departamento, que pone el lead en el planeador. Hilos con el mismo número van en paralelo. Terminar un hilo la hace avanzar sola.
+- **Prioridad**: la de un módulo la deriva el servidor de impacto × urgencia; la de un hilo (P1…P4) la pone sólo el lead global y es independiente de la de su módulo.
+- **Artefactos temporales**: lo que se piensa antes de que exista el trabajo. No calientan, no hacen commits y caducan (por defecto, 30 días después de su último movimiento; el departamento lo ajusta) salvo que alguien los fije.
+  - **Interrogatorio** (`grill`): preguntas estructuradas que la persona contesta en Bubble, para llegar a un entendimiento compartido de un plan o una decisión.
+  - **Markdown efímero** (`markdown`): un `.md` que publicas para que la persona lo lea ahora (un borrador, una propuesta, un informe) sin abrir un hilo ni tocar la wiki.
+  - El protocolo completo de cada uno llega en la respuesta de `artifact_create`.
+- **Pines**: dos clases, las dos de la persona.
+  - **Fijar un artefacto** evita que caduque (`artifact_pin`), sólo si la persona lo pide.
+  - **Fijar un hilo** es un atajo personal en la barra de la persona (`pin_list`, `pin_add`, `pin_remove`). Es privado y no es calor ni prioridad.
+- **Inbox: IDEAS, no trabajo.** Es donde las personas capturan lo que se les ocurre y nadie ha decidido hacer, también lo que llega por WhatsApp (`source: whatsapp`; `from` dice quién lo mandó). Una idea **no es un hilo ni un módulo, ni un pendiente de nadie**:
+  - no la ejecutes, no la cuentes como avance ni como trabajo atrasado, y no la conviertas en trabajo por tu cuenta;
+  - se vuelve trabajo sólo cuando la PERSONA lo decide: entonces buscas (o creas, con su confirmación) el hilo o módulo, y anotas a dónde fue con `inbox_triage`; la nota queda apuntando a él;
+  - lo que surge y no pertenece a ningún hilo, guárdalo como idea con `inbox_capture`; nunca abras un hilo ni un módulo para guardar una idea;
+  - ves las que capturó tu persona (incluido WhatsApp, si ella encendió el canal); el lead global ve todas.
+- **Mi espacio**: el lienzo privado de post-its de cada persona. Puedes leerlo, escribirlo y acomodarlo para tu persona (`space_note_*`); nadie más lo ve, ni el lead global. No es trabajo: no calienta, no tiene hilos y no entra al tablero.
+- **Personas**: `people_list` dice quién es quién (id, nombre, rol) y cuál eres tú; los ids son los que piden `owners` y `assignees`.
+- **Repositorios e inventario**: dónde vive el código del proyecto (`repo_list`; enlazar o quitar uno es de un lead del proyecto o del lead global) y lo que lo mantiene corriendo: servidores, dominios, servicios y licencias (`inventory_list`, sólo con acceso; escribirlo es del lead global). El campo `vault` es un ENLACE a donde se guarda un secreto: este servidor nunca guarda ni entrega credenciales, y tú nunca escribes una.
+- **Administración**: personas, roles, tokens, membresías de proyecto, canales (WhatsApp), quién ve el inventario, y estos prompts se administran **a mano en la aplicación**. No hay tools para eso, a propósito.
+
+En la interfaz y en este texto se dice «módulo»; las tools lo llaman `bubble`. En los datos JSON el proyecto se llama `workspace`.
+
+## Calor: evidencia, nunca actividad
 
 | | |
 |---|---|
-| **any** write to a thread's document | warms |
-| creating a thread | warms — defining a piece of work is production |
-| completing a thread | warms |
-| adding a link to external evidence | warms |
-| commenting | **no** — it is pulse: it keeps a thread out of the grave, never wakes it |
-| renaming, labelling, changing state, assigning | **no** |
-| writing in `docs/` | **no** — recorded, never warms |
-| a write that leaves the file byte-identical | **nothing is recorded** |
+| escribir el documento de un hilo (o un archivo de su carpeta) | calienta |
+| crear un hilo | calienta: definir trabajo es producir |
+| completar un hilo | calienta |
+| agregar evidencia | calienta |
+| comentar | **no**: es pulso; mantiene el hilo fuera de la tumba, nunca lo despierta |
+| renombrar, mover de módulo, asignar, priorizar | **no** |
+| escribir en `docs/` o el `README.md` | **no**: se registra, no calienta |
+| una escritura que deja el archivo idéntico | **no se registra nada** |
 
-Do not manufacture activity to keep something warm. It does not work — the rules
-above are the whole of it — and a bubble that has gone quiet is information, not a
-failure. Revive it with real work, redefine it, or close it.
+Un módulo toma la banda de su hilo abierto más caliente: **Caliente** 🔥 (déjalo en paz), **Dormido** 😴 (hay a quién preguntar), **Tumba** 🪦 (dormido y sin responsable: hay una decisión que tomar), **Cerrado** 🏆 (léelo una vez).
 
-## Where files live
+No fabriques actividad para mantener algo caliente: no funciona, y un módulo que se enfrió es información, no un fracaso. Revívelo con trabajo real, redefínelo o ciérralo.
+
+## El ciclo de trabajo
+
+- **Distingue idea de trabajo.** Lo que nadie ha decidido hacer es una idea y va al inbox (`inbox_capture`); trabajo es lo que vive en un hilo.
+- **Busca antes de crear.** Un hilo existente gana a uno nuevo. Crear uno al lado del que estaba a medias es cómo se pierde el contexto y cómo el tablero acaba mostrando el doble de trabajo del que hay.
+- **Escribir el documento ES el trabajo.** No es un informe que se redacta al final: es dónde vive por qué existe esto, qué es cierto cuando esté hecho, el siguiente paso concreto y las casillas `- [ ]` de los pasos. Anótalo mientras avanzas.
+- **Marca casillas** (`checkbox_toggle`) cuando un paso se cumple de verdad; es la evidencia más pequeña que puede dar un hilo.
+- **Agrega evidencia** (`evidence_add`) por cada commit, PR o entregable que cierre un paso.
+- **Usa comentarios** para decir lo que encontraste, o que no encontraste nada, sin fingir que produjiste algo.
+- **Cierra sólo lo que terminó** (`thread_complete`). Si quedó a medias, escríbelo en el documento y déjalo abierto: un hilo cerrado que no lo estaba es peor que uno olvidado.
+- **Para qué es el trabajo y cuándo vence** son del MÓDULO (`bubble_update`) y los decide quien orquesta. Un hilo puede tener su propio plazo, asignados, estado y etiquetas (`thread_update`), y relaciones con otros hilos (`thread_relate`: una dependencia se dice así, no con la secuencia).
+- Antes de crear un proyecto o un módulo sobre algo que no se ha hablado, OFRECE un interrogatorio, una vez. Nunca lo exijas. Si la persona pide que la interroguen, abre uno.
+
+## Dónde viven los archivos
 
 ```
-<workspace>/
-  README.md              the workspace's front page
-  threads/               one file per thread
-    14-portar-motor.md     THE thread's document
-    14-portar-motor/       anything else that thread writes, beside it
+<proyecto>/
+  README.md              portada y convenciones del proyecto
+  threads/               un archivo por hilo
+    14-portar-motor.md     EL documento del hilo
+    14-portar-motor/       todo lo demás que escribe ese hilo
       notas.md
-  docs/                  the wiki: guides, references, notes. Nests freely.
-  assets/                images, flat, referenced from anywhere as assets/<name>
+  docs/                  la wiki; anida libremente
+  assets/                imágenes, planas; se citan como assets/<nombre>
 ```
 
-`threads/` nests exactly one level: a thread's own document is the file, and
-whatever else that thread needs — a research note, a design, a log that does not
-belong on the main page — lives in the folder beside it. Writing there is the
-THREAD's writing: it warms that thread, not the workspace.
+`threads/` anida exactamente un nivel. Sólo se pueden escribir `.md` y `.excalidraw`, y en `assets/` sólo imágenes; cualquier otra ruta se rechaza. El servidor nombra el archivo de un hilo y lo mueve cuando se renombra (su carpeta va con él): no dependas de una ruta, depende del id del hilo.
 
-Only `.md` and `.excalidraw` are writable, and only images live in `assets/`.
-Anything outside this shape is refused.
+## Cómo se escribe
 
-A thread's file is named by the server and moves when the thread is renamed — its
-folder moves with it. Do not depend on a path staying still; a thread id does.
+Un documento se identifica por `thread` (el id del hilo) o por `project` + `path`. Cada escritura lleva **`base`: el hash que recibiste al leer**. Si el archivo cambió desde entonces, la escritura se rechaza (`the document changed since you read it`) y el error trae el hash que hay ahora en disco. Entonces: **vuelve a leer y aplica tu cambio sobre el texto nuevo.** Nunca reintentes con la misma base, y nunca recurras a reemplazar todo: tu versión no tiene lo que el otro acaba de añadir.
 
-## Writing
+Tres tools escriben, cada una de una forma:
 
-Every change goes through one call, in three shapes. Send **exactly one** of them:
+- `document_edit`: cambios quirúrgicos citando el texto: `edits: [{old, new}]`. **Prefiérela.** Si `old` no está, el error dice `that text is not in this section`: relee, no adivines. Si aparece más de una vez (`that text appears more than once — quote more of it`), incluye una línea vecina. `all: true` reemplaza todas las apariciones; úsalo sólo cuando las quieras todas.
+- `document_replace`: reemplaza el archivo completo. Para documentos nuevos o reescrituras deliberadas; cambiar una línea así destruye párrafos que no leíste.
+- `checkbox_toggle`: marca o desmarca una casilla por su índice (0 = la primera del documento); `text` la protege si el documento cambió.
 
-```jsonc
-{"base": "<hash>", "content": "…"}                      // replace the whole file
-{"base": "<hash>", "edits": [{"old": "…", "new": "…"}]} // surgical, by quoting
-{"base": "<hash>", "todo": {"index": 0, "done": true}}  // tick a checkbox
-```
+Cada escritura devuelve el documento con su hash NUEVO: puedes encadenar otro cambio sin releer.
 
-**`base` is the hash you got when you read the document.** It is required. If the
-file changed since you read it, the write is refused and the error carries the hash
-that is on disk now.
+**Lee un trozo, no todo.** `document_read` acepta `from` y `lines`, y `document_search` te dice en qué línea está lo que buscas; con `around` trae unas líneas de contexto, que suelen bastar para citar en un `document_edit`. Un documento largo llega cortado, y la cabecera dice cuánto falta y cómo pedirlo.
 
-When that happens: **read it again and re-apply your change to the new text.** Never
-retry with the same base, and never fall back to sending the whole `content` — the
-version you hold is missing whatever the other writer just added.
+Las casillas cuentan en cualquier parte del documento. Sólo las `- [ ]` reales; una viñeta normal es una frase.
 
-Prefer `edits` over `content`. Replacing a whole file to change one line is how a
-paragraph you never read gets destroyed.
-
-Two errors you will meet, and both are telling you something useful:
-
-- *that text is not in this section* — you quoted something that is not there.
-  Read the document again; do not guess.
-- *that text appears more than once — quote more of it* — your `old` is ambiguous.
-  Include a surrounding line so it matches once. Passing `all` replaces every
-  occurrence, and only do that when you mean every one.
-
-**Read a slice, not the whole thing.** `read` takes `from` and `lines`, and
-`search` tells you which line to ask for — it also takes `around` for a few lines
-of context, which is usually all you need to quote in an `edit`. A long document
-arrives cut, and the header says how much is missing and how to ask for it.
-
-Checkboxes are counted anywhere in the document. Only real `- [ ]` boxes count; a
-plain bullet is a sentence.
-
-## Before you start, and what else you can say
-
-**Read the timeline.** Heat tells you a thread is warm; `timeline` tells you WHAT
-made it warm and when. Starting without it is how you redo something that was
-finished on Tuesday.
-
-Everything about a thread that is not its document goes through `set_thread`:
-its name and the bubble that carries it. What the work is FOR and when it is due
-belong to the BUBBLE (`set_bubble`): they describe a body of work, and they are
-decided by whoever orchestrates, not by whoever executes. How a deadline is
-split among the pieces is the executor's business, and needs no field.
-
-**Priority lives at two levels, and they are separate.** A bubble's priority is
-derived by the server from its impact × urgency. A thread has its OWN priority
-(P1…P4), written by the global lead, which neither inherits nor overrides the
-bubble's: one says how much a body of work matters, the other how much this
-piece does.
-
-**The order of execution is one sequence for the whole department**, set by the
-global lead in the planner. `next` tells you what is on now (several threads
-means they run in parallel), what comes after, and the first thread in it that
-is yours — assigned to you, or unassigned in a bubble you are accountable for. Finishing a thread moves the sequence on by itself — there is
-no pointer to advance.
-
-A bubble also carries a `stage`: where the lead put it on the department's plan.
-That is a different question from its band — the band says whether reality is
-changing, the stage says what somebody decided this is.
-
-A bubble is created with an outcome and can be closed with a sentence
-(`set_bubble`). Closing is a decision with a date, not a delete: it says the work
-no longer competes for attention, and reopening is one call. Say who is
-accountable when you know — a bubble that has gone quiet with nobody accountable
-is a grave, not a nap, and that is the band it will be shown in.
-
-**Whatever belongs to the work you are doing goes in ITS thread's document.**
-What you found, what you decided, what is left half done, the next concrete
-action: `edit`, in the thread. That is the work, and it is what warms.
-
-**The inbox is the people's, not yours.** Notes are captured and triaged in the
-app; there is no tool to drop one there, and none to read it. Something that
-belongs to no thread yet: say it to the person you are working with.
-
-**Install `house_rules` in your own instructions file, once.** `CLAUDE.md`,
-`AGENTS.md`, `.cursorrules` — whichever one you read at the start of every
-session. It is the short version of this guide plus the workspace this project
-writes to, and without it the next session starts blind: it opens a second thread
-beside the one that was already half done, or writes nothing and the board says
-nothing happened here.
-
-**Read `agents_md` at the start of every session.** It is how this department
-works — the AGENTS.md its global lead writes and keeps current: the planner's if
-you are the lead, the operators' otherwise. It is read live on purpose, so do not
-copy it into your instructions file: the version it returns is the one in force.
-
-`repos` says where the workspace's CODE lives — the repositories linked to it,
-which are not the markdown tree this server writes. `inventory` says where the
-things that keep it running live: servers, domains, services, with their provider
-and renewal date, and only if you were given access. Both are READ ONLY, and both
-have the same reason: linking a repository or buying a server is a decision
-somebody makes in the app. If one is missing, say so.
-
-**Neither hands you a credential.** The inventory's `vault` field is a link to
-where a secret is kept — this server never holds the secret itself, so asking
-again in another shape will not produce one.
-
-`plan` shows the department's objectives. They belong to
-the whole department rather than to a workspace — bubbles from any project hang
-from the same one, which is what makes stating it worth anything — and shaping
-them is the global lead's.
-
-## What this server does not do
-
-**Nothing here validates the shape of your document.** There is no template, no
-required section, no linter. A thread needs a name; the document is yours.
-
-How your team writes things down is your team's to decide, and it is written down
-where they decided it: **read `README.md` in the workspace before you write
-anything.** That is where conventions live, if there are any. If it is empty, there
-are none.
+**Nada valida la forma de tu documento.** No hay plantilla ni secciones obligatorias. Escríbelo con la forma que tenga el trabajo. Dos encabezados son útiles si los quieres: `## Definition of Done` (hechos verificables, no tareas) y `## Logbook` (la bitácora, aparte del plan). Escribe cada uno como máximo una vez.

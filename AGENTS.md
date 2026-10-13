@@ -93,7 +93,7 @@ built; what is left is **Phase 6** (reading the v0 databases) and the "Later" an
 | `internal/heat` | the classifier; `now` is a parameter |
 | `internal/channels` | inbox channels as compiled plugins (WhatsApp first; `-tags nowhatsapp`) |
 | `internal/boot`, `internal/release` | launch, health check, rollback, download + SHA256 |
-| `prompts/` | `guide`, `house_rules`, `connect` — embedded, served by MCP and HTTP |
+| `prompts/` | what an agent reads, in Spanish: the guide (`agents_md` part 1), markdown, grill and ephemeral-markdown protocols, `connect` — embedded, editable in Prompts |
 | `frontend/` → `web/dist` | Svelte 5 + Tailwind 4 + Skeleton, built with bun; **the bundle is committed** |
 | `deploy/` | systemd, launchd and Coolify |
 

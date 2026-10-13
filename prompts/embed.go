@@ -5,10 +5,11 @@
 // re-escaped into Go source stops getting edited. Here it can be read, diffed and
 // tuned like any other document.
 //
-// Tres documentos, y cada uno contesta algo distinto: `Guide` describe el
-// SISTEMA, `House` es lo que un agente se pega a sí mismo en sus instrucciones
-// del proyecto para que la próxima sesión no empiece a ciegas, y `Connect` es lo
-// que una persona copia para configurar su asistente.
+// Lo que lee un agente sale de aquí: `Guide` es la guía de Bubble Work (la
+// parte 1 de `agents_md`), `Markdown` cómo se escribe, `Grill` y
+// `EphemeralMarkdown` los protocolos que llegan al crear su artefacto, y
+// `Connect` lo que una persona copia para conectar su asistente (incluye la
+// sección breve que el agente se instala en su CLAUDE.md / AGENTS.md).
 //
 // Embedded rather than read from disk, for a different one: this guide makes
 // PROMISES about the API — which shapes a PATCH takes, what a conflict looks like
@@ -25,25 +26,12 @@ import (
 	_ "embed"
 )
 
-// Guide is the one document this server ships. It describes the SYSTEM — what
-// warms, where files live, how a write works. It says nothing about how to write a
-// document, because that is the writer's to decide: a team's own conventions live
-// in the README of its workspace, which the guide points at.
+// Guide es la guía de Bubble Work para agentes: entidades, ciclo de trabajo,
+// cómo se escribe. Es la primera parte de cada respuesta de `agents_md`, antes
+// de la tabla de tools (generada) y de la forma de trabajar del departamento.
 //
 //go:embed bubble-work.md
 var Guide string
-
-// House is what an agent installs into ITS OWN instructions file — `CLAUDE.md`,
-// `AGENTS.md`, `.cursorrules`, whichever it happens to read — so that the next
-// session starts knowing where the work is written down.
-//
-// Sin ella, cada conversación vuelve a inventarlo: abre un thread nuevo al lado
-// del que ya estaba a medias, o no anota nada y el board dice que aquí no pasó
-// nada. Lleva un hueco, `<SLUG>`, que quien la instala sustituye por el
-// workspace del proyecto — el documento no puede saber en cuál se está pegando.
-//
-//go:embed house-rules.md
-var House string
 
 // Connect is what a PERSON copies to configure their assistant. A template with
 // two holes, `{{url}}` and `{{token}}`, filled by the server that serves it.
@@ -55,3 +43,22 @@ var House string
 //
 //go:embed connect.md
 var Connect string
+
+// Grill es cómo un agente interroga a alguien A TRAVÉS de Bubble: preguntas
+// estructuradas que la persona contesta en la aplicación. Llega en la respuesta
+// de `artifact_create(kind: grill)`, justo cuando se usa; `agents_md` sólo dice
+// cuándo ofrecerlo.
+//
+//go:embed grill.md
+var Grill string
+
+// Markdown es cómo se escribe markdown aquí; va en cada respuesta de agents_md.
+//
+//go:embed markdown.md
+var Markdown string
+
+// EphemeralMarkdown es el protocolo del `.md` efímero; llega en la respuesta de
+// `artifact_create(kind: markdown)`.
+//
+//go:embed ephemeral-markdown.md
+var EphemeralMarkdown string

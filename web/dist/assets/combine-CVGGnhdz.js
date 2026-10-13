@@ -1,1 +1,0 @@
-function e(){var e=[...arguments];return function(){e.forEach(function(e){return e()})}}export{e as t};

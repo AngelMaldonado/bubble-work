@@ -7,6 +7,12 @@
     /** A lucide component, not an emoji: the emoji alphabet belongs to the
         lifecycle, and spending it on furniture makes the signal harder to see. */
     icon?: Component<{ class?: string }>;
+    /** o un ícono 3D de la casa (`Icon`), siempre a color */
+    face?: string;
+    /** el nombre en monoespaciada: identificadores, no títulos */
+    mono?: boolean;
+    /** un punto al final de la fila: editado, desactualizado… */
+    dot?: 'on' | 'warn';
     /** Shown right-aligned on the row: a relation type, a count, a hint. */
     badge?: string;
     /** Cuánto se escribió en este archivo dentro de la ventana. Dos números y
@@ -31,14 +37,18 @@
   import { TreeView } from '@skeletonlabs/skeleton-svelte';
   import { collection as treeCollection } from '@zag-js/tree-view';
   import type { Snippet } from 'svelte';
+  import Icon from './Icon.svelte';
 
   let {
     nodes,
+    selected = '',
     onselect,
     branchActions,
     itemActions,
   }: {
     nodes: TreeNode[];
+    /** el id del nodo seleccionado, cuando quien llama lo sabe (la dirección) */
+    selected?: string;
     onselect?: (node: TreeNode) => void;
     /** Rendered at the right of a branch's row — the section's "+" button. */
     branchActions?: Snippet<[TreeNode]>;
@@ -82,7 +92,7 @@
         <TreeView.BranchControl>
           <TreeView.BranchIndicator>›</TreeView.BranchIndicator>
           <TreeView.BranchText>
-            {#if node.icon}{@const Icon = node.icon}<Icon class="size-4 shrink-0" />{/if}
+            {#if node.face}<Icon of={node.face} tint />{:else if node.icon}{@const Lucide = node.icon}<Lucide class="size-4 shrink-0" />{/if}
             <span class="node-name">{node.name}</span>
           </TreeView.BranchText>
           <!-- The count lives on the branch, so a collapsed section still says
@@ -105,8 +115,9 @@
     {:else}
       <div class="row">
         <TreeView.Item onclick={() => open(node)} title={node.href ?? node.name}>
-          {#if node.icon}{@const Icon = node.icon}<Icon class="size-4 shrink-0" />{/if}
-          <span class="node-name">{node.name}</span>
+          {#if node.face}<Icon of={node.face} tint />{:else if node.icon}{@const Lucide = node.icon}<Lucide class="size-4 shrink-0" />{/if}
+          <span class="node-name" class:mono={node.mono}>{node.name}</span>
+          {#if node.dot}<span class="dot" class:warn={node.dot === 'warn'}></span>{/if}
           {#if node.churn && (node.churn.added || node.churn.removed)}
             <span class="churn" title="en este ciclo">
               {#if node.churn.added}<span class="plus">+{node.churn.added}</span>{/if}
@@ -126,6 +137,7 @@
 <div class="tree">
 <TreeView
   collection={coll}
+  selectedValue={selected ? [selected] : undefined}
   expandedValue={expanded}
   onExpandedChange={(e: { expandedValue: string[] }) =>
     (closed = branches.filter((id) => !e.expandedValue.includes(id)))}>
@@ -197,6 +209,9 @@
   /* The row's buttons sit outside the Item, so a click on them is not a click
      on the node. */
   .row { display: flex; align-items: center; }
+  .mono { font-family: var(--mono, ui-monospace, monospace); font-size: 0.86em; }
+  .dot { flex: none; width: 7px; height: 7px; margin-left: auto; border-radius: 999px; background: var(--accent); }
+  .dot.warn { background: #f59e0b; }
   .row :global([data-part='item']) { flex: 1; min-width: 0; }
   .acts { flex: none; display: flex; align-items: center; }
 </style>

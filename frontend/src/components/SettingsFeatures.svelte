@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // Funciones: qué partes del producto tiene encendidas el departamento.
   //
   // Encender o apagar es del lead global, y lo nota todo el departamento a la
@@ -44,7 +45,7 @@
         disabled={saving || !features.id}
         onCheckedChange={(e: { checked: boolean }) => set({ sequence: e.checked })}>
         <Switch.Control><Switch.Thumb /></Switch.Control>
-        <Switch.Label>🧭 Secuencia de ejecución</Switch.Label>
+        <Switch.Label><Icon of="compass" tint /> Secuencia de ejecución</Switch.Label>
         <Switch.HiddenInput />
       </Switch>
       <p class="help">

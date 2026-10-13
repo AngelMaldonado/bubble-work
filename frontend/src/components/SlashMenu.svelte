@@ -1,4 +1,5 @@
 <script lang="ts">
+  import Icon from './Icon.svelte';
   // The slash menu, anchored AT THE CARET — which is the whole difference
   // between this and a command palette: ⌘K asks "what am I looking for", this
   // one answers "what goes here".
@@ -80,7 +81,7 @@
               e.preventDefault(); // keep the focus in the editor
               onpick(c);
             }}>
-            <span class="glyph">{c.glyph}</span>{c.label}
+            <span class="glyph"><Icon of={c.glyph} /></span>{c.label}
           </button>
         {/each}
       {/if}

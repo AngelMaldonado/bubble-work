@@ -136,6 +136,25 @@ says what to do; a Page says what has to remain true of it.
 Writing a Page is **not evidence of production** (§5.1) — documenting what you
 intend is not the same as changing reality, so pages earn no heat.
 
+### 2.6 Ephemeral artifacts — thinking before the work
+
+An interrogation or a temporary Markdown document can live beside the work,
+attached to an Inbox capture, without becoming a thread or a Page. These are
+**thinking artifacts, not evidence**: they earn no heat and do not enter git.
+Bubble runs no model; an agent in an external harness publishes them.
+
+In an interrogation the person answers structured questions. In a temporary
+`.md` the agent publishes full revisions and the person reads, without editing
+the document in Bubble. Both are visible to their creator and global leads,
+expire after their inactivity window unless pinned, and can also be explicitly
+deleted by their creator or a global lead. Expiry and deletion remove the
+thinking artifact and its entries, never the Inbox capture or independently
+written durable work.
+
+When the result deserves to last, write it independently into the durable work
+before handing off. That work must not depend on a link to something that will
+be deleted.
+
 ---
 
 ## 3. Threads and their documents
@@ -187,7 +206,7 @@ the offer buys:
 
 | Heading | What it buys |
 |---|---|
-| `## Definition of Done` | `complete_thread` reports which items were still open when you finished; `audit_bubble` tracks progress against it |
+| `## Definition of Done` | a region of its own for verifiable facts; nothing grades it — `thread_complete` is a position somebody takes |
 | `## Logbook` | its own addressable region, so the plan can be rewritten without touching the rest of the page |
 
 **Write each reserved heading at most once.** `## Logbook` and

@@ -1711,8 +1711,9 @@ chk ">>> un member tampoco crea un hilo ya priorizado" \
 chk ">>> el lead global pone la prioridad del hilo" "$(tpatch "$C" "$SQ1" '{"priority":"P1"}')" 200
 chk "...que vive separada de la de su burbuja" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t['priority'] for t in d['threads'] if t['id']=='$SQ1'))")" P1
+ARG="{\"thread\":\"$SQ2\",\"priority\":\"P2\"}"
 chk ">>> por MCP, un member no la pone" \
-  "$(mcptext "$A" thread_update "{\"thread\":\"$SQ2\",\"priority\":\"P2\"}" | grep -c 'only the global lead')" 1
+  "$(mcptext "$A" thread_update "$ARG" | grep -c "only a lead of the project's team")" 1
 chk "...el lead global sí" "$(mcptext "$C" thread_update "{\"thread\":\"$SQ2\",\"priority\":\"P2\"}" | j "['priority']")" P2
 chk ">>> una prioridad que no existe se rechaza" \
   "$(mcptext "$C" thread_update "{\"thread\":\"$SQ2\",\"priority\":\"P9\"}" | grep -c 'P1, P2, P3 or P4')" 1

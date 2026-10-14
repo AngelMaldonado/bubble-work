@@ -2584,6 +2584,37 @@ Validado: `just check` (688 live, 40 frontend). Las pruebas cubren:
 
 Nota para las pruebas: en el bash 3.2 de macOS, un JSON escrito en línea dentro de `"$( … )"` con valores que llevan espacios llega partido. Va siempre en una variable (`ARG=…`), como ya decía el script.
 
+## Equipos: contextos aislados, y un equipo personal por lead *(built)*
+
+Motivo: va a entrar un segundo lead global, arriba en el organigrama, con proyectos propios. Cada lead necesita su contexto privado y, además, el del equipo de TI. Hasta ahora «lead global» significaba «ve todo».
+
+- **Equipo** (`teams`, `team_members` con papel lead|member): agrupa proyectos y es dueño de lo que se planea sobre ellos. `workspaces`, `objectives`, `calendar_events`, `inbox_items` y `channels` llevan `team`. La migración `1788532000_teams.go` crea el equipo «TI» y pone ahí todo lo que existía y a todas las personas (los leads globales, como lead). Nadie pierde nada.
+- **Visibilidad.** Donde una regla decía «lead global», ahora dice «lead del equipo del proyecto»: el lead global, si el equipo no es personal, o una fila de lead en el equipo. Se reescribieron las reglas de 15 colecciones que cuelgan de un proyecto, más objetivos, calendario, inbox y artefactos. `canSee`, `reachWorkspace`/`reachThread` y los tableros agregados preguntan lo mismo. La membresía de proyecto no cambia: invitar a alguien a un proyecto de otro equipo le enseña ese proyecto y nada más.
+- **Un equipo personal** (`personal`, `owner`) es el contexto privado de un lead global: sólo lo ve quien está en él, ni otro lead global. No entra nadie más; a otra persona se la invita a un PROYECTO. Uno por persona.
+  - Lo tiene **todo lead global, sin pedirlo**: la migración se lo crea a los que ya existen, y el servidor a quien se da de alta como lead o pasa a serlo. El nombre es «Personal · <nombre visible>» (con el correo si se repite) y se puede renombrar. Quitarle el rol no se lo quita.
+- **El rol `lead` es administración** (personas, tokens, prompts, inventario, funciones, calibración) y además hace lead implícito de todo equipo compartido. Ser admin no da acceso al contenido de un equipo personal ajeno.
+- **Por equipo:** objetivos (un módulo sólo cuelga de un objetivo de su equipo), secuencia (una línea por equipo; `Next`, la cola y los pasos del tablero se calculan por equipo), calendario, inbox (una idea se vuelve trabajo sólo en un proyecto de su propio equipo) y canal de WhatsApp. El canal guarda su sesión en `pb_data/channels/<equipo>/`; la sesión anterior se muda sola al primer equipo que lo arranca, así no se pide otro QR.
+- **Equipo por defecto:** el que la persona eligió en la aplicación (`prefs.team`), si no su primer equipo compartido. Lo que no dice equipo va ahí: proyectos, ideas, objetivos, fechas, y también lo que crea la IA. Una persona nueva entra al primer equipo compartido (lead si es lead global).
+- **Mover un proyecto de equipo** es de un lead global que lidere los dos.
+- **Interfaz:** selector de equipo arriba de la columna (sólo con dos o más equipos), un menú del tema como el del pie —no un `<select>` nativo— que marca el equipo actual y los privados; proyectos del equipo elegido más «Compartidos contigo»; «Mover a…» en el menú de un proyecto; el planeador, la secuencia de sólo lectura y la agenda trabajan sobre el equipo elegido, con su propio selector; Ajustes → Equipos (crear compartido, crear el personal si falta, renombrar, quién está y con qué papel, borrar uno vacío); Ajustes → Canales con el canal de cada equipo que lideras.
+- **IA:** `team_list`, y `team` en `project_create`, `inbox_capture`, `inbox_list`, `objective_create`, `sequence_next` y `artifact_create`.
+  - **Las respuestas dicen el contexto:** `project_list`, `project_create`, `bubble_*`, `thread_create`, `thread_update` y `thread_get` traen `team` (id, nombre y si es personal); `change_list` y el tablero traen el nombre del equipo.
+  - **Asignar es invitar.** Hacer responsable de un módulo o asignar un hilo a alguien que no ve el proyecto lo suma al proyecto como miembro: ve ESE proyecto y nada más de su equipo, ni de uno personal. Así se invita también desde «Todos», donde el selector ofrece a todas las personas. Sólo si quien asigna puede invitar (lead del proyecto o de su equipo); un miembro común recibe «pídele a un lead que lo invite»: asignar no es una puerta para saltarse quién invita. Vale igual por la interfaz (hooks de `bubbles.owners` y `threads.assignees`, en la misma transacción) y por MCP. `people_list` acepta `project` (quién ya lo ve) y `team` (quién está en él). Rechazado: rechazar la asignación y obligar a invitar antes; rechazado también que cualquier miembro invite asignando.
+- Rechazado:
+  - un campo `private` en el proyecto (un equipo personal es el mismo caso, y los equipos además separan el plan de cada contexto);
+  - separar en dos departamentos (él decide también en TI; se duplicarían objetivos, secuencia e inventario);
+  - un rol intermedio de «ejecutivo» (no resuelve la privacidad).
+- **Límite:** es privacidad dentro de la aplicación. Quien opera el servidor (superusuario, `pb_data`, repositorios en disco) puede leer todo.
+
+Pendiente:
+- `agents_md` sigue siendo uno por rol para todo el departamento; uno por equipo queda para después.
+- La presencia (quién está conectado) sigue siendo de toda la aplicación.
+
+Validado:
+- `just check` (760 live, 40 frontend). Las pruebas cubren, con un segundo lead global y su equipo personal: lo que no ve el otro lead (equipo, proyecto, tablero, hilos, documento, cambios, ideas, objetivos, por REST y por MCP); el proyecto compartido con una persona sin abrirle el equipo; objetivos, secuencia, cola y canal por equipo; crear un equipo compartido y un lead que no es global; mover proyectos con sus reglas; borrar sólo equipos vacíos.
+- `/tmp/bw-pw/r23.mjs`: el recorrido en el navegador.
+- La migración, probada sobre una copia de `pb_data` real.
+
 ## Papelera en el menú del cerebro *(built)*
 
 Eliminar está también a la derecha de cada una de las ocho filas visibles del

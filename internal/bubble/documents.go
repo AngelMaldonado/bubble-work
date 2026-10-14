@@ -416,14 +416,10 @@ func reachWorkspace(e *core.RequestEvent, id string) (*core.Record, string, erro
 	if err != nil {
 		return nil, "", e.NotFoundError("", err)
 	}
-	if !IsSuperuser(e.Auth) && e.Auth.GetString("role") != "lead" {
-		var n int
-		err := e.App.DB().NewQuery(
-			`SELECT COUNT(*) FROM memberships WHERE workspace = {:ws} AND user = {:u}`).
-			Bind(map[string]any{"ws": ws.Id, "u": e.Auth.Id}).Row(&n)
-		if err != nil || n == 0 {
-			return nil, "", e.NotFoundError("", nil)
-		}
+	// La misma pregunta que las reglas: el lead del equipo del proyecto, o
+	// quien es miembro de él.
+	if !canSee(e.App, e.Auth, ws.Id) {
+		return nil, "", e.NotFoundError("", nil)
 	}
 	repo := ws.GetString("repo_path")
 	if repo == "" {
@@ -496,16 +492,11 @@ func reachThread(e *core.RequestEvent, id string) (*core.Record, string, error) 
 	if err != nil {
 		return nil, "", e.NotFoundError("", err)
 	}
-	if !IsSuperuser(e.Auth) && e.Auth.GetString("role") != "lead" {
-		var n int
-		err := e.App.DB().NewQuery(
-			`SELECT COUNT(*) FROM memberships WHERE workspace = {:ws} AND user = {:u}`).
-			Bind(map[string]any{"ws": th.GetString("workspace"), "u": e.Auth.Id}).Row(&n)
-		if err != nil || n == 0 {
-			// Invisible rather than forbidden, the same answer the rules give.
-			return nil, "", e.NotFoundError("", nil)
-		}
+	if !canSee(e.App, e.Auth, th.GetString("workspace")) {
+		// Invisible rather than forbidden, the same answer the rules give.
+		return nil, "", e.NotFoundError("", nil)
 	}
+
 	repo, err := repoOf(e.App, th)
 	if err != nil {
 		return nil, "", e.NotFoundError("", err)

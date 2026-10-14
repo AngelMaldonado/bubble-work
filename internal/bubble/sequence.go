@@ -46,13 +46,28 @@ type NextStep struct {
 	Threads  []map[string]any `json:"threads"`
 }
 
-// Next contesta «¿qué sigue?» para quien pregunta: el paso de ahora (sus hilos
-// abiertos, en paralelo), el siguiente, y el primer hilo abierto de la
-// secuencia que es suyo (asignado, o sin asignar en una burbuja a su cargo).
-// Sólo con hilos que puede ver.
-func Next(app core.App, auth *core.Record) (map[string]any, error) {
+// Next contesta «¿qué sigue?» en la secuencia de UN equipo (vacío: el equipo
+// por defecto de quien pregunta): el paso de ahora (sus hilos abiertos, en
+// paralelo), el siguiente, y el primer hilo abierto de la secuencia que es suyo
+// (asignado, o sin asignar en una burbuja a su cargo). Sólo con hilos que puede
+// ver. Cada equipo tiene su propia línea.
+func Next(app core.App, auth *core.Record, team string) (map[string]any, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
+	}
+	teamID := ""
+	teamName := ""
+	if ts, err := TeamsOf(app, auth); err == nil && (team != "" || len(ts) > 0) {
+		id, err := ResolveTeam(app, auth, team)
+		if err != nil {
+			return nil, err
+		}
+		teamID = id
+		for _, t := range ts {
+			if t.ID == id {
+				teamName = t.Name
+			}
+		}
 	}
 	if !SequenceOn(app) {
 		return map[string]any{
@@ -70,8 +85,8 @@ func Next(app core.App, auth *core.Record) (map[string]any, error) {
 		wsID := r.GetString("workspace")
 		ok, seen := reach[wsID]
 		if !seen {
-			_, _, err := WorkspaceFor(app, auth, wsID)
-			ok = err == nil
+			ws, _, err := WorkspaceFor(app, auth, wsID)
+			ok = err == nil && (teamID == "" || ws.GetString("team") == teamID)
 			reach[wsID] = ok
 		}
 		if !ok || completedState(app, r.GetString("state")) {
@@ -147,5 +162,9 @@ func Next(app core.App, auth *core.Record) (map[string]any, error) {
 			}
 		}
 	}
-	return map[string]any{"enabled": true, "now": step(0), "then": step(1), "mine": mine}, nil
+	out := map[string]any{"enabled": true, "now": step(0), "then": step(1), "mine": mine}
+	if teamID != "" {
+		out["team"] = map[string]any{"id": teamID, "name": teamName}
+	}
+	return out, nil
 }

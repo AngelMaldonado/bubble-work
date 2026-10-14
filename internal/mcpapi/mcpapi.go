@@ -131,7 +131,7 @@ type toolEntry struct {
 }
 
 // toolGroups es el orden de las categorías en la tabla.
-var toolGroups = []string{"Guía", "Personas y cambios", "Proyectos", "Módulos (burbujas)", "Hilos",
+var toolGroups = []string{"Guía", "Equipos", "Personas y cambios", "Proyectos", "Módulos (burbujas)", "Hilos",
 	"Documentos", "Comentarios", "Inbox (ideas)", "Artefactos temporales", "Plan y secuencia",
 	"Mi espacio", "Pines", "Infraestructura"}
 
@@ -267,8 +267,9 @@ func build() *mcp.Server {
 	}
 
 	add(tb, "Proyectos", reads, "Listar proyectos", &mcp.Tool{
-		Name:        "project_list",
-		Description: "Lista los proyectos que puedes ver, con su id, su slug y su nombre.",
+		Name: "project_list",
+		Description: "Lista los proyectos que puedes ver, con su id, su slug, su nombre y su equipo (el " +
+			"contexto: id, nombre y si es personal).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -285,12 +286,14 @@ func build() *mcp.Server {
 			}
 			out = append(out, map[string]any{
 				"id": w.Id, "slug": w.GetString("slug"), "name": w.GetString("name"),
+				"team": bubble.TeamRefOf(c.app, w.GetString("team")),
 			})
 		}
 		return jsonOut(out), nil, nil
 	})
 
 	type newProjectArg struct {
+		Team string `json:"team,omitempty" jsonschema:"el equipo (id o nombre, team_list los dice); vacío = tu equipo por defecto"`
 		Name string `json:"name"`
 		Slug string `json:"slug,omitempty" jsonschema:"su dirección: letras, dígitos y guiones. Si lo omites sale del nombre"`
 	}
@@ -298,19 +301,21 @@ func build() *mcp.Server {
 		Name: "project_create",
 		Description: "Funda un proyecto: la frontera de un cuerpo de trabajo, con su propio repositorio " +
 			"git. Quedas como su lead, y empieza con un flujo de estados para que un hilo tenga dónde " +
-			"estar. El slug es su dirección en disco y en cada enlace, y no cambia nunca. Antes de crear " +
-			"uno sobre algo que no se ha hablado, ofrece un interrogatorio.",
+			"estar. Nace en un EQUIPO (`team`): pregúntale a la persona en cuál si tiene más de uno. El slug " +
+			"es su dirección en disco y en cada enlace, y no cambia nunca. Antes de crear uno sobre algo " +
+			"que no se ha hablado, ofrece un interrogatorio.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newProjectArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		ws, err := bubble.CreateWorkspace(c.app, c.auth, in.Name, in.Slug)
+		ws, err := bubble.CreateWorkspace(c.app, c.auth, in.Name, in.Slug, in.Team)
 		if err != nil {
 			return nil, nil, err
 		}
 		return jsonOut(map[string]any{
 			"id": ws.Id, "name": ws.GetString("name"), "slug": ws.GetString("slug"),
+			"team": bubble.TeamRefOf(c.app, ws.GetString("team")),
 		}), nil, nil
 	})
 
@@ -380,10 +385,11 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return jsonOut(map[string]any{"id": b.Id, "name": b.GetString("name")}), nil, nil
+		return jsonOut(map[string]any{"id": b.Id, "name": b.GetString("name"), "project": ws.GetString("slug"),
+			"team": bubble.TeamRefOf(c.app, ws.GetString("team"))}), nil, nil
 	})
 
-	bubbleOut := func(b *core.Record) *mcp.CallToolResult {
+	bubbleOut := func(app core.App, b *core.Record) *mcp.CallToolResult {
 		return jsonOut(map[string]any{
 			"id": b.Id, "name": b.GetString("name"), "outcome": b.GetString("outcome"),
 			"owners":    b.GetStringSlice("owners"),
@@ -392,6 +398,7 @@ func build() *mcp.Server {
 			"due_date": b.GetDateTime("due_date").String(),
 			"closed":   !b.GetDateTime("closed_at").IsZero(),
 			"closure":  b.GetString("closure"),
+			"team":     bubble.WorkspaceTeam(app, b.GetString("workspace")),
 		})
 	}
 
@@ -402,7 +409,7 @@ func build() *mcp.Server {
 		Bubble    string    `json:"bubble" jsonschema:"el id del módulo"`
 		Name      *string   `json:"name,omitempty"`
 		Outcome   *string   `json:"outcome,omitempty" jsonschema:"qué es CIERTO cuando esto termine"`
-		Owners    *[]string `json:"owners,omitempty" jsonschema:"ids de personas (people_list); vacío es que nadie responde"`
+		Owners    *[]string `json:"owners,omitempty" jsonschema:"ids de personas (people_list); quien no ve el proyecto se SUMA a él si puedes invitar (lead del proyecto o del equipo); vacío es que nadie responde"`
 		Objective *string   `json:"objective,omitempty" jsonschema:"el id del objetivo al que sirve; vacío lo desarchiva"`
 		Impact    *string   `json:"impact,omitempty" jsonschema:"high, mid o low"`
 		Urgency   *string   `json:"urgency,omitempty" jsonschema:"high, mid o low"`
@@ -427,7 +434,7 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return bubbleOut(b), nil, nil
+		return bubbleOut(c.app, b), nil, nil
 	})
 
 	type closeBubbleArg struct {
@@ -452,7 +459,7 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return bubbleOut(b), nil, nil
+		return bubbleOut(c.app, b), nil, nil
 	})
 
 	type bubbleArg struct {
@@ -471,7 +478,7 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		return bubbleOut(b), nil, nil
+		return bubbleOut(c.app, b), nil, nil
 	})
 
 	// ---- Hilos -----------------------------------------------------------------
@@ -506,7 +513,8 @@ func build() *mcp.Server {
 		}
 		return jsonOut(map[string]any{
 			"id": th.Id, "seq": th.GetInt("seq"), "name": th.GetString("name"),
-			"doc_path": th.GetString("doc_path"),
+			"doc_path": th.GetString("doc_path"), "project": ws.GetString("slug"),
+			"team": bubble.TeamRefOf(c.app, ws.GetString("team")),
 		}), nil, nil
 	})
 
@@ -514,8 +522,8 @@ func build() *mcp.Server {
 		Thread    string    `json:"thread" jsonschema:"el id del hilo"`
 		Name      *string   `json:"name,omitempty" jsonschema:"renombrar mueve su archivo, y git lo sigue"`
 		Bubble    *string   `json:"bubble,omitempty" jsonschema:"el id de un módulo del mismo proyecto; vacío lo deja suelto"`
-		Priority  *string   `json:"priority,omitempty" jsonschema:"P1, P2, P3 o P4: la prioridad propia de esta pieza, aparte de la de su módulo; vacío la quita. Sólo el lead global"`
-		Assignees *[]string `json:"assignees,omitempty" jsonschema:"ids de personas (people_list); vacío lo deja sin asignar"`
+		Priority  *string   `json:"priority,omitempty" jsonschema:"P1, P2, P3 o P4: la prioridad propia de esta pieza, aparte de la de su módulo; vacío la quita. Sólo un lead del equipo"`
+		Assignees *[]string `json:"assignees,omitempty" jsonschema:"ids de personas (people_list); quien no ve el proyecto se SUMA a él si puedes invitar (lead del proyecto o del equipo); vacío lo deja sin asignar"`
 		Due       *string   `json:"due,omitempty" jsonschema:"un día, 2026-09-15: el plazo propio de esta pieza; vacío lo quita"`
 		State     *string   `json:"state,omitempty" jsonschema:"el nombre de un estado del proyecto (thread_get los dice); a uno completado es terminarlo"`
 		Labels    *[]string `json:"labels,omitempty" jsonschema:"nombres de etiquetas; las que no existen en el proyecto se crean; vacío las quita"`
@@ -523,9 +531,9 @@ func build() *mcp.Server {
 	add(tb, "Hilos", sets, "Actualizar hilo", &mcp.Tool{
 		Name: "thread_update",
 		Description: "Cambia lo de un hilo que no es su documento: nombre, módulo, asignados, plazo, estado, etiquetas y prioridad. " +
-			"La prioridad propia (P1…P4) va aparte de la de su módulo y sólo la pone el lead global; si no " +
-			"eres lead, proponla en un comentario. Para qué es y cuándo vence son del MÓDULO " +
-			"(`bubble_update`). Su lugar en la secuencia lo pone el lead en el planeador.",
+			"La prioridad propia (P1…P4) va aparte de la de su módulo y sólo la pone un lead del equipo del " +
+			"proyecto; si no lo eres, proponla en un comentario. Para qué es y cuándo vence son del MÓDULO " +
+			"(`bubble_update`). Su lugar en la secuencia lo pone un lead del equipo (`sequence_set`).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setThreadArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -542,6 +550,7 @@ func build() *mcp.Server {
 			"id": th.Id, "seq": th.GetInt("seq"), "name": th.GetString("name"),
 			"doc_path": th.GetString("doc_path"), "bubble": th.GetString("bubble"),
 			"priority": th.GetString("priority"),
+			"team":     bubble.WorkspaceTeam(c.app, th.GetString("workspace")),
 		}), nil, nil
 	})
 
@@ -827,6 +836,7 @@ func build() *mcp.Server {
 		Kind      string `json:"kind" jsonschema:"grill (interrogatorio) o markdown (documento efímero)"`
 		Topic     string `json:"topic,omitempty" jsonschema:"de qué trata; crea la nota del inbox de la que cuelga"`
 		InboxItem string `json:"inbox_item,omitempty" jsonschema:"una nota tuya del inbox de la que colgarlo, en vez de topic"`
+		Team      string `json:"team,omitempty" jsonschema:"el equipo (id o nombre, team_list los dice); vacío = tu equipo por defecto"`
 	}
 	add(tb, "Artefactos temporales", adds, "Crear artefacto", &mcp.Tool{
 		Name: "artifact_create",
@@ -839,7 +849,7 @@ func build() *mcp.Server {
 		if err != nil {
 			return nil, nil, err
 		}
-		art, err := bubble.ArtifactStart(c.app, c.auth, in.Kind, in.InboxItem, in.Topic)
+		art, err := bubble.ArtifactStart(c.app, c.auth, in.Kind, in.InboxItem, in.Topic, in.Team)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -982,18 +992,21 @@ func build() *mcp.Server {
 
 	// ---- Plan y secuencia ------------------------------------------------------
 
+	type nextArg struct {
+		Team string `json:"team,omitempty" jsonschema:"el equipo (id o nombre, team_list los dice); vacío = tu equipo por defecto"`
+	}
 	add(tb, "Plan y secuencia", reads, "Qué sigue", &mcp.Tool{
 		Name: "sequence_next",
-		Description: "Qué toca ahora en la secuencia del departamento, y cuál es el primer hilo tuyo. El departamento tiene UNA secuencia de ejecución, puesta por el lead " +
-			"global: `now` es el primer paso con hilos abiertos (varios = van en paralelo), `then` el paso " +
+		Description: "Qué toca ahora en la secuencia de un equipo, y cuál es el primer hilo tuyo. Cada equipo tiene UNA secuencia de ejecución, puesta por el lead " +
+			"del equipo: `now` es el primer paso con hilos abiertos (varios = van en paralelo), `then` el paso " +
 			"siguiente, y `mine` el primer hilo abierto de la secuencia que es tuyo: asignado a ti, o sin " +
 			"asignar en un módulo del que respondes. Terminar un hilo hace avanzar la secuencia sola.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nextArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		out, err := bubble.Next(c.app, c.auth)
+		out, err := bubble.Next(c.app, c.auth, in.Team)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1002,8 +1015,8 @@ func build() *mcp.Server {
 
 	add(tb, "Plan y secuencia", reads, "Listar objetivos", &mcp.Tool{
 		Name: "objective_list",
-		Description: "Los objetivos del departamento: para qué es el trabajo. Sólo el lead global los lee. " +
-			"Un objetivo se sirve con MÓDULOS: de ahí cuelga el trabajo.",
+		Description: "Los objetivos de los equipos que lideras: para qué es el trabajo, cada uno con su " +
+			"equipo. Un objetivo se sirve con MÓDULOS de los proyectos de ese equipo.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1020,20 +1033,21 @@ func build() *mcp.Server {
 	})
 
 	type newObjectiveArg struct {
+		Team    string `json:"team,omitempty" jsonschema:"el equipo (id o nombre, team_list los dice); vacío = tu equipo por defecto"`
 		Name    string `json:"name"`
 		Outcome string `json:"outcome,omitempty" jsonschema:"qué es CIERTO cuando se cumpla"`
 		Due     string `json:"due_date,omitempty" jsonschema:"un día: 2026-12-31"`
 	}
 	add(tb, "Plan y secuencia", adds, "Crear objetivo", &mcp.Tool{
 		Name: "objective_create",
-		Description: "Crea un objetivo del departamento: para qué es el trabajo. Es del DEPARTAMENTO, no de un proyecto: los módulos de cualquier " +
-			"proyecto cuelgan del mismo, y eso es lo que lo hace valer. Sólo el lead global da forma a esta capa.",
+		Description: "Crea un objetivo de un equipo: para qué es el trabajo. Es del EQUIPO, no de un proyecto: " +
+			"los módulos de cualquiera de sus proyectos cuelgan del mismo. Sólo un lead del equipo.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in newObjectiveArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		o, err := bubble.SetObjective(c.app, c.auth, "", in.Name, in.Outcome, in.Due)
+		o, err := bubble.SetObjective(c.app, c.auth, "", in.Team, in.Name, in.Outcome, in.Due)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1049,7 +1063,7 @@ func build() *mcp.Server {
 	add(tb, "Plan y secuencia", sets, "Actualizar objetivo", &mcp.Tool{
 		Name: "objective_update",
 		Description: "Cambia el nombre, el resultado esperado o la fecha de un objetivo; lo que omitas " +
-			"queda igual. Sólo el lead global.",
+			"queda igual. Sólo un lead de su equipo.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in setObjectiveArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1058,7 +1072,7 @@ func build() *mcp.Server {
 		if in.Objective == "" {
 			return nil, nil, fmt.Errorf("falta `objective`; para crear uno, `objective_create`")
 		}
-		o, err := bubble.SetObjective(c.app, c.auth, in.Objective, in.Name, in.Outcome, in.Due)
+		o, err := bubble.SetObjective(c.app, c.auth, in.Objective, "", in.Name, in.Outcome, in.Due)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1089,19 +1103,54 @@ func build() *mcp.Server {
 		return jsonOut(map[string]any{"groups": groups, "items": items}), nil, nil
 	})
 
-	// ---- Personas y cambios ------------------------------------------------------
+	// ---- Equipos -------------------------------------------------------------------
 
-	add(tb, "Personas y cambios", reads, "Personas", &mcp.Tool{
-		Name: "people_list",
-		Description: "Las personas activas del departamento: id, nombre y rol, y cuál eres tú (`me`). " +
-			"Los ids son los que piden `owners` y `assignees`. Administrar personas, roles y tokens se " +
+	add(tb, "Equipos", reads, "Mis equipos", &mcp.Tool{
+		Name: "team_list",
+		Description: "Los equipos que ves y tu papel en cada uno (lead o member), con quién está en ellos. Un " +
+			"equipo es un CONTEXTO: sus proyectos, objetivos, secuencia, calendario, inbox y canal de WhatsApp " +
+			"son suyos y no se mezclan con los de otro. Un equipo personal sólo lo ve quien está en él. " +
+			"`default` es a dónde va lo que no dice equipo. Crear equipos y cambiar quién está en ellos se " +
 			"hace a mano en la aplicación.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, _ none) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		out, err := bubble.People(c.app, c.auth)
+		ts, err := bubble.TeamsOf(c.app, c.auth)
+		if err != nil {
+			return nil, nil, err
+		}
+		out := []map[string]any{}
+		for _, t := range ts {
+			members := []map[string]string{}
+			for _, m := range bubble.TeamMembersOf(c.app, t.ID) {
+				members = append(members, map[string]string{"id": m.User, "name": m.Name, "role": m.Role})
+			}
+			out = append(out, map[string]any{"id": t.ID, "name": t.Name, "personal": t.Personal,
+				"role": t.Role, "members": members})
+		}
+		return jsonOut(map[string]any{"teams": out, "default": bubble.DefaultTeam(c.app, c.auth)}), nil, nil
+	})
+
+	// ---- Personas y cambios ------------------------------------------------------
+
+	type peopleArg struct {
+		Project string `json:"project,omitempty" jsonschema:"sólo quienes ven este proyecto (id o slug)"`
+		Team    string `json:"team,omitempty" jsonschema:"sólo quienes están en este equipo (id o nombre)"`
+	}
+	add(tb, "Personas y cambios", reads, "Personas", &mcp.Tool{
+		Name: "people_list",
+		Description: "Las personas activas: id, nombre y rol, y cuál eres tú (`me`). Con `project`, sólo " +
+			"quienes ya VEN ese proyecto; con `team`, quienes están en ese equipo. Asignar a alguien que " +
+			"no ve el proyecto lo SUMA a él (sólo si puedes invitar): hazlo sólo si la persona lo pide. " +
+			"Administrar personas, roles y tokens se hace a mano en la aplicación.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in peopleArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := bubble.People(c.app, c.auth, in.Project, in.Team)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1194,21 +1243,23 @@ func build() *mcp.Server {
 		Idea string `json:"idea" jsonschema:"el id de la idea"`
 	}
 	type ideasArg struct {
+		Team    string `json:"team,omitempty" jsonschema:"sólo las de este equipo (id o nombre); vacío = todas las que ves"`
 		Source  string `json:"source,omitempty" jsonschema:"whatsapp, app o vacío para todas"`
 		Decided bool   `json:"decided,omitempty" jsonschema:"true incluye las que ya se volvieron trabajo"`
 	}
 	add(tb, "Inbox (ideas)", reads, "Listar ideas", &mcp.Tool{
 		Name: "inbox_list",
-		Description: "Las ideas del inbox que puedes ver: lo que tú capturaste (el lead global ve todas), " +
-			"incluido lo que llega por WhatsApp (`source: whatsapp`, `from` dice quién lo mandó). Son IDEAS, " +
-			"no trabajo: ni hilos ni módulos, ni pendientes de nadie. No las ejecutes ni las cuentes como " +
-			"avance; vuélvelas trabajo sólo si la persona lo decide. Por defecto, sólo las que nadie ha decidido.",
+		Description: "Las ideas del inbox que puedes ver: las que capturaste y las de los equipos que " +
+			"lideras, cada una con su EQUIPO (su contexto), incluido lo que llega por el WhatsApp de cada " +
+			"equipo (`source: whatsapp`, `from` dice quién lo mandó). Son IDEAS, no trabajo: ni hilos ni " +
+			"módulos, ni pendientes de nadie. No las ejecutes ni las cuentes como avance; vuélvelas trabajo " +
+			"sólo si la persona lo decide, y en un proyecto de SU equipo. Por defecto, sólo las que nadie ha decidido.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ideasArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		out, err := bubble.Ideas(c.app, c.auth, in.Source, in.Decided)
+		out, err := bubble.Ideas(c.app, c.auth, in.Team, in.Source, in.Decided)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1232,20 +1283,22 @@ func build() *mcp.Server {
 	})
 
 	type captureArg struct {
+		Team string `json:"team,omitempty" jsonschema:"el equipo (id o nombre, team_list los dice); vacío = tu equipo por defecto"`
 		Note string `json:"note" jsonschema:"la idea, en una línea"`
 		Body string `json:"body,omitempty" jsonschema:"el detalle, en markdown"`
 	}
 	add(tb, "Inbox (ideas)", adds, "Capturar idea", &mcp.Tool{
 		Name: "inbox_capture",
-		Description: "Anota una idea en el inbox de tu persona: algo que surgió y no pertenece a ningún hilo, " +
-			"y que nadie ha decidido hacer. Es el lugar para lo que NO es trabajo todavía: no abras un hilo " +
-			"ni un módulo para guardar una idea. Lo que sí es del hilo en curso va en su documento.",
+		Description: "Anota una idea, a tu nombre, en el inbox de un EQUIPO del que eres parte: el contexto " +
+			"al que pertenece (`team`; si no es obvio, pregunta). Es algo que surgió, no pertenece a ningún " +
+			"hilo y nadie ha decidido hacer: lo que NO es trabajo todavía. No abras un hilo ni un módulo para " +
+			"guardar una idea. Lo que sí es del hilo en curso va en su documento.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in captureArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		out, err := bubble.IdeaCapture(c.app, c.auth, in.Note, in.Body)
+		out, err := bubble.IdeaCapture(c.app, c.auth, in.Team, in.Note, in.Body)
 		if err != nil {
 			return nil, nil, err
 		}
@@ -1578,8 +1631,8 @@ func build() *mcp.Server {
 	}
 	add(tb, "Plan y secuencia", sets, "Ordenar la secuencia", &mcp.Tool{
 		Name: "sequence_set",
-		Description: "Pone un hilo (o un módulo) en un paso de la secuencia del departamento. Sólo el lead " +
-			"global. Pasos de 10 en 10; el mismo número va en paralelo; 0 lo saca. La secuencia es el ORDEN, " +
+		Description: "Pone un hilo (o un módulo) en un paso de la secuencia de su equipo. Sólo un lead del " +
+			"equipo. Cada equipo tiene su propia línea. Pasos de 10 en 10; el mismo número va en paralelo; 0 lo saca. La secuencia es el ORDEN, " +
 			"no una dependencia: las dependencias son relaciones (`thread_relate`).",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in seqArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)

@@ -19,6 +19,8 @@
   import PlusIcon from '@lucide/svelte/icons/plus';
   import MenuIcon from '@lucide/svelte/icons/menu';
   import MoreVerticalIcon from '@lucide/svelte/icons/more-vertical';
+  import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
+  import CheckIcon from '@lucide/svelte/icons/check';
   import BrandOrb from './BrandOrb.svelte';
   import { rail } from '../lib/filters.svelte';
   import { rowSquare } from '../lib/rowSquare';
@@ -36,7 +38,14 @@
     hot?: number;
     life?: Lifecycle;
     warmAt?: string;
+    /** su equipo */
+    team?: string;
+    /** de un equipo que no es tuyo: te invitaron a ESTE proyecto */
+    shared?: boolean;
   };
+
+  /** Un equipo, para el selector y para «Mover a…». */
+  export type ShellTeam = { id: string; name: string; personal: boolean };
 
   /** Something in the column that is NOT a workspace: a screen the whole app
    *  has, reached the same way you reach a project. */
@@ -70,6 +79,10 @@
     ondelete,
     /** create one and say which it is, so it can be named straight away */
     oncreate,
+    teamList = [],
+    team = '',
+    onteam,
+    onmove,
     children,
     corner,
   }: {
@@ -99,6 +112,13 @@
     onrename?: (id: string, name: string) => void;
     ondelete?: (id: string) => void;
     oncreate?: () => Promise<string | void> | string | void;
+    /** los equipos de quien mira; con más de uno aparece el selector */
+    teamList?: ShellTeam[];
+    /** el equipo en el que se está trabajando */
+    team?: string;
+    onteam?: (id: string) => void;
+    /** mover un proyecto a otro equipo (lo ofrece sólo a un lead global) */
+    onmove?: (id: string, team: string) => void;
     children?: Snippet;
     /** lo que flota sobre el pane sin ir DENTRO de él: la esquina de abajo a la
      *  izquierda. Va aquí y no en la aplicación porque `position: fixed` mide
@@ -114,6 +134,9 @@
 
   /** Los fijados se reparten: arriba del listado o al pie de la columna. */
   const head = $derived(pins.filter((p) => p.top));
+  const own = $derived(items.filter((p) => !p.shared));
+  const shared = $derived(items.filter((p) => p.shared));
+  const teamNow = $derived(teamList.find((t) => t.id === team));
   const foot = $derived(pins.filter((p) => !p.top));
 
   // Colapsada o no, como se dejó la última vez. La preferencia se lee al montar
@@ -239,6 +262,48 @@
         </div>
       </Navigation.Header>
 
+      <!-- El equipo es el CONTEXTO: sus proyectos, su planeador, su inbox, su
+           canal. Con más de uno se elige aquí, y lo elegido es también el
+           equipo por defecto del servidor y de la IA. -->
+      {#if teamList.length > 1}
+        <!-- Un menú del tema, como el del pie, y no un <select> nativo: la fila
+             se ve como las demás de la columna, y la lista marca el equipo en
+             el que estás. En el rail, sólo la cara del equipo. -->
+        <Menu positioning={{ placement: shutByWidth ? 'right-start' : 'bottom-start' }}
+          onSelect={(e: { value: string }) => onteam?.(e.value)}>
+          <div class="proj team-row">
+            <Menu.Trigger>
+              {#snippet element(attributes: Record<string, unknown>)}
+                <button {...attributes} class="pin-row team-trigger" data-scope="navigation" data-part="trigger"
+                  data-layout={shutByWidth ? 'rail' : 'sidebar'}
+                  aria-label={`Equipo en el que trabajas: ${teamNow?.name ?? ''}`} title={`Equipo: ${teamNow?.name ?? ''}`}>
+                  <Icon of={teamNow?.personal ? 'key' : 'people'} size="26px" tint />
+                  <span class="team-text" data-scope="navigation" data-part="trigger-text" data-layout={shutByWidth ? 'rail' : 'sidebar'}>
+                    {#if !shutByWidth}<small>Equipo</small>{/if}
+                    <b>{teamNow?.name ?? ''}</b>
+                  </span>
+                  {#if !shutByWidth}<ChevronsUpDownIcon class="size-4 chev" />{/if}
+                </button>
+              {/snippet}
+            </Menu.Trigger>
+          </div>
+          <Portal>
+            <Menu.Positioner>
+              <Menu.Content class="shell-menu team-menu">
+                {#each teamList as t (t.id)}
+                  <Menu.Item value={t.id}>
+                    <span class="face"><Icon of={t.personal ? 'key' : 'people'} tint /></span>
+                    <Menu.ItemText>{t.name}</Menu.ItemText>
+                    {#if t.personal}<span class="tag">privado</span>{/if}
+                    {#if t.id === team}<CheckIcon class="size-4 check" aria-label="actual" />{/if}
+                  </Menu.Item>
+                {/each}
+              </Menu.Content>
+            </Menu.Positioner>
+          </Portal>
+        </Menu>
+      {/if}
+
       <!-- The label sits OUTSIDE the scrolling list: a heading that scrolls
            away is a heading that stops labelling anything. -->
       {#if !shutByWidth}<Navigation.Label>{label}</Navigation.Label>{/if}
@@ -251,7 +316,10 @@
           {#each head as p (p.id)}
             {@render pinRow(p)}
           {/each}
-          {#each items as p (p.id)}
+          {#each [...own, ...shared] as p, i (p.id)}
+            {#if p.shared && (i === 0 || !([...own, ...shared][i - 1].shared)) && !shutByWidth}
+              <p class="shared-label">Compartidos contigo</p>
+            {/if}
             {#if editing === p.id && !shutByWidth}
               <!-- Renaming happens IN PLACE. A dialog for one field is a dialog
                    asking you to confirm you meant to type.
@@ -297,6 +365,7 @@
                   <Menu onSelect={(e: { value: string }) => {
                     if (e.value === 'rename') startRename(p.id, p.name);
                     if (e.value === 'delete') ondelete?.(p.id);
+                    if (e.value.startsWith('move:')) onmove?.(p.id, e.value.slice(5));
                   }}>
                     <Menu.Trigger>
                       {#snippet element(attributes: Record<string, unknown>)}
@@ -308,6 +377,11 @@
                       <Menu.Positioner>
                         <Menu.Content>
                           {#if onrename}<Menu.Item value="rename"><Menu.ItemText>Renombrar</Menu.ItemText></Menu.Item>{/if}
+                          {#if onmove && !p.shared}
+                            {#each teamList.filter((t) => t.id !== p.team) as t (t.id)}
+                              <Menu.Item value={`move:${t.id}`}><Menu.ItemText>Mover a {t.personal ? '🔒 ' : ''}{t.name}</Menu.ItemText></Menu.Item>
+                            {/each}
+                          {/if}
                           {#if ondelete}<Menu.Item value="delete"><Menu.ItemText>Eliminar</Menu.ItemText></Menu.Item>{/if}
                         </Menu.Content>
                       </Menu.Positioner>
@@ -683,4 +757,19 @@
     color: var(--hot);
     background: color-mix(in oklab, var(--hot) 14%, transparent);
   }
+  /* El selector de equipo: una fila como las de la lista, con su nombre en
+     dos renglones (qué es y cuál) y el chevron de «se elige». */
+  .team-row { margin-bottom: 0.1rem; }
+  .team-trigger { width: 100%; }
+  /* Más específica que la regla de una línea de `.proj`: aquí son dos
+     renglones, «Equipo» y cuál. */
+  .proj.team-row .team-text { display: flex; flex-direction: column; align-items: flex-start; min-width: 0; flex: 1; line-height: 1.15; white-space: normal; }
+  .team-text small { color: var(--muted); font-size: 0.7rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; }
+  .team-text b { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 700; }
+  .shell :global(.shell-nav[data-layout='rail'] .proj.team-row .team-text) { align-items: center; }
+  .team-trigger :global(.chev) { flex: none; color: var(--muted); }
+  :global(.team-menu .tag) { margin-left: auto; padding: 0 0.4rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.68rem; font-weight: 700; }
+  :global(.team-menu .check) { margin-left: auto; color: var(--accent); }
+  :global(.team-menu .tag + .check) { margin-left: 0.3rem; }
+  .shared-label { margin: 0.6rem 0 0.1rem; padding-inline: 0.5rem; color: var(--muted); font-size: 0.72rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
 </style>

@@ -55,6 +55,7 @@ export type CalendarEvent = {
   /** vacío es «no se repite» */
   repeat?: '' | 'daily' | 'weekly' | 'biweekly' | 'monthly';
   notes?: string;
+  team?: string;
 };
 
 /** Qué acepta el servidor: cuánto cabe en cada campo y qué se puede subir.
@@ -134,9 +135,22 @@ export type Board = {
 
 /** Lo justo de un workspace para etiquetar una fila y para construir la
  *  dirección que la abre. */
-export type BoardWorkspace = { id: string; slug: string; name: string };
+export type BoardWorkspace = { id: string; slug: string; name: string; team?: string };
 
-export type Workspace = { id: string; name: string; slug: string };
+export type Workspace = { id: string; name: string; slug: string; team?: string };
+
+/** Un equipo: un CONTEXTO con sus proyectos, objetivos, secuencia, calendario,
+ *  inbox y canal. `role` es el tuyo; `implicit`, que lo eres por ser lead
+ *  global. Uno `personal` sólo lo ve quien está en él. */
+export type Team = {
+  id: string;
+  name: string;
+  personal: boolean;
+  owner?: string;
+  role: 'lead' | 'member';
+  implicit?: boolean;
+  members?: { user: string; name: string; role: 'lead' | 'member'; global?: boolean }[];
+};
 
 
 /** Una burbuja como fila: lo que el planeador organiza. */
@@ -188,6 +202,7 @@ export type ThreadRecord = {
 
 export type Objective = {
   id: string;
+  team?: string;
   name: string;
   outcome?: string;
   due_date?: string;
@@ -212,6 +227,8 @@ export type InboxItem = {
   source?: string;
   /** quién la mandó por ese canal, como lo dice el canal */
   source_from?: string;
+  /** el equipo, el contexto en el que nació */
+  team?: string;
 };
 
 /** Cómo está un canal del inbox. `extra` es lo propio de cada canal. */
@@ -251,6 +268,9 @@ export type Prefs = {
   /** Accesos personales a hilos; no alteran calor, prioridad ni secuencia. */
   thread_pins?: string[];
   project_colors?: Record<string,string>;
+  /** el equipo en el que se está trabajando; el servidor lo usa como equipo
+   *  por defecto, también para la IA */
+  team?: string;
   /** qué forma tiene el tablero: la línea de ejecución o el kanban. Sólo
    *  significa algo con la función de secuencia encendida. */
   view?: 'sequence' | 'pool';
@@ -589,11 +609,40 @@ class Api {
     return out.items;
   }
 
-  createWorkspace(name: string, slug: string) {
+  createWorkspace(name: string, slug: string, team = '') {
     return this.call<Workspace>('/api/collections/workspaces/records', {
       method: 'POST',
-      body: JSON.stringify({ name, slug }),
+      body: JSON.stringify({ name, slug, team }),
     });
+  }
+
+  /** Mover un proyecto de equipo: un lead global que lidere los dos. */
+  moveWorkspace(id: string, team: string) {
+    return this.update<Workspace>('workspaces', id, { team });
+  }
+
+  // ---- equipos ----
+
+  teams() {
+    return this.call<{ teams: Team[]; default: string }>('/api/teams');
+  }
+  createTeam(name: string) {
+    return this.call<{ id: string; name: string }>('/api/teams', { method: 'POST', body: JSON.stringify({ name }) });
+  }
+  createPersonalTeam(name = '') {
+    return this.call<{ id: string; name: string }>('/api/teams/personal', { method: 'POST', body: JSON.stringify({ name }) });
+  }
+  renameTeam(id: string, name: string) {
+    return this.call<{ id: string; name: string }>(`/api/teams/${id}`, { method: 'PATCH', body: JSON.stringify({ name }) });
+  }
+  deleteTeam(id: string) {
+    return this.call<unknown>(`/api/teams/${id}`, { method: 'DELETE' });
+  }
+  setTeamMember(team: string, user: string, role: 'lead' | 'member') {
+    return this.call<{ members: Team['members'] }>(`/api/teams/${team}/members`, { method: 'POST', body: JSON.stringify({ user, role }) });
+  }
+  removeTeamMember(team: string, user: string) {
+    return this.call<{ members: Team['members'] }>(`/api/teams/${team}/members/${user}`, { method: 'DELETE' });
   }
 
   renameWorkspace(id: string, name: string) {
@@ -753,23 +802,24 @@ class Api {
 
   // ---- canales del inbox (lead global) ----
 
-  channels() {
-    return this.call<ChannelStatus[]>('/api/channels');
+  // Cada equipo tiene su canal: `team` dice cuál (vacío: el equipo por defecto).
+  channels(team = '') {
+    return this.call<ChannelStatus[]>(`/api/channels?team=${encodeURIComponent(team)}`);
   }
 
-  setChannel(kind: string, on: boolean) {
-    return this.call<ChannelStatus>(`/api/channels/${kind}/${on ? 'enable' : 'disable'}`, { method: 'POST' });
+  setChannel(kind: string, on: boolean, team = '') {
+    return this.call<ChannelStatus>(`/api/channels/${kind}/${on ? 'enable' : 'disable'}?team=${encodeURIComponent(team)}`, { method: 'POST' });
   }
 
   /** Lo propio de un canal: vincular, elegir grupo, desvincular… */
-  channelAction<T = ChannelStatus>(kind: string, action: string, body: Record<string, unknown> = {}) {
-    return this.call<T>(`/api/channels/${kind}/${action}`, { method: 'POST', body: JSON.stringify(body) });
+  channelAction<T = ChannelStatus>(kind: string, action: string, body: Record<string, unknown> = {}, team = '') {
+    return this.call<T>(`/api/channels/${kind}/${action}?team=${encodeURIComponent(team)}`, { method: 'POST', body: JSON.stringify(body) });
   }
 
   /** El QR vigente de un canal que se está vinculando, como URL de blob. La
    *  ruta exige sesión y un `<img>` no manda cabeceras. Vacío si no hay. */
-  async channelQR(kind: string): Promise<string> {
-    const res = await fetch(`/api/channels/${kind}/qr.png?t=${Date.now()}`, {
+  async channelQR(kind: string, team = ''): Promise<string> {
+    const res = await fetch(`/api/channels/${kind}/qr.png?t=${Date.now()}&team=${encodeURIComponent(team)}`, {
       headers: this.token ? { Authorization: this.token } : {},
     });
     return res.ok ? URL.createObjectURL(await res.blob()) : '';
@@ -810,12 +860,15 @@ class Api {
     kind: 'threads' | 'bubbles';
     state: 'open' | 'done';
     page?: number;
+    /** sólo los proyectos de este equipo: la secuencia es de un equipo */
+    team?: string;
   }): Promise<QueuePage> {
     const q = new URLSearchParams({
       kind: opts.kind,
       state: opts.state,
       page: String(opts.page ?? 1),
     });
+    if (opts.team) q.set('team', opts.team);
     return this.call<QueuePage>(`/api/queue?${q}`);
   }
 

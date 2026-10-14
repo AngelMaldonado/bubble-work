@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -17,17 +18,26 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/filesystem"
 	qrcode "github.com/skip2/go-qrcode"
+
+	"github.com/AngelMaldonado/bubble-work/internal/bubble"
 )
 
 // ErrDuplicate: ese mensaje ya entró al inbox.
 var ErrDuplicate = errors.New("ya capturado")
 
 // Manager enciende, apaga y expone los canales compilados en el binario.
+//
+// Un canal es de un EQUIPO: cada equipo conecta el suyo (su propia cuenta de
+// WhatsApp vinculada, su propio grupo), y lo que entra va al inbox de ese
+// equipo. Así las ideas quedan en su contexto, y un equipo personal no pasa
+// por el teléfono de nadie más. La clave de lo que corre es equipo + tipo.
 type Manager struct {
 	app     core.App
 	mu      sync.Mutex
 	running map[string]Channel
 }
+
+func key(team, kind string) string { return team + "/" + kind }
 
 // Mount monta los canales en la app: los enciende al arrancar el servidor si
 // estaban encendidos, los apaga al terminar, y publica sus rutas.
@@ -35,10 +45,11 @@ func Mount(app core.App) *Manager {
 	m := &Manager{app: app, running: map[string]Channel{}}
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
-		for _, kind := range Kinds() {
-			if row, err := m.row(kind); err == nil && row.GetBool("enabled") {
-				if err := m.start(kind); err != nil {
-					app.Logger().Error("canal no arrancó", "kind", kind, "error", err)
+		if rows, err := app.FindRecordsByFilter("channels", "enabled = true", "created", 0, 0); err == nil {
+			for _, row := range rows {
+				team, kind := row.GetString("team"), row.GetString("kind")
+				if err := m.start(team, kind); err != nil {
+					app.Logger().Error("canal no arrancó", "team", team, "kind", kind, "error", err)
 				}
 			}
 		}
@@ -63,18 +74,27 @@ func Mount(app core.App) *Manager {
 	return m
 }
 
-// Los canales son del departamento: los conecta el lead global. Un canal
-// decide qué entra al inbox de todos, y trae credenciales de una cuenta.
-func onlyLead(e *core.RequestEvent) error {
-	if e.Auth == nil || e.Auth.Collection().Name != "users" || e.Auth.GetString("role") != "lead" {
-		return e.ForbiddenError("sólo el lead global conecta canales", nil)
+// Los canales son de un equipo: los conecta un lead de ese equipo. Un canal
+// decide qué entra al inbox del equipo, y trae credenciales de una cuenta.
+// `?team=` dice de qué equipo; sin él, el equipo por defecto de quien pide.
+func teamLead(e *core.RequestEvent) (string, error) {
+	if e.Auth == nil || e.Auth.Collection().Name != "users" {
+		return "", e.ForbiddenError("sólo un lead del equipo conecta su canal", nil)
 	}
-	return nil
+	team := e.Request.URL.Query().Get("team")
+	if team == "" {
+		team = bubble.DefaultTeam(e.App, e.Auth)
+	}
+	if team == "" || !bubble.LeadsTeam(e.App, e.Auth, team) {
+		return "", e.ForbiddenError("sólo un lead del equipo conecta su canal", nil)
+	}
+	return team, nil
 }
 
-// row trae (o crea, apagada) la fila de un tipo de canal.
-func (m *Manager) row(kind string) (*core.Record, error) {
-	if r, err := m.app.FindFirstRecordByData("channels", "kind", kind); err == nil {
+// row trae (o crea, apagada) la fila de un tipo de canal de un equipo.
+func (m *Manager) row(team, kind string) (*core.Record, error) {
+	if r, err := m.app.FindFirstRecordByFilter("channels", "team = {:t} && kind = {:k}",
+		map[string]any{"t": team, "k": kind}); err == nil {
 		return r, nil
 	}
 	col, err := m.app.FindCollectionByNameOrId("channels")
@@ -82,6 +102,7 @@ func (m *Manager) row(kind string) (*core.Record, error) {
 		return nil, err
 	}
 	r := core.NewRecord(col)
+	r.Set("team", team)
 	r.Set("kind", kind)
 	r.Set("enabled", false)
 	r.Set("config", map[string]any{})
@@ -90,11 +111,12 @@ func (m *Manager) row(kind string) (*core.Record, error) {
 
 type rowStore struct {
 	m    *Manager
+	team string
 	kind string
 }
 
 func (s rowStore) Config() map[string]any {
-	r, err := s.m.row(s.kind)
+	r, err := s.m.row(s.team, s.kind)
 	out := map[string]any{}
 	if err != nil {
 		return out
@@ -104,11 +126,11 @@ func (s rowStore) Config() map[string]any {
 }
 
 func (s rowStore) Logger() *slog.Logger {
-	return s.m.app.Logger().With("channel", s.kind)
+	return s.m.app.Logger().With("channel", s.kind, "team", s.team)
 }
 
 func (s rowStore) SaveConfig(cfg map[string]any) error {
-	r, err := s.m.row(s.kind)
+	r, err := s.m.row(s.team, s.kind)
 	if err != nil {
 		return err
 	}
@@ -116,36 +138,64 @@ func (s rowStore) SaveConfig(cfg map[string]any) error {
 	return s.m.app.Save(r)
 }
 
-func (m *Manager) start(kind string) error {
+// sessionDir es dónde guarda un canal su sesión: un directorio por equipo.
+// La sesión que existía antes de los equipos (`channels/<archivo>`) se muda al
+// primer equipo que arranca ese tipo, para no pedir otro QR al actualizar.
+func (m *Manager) sessionDir(team, kind string) (string, error) {
+	base := filepath.Join(m.app.DataDir(), "channels")
+	dir := filepath.Join(base, team)
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", err
+	}
+	legacy := filepath.Join(base, kind+".db")
+	if _, err := os.Stat(legacy); err == nil {
+		if _, err := os.Stat(filepath.Join(dir, kind+".db")); os.IsNotExist(err) {
+			for _, suffix := range []string{"", "-wal", "-shm"} {
+				if _, err := os.Stat(legacy + suffix); err == nil {
+					if err := os.Rename(legacy+suffix, filepath.Join(dir, kind+".db"+suffix)); err != nil {
+						return "", err
+					}
+				}
+			}
+		}
+	}
+	return dir, nil
+}
+
+func (m *Manager) start(team, kind string) error {
 	f, ok := factory(kind)
 	if !ok {
 		return fmt.Errorf("este binario no trae el canal %q", kind)
 	}
 	m.mu.Lock()
-	if _, on := m.running[kind]; on {
+	if _, on := m.running[key(team, kind)]; on {
 		m.mu.Unlock()
 		return nil
 	}
-	dir := filepath.Join(m.app.DataDir(), "channels")
-	ch := f(dir, rowStore{m, kind})
-	m.running[kind] = ch
+	dir, err := m.sessionDir(team, kind)
+	if err != nil {
+		m.mu.Unlock()
+		return err
+	}
+	ch := f(dir, rowStore{m, team, kind})
+	m.running[key(team, kind)] = ch
 	m.mu.Unlock()
-	return ch.Start(context.Background(), &sink{m.app, kind})
+	return ch.Start(context.Background(), &sink{m.app, team, kind})
 }
 
-func (m *Manager) stop(kind string) {
+func (m *Manager) stop(team, kind string) {
 	m.mu.Lock()
-	ch := m.running[kind]
-	delete(m.running, kind)
+	ch := m.running[key(team, kind)]
+	delete(m.running, key(team, kind))
 	m.mu.Unlock()
 	if ch != nil {
 		ch.Stop()
 	}
 }
 
-func (m *Manager) status(kind string) Status {
+func (m *Manager) status(team, kind string) Status {
 	m.mu.Lock()
-	ch := m.running[kind]
+	ch := m.running[key(team, kind)]
 	m.mu.Unlock()
 	if ch != nil {
 		st := ch.Status()
@@ -156,25 +206,27 @@ func (m *Manager) status(kind string) Status {
 }
 
 func (m *Manager) list(e *core.RequestEvent) error {
-	if err := onlyLead(e); err != nil {
+	team, err := teamLead(e)
+	if err != nil {
 		return err
 	}
 	out := []Status{}
 	for _, kind := range Kinds() {
-		out = append(out, m.status(kind))
+		out = append(out, m.status(team, kind))
 	}
 	return e.JSON(http.StatusOK, out)
 }
 
 func (m *Manager) enable(e *core.RequestEvent) error {
-	if err := onlyLead(e); err != nil {
+	team, err := teamLead(e)
+	if err != nil {
 		return err
 	}
 	kind := e.Request.PathValue("kind")
 	if _, ok := factory(kind); !ok {
 		return e.NotFoundError("", nil)
 	}
-	r, err := m.row(kind)
+	r, err := m.row(team, kind)
 	if err != nil {
 		return err
 	}
@@ -184,18 +236,19 @@ func (m *Manager) enable(e *core.RequestEvent) error {
 	if err := m.app.Save(r); err != nil {
 		return err
 	}
-	if err := m.start(kind); err != nil {
+	if err := m.start(team, kind); err != nil {
 		return e.BadRequestError(err.Error(), err)
 	}
-	return e.JSON(http.StatusOK, m.status(kind))
+	return e.JSON(http.StatusOK, m.status(team, kind))
 }
 
 func (m *Manager) disable(e *core.RequestEvent) error {
-	if err := onlyLead(e); err != nil {
+	team, err := teamLead(e)
+	if err != nil {
 		return err
 	}
 	kind := e.Request.PathValue("kind")
-	r, err := m.row(kind)
+	r, err := m.row(team, kind)
 	if err != nil {
 		return e.NotFoundError("", err)
 	}
@@ -203,17 +256,18 @@ func (m *Manager) disable(e *core.RequestEvent) error {
 	if err := m.app.Save(r); err != nil {
 		return err
 	}
-	m.stop(kind)
-	return e.JSON(http.StatusOK, m.status(kind))
+	m.stop(team, kind)
+	return e.JSON(http.StatusOK, m.status(team, kind))
 }
 
 // qr sirve el código de vinculación como PNG. Se genera en el servidor para
 // que el cliente no cargue una librería de QR sólo para esta pantalla.
 func (m *Manager) qr(e *core.RequestEvent) error {
-	if err := onlyLead(e); err != nil {
+	team, err := teamLead(e)
+	if err != nil {
 		return err
 	}
-	st := m.status(e.Request.PathValue("kind"))
+	st := m.status(team, e.Request.PathValue("kind"))
 	if st.QR == "" {
 		return e.NotFoundError("no hay un código que escanear ahora", nil)
 	}
@@ -229,12 +283,13 @@ func (m *Manager) qr(e *core.RequestEvent) error {
 }
 
 func (m *Manager) action(e *core.RequestEvent) error {
-	if err := onlyLead(e); err != nil {
+	team, err := teamLead(e)
+	if err != nil {
 		return err
 	}
 	kind := e.Request.PathValue("kind")
 	m.mu.Lock()
-	ch := m.running[kind]
+	ch := m.running[key(team, kind)]
 	m.mu.Unlock()
 	if ch == nil {
 		return e.BadRequestError("el canal está apagado: enciéndelo primero", nil)
@@ -248,14 +303,15 @@ func (m *Manager) action(e *core.RequestEvent) error {
 		return e.BadRequestError(err.Error(), err)
 	}
 	if out == nil {
-		out = m.status(kind)
+		out = m.status(team, kind)
 	}
 	return e.JSON(http.StatusOK, out)
 }
 
-// sink convierte un mensaje en una nota del inbox.
+// sink convierte un mensaje en una nota del inbox de SU equipo.
 type sink struct {
 	app  core.App
+	team string
 	kind string
 }
 
@@ -266,11 +322,12 @@ const noteMax = 200
 func (s *sink) Capture(_ context.Context, kind string, in Inbound) error {
 	if in.Ref != "" {
 		if _, err := s.app.FindFirstRecordByFilter("inbox_items",
-			"source = {:k} && source_ref = {:r}", map[string]any{"k": kind, "r": in.Ref}); err == nil {
+			"team = {:t} && source = {:k} && source_ref = {:r}", map[string]any{"t": s.team, "k": kind, "r": in.Ref}); err == nil {
 			return ErrDuplicate
 		}
 	}
-	ch, err := s.app.FindFirstRecordByData("channels", "kind", kind)
+	ch, err := s.app.FindFirstRecordByFilter("channels", "team = {:t} && kind = {:k}",
+		map[string]any{"t": s.team, "k": kind})
 	if err != nil {
 		return err
 	}
@@ -292,6 +349,7 @@ func (s *sink) Capture(_ context.Context, kind string, in Inbound) error {
 	r.Set("note", note)
 	r.Set("body", text)
 	r.Set("captured_by", owner)
+	r.Set("team", s.team)
 	r.Set("source", kind)
 	r.Set("source_ref", in.Ref)
 	r.Set("source_from", truncate(in.From, 200))
@@ -366,8 +424,8 @@ func (s *sink) Retract(_ context.Context, kind, ref string) (Outcome, error) {
 		return OutcomeNone, nil
 	}
 	r, err := s.app.FindFirstRecordByFilter("inbox_items",
-		"source = {:k} && (source_ref = {:r} || source_parts ~ {:r})",
-		map[string]any{"k": kind, "r": ref})
+		"team = {:t} && source = {:k} && (source_ref = {:r} || source_parts ~ {:r})",
+		map[string]any{"t": s.team, "k": kind, "r": ref})
 	if err != nil {
 		return OutcomeNone, nil
 	}
@@ -424,8 +482,8 @@ func (s *sink) Revise(_ context.Context, kind, ref, text string) (Outcome, error
 		return OutcomeNone, nil
 	}
 	r, err := s.app.FindFirstRecordByFilter("inbox_items",
-		"source = {:k} && (source_ref = {:r} || source_parts ~ {:r})",
-		map[string]any{"k": kind, "r": ref})
+		"team = {:t} && source = {:k} && (source_ref = {:r} || source_parts ~ {:r})",
+		map[string]any{"t": s.team, "k": kind, "r": ref})
 	if err != nil {
 		return OutcomeNone, nil
 	}

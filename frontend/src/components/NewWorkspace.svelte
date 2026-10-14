@@ -2,6 +2,7 @@
   import Loading from './Loading.svelte';
   import { api } from '../lib/api';
   import { limited } from '../lib/limits.svelte';
+  import { teams } from '../lib/teams.svelte';
 
   let { onDone }: { onDone: () => void } = $props();
   let name = $state('');
@@ -26,7 +27,7 @@
     busy = true;
     error = '';
     try {
-      await api.createWorkspace(name.trim(), slug);
+      await api.createWorkspace(name.trim(), slug, teams.current);
       onDone();
     } catch (err) {
       error = (err as Error).message;

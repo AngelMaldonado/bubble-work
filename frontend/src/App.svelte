@@ -25,6 +25,7 @@
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
+  import { teams } from './lib/teams.svelte';
   import People from './components/People.svelte';
   import Presence from './components/Presence.svelte';
   import { presence } from './lib/presence.svelte';
@@ -111,7 +112,7 @@
     me = await api.refresh();
     signedIn = !!me;
     if (signedIn) {
-      workspaces = await api.workspaces();
+      [workspaces] = await Promise.all([api.workspaces(), teams.load().catch(() => {})]);
       // Says "here" and starts reading everybody else's. Only once signed in:
       // presence is about people, and there is nobody yet.
       presence.start();
@@ -202,12 +203,26 @@
    *  ninguna se ordenan por nombre — alfabético es el orden que no se mueve
    *  solo, y una columna que se reordena sin motivo es una en la que se pulsa
    *  la fila equivocada. */
-  const sorted = $derived(
+  const sortedAll = $derived(
     [...workspaces].sort((a, b) => {
       const d = (burning[b.id] ?? 0) - (burning[a.id] ?? 0);
       return d !== 0 ? d : a.name.localeCompare(b.name);
     }),
   );
+  /** Los proyectos del equipo en el que se trabaja, más los de otro equipo a
+   *  los que te invitaron (ésos van siempre, aparte). */
+  const sorted = $derived(sortedAll.filter((w) => teams.inScope(w)));
+  /** El tablero de TODOS, del equipo elegido: lo de otro contexto no se mezcla. */
+  const scopedBoard = $derived.by(() => {
+    if (!board || !isAll || teams.list.length < 2) return board;
+    const ids = new Set(sorted.map((w) => w.id));
+    return {
+      ...board,
+      workspaces: board.workspaces?.filter((w) => ids.has(w.id)),
+      bubbles: board.bubbles.filter((b) => ids.has(b.workspace)),
+      threads: board.threads.filter((t) => ids.has(t.workspace)),
+    } as typeof board;
+  });
 
   // The thread being read, resolved from the seq in the address. Null while the
   // board is still on its way — which is what makes a pasted link work.
@@ -268,12 +283,23 @@
     const name = 'Proyecto nuevo';
     const slug = 'ws-' + Math.random().toString(36).slice(2, 8);
     try {
-      const made = await api.createWorkspace(name, slug);
+      const made = await api.createWorkspace(name, slug, teams.current);
       workspaces = [...workspaces, made];
       // Go to it. Which workspace is on screen is the address's answer now, so
       // a new one is somewhere you navigate rather than a variable you set.
       go(boardUrl(made.slug));
       return made.id; // the column names it in place
+    } catch (e) {
+      error = (e as Error).message;
+    }
+  }
+
+  /** Mover un proyecto de equipo: el servidor exige a un lead global que
+   *  lidere los dos. */
+  async function moveWorkspace(id: string, team: string) {
+    try {
+      const out = await api.moveWorkspace(id, team);
+      workspaces = workspaces.map((w) => (w.id === id ? { ...w, team: out.team } : w));
     } catch (e) {
       error = (e as Error).message;
     }
@@ -784,7 +810,7 @@
   <SignIn onDone={boot} />
 {:else}
   <Shell
-    items={sorted.map((w) => ({ id: w.id, name: w.name, hint: w.slug, hot: burning[w.id] ?? 0, life: projectBuoyancy[w.id]?.life ?? 'dormant', warmAt: projectBuoyancy[w.id]?.at ?? '' }))}
+    items={sorted.map((w) => ({ id: w.id, name: w.name, hint: w.slug, hot: burning[w.id] ?? 0, life: projectBuoyancy[w.id]?.life ?? 'dormant', warmAt: projectBuoyancy[w.id]?.at ?? '', team: w.team, shared: teams.shared(w) }))}
     pins={[
       // Todos ARRIBA DEL LISTADO: es el board entero, y los workspaces que
       // siguen son sus partes — leerlo como el primero de ellos dice esa
@@ -852,7 +878,11 @@
     }}
     onrename={renameWorkspace}
     ondelete={deleteWorkspace}
-    oncreate={createWorkspace}>
+    oncreate={createWorkspace}
+    teamList={teams.list}
+    team={teams.current}
+    onteam={(id) => { teams.set(id); if (current && !teams.inScope(current)) go(allUrl); }}
+    onmove={me?.role === 'lead' ? moveWorkspace : undefined}>
     {#if route.kind === 'space' && me}
       {#key me.id}<PersonalSpace workspaces={sorted} />{/key}
     {:else if route.kind === 'sequence' && me && features.sequence}
@@ -866,7 +896,7 @@
     {:else if current || isAll}
       <Board
         workspace={current}
-        {board}
+        board={scopedBoard}
         onOpen={openThread}
         onreload={loadBoard}
         onnew={(what) => (naming = what)}

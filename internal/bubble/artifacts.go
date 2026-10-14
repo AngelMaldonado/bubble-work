@@ -233,13 +233,23 @@ const agentLive = 5 * time.Minute
 
 var errHandedOff = errors.New("this artifact was handed off; it is read-only now")
 
-func canTouchArtifact(auth, art *core.Record) bool {
-	return isPersonAuth(auth) && (art.GetString("creator") == auth.Id || isGlobalLead(auth))
+func canTouchArtifact(app core.App, auth, art *core.Record) bool {
+	if !isPersonAuth(auth) {
+		return false
+	}
+	if art.GetString("creator") == auth.Id {
+		return true
+	}
+	// Un lead del equipo de la idea de la que cuelga.
+	if item, err := app.FindRecordById("inbox_items", art.GetString("inbox_item")); err == nil {
+		return LeadsTeam(app, auth, item.GetString("team"))
+	}
+	return false
 }
 
 func artifactFor(app core.App, auth *core.Record, id string) (*core.Record, error) {
 	art, err := app.FindRecordById("artifacts", id)
-	if err != nil || !canTouchArtifact(auth, art) {
+	if err != nil || !canTouchArtifact(app, auth, art) {
 		return nil, ErrDenied
 	}
 	return art, nil
@@ -276,7 +286,7 @@ func loadEntries(app core.App, artID string) ([]Entry, error) {
 // ArtifactStart opens an artifact on an inbox item — an existing one, or a new
 // one made from `topic`. The inbox item is the topic and the backlog row; it
 // outlives the artifact.
-func ArtifactStart(app core.App, auth *core.Record, kindName, inboxItem, topic string) (*core.Record, error) {
+func ArtifactStart(app core.App, auth *core.Record, kindName, inboxItem, topic, team string) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
 	}
@@ -287,7 +297,7 @@ func ArtifactStart(app core.App, auth *core.Record, kindName, inboxItem, topic s
 	var item *core.Record
 	if inboxItem != "" {
 		r, err := app.FindRecordById("inbox_items", inboxItem)
-		if err != nil || (r.GetString("captured_by") != auth.Id && !isGlobalLead(auth)) {
+		if err != nil || (r.GetString("captured_by") != auth.Id && !LeadsTeam(app, auth, r.GetString("team"))) {
 			return nil, ErrDenied
 		}
 		item = r
@@ -295,7 +305,7 @@ func ArtifactStart(app core.App, auth *core.Record, kindName, inboxItem, topic s
 		if topic == "" {
 			return nil, fmt.Errorf("say what it is about: a topic, or an inbox item")
 		}
-		r, err := Capture(app, auth, topic)
+		r, err := Capture(app, auth, team, topic)
 		if err != nil {
 			return nil, err
 		}
@@ -830,8 +840,8 @@ func registerArtifacts(app core.App) {
 				return e.UnauthorizedError("sign in first", nil)
 			}
 			all := e.Request.URL.Query().Get("scope") == "inbox"
-			if all && !isGlobalLead(e.Auth) {
-				return e.ForbiddenError("only a global lead reads the department inbox", nil)
+			if all && len(LedTeams(e.App, e.Auth)) == 0 {
+				return e.ForbiddenError("only a team lead reads the team's inbox", nil)
 			}
 			list, err := ArtifactsOf(e.App, e.Auth, all)
 			if err != nil {

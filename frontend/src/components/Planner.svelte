@@ -44,6 +44,7 @@
   import { type SeqThread } from './SequencePane.svelte';
   import SequenceCanvas, { type SeqEntry } from './SequenceCanvas.svelte';
   import { projectColors } from '../lib/projectColors.svelte';
+  import { teams } from '../lib/teams.svelte';
   import { ago } from '../lib/when';
   import { untrack, onDestroy } from 'svelte';
   import { live } from '../lib/live.svelte';
@@ -188,9 +189,12 @@
   // it. See `Confirm.svelte`.
   let doom = $state<Doom>(null);
 
+  // El planeador es de UN equipo: el elegido. Sus proyectos, objetivos,
+  // calendario, inbox y secuencia; lo de otro contexto no entra.
   async function load() {
     try {
-      const [bu, ce, th, ob, inb, pr, ws] = await Promise.all([
+      const T = teams.current;
+      const [bu0, ce0, th0, ob0, inb0, pr, ws0] = await Promise.all([
         api.allBubbles(),
         api.calendarEvents(),
         api.allThreads(),
@@ -199,6 +203,14 @@
         api.allPriorities(),
         api.workspaces(),
       ]);
+      // Sin equipos (una base vieja) se ve todo, como antes.
+      const ws = T ? ws0.filter((w) => !w.team || w.team === T) : ws0;
+      const inT = new Set(ws.map((w) => w.id));
+      const bu = bu0.filter((b) => inT.has(b.workspace));
+      const th = th0.filter((t) => inT.has(t.workspace));
+      const ce = T ? ce0.filter((e) => !e.team || e.team === T) : ce0;
+      const ob = T ? ob0.filter((o) => !o.team || o.team === T) : ob0;
+      const inb = T ? inb0.filter((n) => !n.team || n.team === T) : inb0;
       bubbles = bu;
       dates = ce;
       threads = th;
@@ -224,6 +236,9 @@
   async function loadHeat() {
     try {
       const [all, ps] = await Promise.all([api.allBoard(), api.people()]);
+      const inT = (ws: string) => !teams.current || ws in places;
+      all.threads = all.threads.filter((t) => inT(t.workspace));
+      all.bubbles = all.bubbles.filter((b) => inT(b.workspace));
       heated = all.threads;
       // La banda de cada burbuja, que ya venía en la misma llamada y se tiraba.
       // Es lo único que el filtro de banda necesita: `allBubbles()` trae la
@@ -366,6 +381,7 @@
         kind: tasksMode ? 'threads' : 'bubbles',
         state,
         page: side.page + 1,
+        team: teams.current,
       });
       side.items = [...side.items, ...out.items];
       side.page = out.page;
@@ -391,6 +407,14 @@
     pull(queueOpen, 'open');
     pull(queueDone, 'done');
   }
+  // Otro equipo es otro planeador: se recarga todo.
+  let shownTeam = untrack(() => teams.current);
+  $effect(() => {
+    const t = teams.current;
+    if (t === shownTeam) return;
+    shownTeam = t;
+    untrack(() => { load(); refillSides(); });
+  });
   $effect(() => {
     // Depende del modo y de si la línea está a la vista; nada más.
     void mode;
@@ -719,7 +743,7 @@
       repeat: dateDraft.repeat,
     };
     dateDraft = { name: '', start: '', repeat: '' };
-    write(() => api.create('calendar_events', fields));
+    write(() => api.create('calendar_events', { ...fields, team: teams.current }));
   }
 
   const patchDate = (id: string, fields: Record<string, unknown>) =>
@@ -834,7 +858,7 @@
     };
   };
 
-  const capture = (text: string) => write(() => api.create('inbox_items', { note: text }));
+  const capture = (text: string) => write(() => api.create('inbox_items', { note: text, team: teams.current }));
 
   /** Guardar lo escrito en una nota.
    *
@@ -1039,6 +1063,7 @@
       api.create('objectives', {
         name: `${name} ${objectiveRows.length + 1}`,
         position: objectiveRows.length,
+        team: teams.current,
       }),
     );
 

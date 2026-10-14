@@ -59,8 +59,10 @@ func canSee(app core.App, auth *core.Record, workspace string) bool {
 	if auth == nil || auth.Collection().Name != "users" {
 		return false
 	}
-	if auth.GetString("role") == "lead" {
-		return true // the global lead sees every workspace
+	// El lead del equipo del proyecto lo ve entero (el lead global lo es de
+	// todo equipo que no sea personal); los demás, por su membresía.
+	if LeadsWorkspaceTeam(app, auth, workspace) {
+		return true
 	}
 	var n int
 	err := app.DB().NewQuery(
@@ -486,6 +488,14 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 		b.Set("outcome", *in.Outcome)
 	}
 	if in.Owners != nil {
+		owners, err := activePeople(app, *in.Owners)
+		if err != nil {
+			return nil, err
+		}
+		if _, err := joinAssigned(app, auth, owners, b.GetString("workspace")); err != nil {
+			return nil, err
+		}
+		*in.Owners = owners
 		b.Set("owners", *in.Owners)
 	}
 	if in.Closure != nil {
@@ -493,8 +503,12 @@ func SetBubble(app core.App, auth *core.Record, id string, in BubbleEdit) (*core
 	}
 	if in.Objective != nil {
 		if *in.Objective != "" {
-			if _, err := app.FindRecordById("objectives", *in.Objective); err != nil {
+			obj, err := app.FindRecordById("objectives", *in.Objective)
+			if err != nil {
 				return nil, fmt.Errorf("no objective %q", *in.Objective)
+			}
+			if obj.GetString("team") != teamOfWorkspace(app, b.GetString("workspace")) {
+				return nil, fmt.Errorf("un módulo cuelga de un objetivo del equipo de su proyecto")
 			}
 		}
 		// Un objetivo es del DEPARTAMENTO, así que una burbuja de cualquier
@@ -597,8 +611,8 @@ func SetThread(app core.App, auth *core.Record, id string, in ThreadEdit) (*core
 		th.Set("bubble", *in.Bubble)
 	}
 	if in.Priority != nil {
-		if !isGlobalLead(auth) {
-			return nil, fmt.Errorf("only the global lead sets a thread's priority")
+		if !LeadsTeam(app, auth, ws.GetString("team")) {
+			return nil, fmt.Errorf("only a lead of the project's team sets a thread's priority")
 		}
 		p := strings.ToUpper(strings.TrimSpace(*in.Priority))
 		switch p {
@@ -635,6 +649,8 @@ type Plan struct {
 
 type PlanObjective struct {
 	ID      string `json:"id"`
+	Team    string `json:"team"`
+	TeamNm  string `json:"team_name"`
 	Name    string `json:"name"`
 	Outcome string `json:"outcome,omitempty"`
 	Due     string `json:"due_date,omitempty"`
@@ -656,31 +672,44 @@ func ReadPlan(app core.App, auth *core.Record) (Plan, error) {
 		return Plan{}, ErrDenied
 	}
 	out := Plan{Objectives: []PlanObjective{}, Inbox: []PlanNote{}}
-	lead := isGlobalLead(auth) || IsSuperuser(auth)
-	if lead {
-		rows, err := app.FindAllRecords("objectives")
-		if err != nil {
-			return Plan{}, err
+	// Los objetivos de cada equipo los leen sus leads.
+	led := map[string]string{}
+	if IsSuperuser(auth) {
+		ts, _ := app.FindAllRecords("teams")
+		for _, t := range ts {
+			led[t.Id] = t.GetString("name")
 		}
-		for _, o := range rows {
-			var n int
-			// Burbujas, no threads: un objetivo se sirve con cuerpos de trabajo, y
-			// contar piezas de ejecución decía «catorce» donde lo que hay son tres
-			// cosas en marcha.
-			_ = app.DB().NewQuery("SELECT COUNT(*) FROM bubbles WHERE objective = {:o}").
-				Bind(dbx.Params{"o": o.Id}).Row(&n)
-			out.Objectives = append(out.Objectives, PlanObjective{
-				ID: o.Id, Name: o.GetString("name"), Outcome: o.GetString("outcome"),
-				Due: o.GetDateTime("due_date").String(), Bubbles: n,
-			})
+	} else if ts, err := TeamsOf(app, auth); err == nil {
+		for _, t := range ts {
+			if t.Role == "lead" {
+				led[t.ID] = t.Name
+			}
 		}
+	}
+	rows, err := app.FindRecordsByFilter("objectives", "", "position,created", 0, 0)
+	if err != nil {
+		return Plan{}, err
+	}
+	for _, o := range rows {
+		name, ok := led[o.GetString("team")]
+		if !ok {
+			continue
+		}
+		var n int
+		// Burbujas, no threads: un objetivo se sirve con cuerpos de trabajo.
+		_ = app.DB().NewQuery("SELECT COUNT(*) FROM bubbles WHERE objective = {:o}").
+			Bind(dbx.Params{"o": o.Id}).Row(&n)
+		out.Objectives = append(out.Objectives, PlanObjective{
+			ID: o.Id, Team: o.GetString("team"), TeamNm: name, Name: o.GetString("name"), Outcome: o.GetString("outcome"),
+			Due: o.GetDateTime("due_date").String(), Bubbles: n,
+		})
 	}
 	notes, err := app.FindAllRecords("inbox_items")
 	if err != nil {
 		return Plan{}, err
 	}
 	for _, n := range notes {
-		if !lead && n.GetString("captured_by") != auth.Id {
+		if _, ok := led[n.GetString("team")]; !ok && n.GetString("captured_by") != auth.Id {
 			continue
 		}
 		out.Inbox = append(out.Inbox, PlanNote{
@@ -697,13 +726,20 @@ func ReadPlan(app core.App, auth *core.Record) (Plan, error) {
 //
 // Capturing is NOT evidence. A note has no outcome and no output; the thread it
 // becomes is what warms anything.
-func Capture(app core.App, auth *core.Record, note string) (*core.Record, error) {
+func Capture(app core.App, auth *core.Record, team, note string) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
 	}
 	note = strings.TrimSpace(note)
 	if note == "" {
 		return nil, fmt.Errorf("a note needs something in it")
+	}
+	teamID, err := ResolveTeam(app, auth, team)
+	if err != nil {
+		return nil, err
+	}
+	if !InTeam(app, auth, teamID) {
+		return nil, fmt.Errorf("una idea va al inbox de un equipo del que eres parte")
 	}
 	col, err := app.FindCollectionByNameOrId("inbox_items")
 	if err != nil {
@@ -712,23 +748,24 @@ func Capture(app core.App, auth *core.Record, note string) (*core.Record, error)
 	r := core.NewRecord(col)
 	r.Set("note", note)
 	r.Set("captured_by", auth.Id)
+	r.Set("team", teamID)
 	if err := app.Save(r); err != nil {
 		return nil, err
 	}
 	return r, nil
 }
 
-// SetObjective creates or edits one. Mirrors `objectives` — the global lead
-// shapes the strategic layer, and only they.
-func SetObjective(app core.App, auth *core.Record, id, name, outcome, due string) (*core.Record, error) {
-	if !isGlobalLead(auth) {
-		return nil, ErrDenied
+// SetObjective creates or edits one. Mirrors `objectives`: a lead of the
+// objective's team shapes it.
+func SetObjective(app core.App, auth *core.Record, id, team, name, outcome, due string) (*core.Record, error) {
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
 	}
 	var r *core.Record
 	if id != "" {
 		found, err := app.FindRecordById("objectives", id)
-		if err != nil {
-			return nil, fmt.Errorf("no objective %q", id)
+		if err != nil || !LeadsTeam(app, auth, found.GetString("team")) {
+			return nil, ErrDenied
 		}
 		r = found
 	} else {
@@ -737,6 +774,15 @@ func SetObjective(app core.App, auth *core.Record, id, name, outcome, due string
 			return nil, err
 		}
 		r = core.NewRecord(col)
+		t, err := ResolveTeam(app, auth, team)
+		if err != nil {
+			return nil, err
+		}
+		// Los objetivos son de un equipo, y los da forma un lead del equipo.
+		if !LeadsTeam(app, auth, t) {
+			return nil, ErrDenied
+		}
+		r.Set("team", t)
 	}
 	if name != "" {
 		r.Set("name", strings.TrimSpace(name))
@@ -819,9 +865,16 @@ func RemovePath(app core.App, auth *core.Record, t *tree.Tree, ws *core.Record, 
 // repository, no members and no states: visible to nobody, and unable to hold
 // work. All of it in one transaction, because a half-founded workspace is worse
 // than a refused one.
-func CreateWorkspace(app core.App, auth *core.Record, name, slug string) (*core.Record, error) {
+func CreateWorkspace(app core.App, auth *core.Record, name, slug, team string) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
+	}
+	team, err := ResolveTeam(app, auth, team)
+	if err != nil {
+		return nil, err
+	}
+	if !InTeam(app, auth, team) {
+		return nil, fmt.Errorf("un proyecto nace en un equipo del que eres parte")
 	}
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -845,6 +898,7 @@ func CreateWorkspace(app core.App, auth *core.Record, name, slug string) (*core.
 	ws.Set("name", name)
 	ws.Set("slug", slug)
 	ws.Set("repo_path", slug)
+	ws.Set("team", team)
 
 	err = app.RunInTransaction(func(tx core.App) error {
 		if err := tx.Save(ws); err != nil {

@@ -162,12 +162,15 @@ type BoardWorkspace struct {
 	ID   string `json:"id"`
 	Slug string `json:"slug"`
 	Name string `json:"name"`
+	Team string `json:"team,omitempty"`
+	// el nombre del equipo, para que quien lee el tablero sepa el contexto
+	TeamName string `json:"team_name,omitempty"`
 }
 
 // liveSteps: los pasos de la secuencia que tienen algo abierto, en orden, de
-// todo el departamento. Sólo números: no dice de qué hilos, así que no enseña
-// nada de un proyecto que quien mira no alcanza.
-func liveSteps(app core.App) map[int]int {
+// la línea de UN equipo (cada equipo tiene la suya). Sólo números: no dice de
+// qué hilos, así que no enseña nada de un proyecto que quien mira no alcanza.
+func liveSteps(app core.App, team string) map[int]int {
 	// Apagada, ningún hilo está en ningún paso: los datos se quedan, la línea
 	// no se enseña.
 	if !SequenceOn(app) {
@@ -176,8 +179,9 @@ func liveSteps(app core.App) map[int]int {
 	var seqs []int
 	_ = app.DB().NewQuery(
 		"SELECT DISTINCT t.sequence FROM threads t LEFT JOIN states s ON s.id = t.state " +
-			"WHERE t.sequence > 0 AND (s.[[group]] IS NULL OR s.[[group]] != 'completed') ORDER BY t.sequence",
-	).Column(&seqs)
+			"JOIN workspaces w ON w.id = t.workspace " +
+			"WHERE t.sequence > 0 AND w.team = {:team} AND (s.[[group]] IS NULL OR s.[[group]] != 'completed') ORDER BY t.sequence",
+	).Bind(dbx.Params{"team": team}).Column(&seqs)
 	out := make(map[int]int, len(seqs))
 	for i, v := range seqs {
 		out[v] = i + 1
@@ -216,7 +220,7 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 		due      string
 	}
 	planned := map[string]plan{}
-	steps := liveSteps(app)
+	steps := liveSteps(app, ws.GetString("team"))
 	if recs, err := app.FindAllRecords("threads", dbx.HashExp{"workspace": ws.Id}); err == nil {
 		for _, t := range recs {
 			planned[t.Id] = plan{t.GetString("priority"), t.GetInt("sequence"), day(t.GetDateTime("due_date"))}
@@ -292,7 +296,8 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 	return Board{
 		Workspace: ws.Id, At: now.Format(time.RFC3339), Tuning: tun,
 		Workspaces: []BoardWorkspace{{
-			ID: ws.Id, Slug: ws.GetString("slug"), Name: ws.GetString("name"),
+			ID: ws.Id, Slug: ws.GetString("slug"), Name: ws.GetString("name"), Team: ws.GetString("team"),
+			TeamName: TeamRefOf(app, ws.GetString("team")).Name,
 		}},
 		Bubbles: out, Threads: threads,
 	}, nil
@@ -386,7 +391,8 @@ func AllBoards(e *core.RequestEvent) (Board, error) {
 			continue
 		}
 		out.Workspaces = append(out.Workspaces, BoardWorkspace{
-			ID: ws.Id, Slug: ws.GetString("slug"), Name: ws.GetString("name"),
+			ID: ws.Id, Slug: ws.GetString("slug"), Name: ws.GetString("name"), Team: ws.GetString("team"),
+			TeamName: TeamRefOf(e.App, ws.GetString("team")).Name,
 		})
 		out.Bubbles = append(out.Bubbles, b.Bubbles...)
 		out.Threads = append(out.Threads, b.Threads...)
@@ -417,24 +423,31 @@ func reachableWorkspaces(e *core.RequestEvent) ([]*core.Record, error) {
 	if e.Auth == nil || (!isPersonAuth(e.Auth) && !IsSuperuser(e.Auth)) {
 		return nil, e.NotFoundError("", nil)
 	}
-	if IsSuperuser(e.Auth) || e.Auth.GetString("role") == "lead" {
-		all, err := e.App.FindAllRecords("workspaces")
-		if err != nil {
-			return nil, e.InternalServerError(err.Error(), err)
-		}
-		return all, nil
-	}
-	rows, err := e.App.FindAllRecords("memberships", dbx.HashExp{"user": e.Auth.Id})
+	// Los proyectos de los equipos que lideras, más aquellos de los que eres
+	// miembro (también los de otro equipo al que te invitaron). Un equipo
+	// personal ajeno no entra, ni para el lead global.
+	all, err := e.App.FindAllRecords("workspaces")
 	if err != nil {
 		return nil, e.InternalServerError(err.Error(), err)
 	}
-	out := make([]*core.Record, 0, len(rows))
-	for _, m := range rows {
-		ws, err := e.App.FindRecordById("workspaces", m.GetString("workspace"))
-		if err != nil {
-			continue // a membership pointing at nothing is not an error to show
+	if IsSuperuser(e.Auth) {
+		return all, nil
+	}
+	led := map[string]bool{}
+	for _, t := range LedTeams(e.App, e.Auth) {
+		led[t] = true
+	}
+	mine := map[string]bool{}
+	if rows, err := e.App.FindAllRecords("memberships", dbx.HashExp{"user": e.Auth.Id}); err == nil {
+		for _, m := range rows {
+			mine[m.GetString("workspace")] = true
 		}
-		out = append(out, ws)
+	}
+	out := make([]*core.Record, 0, len(all))
+	for _, ws := range all {
+		if led[ws.GetString("team")] || mine[ws.Id] {
+			out = append(out, ws)
+		}
 	}
 	return out, nil
 }

@@ -70,6 +70,16 @@ func registerQueue(app core.App) {
 				return err
 			}
 			q := e.Request.URL.Query()
+			// La secuencia es de un equipo: con `team`, sólo sus proyectos.
+			if team := q.Get("team"); team != "" {
+				in := ws[:0]
+				for _, w := range ws {
+					if w.GetString("team") == team {
+						in = append(in, w)
+					}
+				}
+				ws = in
+			}
 			kind := q.Get("kind")
 			if kind != "threads" && kind != "bubbles" {
 				return e.BadRequestError("kind es `threads` o `bubbles`", nil)

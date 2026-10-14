@@ -1,6 +1,7 @@
 package bubble
 
 import (
+	"fmt"
 	"net/http"
 	"slices"
 
@@ -53,6 +54,7 @@ type readInboxItem struct {
 	CapturedBy string `json:"captured_by"`
 	Created    string `json:"created"`
 	SourceFrom string `json:"source_from,omitempty"`
+	Team       string `json:"team"`
 }
 
 func registerReadPlanner(app core.App) {
@@ -65,22 +67,26 @@ func registerReadPlanner(app core.App) {
 			if err != nil {
 				return err
 			}
-			if !isGlobalLead(e.Auth) {
+			// Quien lidera un equipo ve el tablero entero de lo que alcanza; los
+			// demás, lo suyo. El inbox y los artefactos: lo propio y lo de los
+			// equipos que lidera, nunca el de otro equipo.
+			led := LedTeams(e.App, e.Auth)
+			if len(led) == 0 {
 				board = participantBoard(board, e.Auth.Id)
 			}
-			filter := "captured_by = {:u}"
-			if isGlobalLead(e.Auth) {
-				filter = ""
+			params := dbx.Params{"u": e.Auth.Id}
+			filter, artFilter := "captured_by = {:u}", "creator = {:u}"
+			for i, t := range led {
+				k := fmt.Sprintf("t%d", i)
+				params[k] = t
+				filter += " || team = {:" + k + "}"
+				artFilter += " || inbox_item.team = {:" + k + "}"
 			}
-			rows, err := e.App.FindRecordsByFilter("inbox_items", filter, "-created", 0, 0, dbx.Params{"u": e.Auth.Id})
+			rows, err := e.App.FindRecordsByFilter("inbox_items", filter, "-created", 0, 0, params)
 			if err != nil {
 				return e.InternalServerError("could not read inbox", err)
 			}
-			artFilter := "creator = {:u}"
-			if isGlobalLead(e.Auth) {
-				artFilter = ""
-			}
-			ars, err := e.App.FindRecordsByFilter("artifacts", artFilter, "-touched_at", 0, 0, dbx.Params{"u": e.Auth.Id})
+			ars, err := e.App.FindRecordsByFilter("artifacts", artFilter, "-touched_at", 0, 0, params)
 			if err != nil {
 				return e.InternalServerError("could not read artifacts", err)
 			}
@@ -101,7 +107,7 @@ func registerReadPlanner(app core.App) {
 				if (n.GetString("thread") != "" || n.GetString("bubble") != "") && !attached[n.Id] {
 					continue
 				}
-				notes = append(notes, readInboxItem{ID: n.Id, Note: n.GetString("note"), Body: n.GetString("body"), CapturedBy: n.GetString("captured_by"), Created: n.GetString("created"), SourceFrom: n.GetString("source_from")})
+				notes = append(notes, readInboxItem{ID: n.Id, Note: n.GetString("note"), Body: n.GetString("body"), CapturedBy: n.GetString("captured_by"), Created: n.GetString("created"), SourceFrom: n.GetString("source_from"), Team: n.GetString("team")})
 			}
 			return e.JSON(http.StatusOK, map[string]any{"board": board, "inbox": notes, "artifacts": artifacts})
 		}).Bind(apis.RequireAuth())

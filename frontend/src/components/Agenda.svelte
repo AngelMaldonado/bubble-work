@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { teams } from '../lib/teams.svelte';
   // The calendar, for somebody who does not run the plan.
   //
   // The same SCREEN as the planner — its bar, its way back, its pane and its
@@ -44,9 +45,12 @@
         api.workspaces(),
         api.calendarEvents(),
       ]);
-      bubbles = bs;
-      places = ws;
-      dates = ce;
+      // La agenda del equipo elegido.
+      const T = teams.current;
+      places = ws.filter((w) => !T || !w.team || w.team === T || !teams.mine(w.team));
+      const inT = new Set(places.map((w) => w.id));
+      bubbles = bs.filter((b) => inT.has(b.workspace));
+      dates = ce.filter((e) => !T || !e.team || e.team === T);
       error = '';
     } catch (e) {
       error = (e as Error).message;

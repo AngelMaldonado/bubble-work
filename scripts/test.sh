@@ -71,6 +71,9 @@ list(){ curl -s "$API/api/collections/$1/records" -H "Authorization: $2"; }
 SU=$(curl -s -X POST "$API/api/collections/_superusers/auth-with-password" -H "$JS" \
   -d '{"identity":"root@bubble.test","password":"rootrootroot"}' | j "['token']")
 [ -n "$SU" ] && ok "superuser autentica" || { no "superuser autentica" "sin token"; exit 1; }
+# El equipo que la migración crea para todo lo que ya existía.
+TI=$(curl -s "$API/api/collections/teams/records" -H "Authorization: $SU" | j "['items'][0]['id']")
+chk ">>> todo nace en un equipo: TI" "$(curl -s "$API/api/collections/teams/records" -H "Authorization: $SU" | j "['items'][0]['name']")" TI
 
 # Guard against talking to somebody else's server on this port. A leftover process
 # from an earlier run answers every request with an OLDER database, which does not
@@ -588,8 +591,8 @@ chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "[
 echo
 OBJ=$(post objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\",\"outcome\":\"todo el ingreso facturado\"}" | j "['id']")
 chk ">>> el lead GLOBAL define el objetivo" "$([ -n "$OBJ" ] && echo si || echo no)" si
-chk ">>> el lead de un workspace NO lo define: la capa estratégica es del departamento" \
-  "$(pcode objectives "$B" "{\"name\":\"Mio\"}")" 400
+chk ">>> el lead de un workspace NO lo define: los objetivos son de los leads del equipo" \
+  "$(pcode objectives "$B" "{\"name\":\"Mio\"}")" 403
 chk "el mismo nombre dos veces se rechaza" \
   "$(pcode objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\"}")" 400
 chk ">>> el plan lo LEE el lead global, y nadie más" \
@@ -894,7 +897,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "agents_md,artifact_append,artifact_create,artifact_delete,artifact_handoff,artifact_list,artifact_pin,artifact_read,artifact_wait,bubble_close,bubble_create,bubble_reopen,bubble_update,change_list,checkbox_toggle,comment_create,comment_list,document_delete,document_edit,document_list,document_read,document_replace,document_search,evidence_add,inbox_capture,inbox_delete,inbox_list,inbox_read,inbox_triage,inbox_update,inventory_group_create,inventory_group_delete,inventory_group_update,inventory_item_create,inventory_item_delete,inventory_item_update,inventory_list,objective_create,objective_list,objective_update,people_list,pin_add,pin_list,pin_remove,project_board,project_create,project_list,repo_link,repo_list,repo_unlink,sequence_next,sequence_set,space_note_arrange,space_note_create,space_note_delete,space_note_list,space_note_update,thread_complete,thread_create,thread_get,thread_history,thread_relate,thread_unrelate,thread_update"
+  "agents_md,artifact_append,artifact_create,artifact_delete,artifact_handoff,artifact_list,artifact_pin,artifact_read,artifact_wait,bubble_close,bubble_create,bubble_reopen,bubble_update,change_list,checkbox_toggle,comment_create,comment_list,document_delete,document_edit,document_list,document_read,document_replace,document_search,evidence_add,inbox_capture,inbox_delete,inbox_list,inbox_read,inbox_triage,inbox_update,inventory_group_create,inventory_group_delete,inventory_group_update,inventory_item_create,inventory_item_delete,inventory_item_update,inventory_list,objective_create,objective_list,objective_update,people_list,pin_add,pin_list,pin_remove,project_board,project_create,project_list,repo_link,repo_list,repo_unlink,sequence_next,sequence_set,space_note_arrange,space_note_create,space_note_delete,space_note_list,space_note_update,team_list,thread_complete,thread_create,thread_get,thread_history,thread_relate,thread_unrelate,thread_update"
 chk ">>> cada tool dice si sólo lee (anotaciones MCP)" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 t={x["name"]:x.get("annotations",{}) for x in json.load(sys.stdin)["result"]["tools"]}
@@ -938,7 +941,7 @@ chk ">>> agents_md trae la guía de Bubble" \
 chk ">>> ...las entidades, con wiki, artefactos y pines" \
   "$(mcptext "$A" agents_md '{}' | grep -cE '^- \*\*(Proyecto|Módulo|Hilo|Artefactos temporales|Pines)\*\*')" 5
 chk ">>> ...y la tabla de tools, generada del registro" \
-  "$(mcptext "$A" agents_md '{}' | grep -cE '^\| `[a-z_]+` \|')" 64
+  "$(mcptext "$A" agents_md '{}' | grep -cE '^\| `[a-z_]+` \|')" 65
 chk ">>> ...por categoría" \
   "$(mcptext "$A" agents_md '{}' | grep -c '^### Módulos (burbujas)$')" 1
 chk ">>> ...y el protocolo de interrogatorio NO: llega al crear el artefacto" \
@@ -1199,7 +1202,7 @@ chk "...firmada por su persona" \
 chk "...y una idea NO es trabajo: ningún evento" \
   "$(curl -s "$API/api/collections/events/records?perPage=1" -H "Authorization: $SU" | j "['totalItems']")" "$EV_IDEA"
 WAIDEA=$(curl -s -X POST "$API/api/collections/inbox_items/records" -H "Authorization: $SU" -H "$JS" \
-  -d "{\"note\":\"¿Hay demo el jueves?\",\"body\":\"¿Hay demo el jueves?\\nLo pregunta el cliente\",\"captured_by\":\"$BID\",\"source\":\"whatsapp\",\"source_ref\":\"t-ai-1\",\"source_from\":\"Ana Ventas\"}" | j "['id']")
+  -d "{\"note\":\"¿Hay demo el jueves?\",\"body\":\"¿Hay demo el jueves?\\nLo pregunta el cliente\",\"captured_by\":\"$BID\",\"team\":\"$TI\",\"source\":\"whatsapp\",\"source_ref\":\"t-ai-1\",\"source_from\":\"Ana Ventas\"}" | j "['id']")
 chk ">>> lo que llega por WhatsApp sale como idea, con quién lo mandó" \
   "$(mcptext "$B" inbox_list '{"source":"whatsapp"}' | python3 -c 'import sys,json
 d=[x for x in json.load(sys.stdin) if x["id"]=="'"$WAIDEA"'"]; print(d[0]["from"], d[0]["source"], d[0]["decided"])')" "Ana Ventas whatsapp False"
@@ -1304,8 +1307,8 @@ chk "...ni en el total" "$(mcptext "$ER" change_list '{}')" "[]"
 chk ">>> un since sin forma se rechaza" "$(mcptext "$A" change_list '{"since":"ayer"}' | grep -c 'RFC 3339')" 1
 
 ARG="{\"thread\":\"$T2\",\"sequence\":30}"
-chk ">>> sólo el lead global ordena la secuencia" \
-  "$(mcptext "$A" sequence_set "$ARG" | grep -c 'lead global')" 1
+chk ">>> sólo un lead del equipo ordena la secuencia" \
+  "$(mcptext "$A" sequence_set "$ARG" | grep -c 'lead del equipo')" 1
 ARG="{\"thread\":\"$T2\",\"sequence\":30}"
 chk "...el lead sí" "$(mcptext "$C" sequence_set "$ARG" | j "['sequence']")" 30
 mcptext "$C" sequence_set "{\"thread\":\"$T2\",\"sequence\":0}" >/dev/null
@@ -1332,7 +1335,7 @@ chk ">>> artifact_list: mis artefactos, para retomarlos en otra sesión" \
   "$(mcptext "$A" artifact_list '{}' | python3 -c 'import sys,json;print([a["status"] for a in json.load(sys.stdin) if a["id"]=="'"$ART"'"][0])')" open
 ARG="{\"id\":\"$ART\",\"pinned\":true}"
 chk "...fijar uno" "$(mcptext "$A" artifact_pin "$ARG" | j "['pinned']")" True
-chk "...los del departamento son sólo del lead" "$(mcptext "$A" artifact_list '{"all":true}' | grep -c 'lead global')" 1
+chk "...los del equipo son sólo de sus leads" "$(mcptext "$A" artifact_list '{"all":true}' | grep -c 'lead de equipo')" 1
 chk ">>> bob no borra el de alice" "$(mcptext "$B" artifact_delete "{\"id\":\"$ART\"}" | grep -c 'not found')" 1
 chk ">>> borrarlo" "$(mcptext "$A" artifact_delete "{\"id\":\"$ART\"}" | j "['deleted']")" True
 
@@ -1848,10 +1851,10 @@ chk ">>> las dos líneas son independientes: el hilo conserva el suyo" \
 # nadie trabajara.
 CEV="$API/api/collections/calendar_events/records"
 echo
-chk ">>> un lead de workspace NO pone una fecha del departamento" \
+chk ">>> un lead de workspace NO pone una fecha del calendario del equipo" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$CEV" -H "Authorization: $A" \
      -H 'Content-Type: application/json' \
-     -d '{"name":"Junta","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}')" 400
+     -d '{"name":"Junta","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}')" 403
 EVBEFORE=$(curl -s "$API/api/collections/events/records?perPage=1" -H "Authorization: $SU" | j "['totalItems']")
 CEID=$(curl -s -X POST "$CEV" -H "Authorization: $C" -H 'Content-Type: application/json' \
   -d '{"name":"Junta semanal","start":"2026-10-05 00:00:00.000Z","repeat":"weekly"}' | j "['id']")
@@ -2197,7 +2200,10 @@ RP_SIBLING=$(post threads "$C" '{"workspace":"'$ALPHA'","bubble":"'$RP_ASSIGNED'
 RP_STAND=$(post threads "$C" '{"workspace":"'$ALPHA'","name":"RP standalone","assignees":["'$BID'"]}' | j "['id']")
 # An assignment must never bypass the outer workspace-membership boundary.
 RP_OTHER_WS=$(post workspaces "$C" '{"name":"RP inaccessible","slug":"rp-inaccessible"}' | j "['id']")
-RP_OTHER=$(post threads "$C" '{"workspace":"'$RP_OTHER_WS'","name":"RP outside membership","assignees":["'$BID'"]}' | j "['id']")
+# Asignado por el superuser, que no invita a nadie: un hilo con bob asignado en un
+# proyecto del que bob NO es miembro (por la puerta de la aplicación, asignarlo
+# lo habría sumado al proyecto).
+RP_OTHER=$(post threads "$SU" '{"workspace":"'$RP_OTHER_WS'","name":"RP outside membership","assignees":["'$BID'"]}' | j "['id']")
 RP_READ=$(curl -s "$API/api/planner/read" -H "Authorization: $B")
 chk ">>> responsable o asignado ve sus burbujas, no las otras del mismo workspace" \
   "$(echo "$RP_READ" | python3 -c 'import json,sys;d=json.load(sys.stdin);ids={b["id"] for b in d["board"]["bubbles"]};print("'$RP_OWN'" in ids and "'$RP_ASSIGNED'" in ids and "'$RP_HIDE'" not in ids)')" True
@@ -2260,6 +2266,186 @@ INLINEWRITE=$(curl -s -X PATCH "$INLINEURL" -H "Authorization: $A" -H "$JS" \
 chk ">>> el tick desde el render persiste y no cambia el ejemplo" \
   "$(curl -s "$INLINEURL" -H "Authorization: $A" | j "['content']" | python3 -c 'import sys;s=sys.stdin.read();print("si" if "- [ ] ejemplo" in s and "- [x] real" in s else "no")')" si
 curl -s -X DELETE "$API/api/collections/threads/records/$INLINEID" -H "Authorization: $A" >/dev/null
+
+# ------------------------------------------------ equipos: contextos aislados ----
+# Un segundo lead global con su equipo PERSONAL. Lo de TI lo ven los dos; lo
+# personal de cada uno, sólo su dueño. Invitar a alguien a un PROYECTO le enseña
+# ese proyecto y nada más del equipo.
+echo
+GINA=$(ppost "$C" "" '{"email":"gina@bubble.test","name":"Gina","password":"passwordpass","role":"lead"}' | j "['id']")
+GI=$(login gina@bubble.test)
+chk ">>> una persona nueva entra a TI como miembro" \
+  "$(curl -s "$API/api/collections/team_members/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"user='$GINA'\"))")" -H "Authorization: $SU" | j "['items'][0]['team']")" "$TI"
+chk ">>> un lead global es lead implícito de TI" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;t=[x for x in json.load(sys.stdin)["teams"] if x["id"]=="'"$TI"'"][0];print(t["role"])')" lead
+chk ">>> un member no crea un equipo personal" \
+  "$(code -X POST "$API/api/teams/personal" -H "Authorization: $A" -H "$JS" -d '{}')" 403
+GP=$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;print(next((t["id"] for t in json.load(sys.stdin)["teams"] if t["personal"]),""))')
+chk ">>> un lead global nuevo nace con su equipo personal" "$([ -n "$GP" ] && echo si || echo no)" si
+chk "...a su nombre" "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;print([t["name"] for t in json.load(sys.stdin)["teams"] if t["personal"]][0])')" "Personal · Gina"
+chk "...uno solo" "$(code -X POST "$API/api/teams/personal" -H "Authorization: $GI" -H "$JS" -d '{}')" 400
+chk ">>> su equipo por defecto sigue siendo el compartido" "$(curl -s "$API/api/teams" -H "Authorization: $GI" | j "['default']")" "$TI"
+HANK=$(ppost "$C" "" '{"email":"hank@bubble.test","name":"Hank","password":"passwordpass","role":"member"}' | j "['id']")
+HK=$(login hank@bubble.test)
+chk ">>> un member nuevo no tiene equipo personal" \
+  "$(curl -s "$API/api/collections/teams/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"owner='$HANK'\"))")" -H "Authorization: $SU" | j "['totalItems']")" 0
+ARG='{"role":"lead"}'
+curl -s -o /dev/null -X PATCH "$API/api/collections/users/records/$HANK" -H "Authorization: $C" -H "$JS" -d "$ARG"
+chk ">>> al ascenderlo a lead global recibe el suyo" \
+  "$(curl -s "$API/api/collections/teams/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"owner='$HANK' && personal=true\"))")" -H "Authorization: $SU" | j "['totalItems']")" 1
+chk ">>> carol, también lead global, NO ve el equipo personal de gina" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $C" | python3 -c 'import sys,json;print(any(t["id"]=="'"$GP"'" for t in json.load(sys.stdin)["teams"]))')" False
+chk "...ni por la colección" "$(code "$API/api/collections/teams/records/$GP" -H "Authorization: $C")" 404
+ARG="{\"name\":\"Plan de dirección\",\"team\":\"$GP\"}"
+GWS=$(mcptext "$GI" project_create "$ARG" | j "['id']")
+chk ">>> gina crea un proyecto en su equipo personal" \
+  "$(curl -s "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $GI" | j "['team']")" "$GP"
+ARG="{\"project\":\"$GWS\",\"name\":\"Presupuesto 2027\"}"
+GT=$(mcptext "$GI" thread_create "$ARG" | j "['id']")
+chk ">>> carol no ve el proyecto: ni en la lista" \
+  "$(curl -s "$API/api/collections/workspaces/records?perPage=200" -H "Authorization: $C" | python3 -c 'import sys,json;print(any(w["id"]=="'"$GWS"'" for w in json.load(sys.stdin)["items"]))')" False
+chk "...ni por id" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $C")" 404
+chk "...ni su tablero" "$(code "$API/api/workspaces/$GWS/board" -H "Authorization: $C")" 404
+chk "...ni sus hilos" "$(code "$API/api/collections/threads/records/$GT" -H "Authorization: $C")" 404
+chk "...ni el documento" "$(code "$API/api/threads/$GT/document" -H "Authorization: $C")" 404
+chk "...ni en el tablero de todos" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any(w["id"]=="'"$GWS"'" for w in json.load(sys.stdin)["workspaces"]))')" False
+ARG="{\"thread\":\"$GT\"}"
+chk "...ni por MCP" "$(mcptext "$C" thread_get "$ARG" | grep -c 'not found')" 1
+chk "...ni en lo que cambió" \
+  "$(mcptext "$C" change_list '{}' | python3 -c 'import sys,json;print(any(c.get("thread")=="'"$GT"'" for c in json.load(sys.stdin)))')" False
+chk ">>> gina sí ve TI, con lo de carol" \
+  "$(curl -s "$API/api/collections/workspaces/records/$ALPHA" -H "Authorization: $GI" | j "['id']")" "$ALPHA"
+ARG="{\"name\":\"Colado\",\"team\":\"$GP\"}"
+chk ">>> carol no mete un proyecto en el equipo personal de gina" \
+  "$(mcptext "$C" project_create "$ARG" | grep -c 'no ves ningún equipo')" 1
+
+GWSM=$(curl -s -X POST "$API/api/collections/memberships/records" -H "Authorization: $GI" -H "$JS" \
+  -d "{\"workspace\":\"$GWS\",\"user\":\"$BID\",\"role\":\"member\"}" | j "['id']")
+chk ">>> gina invita a bob a SU proyecto" "$([ -n "$GWSM" ] && echo si || echo no)" si
+chk "...y bob lo ve" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $B")" 200
+chk "...pero no el equipo personal" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $B" | python3 -c 'import sys,json;print(any(t["id"]=="'"$GP"'" for t in json.load(sys.stdin)["teams"]))')" False
+ARG="{\"team\":\"$GP\",\"note\":\"colada\"}"
+chk "...y no le mete ideas" \
+  "$(mcptext "$B" inbox_capture "$ARG" | grep -c 'no ves ningún equipo')" 1
+ARG="{\"user\":\"$BID\",\"role\":\"member\"}"
+chk ">>> a un equipo personal no se agrega a nadie" \
+  "$(curl -s -X POST "$API/api/teams/$GP/members" -H "Authorization: $GI" -H "$JS" -d "$ARG" | j "['message']" | grep -c 'invita a la persona a un PROYECTO')" 1
+
+ARG="{\"team\":\"$GP\",\"note\":\"Reestructurar el área\"}"
+GIDEA=$(mcptext "$GI" inbox_capture "$ARG" | j "['id']")
+chk ">>> las ideas de gina en su equipo personal: carol no las ve" \
+  "$(mcptext "$C" inbox_list '{}' | python3 -c 'import sys,json;print(any(x["id"]=="'"$GIDEA"'" for x in json.load(sys.stdin)))')" False
+chk "...ni por la colección" "$(code "$API/api/collections/inbox_items/records/$GIDEA" -H "Authorization: $C")" 404
+CIDEA=$(mcptext "$C" inbox_capture '{"note":"Idea de TI"}' | j "['id']")
+ARG="{\"team\":\"$TI\"}"
+chk ">>> una idea de TI sí la ven los dos leads de TI" \
+  "$(mcptext "$GI" inbox_list "$ARG" | python3 -c 'import sys,json;print(any(x["id"]=="'"$CIDEA"'" for x in json.load(sys.stdin)))')" True
+ARG="{\"idea\":\"$CIDEA\",\"thread\":\"$GT\"}"
+chk ">>> una idea de TI no se vuelve trabajo en un proyecto de otro equipo" \
+  "$(mcptext "$GI" inbox_triage "$ARG" | grep -c 'de otro equipo')" 1
+curl -s -o /dev/null -X DELETE "$API/api/collections/inbox_items/records/$CIDEA" -H "Authorization: $C"
+
+ARG="{\"team\":\"$GP\",\"name\":\"Rentabilidad del área\"}"
+GOBJ=$(mcptext "$GI" objective_create "$ARG" | j "['id']")
+chk ">>> los objetivos son del equipo: carol no ve los de gina" \
+  "$(mcptext "$C" objective_list '{}' | python3 -c 'import sys,json;print(any(o["id"]=="'"$GOBJ"'" for o in json.load(sys.stdin)["objectives"]))')" False
+TIB=$(mcptext "$C" bubble_create '{"project":"alpha","name":"Módulo de TI"}' | j "['id']")
+ARG="{\"bubble\":\"$TIB\",\"objective\":\"$GOBJ\"}"
+chk ">>> un módulo de TI no cuelga de un objetivo de otro equipo" \
+  "$(mcptext "$GI" bubble_update "$ARG" | grep -c 'del equipo de su proyecto')" 1
+curl -s -o /dev/null -X DELETE "$API/api/collections/bubbles/records/$TIB" -H "Authorization: $C"
+
+ARG="{\"thread\":\"$GT\",\"sequence\":10}"
+chk ">>> cada equipo ordena su secuencia: carol no toca la de gina" \
+  "$(mcptext "$C" sequence_set "$ARG" | grep -c 'not found')" 1
+ARG="{\"thread\":\"$GT\",\"sequence\":10}"
+chk "...gina sí" "$(mcptext "$GI" sequence_set "$ARG" | j "['sequence']")" 10
+ARG="{\"team\":\"$GP\"}"
+chk ">>> y sequence_next de su equipo lo trae" \
+  "$(mcptext "$GI" sequence_next "$ARG" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["team"]["id"]=="'"$GP"'", d["now"]["threads"][0]["id"]=="'"$GT"'")')" "True True"
+ARG="{\"team\":\"$TI\"}"
+chk "...pero no la línea de TI" \
+  "$(mcptext "$GI" sequence_next "$ARG" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any(t["id"]=="'"$GT"'" for s in (d.get("now"),d.get("then")) if s for t in s["threads"]))')" False
+chk ">>> la cola de un equipo sólo trae sus proyectos" \
+  "$(curl -s "$API/api/queue?kind=threads&state=open&team=$TI" -H "Authorization: $GI" | python3 -c 'import sys,json;print(all(c["workspace"]!="'"$GWS"'" for c in json.load(sys.stdin)["items"]))')" True
+
+chk ">>> el canal de un equipo personal es sólo de su dueño" \
+  "$(code "$API/api/channels?team=$GP" -H "Authorization: $C")" 403
+chk "...gina sí lo ve" "$(code "$API/api/channels?team=$GP" -H "Authorization: $GI")" 200
+chk ">>> un member no conecta el canal de su equipo" "$(code "$API/api/channels?team=$TI" -H "Authorization: $A")" 403
+
+# Lo que la IA lee dice su contexto, y no asigna a quien no ve el trabajo.
+ARG="{\"thread\":\"$GT\"}"
+chk ">>> thread_get dice el equipo del hilo" \
+  "$(mcptext "$GI" thread_get "$ARG" | python3 -c 'import sys,json;t=json.load(sys.stdin)["team"];print(t["name"], t["personal"])')" "Personal · Gina True"
+chk ">>> project_list dice el equipo de cada proyecto, con nombre" \
+  "$(mcptext "$GI" project_list '{}' | python3 -c 'import sys,json;print([p["team"]["name"] for p in json.load(sys.stdin) if p["id"]=="'"$GWS"'"][0])')" "Personal · Gina"
+chk ">>> change_list dice el equipo de cada cambio" \
+  "$(mcptext "$GI" change_list '{}' | python3 -c 'import sys,json;print([c["team"] for c in json.load(sys.stdin) if c.get("thread")=="'"$GT"'"][0])')" "Personal · Gina"
+ARG="{\"project\":\"$GWS\"}"
+chk ">>> people_list(project): sólo quienes ven el proyecto" \
+  "$(mcptext "$GI" people_list "$ARG" | python3 -c 'import sys,json;ids={p["id"] for p in json.load(sys.stdin)};print("'"$GINA"'" in ids, "'"$BID"'" in ids, "'"$CID"'" in ids, "'"$AID"'" in ids)')" "True True False False"
+ARG="{\"team\":\"$TI\"}"
+chk ">>> people_list(team): quienes están en el equipo" \
+  "$(mcptext "$C" people_list "$ARG" | python3 -c 'import sys,json;print("'"$AID"'" in {p["id"] for p in json.load(sys.stdin)})')" True
+# Asignar es invitar: quien no ve el proyecto se suma a él, si quien asigna
+# puede invitar (lead del proyecto o de su equipo).
+ARG="{\"thread\":\"$GT\",\"assignees\":[\"$BID\"]}"
+chk ">>> asignar a quien ya ve el proyecto (bob, invitado); la respuesta dice el equipo" \
+  "$(mcptext "$GI" thread_update "$ARG" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["team"]["name"])')" "Personal · Gina"
+ARG="{\"thread\":\"$GT\",\"assignees\":[\"$BID\",\"$AID\"]}"
+chk ">>> un miembro (bob) no suma a nadie asignándolo" \
+  "$(mcptext "$B" thread_update "$ARG" | grep -c 'pídele que lo invite')" 1
+chk "...y alice sigue sin ver el proyecto" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $A")" 404
+chk ">>> gina (lead) asigna a alice: queda invitada al proyecto" \
+  "$(mcptext "$GI" thread_update "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin).get("team",{})) > 0)')" True
+chk "...y alice ya lo ve" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $A")" 200
+chk "...pero no el equipo personal de gina" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $A" | python3 -c 'import sys,json;print(any(t["id"]=="'"$GP"'" for t in json.load(sys.stdin)["teams"]))')" False
+ARG="{\"project\":\"$GWS\",\"name\":\"Módulo de dirección\"}"
+GB=$(mcptext "$GI" bubble_create "$ARG")
+GBID=$(echo "$GB" | j "['id']")
+chk ">>> bubble_create dice el equipo del módulo" "$(echo "$GB" | j "['team']['name']")" "Personal · Gina"
+ARG="{\"bubble\":\"$GBID\",\"owners\":[\"$CID\"]}"
+chk ">>> hacer responsable de un módulo también invita (carol, el otro lead global)" \
+  "$(mcptext "$GI" bubble_update "$ARG" | j "['team']['personal']")" True
+chk "...carol ve ESE proyecto" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $C")" 200
+chk "...y nada más del equipo personal" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $C" | python3 -c 'import sys,json;print(any(t["id"]=="'"$GP"'" for t in json.load(sys.stdin)["teams"]))')" False
+# Por la API REST (la interfaz, también desde «Todos») vale lo mismo.
+ARG="{\"owners\":[\"$GINA\",\"$HANK\"]}"
+chk ">>> por REST, un miembro no invita asignando" \
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$GBID" -H "Authorization: $A" -H "$JS" -d "$ARG")" 400
+chk "...y hank sigue sin verlo" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $HK")" 404
+chk ">>> por REST, la lead del proyecto sí: hank queda invitado" \
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$GBID" -H "Authorization: $GI" -H "$JS" -d "$ARG")" 200
+chk "...y lo ve" "$(code "$API/api/collections/workspaces/records/$GWS" -H "Authorization: $HK")" 200
+OPS=$(curl -s -X POST "$API/api/teams" -H "Authorization: $C" -H "$JS" -d '{"name":"Operaciones"}' | j "['id']")
+chk ">>> un lead global crea un equipo compartido" "$([ -n "$OPS" ] && echo si || echo no)" si
+chk "...un member no" "$(code -X POST "$API/api/teams" -H "Authorization: $A" -H "$JS" -d '{"name":"Mío"}')" 403
+chk "...y lo ve el otro lead global" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any(t["id"]=="'"$OPS"'" for t in json.load(sys.stdin)["teams"]))')" True
+ARG="{\"user\":\"$AID\",\"role\":\"lead\"}"
+chk ">>> carol pone a alice de lead de Operaciones" \
+  "$(curl -s -X POST "$API/api/teams/$OPS/members" -H "Authorization: $C" -H "$JS" -d "$ARG" | python3 -c 'import sys,json;print([m["role"] for m in json.load(sys.stdin)["members"] if m["user"]=="'"$AID"'"][0])')" lead
+ARG="{\"name\":\"Almacén\",\"team\":\"Operaciones\"}"
+OWS=$(mcptext "$A" project_create "$ARG" | j "['id']")
+chk "...y alice crea un proyecto ahí, por nombre del equipo" \
+  "$(curl -s "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" | j "['team']")" "$OPS"
+chk ">>> alice no mueve el proyecto a TI: no es lead global" \
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $A" -H "$JS" -d "{\"team\":\"$TI\"}")" 403
+chk ">>> carol no lo mueve al equipo personal de gina" \
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "{\"team\":\"$GP\"}")" 403
+ARG="{\"team\":\"$TI\"}"
+chk ">>> carol sí lo mueve a TI: lidera los dos" \
+  "$(curl -s -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "$ARG" | j "['team']")" "$TI"
+chk ">>> un equipo con proyectos no se borra" \
+  "$(code -X DELETE "$API/api/teams/$GP" -H "Authorization: $GI")" 400
+chk ">>> uno vacío sí" "$(code -X DELETE "$API/api/teams/$OPS" -H "Authorization: $C")" 204
+chk ">>> team_list: los equipos y el papel en cada uno" \
+  "$(mcptext "$GI" team_list '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(sorted((t["name"],t["role"],t["personal"]) for t in d["teams"]))')" "[('Personal · Gina', 'lead', True), ('TI', 'lead', False)]"
 
 chk ">>> el superuser SÍ ve el board (se salta las reglas en todos lados o en ninguno)" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $SU")" 200

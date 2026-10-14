@@ -2,13 +2,20 @@
   // Canales: por dónde entra al inbox lo que no se escribe en la app.
   //
   // Cada canal es un plugin del servidor; esta pantalla enseña los que el
-  // binario trae. WhatsApp escucha UN grupo: se vincula una cuenta (mejor un
+  // binario trae. Cada EQUIPO conecta el suyo —su propia cuenta, su propio
+  // grupo— y lo que entra va al inbox de ese equipo: las ideas se quedan en su
+  // contexto. WhatsApp escucha UN grupo: se vincula una cuenta (mejor un
   // número dedicado), se elige el grupo, y cada mensaje que llega ahí entra al
   // inbox y recibe 📥.
   import { Switch } from '@skeletonlabs/skeleton-svelte';
   import { api, type ChannelStatus } from '../lib/api';
   import Confirm, { type Doom } from './Confirm.svelte';
   import { untrack } from 'svelte';
+  import { teams } from '../lib/teams.svelte';
+
+  /** Los equipos que lideras: de esos conectas el canal. */
+  const led = $derived(teams.list.filter((t) => t.role === 'lead'));
+  let team = $state(untrack(() => (teams.leads(teams.current) ? teams.current : (teams.list.find((t) => t.role === 'lead')?.id ?? ''))));
 
   let rows = $state<ChannelStatus[]>([]);
   let error = $state('');
@@ -17,14 +24,15 @@
 
   async function load() {
     try {
-      rows = await api.channels();
+      rows = await api.channels(team);
       error = '';
     } catch (e) {
       error = (e as Error).message;
     }
   }
   $effect(() => {
-    load();
+    void team;
+    untrack(() => { rows = []; groups = []; phoneCode = ''; load(); });
   });
 
   const wa = $derived(rows.find((r) => r.kind === 'whatsapp'));
@@ -45,7 +53,7 @@
     const tick = async () => {
       await load();
       if (rows.find((r) => r.kind === 'whatsapp')?.state === 'pairing' && !phoneCode) {
-        const next = await api.channelQR('whatsapp');
+        const next = await api.channelQR('whatsapp', team);
         if (qrUrl) URL.revokeObjectURL(qrUrl);
         qrUrl = next;
       }
@@ -72,7 +80,7 @@
   let phone = $state('');
   let phoneCode = $state('');
   async function pairPhone() {
-    const out = await run(api.channelAction<{ code: string }>('whatsapp', 'pair-phone', { phone }));
+    const out = await run(api.channelAction<{ code: string }>('whatsapp', 'pair-phone', { phone }, team));
     if (out?.code) phoneCode = out.code;
   }
 
@@ -80,13 +88,13 @@
   let groups = $state<{ id: string; name: string }[]>([]);
   let groupName = $state('');
   async function loadGroups() {
-    groups = (await run(api.channelAction<{ id: string; name: string }[]>('whatsapp', 'groups'))) ?? [];
+    groups = (await run(api.channelAction<{ id: string; name: string }[]>('whatsapp', 'groups', {}, team))) ?? [];
   }
   $effect(() => {
     if (waState === 'connected' && untrack(() => !groups.length)) untrack(loadGroups);
   });
   function chooseGroup(body: { id?: string; name?: string }) {
-    run(api.channelAction('whatsapp', 'group', body));
+    run(api.channelAction('whatsapp', 'group', body, team));
   }
 
   const stateText: Record<string, string> = {
@@ -101,9 +109,20 @@
 
 <section class="set-section">
   <p class="set-lead">
-    Por dónde entra al inbox lo que no se escribe en la app. Lo que llega se captura a nombre de
-    quien enciende el canal, y dice quién lo mandó.
+    Por dónde entra al inbox lo que no se escribe en la app. Cada equipo tiene su propio canal, con
+    su propia cuenta y su propio grupo: lo que llega va al inbox de ESE equipo, a nombre de quien
+    enciende el canal, y dice quién lo mandó.
   </p>
+  {#if led.length > 1}
+    <label class="set-row team-pick">
+      <span>Canal del equipo</span>
+      <select class="select" bind:value={team}>
+        {#each led as t (t.id)}<option value={t.id}>{t.personal ? '🔒 ' : ''}{t.name}</option>{/each}
+      </select>
+    </label>
+  {:else if led.length === 1}
+    <p class="faint text-sm">Canal del equipo <b>{led[0].name}</b>.</p>
+  {/if}
 
   {#if error}<p class="set-err" role="alert">{error}</p>{/if}
 
@@ -116,7 +135,7 @@
           class="ml-auto"
           checked={wa.enabled}
           disabled={busy}
-          onCheckedChange={(e: { checked: boolean }) => run(api.setChannel('whatsapp', e.checked))}>
+          onCheckedChange={(e: { checked: boolean }) => run(api.setChannel('whatsapp', e.checked, team))}>
           <Switch.Control><Switch.Thumb /></Switch.Control>
           <Switch.HiddenInput />
         </Switch>
@@ -144,7 +163,7 @@
             </p>
           {:else}
             <div class="set-row">
-              <button class="btn btn-sm preset-filled-primary-500" disabled={busy} onclick={() => run(api.channelAction('whatsapp', 'pair'))}>
+              <button class="btn btn-sm preset-filled-primary-500" disabled={busy} onclick={() => run(api.channelAction('whatsapp', 'pair', {}, team))}>
                 Vincular con QR
               </button>
               <span class="faint text-xs">o</span>
@@ -198,7 +217,7 @@
                 go: () => {
                   phoneCode = '';
                   groups = [];
-                  run(api.channelAction('whatsapp', 'unlink'));
+                  run(api.channelAction('whatsapp', 'unlink', {}, team));
                 },
               })}>
             Desvincular
@@ -230,4 +249,6 @@
   .groups { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0; padding: 0; list-style: none; }
   .groups button { padding: 0.2rem 0.6rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.8rem; }
   .groups button.on { background: var(--hover); border-color: currentColor; font-weight: 600; }
+  .team-pick { gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
+  .team-pick .select { max-width: 18rem; }
 </style>

@@ -49,7 +49,8 @@ explicit meaning so it never collides with tool terms or engineering terms.
 
 | Term | Meaning in Bubble Work | ⚠️ Do not confuse with |
 |------|------------------------|------------------------|
-| **Workspace** | The boundary for a body of work (a project, or a temporal frame like a week/quarter) | A vendor "Workspace" (e.g. Plane's org-level container) |
+| **Team** | A context of work: its workspaces, objectives, sequence, calendar, inbox of ideas and channel. A personal team is one person's private context | An org chart — a team is where work is *seen*, not who reports to whom |
+| **Workspace** | The boundary for a body of work (a project, or a temporal frame like a week/quarter). Lives in one team | A vendor "Workspace" (e.g. Plane's org-level container) |
 | **Bubble** | A durable grouping of related threads — a unit of *attention* | A folder — a bubble has an outcome and can die |
 | **Thread** | One executable unit of work inside a bubble | OS/CPU threads |
 | **Cycle** | The repeating pulse against which heat is measured (the *heat window*) | A calendar month — it's a rhythm, not a date |
@@ -63,6 +64,7 @@ explicit meaning so it never collides with tool terms or engineering terms.
 
 ```mermaid
 flowchart TD
+    TM["👥 Team<br/><i>context</i>"] --> W
     W["🗂️ Workspace<br/><i>boundary</i>"]
     W --> B1["🫧 Bubble<br/><i>attention · has an outcome</i>"]
     W --> B2["🫧 Bubble"]
@@ -80,6 +82,19 @@ flowchart TD
     class T1,T2 thr;
     class BR,LB art;
 ```
+
+### 2.0 Team — the context
+
+The outermost frame: *whose plan is this part of?* A team holds workspaces and
+owns what is planned across them — objectives, the execution sequence, the
+calendar, the inbox of ideas and the channel ideas arrive by. Nothing from one
+team mixes into another.
+
+People belong to teams as **lead** or **member**. A global lead (the role that
+also administers people, tokens and prompts) leads every shared team. A
+**personal team** is one person's private context: nobody else sees it, not even
+another global lead; working with someone there means inviting them to a
+*workspace*, which shows them that workspace and nothing else of the team.
 
 ### 2.1 Workspace — the boundary
 

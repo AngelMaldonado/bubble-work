@@ -43,10 +43,27 @@ func personName(u *core.Record) string {
 }
 
 // People lista a las personas activas. Refleja `users.ListRule`: cualquiera con
-// sesión.
-func People(app core.App, auth *core.Record) ([]Person, error) {
+// sesión. Con `project`, sólo quienes ven ese proyecto (a quién tiene sentido
+// asignar o poner de responsable); con `team`, quienes están en ese equipo.
+func People(app core.App, auth *core.Record, project, team string) ([]Person, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
+	}
+	wsID := ""
+	if project != "" {
+		ws, _, err := WorkspaceFor(app, auth, project)
+		if err != nil {
+			return nil, err
+		}
+		wsID = ws.Id
+	}
+	teamID := ""
+	if team != "" {
+		id, err := ResolveTeam(app, auth, team)
+		if err != nil {
+			return nil, err
+		}
+		teamID = id
 	}
 	rows, err := app.FindRecordsByFilter("users", "deleted_at = ''", "display_name", 0, 0)
 	if err != nil {
@@ -54,9 +71,81 @@ func People(app core.App, auth *core.Record) ([]Person, error) {
 	}
 	out := make([]Person, 0, len(rows))
 	for _, u := range rows {
+		if wsID != "" && !canSee(app, u, wsID) {
+			continue
+		}
+		if teamID != "" && !InTeam(app, u, teamID) {
+			continue
+		}
 		out = append(out, Person{ID: u.Id, Name: personName(u), Role: u.GetString("role"), Me: u.Id == auth.Id})
 	}
 	return out, nil
+}
+
+// joinAssigned: asignar es invitar. Quien queda de responsable de un módulo o
+// asignado a un hilo y no ve el proyecto se suma a él como miembro (ve ESE
+// proyecto, nada más del equipo), siempre que quien asigna pueda invitar: un
+// lead del proyecto o de su equipo. Si no puede, se rechaza: asignar no es una
+// puerta para saltarse quién invita. Devuelve a quién sumó.
+func joinAssigned(app core.App, auth *core.Record, ids []string, wsID string) ([]string, error) {
+	joined := []string{}
+	var col *core.Collection
+	for _, id := range ids {
+		u, err := app.FindRecordById("users", id)
+		if err != nil || canSee(app, u, wsID) {
+			continue
+		}
+		if IsSuperuser(auth) || !leadsWorkspace(app, auth, wsID) {
+			return nil, fmt.Errorf("%s no está en este proyecto, y sólo un lead del proyecto o de su equipo puede invitarlo: pídele que lo invite", personName(u))
+		}
+		if col == nil {
+			if col, err = app.FindCollectionByNameOrId("memberships"); err != nil {
+				return nil, err
+			}
+		}
+		m := core.NewRecord(col)
+		m.Set("workspace", wsID)
+		m.Set("user", id)
+		m.Set("role", "member")
+		if err := app.Save(m); err != nil {
+			return nil, err
+		}
+		joined = append(joined, personName(u))
+	}
+	return joined, nil
+}
+
+// assignedOnRequest hace lo mismo por la API REST (la interfaz): un campo de
+// personas (`owners` de un módulo, `assignees` de un hilo) que trae a alguien
+// que no ve el proyecto lo suma, en la misma transacción que la escritura.
+func assignedOnRequest(field string) func(e *core.RecordRequestEvent) error {
+	return func(e *core.RecordRequestEvent) error {
+		if !isPersonAuth(e.Auth) {
+			return e.Next()
+		}
+		before := map[string]bool{}
+		if !e.Record.IsNew() {
+			for _, id := range e.Record.Original().GetStringSlice(field) {
+				before[id] = true
+			}
+		}
+		fresh := []string{}
+		for _, id := range e.Record.GetStringSlice(field) {
+			if !before[id] {
+				fresh = append(fresh, id)
+			}
+		}
+		if len(fresh) == 0 {
+			return e.Next()
+		}
+		return e.App.RunInTransaction(func(tx core.App) error {
+			defer swapApp(e, tx)()
+			if _, err := joinAssigned(tx, e.Auth, fresh, e.Record.GetString("workspace")); err != nil {
+				return e.BadRequestError(err.Error(), err)
+			}
+			return e.Next()
+		})
+	}
 }
 
 func peopleNamed(app core.App, ids []string) []Person {
@@ -95,6 +184,8 @@ func activePeople(app core.App, ids []string) ([]string, error) {
 // decide volverla trabajo.
 type Idea struct {
 	ID         string   `json:"id"`
+	Team       string   `json:"team"`
+	TeamName   string   `json:"team_name"`
 	Note       string   `json:"note"`
 	Body       string   `json:"body,omitempty"`
 	Source     string   `json:"source"`
@@ -116,8 +207,12 @@ func ideaOf(app core.App, r *core.Record, full bool) Idea {
 	if u, err := app.FindRecordById("users", r.GetString("captured_by")); err == nil {
 		by = personName(u)
 	}
+	team := ""
+	if t, err := app.FindRecordById("teams", r.GetString("team")); err == nil {
+		team = t.GetString("name")
+	}
 	v := Idea{
-		ID: r.Id, Note: r.GetString("note"), Source: src, From: r.GetString("source_from"),
+		ID: r.Id, Team: r.GetString("team"), TeamName: team, Note: r.GetString("note"), Source: src, From: r.GetString("source_from"),
 		CapturedBy: by, Created: r.GetDateTime("created").String(),
 		Thread: r.GetString("thread"), Bubble: r.GetString("bubble"),
 	}
@@ -129,29 +224,42 @@ func ideaOf(app core.App, r *core.Record, full bool) Idea {
 	return v
 }
 
-// ideaFor refleja `inbox_items.ViewRule`: el lead global, o quien la capturó.
-// Lo que entra por WhatsApp lo captura quien encendió el canal.
+// ideaFor refleja `inbox_items.ViewRule`: quien la capturó, o un lead de su
+// equipo. Lo que entra por el WhatsApp de un equipo lo captura quien encendió
+// ese canal, y es de ese equipo.
 func ideaFor(app core.App, auth *core.Record, id string) (*core.Record, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
 	}
 	r, err := app.FindRecordById("inbox_items", id)
-	if err != nil || (!isGlobalLead(auth) && r.GetString("captured_by") != auth.Id) {
+	if err != nil || (r.GetString("captured_by") != auth.Id && !LeadsTeam(app, auth, r.GetString("team"))) {
 		return nil, ErrDenied
 	}
 	return r, nil
 }
 
-// Ideas lista el inbox que la persona puede ver. `source` filtra (`whatsapp`,
-// `app`); `decided` incluye las que ya se volvieron trabajo.
-func Ideas(app core.App, auth *core.Record, source string, decided bool) ([]Idea, error) {
+// Ideas lista el inbox que la persona puede ver: lo suyo, y lo de los equipos
+// que lidera. `team` limita a un equipo; `source` filtra (`whatsapp`, `app`);
+// `decided` incluye las que ya se volvieron trabajo.
+func Ideas(app core.App, auth *core.Record, team, source string, decided bool) ([]Idea, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
 	}
-	where := []string{}
 	params := dbx.Params{"me": auth.Id}
-	if !isGlobalLead(auth) {
-		where = append(where, "captured_by = {:me}")
+	scope := []string{"captured_by = {:me}"}
+	for i, t := range LedTeams(app, auth) {
+		k := fmt.Sprintf("t%d", i)
+		params[k] = t
+		scope = append(scope, "team = {:"+k+"}")
+	}
+	where := []string{"(" + strings.Join(scope, " || ") + ")"}
+	if team != "" {
+		id, err := ResolveTeam(app, auth, team)
+		if err != nil {
+			return nil, err
+		}
+		params["team"] = id
+		where = append(where, "team = {:team}")
 	}
 	switch source {
 	case "":
@@ -184,11 +292,19 @@ func IdeaRead(app core.App, auth *core.Record, id string) (Idea, error) {
 	return ideaOf(app, r, true), nil
 }
 
-// IdeaCapture anota una idea en el inbox de quien llama. Refleja
-// `inbox_items.CreateRule` y el hook que firma `captured_by`.
-func IdeaCapture(app core.App, auth *core.Record, note, body string) (Idea, error) {
+// IdeaCapture anota una idea en el inbox de un equipo del que la persona es
+// parte (vacío: su equipo por defecto). Refleja `inbox_items.CreateRule` y los
+// hooks que firman `captured_by` y completan `team`.
+func IdeaCapture(app core.App, auth *core.Record, team, note, body string) (Idea, error) {
 	if !isPersonAuth(auth) {
 		return Idea{}, ErrNotAPerson
+	}
+	teamID, err := ResolveTeam(app, auth, team)
+	if err != nil {
+		return Idea{}, err
+	}
+	if !InTeam(app, auth, teamID) {
+		return Idea{}, fmt.Errorf("una idea va al inbox de un equipo del que eres parte")
 	}
 	note = strings.TrimSpace(note)
 	if note == "" {
@@ -202,6 +318,7 @@ func IdeaCapture(app core.App, auth *core.Record, note, body string) (Idea, erro
 	r.Set("note", note)
 	r.Set("body", body)
 	r.Set("captured_by", auth.Id)
+	r.Set("team", teamID)
 	if err := app.Save(r); err != nil {
 		return Idea{}, err
 	}
@@ -237,8 +354,19 @@ func IdeaDecide(app core.App, auth *core.Record, id, thread, bubble string) (Ide
 	if err != nil {
 		return Idea{}, err
 	}
+	// Una idea se vuelve trabajo en SU equipo: el contexto en el que nació.
+	same := func(wsTeam string) error {
+		if wsTeam != r.GetString("team") {
+			return fmt.Errorf("esa idea es de otro equipo: se vuelve trabajo en un proyecto de su propio equipo")
+		}
+		return nil
+	}
 	if thread != "" {
-		if _, _, _, err := ThreadFor(app, auth, thread); err != nil {
+		_, ws, _, err := ThreadFor(app, auth, thread)
+		if err != nil {
+			return Idea{}, err
+		}
+		if err := same(ws.GetString("team")); err != nil {
 			return Idea{}, err
 		}
 	}
@@ -247,7 +375,11 @@ func IdeaDecide(app core.App, auth *core.Record, id, thread, bubble string) (Ide
 		if err != nil {
 			return Idea{}, ErrDenied
 		}
-		if _, _, err := WorkspaceFor(app, auth, b.GetString("workspace")); err != nil {
+		ws, _, err := WorkspaceFor(app, auth, b.GetString("workspace"))
+		if err != nil {
+			return Idea{}, err
+		}
+		if err := same(ws.GetString("team")); err != nil {
 			return Idea{}, err
 		}
 	}
@@ -625,10 +757,10 @@ func SetPin(app core.App, auth *core.Record, thread string, pinned bool) ([]Pin,
 
 // ---- repositorios -------------------------------------------------------------
 
-// leadsWorkspace refleja la regla de escritura de `workspace_repos`: el lead
-// global, o un lead de ese proyecto.
+// leadsWorkspace refleja la regla de escritura de `workspace_repos`: un lead
+// del equipo del proyecto, o un lead de ese proyecto.
 func leadsWorkspace(app core.App, auth *core.Record, wsID string) bool {
-	if isGlobalLead(auth) {
+	if LeadsWorkspaceTeam(app, auth, wsID) {
 		return true
 	}
 	if !isPersonAuth(auth) {
@@ -858,6 +990,7 @@ type ThreadInfo struct {
 	Seq       int            `json:"seq"`
 	Name      string         `json:"name"`
 	Project   string         `json:"project"`
+	Team      TeamRef        `json:"team"`
 	Bubble    string         `json:"bubble,omitempty"`
 	BubbleNm  string         `json:"bubble_name,omitempty"`
 	State     string         `json:"state"`
@@ -901,6 +1034,7 @@ func ThreadGet(app core.App, auth *core.Record, id string) (ThreadInfo, error) {
 	}
 	v := ThreadInfo{
 		ID: th.Id, Seq: th.GetInt("seq"), Name: th.GetString("name"), Project: ws.GetString("slug"),
+		Team:   TeamRefOf(app, ws.GetString("team")),
 		Bubble: th.GetString("bubble"), Priority: th.GetString("priority"), Sequence: th.GetInt("sequence"),
 		DocPath: th.GetString("doc_path"), Assignees: peopleNamed(app, th.GetStringSlice("assignees")),
 		Labels: []string{}, Relations: []RelationView{}, Evidence: []Evidence{}, States: []StateView{},
@@ -965,6 +1099,9 @@ func setThreadMore(app core.App, auth *core.Record, th, ws *core.Record, in Thre
 	if in.Assignees != nil {
 		ids, err := activePeople(app, *in.Assignees)
 		if err != nil {
+			return false, err
+		}
+		if _, err := joinAssigned(app, auth, ids, ws.Id); err != nil {
 			return false, err
 		}
 		th.Set("assignees", ids)
@@ -1079,11 +1216,11 @@ func ThreadUnrelate(app core.App, auth *core.Record, id string) error {
 
 // ---- secuencia -----------------------------------------------------------------------
 
-// SetSequence pone un hilo o un módulo en la secuencia del departamento.
-// Refleja `threads.UpdateRule`: `sequence` sólo lo escribe el lead global.
+// SetSequence pone un hilo o un módulo en la secuencia de su equipo.
+// Refleja `threads.UpdateRule`: `sequence` lo escribe un lead del equipo.
 func SetSequence(app core.App, auth *core.Record, kind, id string, n int) (*core.Record, error) {
-	if !isGlobalLead(auth) {
-		return nil, fmt.Errorf("sólo el lead global ordena la secuencia")
+	if !isPersonAuth(auth) {
+		return nil, ErrNotAPerson
 	}
 	if n < 0 {
 		return nil, fmt.Errorf("la secuencia es 0 (fuera) o un paso positivo")
@@ -1101,9 +1238,15 @@ func SetSequence(app core.App, auth *core.Record, kind, id string, n int) (*core
 		if err != nil {
 			return nil, ErrDenied
 		}
+		if _, _, err := WorkspaceFor(app, auth, b.GetString("workspace")); err != nil {
+			return nil, err
+		}
 		r = b
 	default:
 		return nil, fmt.Errorf("da un `thread` o un `bubble`")
+	}
+	if !LeadsWorkspaceTeam(app, auth, r.GetString("workspace")) {
+		return nil, fmt.Errorf("sólo un lead del equipo ordena su secuencia")
 	}
 	r.Set("sequence", n)
 	return r, app.Save(r)
@@ -1117,6 +1260,7 @@ type Change struct {
 	Kind    string         `json:"kind"`
 	Warms   bool           `json:"warms"`
 	Project string         `json:"project"`
+	Team    string         `json:"team"`
 	Thread  string         `json:"thread,omitempty"`
 	Name    string         `json:"name,omitempty"`
 	Actor   string         `json:"actor,omitempty"`
@@ -1172,10 +1316,12 @@ func Changes(app core.App, auth *core.Record, since, project string, limit int) 
 		return out, nil
 	}
 	slug := map[string]string{}
+	teamName := map[string]string{}
 	rows := []*core.Record{}
 	at := from.Format("2006-01-02 15:04:05.000Z")
 	for _, w := range wss {
 		slug[w.Id] = w.GetString("slug")
+		teamName[w.Id] = TeamRefOf(app, w.GetString("team")).Name
 		part, err := app.FindRecordsByFilter("events", "at >= {:from} && workspace = {:ws}", "-at", limit, 0,
 			dbx.Params{"from": at, "ws": w.Id})
 		if err != nil {
@@ -1191,6 +1337,7 @@ func Changes(app core.App, auth *core.Record, since, project string, limit int) 
 	for _, e := range rows {
 		c := Change{
 			At: e.GetDateTime("at").String(), Kind: e.GetString("kind"), Project: slug[e.GetString("workspace")],
+			Team: teamName[e.GetString("workspace")],
 		}
 		switch c.Kind {
 		case EvDocumentChanged, EvThreadCreated, EvThreadCompleted, EvLinkAdded:
@@ -1219,21 +1366,29 @@ func Changes(app core.App, auth *core.Record, since, project string, limit int) 
 
 // ---- artefactos ------------------------------------------------------------------------
 
-// ArtifactsOf lista los artefactos de quien llama (o, para el lead global con
-// `all`, los del departamento), los abiertos primero. La misma lista que
+// ArtifactsOf lista los artefactos de quien llama (o, con `all`, también los
+// de los equipos que lidera), los abiertos primero. La misma lista que
 // `GET /api/artifacts`.
 func ArtifactsOf(app core.App, auth *core.Record, all bool) ([]ArtifactView, error) {
 	if !isPersonAuth(auth) {
 		return nil, ErrNotAPerson
 	}
 	filter := "creator = {:c}"
+	params := dbx.Params{"c": auth.Id}
 	if all {
-		if !isGlobalLead(auth) {
-			return nil, fmt.Errorf("sólo el lead global lee los artefactos del departamento")
+		led := LedTeams(app, auth)
+		if len(led) == 0 {
+			return nil, fmt.Errorf("sólo un lead de equipo lee los artefactos de su equipo")
 		}
-		filter = ""
+		scope := []string{filter}
+		for i, t := range led {
+			k := fmt.Sprintf("t%d", i)
+			params[k] = t
+			scope = append(scope, "inbox_item.team = {:"+k+"}")
+		}
+		filter = strings.Join(scope, " || ")
 	}
-	rows, err := app.FindRecordsByFilter("artifacts", filter, "-touched_at", 0, 0, dbx.Params{"c": auth.Id})
+	rows, err := app.FindRecordsByFilter("artifacts", filter, "-touched_at", 0, 0, params)
 	if err != nil {
 		return nil, err
 	}

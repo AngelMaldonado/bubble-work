@@ -14,6 +14,8 @@
   import SettingsPeople from './SettingsPeople.svelte';
   import SettingsMe from './SettingsMe.svelte';
   import SettingsTokens from './SettingsTokens.svelte';
+  import SettingsTeams from './SettingsTeams.svelte';
+  import { teams } from '../lib/teams.svelte';
 
   let {
     me,
@@ -36,6 +38,8 @@
   } = $props();
 
   const isLead = $derived(me.role === 'lead');
+  /** Quien lidera un equipo conecta su canal, aunque no sea lead global. */
+  const leadsATeam = $derived(teams.list.some((t) => t.role === 'lead'));
 
   // En el orden en que se pidieron. Flotabilidad y Usuarios sólo existen para
   // el lead global: son sus decisiones, y una tab que un member sólo puede
@@ -46,9 +50,10 @@
           { id: 'flotabilidad', label: 'Flotabilidad' },
           { id: 'usuarios', label: 'Usuarios' },
           { id: 'funciones', label: 'Funciones' },
-          { id: 'canales', label: 'Canales' },
         ]
       : []),
+    { id: 'equipos', label: 'Equipos' },
+    ...(isLead || leadsATeam ? [{ id: 'canales', label: 'Canales' }] : []),
     { id: 'mi-usuario', label: 'Mi usuario' },
     { id: 'tokens', label: 'Tokens' },
   ]);
@@ -87,6 +92,11 @@
         <Tabs.Content value="funciones">
           <SettingsFeatures {features} {onfeatures} />
         </Tabs.Content>
+      {/if}
+      <Tabs.Content value="equipos">
+        <SettingsTeams {me} />
+      </Tabs.Content>
+      {#if isLead || leadsATeam}
         <Tabs.Content value="canales">
           <SettingsChannels />
         </Tabs.Content>

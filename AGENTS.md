@@ -11,7 +11,10 @@ both Claude Code and Codex load.
 
 ## Vocabulary (keep the metaphor human-facing)
 
-- **Workspace** — the boundary for a body of work. Not a Plane "Workspace".
+- **Team** — a context of work: workspaces, objectives, sequence, calendar,
+  inbox and channel. A personal team is private even from another global lead.
+- **Workspace** — the boundary for a body of work, inside a team. Not a Plane
+  "Workspace".
 - **Bubble** — a durable grouping of related work; the unit of *attention*.
   It has an outcome and can die.
 - **Cycle** — the repeating pulse (heat window) recency is measured against.

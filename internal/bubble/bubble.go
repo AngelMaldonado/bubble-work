@@ -17,6 +17,9 @@ import (
 
 // Register binds Bubble's hooks and routes to the app.
 func Register(app core.App, t *tree.Tree) {
+	// El equipo primero: el proyecto se valida y se completa antes de
+	// fundarlo.
+	registerTeams(app)
 	app.OnRecordCreateRequest("workspaces").BindFunc(foundingMembership)
 
 	app.OnRecordCreateRequest("users").BindFunc(nameable)

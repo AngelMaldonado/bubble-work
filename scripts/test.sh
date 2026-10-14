@@ -139,8 +139,9 @@ chk "anónimo lista 0 workspaces" "$(curl -s "$API/api/collections/workspaces/re
 INV=$(pcode memberships "$A" "{\"workspace\":\"$ALPHA\",\"user\":\"$BID\",\"role\":\"member\"}")
 chk ">>> alice (lead del workspace) SÍ puede invitar" "$INV" 200
 chk "bob (member) ahora ve alpha y beta" "$(list workspaces "$B" | j "['totalItems']")" 2
+ARG="{\"workspace\":\"$ALPHA\",\"user\":\"$CID\",\"role\":\"member\"}"
 chk ">>> bob (member raso) NO puede invitar" \
-  "$(pcode memberships "$B" "{\"workspace\":\"$ALPHA\",\"user\":\"$CID\",\"role\":\"member\"}")" 400
+  "$(pcode memberships "$B" "$ARG")" 400
 
 echo
 chk ">>> bob (member) NO puede editar alpha  [las dos ?= atan a la MISMA fila]" \
@@ -150,7 +151,8 @@ chk ">>> alice (lead) SÍ puede editar alpha" \
 echo
 
 chk "alice ve el roster de alpha (2), no el de beta" "$(list memberships "$A" | j "['totalItems']")" 2
-chk "membresía duplicada rechazada (índice único)" "$(pcode memberships "$A" "{\"workspace\":\"$ALPHA\",\"user\":\"$BID\",\"role\":\"lead\"}")" 400
+ARG="{\"workspace\":\"$ALPHA\",\"user\":\"$BID\",\"role\":\"lead\"}"
+chk "membresía duplicada rechazada (índice único)" "$(pcode memberships "$A" "$ARG")" 400
 chk "slug duplicado rechazado" "$(pcode workspaces "$A" '{"name":"Otro","slug":"alpha"}')" 400
 chk "slug con espacios/mayúsculas rechazado" "$(pcode workspaces "$A" '{"name":"Otro","slug":"Con Espacios"}')" 400
 
@@ -176,12 +178,15 @@ T4=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Con seq falso\",\"s
 chk "el cliente no puede imponer su seq" "$(echo "$T4" | j "['seq']")" 3
 
 echo
+ARG="{\"workspace\":\"$BETA\",\"bubble\":\"$BU_A\",\"name\":\"Colado\"}"
 chk ">>> thread de beta con una bubble de ALPHA se rechaza" \
-  "$(pcode threads "$B" "{\"workspace\":\"$BETA\",\"bubble\":\"$BU_A\",\"name\":\"Colado\"}")" 400
+  "$(pcode threads "$B" "$ARG")" 400
+ARG="{\"workspace\":\"$ALPHA\",\"name\":\"Colado\",\"group\":\"backlog\"}"
 chk ">>> bob (member) NO puede crear un state en alpha (config = lead)" \
-  "$(pcode states "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"Colado\",\"group\":\"backlog\"}")" 400
+  "$(pcode states "$B" "$ARG")" 400
+ARG="{\"workspace\":\"$ALPHA\",\"name\":\"chore\"}"
 chk ">>> bob (member) SÍ puede crear un label en alpha" \
-  "$(pcode labels "$B" "{\"workspace\":\"$ALPHA\",\"name\":\"chore\"}")" 200
+  "$(pcode labels "$B" "$ARG")" 200
 chk ">>> bob (member) NO puede borrar una bubble de alpha (lead)" \
   "$(code -X DELETE "$API/api/collections/bubbles/records/$BU_A" -H "Authorization: $B")" 404
 echo
@@ -428,10 +433,12 @@ BODY="{\"path\":\"../fuera.md\",\"base\":\"$E0\",\"content\":\"x\"}"
 CODE=$(wpatch "$A" "$BODY")
 chk ">>> una ruta que se escapa se rechaza" "$CODE" 400
 
+ARG="{\"path\":\"docs/de-bob.md\",\"base\":\"$E0\",\"content\":\"# Bob\\n\"}"
 chk "un miembro raso también escribe la wiki" \
-  "$(wpatch "$B" "{\"path\":\"docs/de-bob.md\",\"base\":\"$E0\",\"content\":\"# Bob\\n\"}")" 200
+  "$(wpatch "$B" "$ARG")" 200
+ARG="{\"path\":\"docs/colado.md\",\"base\":\"$E0\",\"content\":\"x\"}"
 chk ">>> erin (sin membresía) no escribe la wiki" \
-  "$(wpatch "$ER" "{\"path\":\"docs/colado.md\",\"base\":\"$E0\",\"content\":\"x\"}")" 404
+  "$(wpatch "$ER" "$ARG")" 404
 
 TREE=$(curl -s "$API/api/workspaces/$ALPHA/tree" -H "Authorization: $A")
 chk ">>> el árbol lista docs, threads y README" \
@@ -591,10 +598,12 @@ chk "erin no ve prioridades de alpha" "$(PRI "(workspace='$ALPHA')" "$ER" | j "[
 echo
 OBJ=$(post objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\",\"outcome\":\"todo el ingreso facturado\"}" | j "['id']")
 chk ">>> el lead GLOBAL define el objetivo" "$([ -n "$OBJ" ] && echo si || echo no)" si
+ARG="{\"name\":\"Mio\"}"
 chk ">>> el lead de un workspace NO lo define: los objetivos son de los leads del equipo" \
-  "$(pcode objectives "$B" "{\"name\":\"Mio\"}")" 403
+  "$(pcode objectives "$B" "$ARG")" 403
+ARG="{\"name\":\"Cerrar el trimestre en verde\"}"
 chk "el mismo nombre dos veces se rechaza" \
-  "$(pcode objectives "$C" "{\"name\":\"Cerrar el trimestre en verde\"}")" 400
+  "$(pcode objectives "$C" "$ARG")" 400
 chk ">>> el plan lo LEE el lead global, y nadie más" \
   "$(curl -s "$API/api/collections/objectives/records" -H "Authorization: $C" | j "['totalItems']")" 1
 chk "...ni siquiera un lead de workspace" \
@@ -689,8 +698,9 @@ chk ">>> un SVG no entra: podría ejecutar código en nuestro origen" \
 # Triar: la nota se convierte en un thread —y ahí se decide de qué workspace es—
 # y se queda apuntando a lo que fue.
 T9=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Rate limit del portal\"}" | j "['id']")
+ARG="{\"thread\":\"$T9\"}"
 chk ">>> el lead global tría la nota a un thread" \
-  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" -H "$JS" -d "{\"thread\":\"$T9\"}")" 200
+  "$(code -X PATCH "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" -H "$JS" -d "$ARG")" 200
 chk "...y la nota conserva a dónde fue" \
   "$(curl -s "$API/api/collections/inbox_items/records/$IN1ID" -H "Authorization: $C" | j "['thread']")" "$T9"
 
@@ -917,12 +927,15 @@ chk ">>> house_rules ya no existe: era una segunda copia" \
 # ---- AGENTS.md del departamento: lo escribe el lead, lo lee cada agente ----
 chk ">>> sin versiones, agents_md lo dice en vez de fallar" \
   "$(mcptext "$A" agents_md '{}' | head -1)" "AGENTS.md (operators) · todavía no hay ninguna versión"
+ARG="{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}"
 chk ">>> un member NO crea una versión" \
-  "$(pcode agents_md "$A" "{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}")" 400
+  "$(pcode agents_md "$A" "$ARG")" 400
+ARG="{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}"
 chk ">>> el lead global NO firma una versión a nombre de otro" \
-  "$(pcode agents_md "$C" "{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}")" 400
+  "$(pcode agents_md "$C" "$ARG")" 400
+ARG="{\"role\":\"operators\",\"content\":\"# WoW v1\",\"author\":\"$CID\"}"
 chk ">>> el lead global sí crea la suya" \
-  "$(pcode agents_md "$C" "{\"role\":\"operators\",\"content\":\"# WoW v1\",\"author\":\"$CID\"}")" 200
+  "$(pcode agents_md "$C" "$ARG")" 200
 post agents_md "$C" "{\"role\":\"operators\",\"content\":\"# WoW v2\",\"author\":\"$CID\"}" >/dev/null
 post agents_md "$C" "{\"role\":\"planner\",\"content\":\"# Plan v1\",\"author\":\"$CID\"}" >/dev/null
 # La forma de trabajar del departamento va AL FINAL, después de la guía: lo
@@ -991,10 +1004,12 @@ chk ">>> ...y vuelve como markdown de verdad, sin \\n escapados" \
 H2=$(hashof "$W1")
 chk ">>> ...con el hash NUEVO, para encadenar otro cambio sin releer" \
   "$([ -n "$H2" ] && [ "$H2" != "$H" ] && echo si || echo no)" si
+ARG="{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"pisado\"}"
 chk ">>> escribir con el base viejo se rechaza también por MCP" \
-  "$(mcptext "$A" document_replace "{\"thread\":\"$NTID\",\"base\":\"$H\",\"content\":\"pisado\"}" | grep -c "changed since you read it")" 1
+  "$(mcptext "$A" document_replace "$ARG" | grep -c "changed since you read it")" 1
+ARG="{\"thread\":\"$NTID\",\"base\":\"$H2\",\"edits\":[]}"
 chk ">>> document_edit sin edits se rechaza en vez de escribir nada" \
-  "$(mcptext "$A" document_edit "{\"thread\":\"$NTID\",\"base\":\"$H2\",\"edits\":[]}" | grep -c 'está vacío')" 1
+  "$(mcptext "$A" document_edit "$ARG" | grep -c 'está vacío')" 1
 W2=$(mcptext "$A" checkbox_toggle "{\"thread\":\"$NTID\",\"base\":\"$H2\",\"index\":0,\"done\":true}")
 chk ">>> marca la casilla y devuelve el conteo" "$(echo "$W2" | grep -c '1 hechas')" 1
 # El html existe para la aplicación web, que lo pide por la API. Por esta puerta
@@ -1031,8 +1046,9 @@ chk ">>> search encuentra lo que acaba de escribir" \
   "$(mcptext "$A" document_search '{"project":"alpha","query":"rate limit"}' | python3 -c 'import sys,json
 h=json.loads(sys.stdin.read()) or []
 print("si" if any("trabajo-del-agente" in x["path"] for x in h) else "no")')" si
+ARG="{\"thread\":\"$NTID\",\"url\":\"https://example.com/pr/9\",\"title\":\"PR\"}"
 chk ">>> link: evidencia externa" \
-  "$(mcptext "$A" evidence_add "{\"thread\":\"$NTID\",\"url\":\"https://example.com/pr/9\",\"title\":\"PR\"}" | j "['url']")" "https://example.com/pr/9"
+  "$(mcptext "$A" evidence_add "$ARG" | j "['url']")" "https://example.com/pr/9"
 
 chk ">>> y la burbuja se calienta por eso: el thread sale hot" \
   "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json
@@ -1042,15 +1058,17 @@ chk "...y la prioridad vive en su burbuja, no en él" \
   "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json
 d=json.loads(sys.stdin.read())
 print(next(b["priority"] for b in d["bubbles"] if b["id"]=="'"$BU_P"'"))')" P1
+ARG="{\"thread\":\"$NTID\"}"
 chk ">>> completar es un cambio de estado, no un examen" \
-  "$(mcptext "$A" thread_complete "{\"thread\":\"$NTID\"}" | j "['id']")" "$NTID"
+  "$(mcptext "$A" thread_complete "$ARG" | j "['id']")" "$NTID"
 chk "...y el board lo refleja" \
   "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json
 d=json.loads(sys.stdin.read())
 print(next(t["heat"]["lifecycle"] for t in d["threads"] if t["id"]=="'"$NTID"'"))')" closed
 
+ARG="{\"thread\":\"$NTID\"}"
 chk ">>> erin no alcanza el thread por MCP" \
-  "$(mcptext "$ER" document_read "{\"thread\":\"$NTID\"}" | grep -c "not found")" 1
+  "$(mcptext "$ER" document_read "$ARG" | grep -c "not found")" 1
 
 # La otra mitad de la superficie: un agente que sólo escribe el documento
 # trabaja a ciegas — no puede decir para qué es el trabajo, cuándo vence, quién
@@ -1072,8 +1090,9 @@ chk ">>> ...y queda como su lead" \
 chk ">>> ...con su flujo de trabajo, o un thread no tendría dónde estar" \
   "$(curl -s "$API/api/collections/states/records?filter=$(python3 -c "import urllib.parse;print(urllib.parse.quote(\"workspace.slug='laboratorio'\"))")" \
      -H "Authorization: $B" | j "['totalItems']")" 3
+ARG="{\"project\":\"laboratorio\"}"
 chk ">>> ...y alice no lo ve: fundar no lo hace de todos" \
-  "$(mcptext "$A" document_list "{\"project\":\"laboratorio\"}" | grep -c "not found")" 1
+  "$(mcptext "$A" document_list "$ARG" | grep -c "not found")" 1
 
 ARG="{\"project\":\"alpha\",\"name\":\"Portal\",\"outcome\":\"la gente entra sin pedir ayuda\"}"
 NBUB=$(mcptext "$A" bubble_create "$ARG" | j "['id']")
@@ -1131,8 +1150,9 @@ chk ">>> el board agregado conserva también ese plazo" \
 # El inbox es de las PERSONAS: se captura y se tría en la aplicación. Un agente
 # que trabaja desde el inbox trabaja fuera de la pieza que alguien asumió, así que
 # la puerta no existe — ni para escribir ni para leer.
+ARG="{\"note\":\"el portal tarda en cargar\"}"
 chk ">>> un agente NO captura: la tool no existe" \
-  "$(mcptext "$B" capture "{\"note\":\"el portal tarda en cargar\"}" | python3 -c 'import sys,json
+  "$(mcptext "$B" capture "$ARG" | python3 -c 'import sys,json
 d=json.load(sys.stdin); print("error" if "error" in d or not d.get("result",{}).get("content") else "creada")')" error
 
 ARG="{\"name\":\"Soporte sin fricción\",\"outcome\":\"nadie escribe dos veces\"}"
@@ -1158,14 +1178,16 @@ chk ">>> un agente comenta" \
 ARG="{\"thread\":\"$NTID\"}"
 chk ">>> ...y lee el hilo" \
   "$(mcptext "$A" comment_list "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)) >= 1)')" True
+ARG="{\"project\":\"alpha\"}"
 chk ">>> comentar NO calienta: queda como pulso" \
-  "$(mcptext "$A" project_board "{\"project\":\"alpha\"}" | python3 -c 'import sys,json
+  "$(mcptext "$A" project_board "$ARG" | python3 -c 'import sys,json
 t=next(x for x in json.load(sys.stdin)["threads"] if x["id"]=="'"$NTID"'")
 print("si" if t["pulse"] else t)')" si
 chk ">>> el stream filtra por la regla: erin no recibe lo que no puede leer" \
   "$(curl -s "$API/api/collections/comments/records?perPage=1" -H "Authorization: $ER" | j "['totalItems']")" 0
+ARG="{\"thread\":\"$NTID\",\"body\":\"hola\"}"
 chk ">>> erin no comenta en un thread que no alcanza" \
-  "$(mcptext "$ER" comment_create "{\"thread\":\"$NTID\",\"body\":\"hola\"}" | grep -c "not found")" 1
+  "$(mcptext "$ER" comment_create "$ARG" | grep -c "not found")" 1
 
 ARG="{\"thread\":\"$NTID\"}"
 chk ">>> timeline: qué le pasó al thread y cuándo" \
@@ -1206,10 +1228,12 @@ WAIDEA=$(curl -s -X POST "$API/api/collections/inbox_items/records" -H "Authoriz
 chk ">>> lo que llega por WhatsApp sale como idea, con quién lo mandó" \
   "$(mcptext "$B" inbox_list '{"source":"whatsapp"}' | python3 -c 'import sys,json
 d=[x for x in json.load(sys.stdin) if x["id"]=="'"$WAIDEA"'"]; print(d[0]["from"], d[0]["source"], d[0]["decided"])')" "Ana Ventas whatsapp False"
+ARG="{\"idea\":\"$WAIDEA\"}"
 chk "...y su mensaje entero se lee" \
-  "$(mcptext "$B" inbox_read "{\"idea\":\"$WAIDEA\"}" | j "['body']" | grep -c 'Lo pregunta el cliente')" 1
+  "$(mcptext "$B" inbox_read "$ARG" | j "['body']" | grep -c 'Lo pregunta el cliente')" 1
+ARG="{\"idea\":\"$IDEAID\"}"
 chk ">>> alice no ve las ideas de bob" \
-  "$(mcptext "$A" inbox_read "{\"idea\":\"$IDEAID\"}" | grep -c 'not found')" 1
+  "$(mcptext "$A" inbox_read "$ARG" | grep -c 'not found')" 1
 chk "...ni en su lista" \
   "$(mcptext "$A" inbox_list '{}' | python3 -c 'import sys,json;print(any(x["id"]=="'"$IDEAID"'" for x in json.load(sys.stdin)))')" False
 chk ">>> el lead global las ve todas" \
@@ -1228,7 +1252,8 @@ chk "...y entonces queda decidida, apuntando al hilo" \
   "$(mcptext "$B" inbox_triage "$ARG" | j "['decided']")" True
 chk "...y deja de salir entre las que nadie ha decidido" \
   "$(mcptext "$B" inbox_list '{}' | python3 -c 'import sys,json;print(any(x["id"]=="'"$IDEAID"'" for x in json.load(sys.stdin)))')" False
-chk ">>> descartar una idea" "$(mcptext "$B" inbox_delete "{\"idea\":\"$WAIDEA\"}" | j "['deleted']")" True
+ARG="{\"idea\":\"$WAIDEA\"}"
+chk ">>> descartar una idea" "$(mcptext "$B" inbox_delete "$ARG" | j "['deleted']")" True
 
 N1=$(mcptext "$A" space_note_create '{"title":"Ideas sueltas","color":"menta"}')
 N1ID=$(echo "$N1" | j "['id']")
@@ -1254,14 +1279,20 @@ chk ">>> nadie más toca Mi espacio, ni el lead global" \
   "$(mcptext "$C" space_note_update "$ARG" | grep -c 'not found')" 1
 chk "...ni lo ve en su lista" \
   "$(mcptext "$C" space_note_list '{}' | python3 -c 'import sys,json;print(any(n["id"]=="'"$N1ID"'" for n in json.load(sys.stdin)))')" False
-chk ">>> borrar una nota" "$(mcptext "$A" space_note_delete "{\"note\":\"$N2ID\"}" | j "['deleted']")" True
+ARG="{\"note\":\"$N2ID\"}"
+chk ">>> borrar una nota" "$(mcptext "$A" space_note_delete "$ARG" | j "['deleted']")" True
 
 pins_of(){ python3 -c 'import sys,json;print(sum(1 for p in json.load(sys.stdin) if p["thread"]=="'"$NTID"'"))'; }
-chk ">>> fijar un hilo" "$(mcptext "$A" pin_add "{\"thread\":\"$NTID\"}" | pins_of)" 1
-chk "...dos veces no lo duplica" "$(mcptext "$A" pin_add "{\"thread\":\"$NTID\"}" | pins_of)" 1
-chk "...y la ficha lo dice" "$(mcptext "$A" thread_get "{\"thread\":\"$NTID\"}" | j "['pinned']")" True
-chk ">>> erin no fija lo que no alcanza" "$(mcptext "$ER" pin_add "{\"thread\":\"$NTID\"}" | grep -c 'not found')" 1
-chk ">>> soltarlo" "$(mcptext "$A" pin_remove "{\"thread\":\"$NTID\"}" | pins_of)" 0
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> fijar un hilo" "$(mcptext "$A" pin_add "$ARG" | pins_of)" 1
+ARG="{\"thread\":\"$NTID\"}"
+chk "...dos veces no lo duplica" "$(mcptext "$A" pin_add "$ARG" | pins_of)" 1
+ARG="{\"thread\":\"$NTID\"}"
+chk "...y la ficha lo dice" "$(mcptext "$A" thread_get "$ARG" | j "['pinned']")" True
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> erin no fija lo que no alcanza" "$(mcptext "$ER" pin_add "$ARG" | grep -c 'not found')" 1
+ARG="{\"thread\":\"$NTID\"}"
+chk ">>> soltarlo" "$(mcptext "$A" pin_remove "$ARG" | pins_of)" 0
 PREFROW=$(curl -s "$API/api/collections/prefs/records" -H "Authorization: $A" | j "['items'][0]['id']")
 curl -s -o /dev/null -X DELETE "$API/api/collections/prefs/records/$PREFROW" -H "Authorization: $SU"
 
@@ -1272,8 +1303,9 @@ OPEN_STATE=$(echo "$TG" | python3 -c 'import sys,json;print([s["name"] for s in 
 DONE_STATE=$(echo "$TG" | python3 -c 'import sys,json;print([s["name"] for s in json.load(sys.stdin)["states"] if s["group"]=="completed"][0])')
 ARG="{\"thread\":\"$NTID\",\"assignees\":[\"$BID\"],\"due\":\"2026-11-30\",\"labels\":[\"cliente\",\"portal\"],\"state\":\"$OPEN_STATE\"}"
 mcptext "$A" thread_update "$ARG" >/dev/null
+ARG="{\"thread\":\"$NTID\"}"
 chk ">>> asignar, plazo, etiquetas (creadas si faltan) y reabrir, en una llamada" \
-  "$(mcptext "$A" thread_get "{\"thread\":\"$NTID\"}" | python3 -c 'import sys,json
+  "$(mcptext "$A" thread_get "$ARG" | python3 -c 'import sys,json
 d=json.load(sys.stdin); print(d["assignees"][0]["id"]=="'"$BID"'", d["due_date"], ",".join(sorted(d["labels"])), d["state_group"]!="completed")')" "True 2026-11-30 cliente,portal True"
 ARG="{\"thread\":\"$NTID\",\"assignees\":[\"zzzzzzzzzzzzzzz\"]}"
 chk ">>> una persona que no existe se rechaza" \
@@ -1288,13 +1320,15 @@ print(sum(1 for c in json.load(sys.stdin) if c.get("thread")=="'"$NTID"'" and c[
 
 T2=$(mcptext "$A" thread_create '{"project":"alpha","name":"Depende del agente"}' | j "['id']")
 REL=$(mcptext "$A" thread_relate "{\"thread\":\"$NTID\",\"related\":\"$T2\",\"type\":\"blocking\"}" | j "['id']")
+ARG="{\"thread\":\"$T2\"}"
 chk ">>> relacionar: una dependencia se dice con una relación" \
-  "$(mcptext "$A" thread_get "{\"thread\":\"$T2\"}" | python3 -c 'import sys,json
+  "$(mcptext "$A" thread_get "$ARG" | python3 -c 'import sys,json
 r=json.load(sys.stdin)["relations"][0]; print(r["type"], r["thread"]=="'"$NTID"'")')" "blocked_by True"
 ARG="{\"thread\":\"$T2\",\"related\":\"$NTID\",\"type\":\"relates_to\"}"
 chk "...dos veces no" \
   "$(mcptext "$A" thread_relate "$ARG" | grep -c 'ya están relacionados')" 1
-chk "...y se quita" "$(mcptext "$A" thread_unrelate "{\"relation\":\"$REL\"}" | j "['deleted']")" True
+ARG="{\"relation\":\"$REL\"}"
+chk "...y se quita" "$(mcptext "$A" thread_unrelate "$ARG" | j "['deleted']")" True
 ARG="{\"thread\":\"$NTID\",\"related\":\"$T2\",\"type\":\"relates_to\"}"
 chk ">>> erin no relaciona lo que no alcanza" \
   "$(mcptext "$ER" thread_relate "$ARG" | grep -c 'not found')" 1
@@ -1327,8 +1361,10 @@ chk "...y repo_list trae su id para quitarlo" \
   "$(mcptext "$A" repo_list '{"project":"alpha"}' | python3 -c 'import sys,json;print(any(r["id"]=="'"$RPID"'" for r in json.load(sys.stdin)))')" True
 chk ">>> una URL que no es de un repositorio se rechaza" \
   "$(mcptext "$B" repo_link '{"project":"alpha","url":"github.com"}' | grep -c 'no es la URL')" 1
-chk ">>> un miembro no lo quita" "$(mcptext "$A" repo_unlink "{\"repo\":\"$RPID\"}" | grep -c 'sólo un lead')" 1
-chk ">>> el lead sí" "$(mcptext "$B" repo_unlink "{\"repo\":\"$RPID\"}" | j "['deleted']")" True
+ARG="{\"repo\":\"$RPID\"}"
+chk ">>> un miembro no lo quita" "$(mcptext "$A" repo_unlink "$ARG" | grep -c 'sólo un lead')" 1
+ARG="{\"repo\":\"$RPID\"}"
+chk ">>> el lead sí" "$(mcptext "$B" repo_unlink "$ARG" | j "['deleted']")" True
 
 ART=$(mcptext "$A" artifact_create '{"kind":"markdown","topic":"Para listar"}' | j "['id']")
 chk ">>> artifact_list: mis artefactos, para retomarlos en otra sesión" \
@@ -1336,8 +1372,10 @@ chk ">>> artifact_list: mis artefactos, para retomarlos en otra sesión" \
 ARG="{\"id\":\"$ART\",\"pinned\":true}"
 chk "...fijar uno" "$(mcptext "$A" artifact_pin "$ARG" | j "['pinned']")" True
 chk "...los del equipo son sólo de sus leads" "$(mcptext "$A" artifact_list '{"all":true}' | grep -c 'lead de equipo')" 1
-chk ">>> bob no borra el de alice" "$(mcptext "$B" artifact_delete "{\"id\":\"$ART\"}" | grep -c 'not found')" 1
-chk ">>> borrarlo" "$(mcptext "$A" artifact_delete "{\"id\":\"$ART\"}" | j "['deleted']")" True
+ARG="{\"id\":\"$ART\"}"
+chk ">>> bob no borra el de alice" "$(mcptext "$B" artifact_delete "$ARG" | grep -c 'not found')" 1
+ARG="{\"id\":\"$ART\"}"
+chk ">>> borrarlo" "$(mcptext "$A" artifact_delete "$ARG" | j "['deleted']")" True
 
 chk ">>> la administración se queda en la aplicación: no hay tools" \
   "$(mcp "$C" "tools/list" "{}" | python3 -c 'import sys,json
@@ -1361,10 +1399,12 @@ chk ">>> una burbuja ya no lleva etapa ni rango" \
 # ilegible en el board.
 echo
 LONGBRIEF=$(python3 -c "print('# Plan\\\\n\\\\n' + 'contexto. ' * 120)")
+ARG="{\"brief\":\"$LONGBRIEF\"}"
 chk ">>> una burbuja lleva un brief largo, con markdown" \
-  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"brief\":\"$LONGBRIEF\"}")" 200
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "$ARG")" 200
+ARG="{\"outcome\":\"$LONGBRIEF\"}"
 chk ">>> ...y el outcome sigue siendo una frase: 500 como mucho" \
-  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"outcome\":\"$LONGBRIEF\"}")" 400
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "$ARG")" 400
 
 # --------------------------------------------------- objetivo de burbuja ----
 #
@@ -1373,8 +1413,9 @@ chk ">>> ...y el outcome sigue siendo una frase: 500 como mucho" \
 # cada pieza y dejaba que dos piezas de lo mismo se contradijeran.
 echo
 OBJ2=$(post objectives "$C" '{"name":"Que el portal aguante la hora pico"}' | j "['id']")
+ARG="{\"objective\":\"$OBJ2\"}"
 chk ">>> una burbuja cuelga de un objetivo del departamento" \
-  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "{\"objective\":\"$OBJ2\"}")" 200
+  "$(code -X PATCH "$API/api/collections/bubbles/records/$BU_P" -H "Authorization: $A" -H "$JS" -d "$ARG")" 200
 chk ">>> ...y el plan las cuenta por objetivo, no por thread" \
   "$(mcptext "$C" objective_list '{}' | python3 -c 'import sys,json
 d=json.loads(sys.stdin.read())
@@ -1403,18 +1444,21 @@ chk ">>> ...ni lo que hay dentro" \
 chk ">>> anónimo tampoco, ni siquiera con el inventario recién creado" \
   "$(curl -s "$API/api/collections/inventory_groups/records" | j "['totalItems']")" 0
 
+ARG="{\"user\":\"$AID\"}"
 chk ">>> asignar el acceso es escribir una FILA" \
-  "$(pcode inventory_access "$C" "{\"user\":\"$AID\"}")" 200
+  "$(pcode inventory_access "$C" "$ARG")" 200
 chk ">>> ...y con ella alice ya lo ve" \
   "$(list inventory_groups "$A" | j "['totalItems']")" 1
 chk ">>> ...pero bob sigue sin verlo" \
   "$(list inventory_groups "$B" | j "['totalItems']")" 0
+ARG="{\"user\":\"$BID\"}"
 chk ">>> nadie se asigna a sí mismo" \
-  "$(pcode inventory_access "$B" "{\"user\":\"$BID\"}")" 400
+  "$(pcode inventory_access "$B" "$ARG")" 400
 chk ">>> quien mira sólo ve SU propia asignación, para poder preguntarse si le toca" \
   "$(list inventory_access "$A" | j "['totalItems']")" 1
+ARG="{\"group\":\"$GRP\",\"name\":\"mío\"}"
 chk ">>> y con acceso se LEE, pero no se escribe: el armario es del lead" \
-  "$(pcode inventory_items "$A" "{\"group\":\"$GRP\",\"name\":\"mío\"}")" 400
+  "$(pcode inventory_items "$A" "$ARG")" 400
 # Por MCP se LEE, con la misma llave: la fila de acceso. El armario sigue siendo
 # del lead, y `vault` es un enlace — este servidor no guarda secretos, así que no
 # puede entregar uno por ninguna puerta.
@@ -1442,10 +1486,13 @@ print(i["group"], i["group_id"]=="'"$G2"'", i["renews_at"], i["note"], any(g["id
 ARG="{\"item\":\"$IT\",\"vault\":\"hunter2\"}"
 chk ">>> un vault que no es un enlace se rechaza: nunca una credencial" \
   "$(mcptext "$C" inventory_item_update "$ARG" | grep -c 'enlace http')" 1
+ARG="{\"group\":\"$G2\"}"
 chk ">>> un grupo con cosas no se borra" \
-  "$(mcptext "$C" inventory_group_delete "{\"group\":\"$G2\"}" | grep -c 'muévelas')" 1
-chk "...se borra la cosa" "$(mcptext "$C" inventory_item_delete "{\"item\":\"$IT\"}" | j "['deleted']")" True
-chk "...y luego el grupo vacío" "$(mcptext "$C" inventory_group_delete "{\"group\":\"$G2\"}" | j "['deleted']")" True
+  "$(mcptext "$C" inventory_group_delete "$ARG" | grep -c 'muévelas')" 1
+ARG="{\"item\":\"$IT\"}"
+chk "...se borra la cosa" "$(mcptext "$C" inventory_item_delete "$ARG" | j "['deleted']")" True
+ARG="{\"group\":\"$G2\"}"
+chk "...y luego el grupo vacío" "$(mcptext "$C" inventory_group_delete "$ARG" | j "['deleted']")" True
 
 curl -s -o /dev/null -X DELETE "$API/api/collections/inventory_groups/records/$GRP" -H "Authorization: $C"
 chk ">>> borrar un grupo se lleva lo que había dentro" \
@@ -1483,12 +1530,15 @@ REPO=$(post workspace_repos "$B" "{\"workspace\":\"$ALPHA\",\"url\":\"https://gi
 chk ">>> el lead del workspace enlaza un repositorio" "$([ -n "$REPO" ] && echo si || echo no)" si
 chk ">>> ...un miembro lo VE" \
   "$(list workspace_repos "$A" | j "['totalItems']")" 1
+ARG="{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/alice/suyo\"}"
 chk ">>> ...pero no enlaza ninguno" \
-  "$(pcode workspace_repos "$A" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/alice/suyo\"}")" 400
+  "$(pcode workspace_repos "$A" "$ARG")" 400
+ARG="{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/bubble-work\"}"
 chk ">>> el mismo repositorio dos veces se rechaza (índice único)" \
-  "$(pcode workspace_repos "$B" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/bubble-work\"}")" 400
+  "$(pcode workspace_repos "$B" "$ARG")" 400
+ARG="{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/otro\"}"
 chk ">>> el lead global también enlaza, como en todo lo demás" \
-  "$(pcode workspace_repos "$C" "{\"workspace\":\"$ALPHA\",\"url\":\"https://github.com/cuby/otro\"}")" 200
+  "$(pcode workspace_repos "$C" "$ARG")" 200
 chk ">>> quien no es del workspace no ve dónde está el código" \
   "$(list workspace_repos "$ER" | j "['totalItems']")" 0
 chk ">>> anónimo tampoco" \
@@ -1629,8 +1679,9 @@ chk ">>> bob no ve el token de alice" "$(list agent_tokens "$B" | j "['totalItem
 chk "...el lead global sí, para poder revocarlo" "$(list agent_tokens "$C" | j "['totalItems']")" 1
 chk ">>> el token abre el MCP y nada más: la API REST no lo acepta" \
   "$(code "$API/api/limits" -H "Authorization: Bearer $TOK")" 401
+ARG="{\"owner\":\"$AID\",\"name\":\"x\",\"hash\":\"abc\"}"
 chk ">>> nadie crea un token por la API de registros: la huella la calcula el servidor" \
-  "$(pcode agent_tokens "$A" "{\"owner\":\"$AID\",\"name\":\"x\",\"hash\":\"abc\"}")" 403
+  "$(pcode agent_tokens "$A" "$ARG")" 403
 chk ">>> caducidad negativa se rechaza" "$(tcode "$A" "" '{"name":"x","days":-1}')" 400
 chk ">>> bob no extiende el token de alice" "$(tcode "$B" "/$TOKID/extend" '{"days":30}')" 404
 chk ">>> alice lo extiende 30 días" \
@@ -1706,17 +1757,20 @@ chk ">>> el lead global sí" \
 chk ">>> un member no pone la prioridad de un hilo" "$(tpatch "$A" "$SQ1" '{"priority":"P1"}')" 404
 chk ">>> ni lo mete en la secuencia" "$(tpatch "$A" "$SQ1" '{"sequence":10}')" 404
 chk "...pero sigue pudiendo renombrarlo" "$(tpatch "$A" "$SQ1" '{"name":"Paso uno"}')" 200
+ARG="{\"workspace\":\"$ALPHA\",\"name\":\"colado\",\"priority\":\"P1\"}"
 chk ">>> un member tampoco crea un hilo ya priorizado" \
-  "$(pcode threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"colado\",\"priority\":\"P1\"}")" 400
+  "$(pcode threads "$A" "$ARG")" 400
 chk ">>> el lead global pone la prioridad del hilo" "$(tpatch "$C" "$SQ1" '{"priority":"P1"}')" 200
 chk "...que vive separada de la de su burbuja" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t['priority'] for t in d['threads'] if t['id']=='$SQ1'))")" P1
 ARG="{\"thread\":\"$SQ2\",\"priority\":\"P2\"}"
 chk ">>> por MCP, un member no la pone" \
   "$(mcptext "$A" thread_update "$ARG" | grep -c "only a lead of the project's team")" 1
-chk "...el lead global sí" "$(mcptext "$C" thread_update "{\"thread\":\"$SQ2\",\"priority\":\"P2\"}" | j "['priority']")" P2
+ARG="{\"thread\":\"$SQ2\",\"priority\":\"P2\"}"
+chk "...el lead global sí" "$(mcptext "$C" thread_update "$ARG" | j "['priority']")" P2
+ARG="{\"thread\":\"$SQ2\",\"priority\":\"P9\"}"
 chk ">>> una prioridad que no existe se rechaza" \
-  "$(mcptext "$C" thread_update "{\"thread\":\"$SQ2\",\"priority\":\"P9\"}" | grep -c 'P1, P2, P3 or P4')" 1
+  "$(mcptext "$C" thread_update "$ARG" | grep -c 'P1, P2, P3 or P4')" 1
 tpatch "$C" "$SQ1" '{"sequence":10}' >/dev/null
 tpatch "$C" "$SQ2" '{"sequence":10}' >/dev/null
 tpatch "$C" "$SQ3" '{"sequence":20}' >/dev/null
@@ -1898,18 +1952,21 @@ chk ">>> ...ni por id" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$PREFS/$PREFID" -H "Authorization: $B")" 404
 chk ">>> ni el lead global: no hay ninguna razón para leer la vista de otro" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$PREFS/$PREFID" -H "Authorization: $C")" 404
+ARG="{\"user\":\"$AID\",\"value\":{}}"
 chk ">>> bob no le escribe las preferencias a alice" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PREFS" -H "Authorization: $B" \
-     -H 'Content-Type: application/json' -d "{\"user\":\"$AID\",\"value\":{}}")" 400
+     -H 'Content-Type: application/json' -d "$ARG")" 400
 # 404 y no 403: tras el cambio la fila ya no pasaría su propia regla, así que
 # para quien pide deja de existir. Es la misma forma en que el resto de la API
 # contesta a «eso no es tuyo».
+ARG="{\"user\":\"$BID\"}"
 chk ">>> ...y alice no regala la suya cambiándole el dueño" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X PATCH "$PREFS/$PREFID" -H "Authorization: $A" \
-     -H 'Content-Type: application/json' -d "{\"user\":\"$BID\"}")" 404
+     -H 'Content-Type: application/json' -d "$ARG")" 404
+ARG="{\"user\":\"$AID\",\"value\":{}}"
 chk ">>> una segunda fila para la misma persona se rechaza" \
   "$(curl -s -o /dev/null -w '%{http_code}' -X POST "$PREFS" -H "Authorization: $A" \
-     -H 'Content-Type: application/json' -d "{\"user\":\"$AID\",\"value\":{}}")" 400
+     -H 'Content-Type: application/json' -d "$ARG")" 400
 chk ">>> guardar otra vez sobreescribe el saco" \
   "$(curl -s -X PATCH "$PREFS/$PREFID" -H "Authorization: $A" -H 'Content-Type: application/json' \
      -d '{"value":{"planner":"bubbles"}}' | j "['value']['planner']")" bubbles
@@ -2435,10 +2492,12 @@ ARG="{\"name\":\"Almacén\",\"team\":\"Operaciones\"}"
 OWS=$(mcptext "$A" project_create "$ARG" | j "['id']")
 chk "...y alice crea un proyecto ahí, por nombre del equipo" \
   "$(curl -s "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" | j "['team']")" "$OPS"
+ARG="{\"team\":\"$TI\"}"
 chk ">>> alice no mueve el proyecto a TI: no es lead global" \
-  "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $A" -H "$JS" -d "{\"team\":\"$TI\"}")" 403
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $A" -H "$JS" -d "$ARG")" 403
+ARG="{\"team\":\"$GP\"}"
 chk ">>> carol no lo mueve al equipo personal de gina" \
-  "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "{\"team\":\"$GP\"}")" 403
+  "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "$ARG")" 403
 ARG="{\"team\":\"$TI\"}"
 chk ">>> carol sí lo mueve a TI: lidera los dos" \
   "$(curl -s -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "$ARG" | j "['team']")" "$TI"

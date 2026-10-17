@@ -55,10 +55,26 @@
         del MCP.
       </p>
     </div>
+    <div class="feature">
+      <Switch
+        checked={!!features.roadmap}
+        disabled={saving || !features.id}
+        onCheckedChange={(e: { checked: boolean }) => set({ roadmap: e.checked })}>
+        <Switch.Control><Switch.Thumb /></Switch.Control>
+        <Switch.Label><Icon of="map" tint /> Roadmap</Switch.Label>
+        <Switch.HiddenInput />
+      </Switch>
+      <p class="help">
+        El calendario como un camino que serpentea: hacia arriba el pasado, hacia abajo el futuro.
+        Los módulos e hilos con fecha son casillas con su banda, y cada persona es una pieza parada
+        en lo primero que le toca. Sólo lectura. Encendido aparece como «Roadmap» en la columna.
+      </p>
+    </div>
   </div>
 </section>
 
 <style>
   .feature { display: flex; flex-direction: column; gap: 0.4rem; }
+  .feature + .feature { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
   .help { margin: 0; color: var(--faint); font-size: 0.8rem; line-height: 1.45; }
 </style>

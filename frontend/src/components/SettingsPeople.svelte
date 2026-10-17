@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FilterPick from './FilterPick.svelte';
   import Loading from './Loading.svelte';
   import Icon from './Icon.svelte';
   // Usuarios: el lead global da de alta, cambia el rol, borra y restaura.
@@ -79,6 +80,7 @@
   let email = $state('');
   let fullName = $state('');
   let role = $state<'member' | 'lead'>('member');
+  const ROLES = [{ value: 'member', label: 'member' }, { value: 'lead', label: 'lead global' }];
   let password = $state('');
   let creating = $state(false);
   let created = $state<{ email: string; password: string } | null>(null);
@@ -136,10 +138,7 @@
         <button type="button" class="btn btn-sm preset-tonal-surface" onclick={generate}>generar</button>
       </div>
       <div class="set-row">
-        <select class="select w-auto" bind:value={role} aria-label="rol">
-          <option value="member">member</option>
-          <option value="lead">lead global</option>
-        </select>
+        <span class="role-pick"><FilterPick items={ROLES} bind:value={role} allowEmpty={false} label="rol" /></span>
         <button class="btn btn-sm preset-filled-primary-500" type="submit" disabled={creating || !email.trim() || password.length < 8}>
           {#if creating}<Loading compact label="Creando persona" />{:else}Dar de alta{/if}
         </button>
@@ -203,15 +202,15 @@
             {#if p.deleted_at}
               <button class="btn btn-sm preset-tonal-surface" onclick={() => run(api.restorePerson(p.id))}>Restaurar</button>
             {:else}
-              <select
-                class="select w-auto role"
-                value={p.role}
-                disabled={self || lastLead}
-                title={self ? 'tu propio rol lo cambia otro lead' : lastLead ? 'es el último lead global' : ''}
-                onchange={(e) => setRole(p, e.currentTarget.value as 'lead' | 'member')}>
-                <option value="member">member</option>
-                <option value="lead">lead global</option>
-              </select>
+              {#if self || lastLead}
+                <!-- Bloqueado: se dice por qué en vez de ofrecer un menú inerte. -->
+                <span class="role-fixed" title={self ? 'tu propio rol lo cambia otro lead' : 'es el último lead global'}>
+                  {p.role === 'lead' ? 'lead global' : 'member'}
+                </span>
+              {:else}
+                <span class="role-pick"><FilterPick items={ROLES} value={p.role} allowEmpty={false} label={`rol de ${p.display_name || p.email}`}
+                  onchange={(r) => r && r !== p.role && setRole(p, r as 'lead' | 'member')} /></span>
+              {/if}
               <button
                 class="btn btn-sm preset-tonal-surface"
                 onclick={() => remove(p)}
@@ -267,5 +266,6 @@
   .av img { width: 100%; height: 100%; object-fit: cover; }
   .pname { margin: 0; font-size: 0.9rem; font-weight: 600; }
   .meta { margin: 0.1rem 0 0; color: var(--faint); font-size: 0.76rem; }
-  .role { font-size: 0.8rem; }
+  .role-pick { width: 10rem; flex: none; }
+  .role-fixed { padding: 0.2rem 0.6rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.8rem; font-weight: 700; }
 </style>

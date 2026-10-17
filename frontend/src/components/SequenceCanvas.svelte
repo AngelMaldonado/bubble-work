@@ -40,6 +40,7 @@
     what = 'módulos',
     completeLabel = '🏆 Cerrar',
     modes,
+    modesBottom = false,
     readonly = false,
     loading = false,
     edgeToEdge = false,
@@ -60,6 +61,8 @@
     what?: string;
     completeLabel?: string;
     modes?: Snippet;
+    /** los filtros de sólo lectura van en una píldora abajo al centro, no en la esquina */
+    modesBottom?: boolean;
     readonly?: boolean;
     loading?: boolean;
     edgeToEdge?: boolean;
@@ -447,12 +450,22 @@
     }}
     ondragleave={() => (dropping = false)}
     ondrop={drop}>
-    <header class="head">
-      <span class="pane-name display"><Glyphs text={title} tint /></span>
-      <span class="count" title="pasos en la secuencia">{layers.length}</span>
-      {#if saving}<Loading compact label="Guardando secuencia" />{/if}
-      {#if saveError}<span class="sync" role="alert">{saveError}</span>{/if}
-    </header>
+    <!-- Arriba: los controles en el borde izquierdo y el badge al centro (la
+         tercera columna va vacía y sin eventos). -->
+    <div class="topbar">
+      <div class="ctrl">
+        <button onclick={() => zoomBy(1 / 1.2)} title="Alejar">−</button>
+        <span>{Math.round(view.z * 100)}%</span>
+        <button onclick={() => zoomBy(1.2)} title="Acercar">+</button>
+        <button onclick={fit} title="Ver todo">⤢</button>
+      </div>
+      <header class="head">
+        <span class="pane-name display"><Glyphs text={title} tint /></span>
+        <span class="count" title="pasos en la secuencia">{layers.length}</span>
+        {#if saving}<Loading compact label="Guardando secuencia" />{/if}
+        {#if saveError}<span class="sync" role="alert">{saveError}</span>{/if}
+      </header>
+    </div>
 
     <div class="world" style:transform="translate({view.x}px, {view.y}px) scale({view.z})">
       {#each parallel as group (group.step)}
@@ -532,14 +545,7 @@
       </div>
     {/if}
 
-    <div class="ctrl">
-      <button onclick={() => zoomBy(1 / 1.2)} title="Alejar">−</button>
-      <span>{Math.round(view.z * 100)}%</span>
-      <button onclick={() => zoomBy(1.2)} title="Acercar">+</button>
-      <button onclick={fit} title="Ver todo">⤢</button>
-    </div>
-
-    {#if readonly && modes}<div class="read-modes">{@render modes()}</div>{/if}
+    {#if readonly && modes}<div class="read-modes" class:bottom={modesBottom}>{@render modes()}</div>{/if}
   </div>
   </div>
 </div>
@@ -549,19 +555,35 @@
   .loading-layer { position: absolute; inset: 0; pointer-events: none; }
   @media (max-width: 1000px) { .read-modes { top: 4.75rem; max-width: min(18rem, calc(100% - 2rem)); } }
   .wrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .topbar {
+    position: absolute; top: 1rem; left: 1rem; right: 1rem; z-index: 4;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.6rem;
+    pointer-events: none;
+  }
+  .topbar > * { pointer-events: auto; }
+  .topbar > .ctrl { grid-column: 1; justify-self: start; }
+  .topbar > .head { grid-column: 2; max-width: none; }
+  /* Los filtros de sólo lectura, abajo al centro, planos en el HUD: cada grupo
+     lleva su propio borde, sin otra píldora alrededor. */
+  .wrap .read-modes.bottom {
+    left: 50%; top: auto; bottom: 1rem; transform: translateX(-50%);
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.5rem;
+    width: max-content; max-width: calc(100% - 2rem); cursor: default;
+  }
+  /* Sin lugar al centro entre las esquinas de abajo: sube sobre ellas. */
+  @media (max-width: 1150px) { .wrap .read-modes.bottom { bottom: 4.75rem; } }
   .head {
-    position: absolute;
-    top: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 4;
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.5rem;
     min-height: 42px;
+    max-width: calc(100% - 2rem);
+    flex-wrap: wrap;
+    justify-content: center;
     padding: 0.5rem 0.9rem;
     border: 1px solid var(--line);
-    border-radius: 999px;
+    border-radius: 26px;
     background: var(--surface-solid);
     box-shadow: 0 4px 16px rgb(0 0 0 / 0.16);
     cursor: default;
@@ -569,7 +591,7 @@
   .pane-name { font-size: 1.5rem; white-space: nowrap; }
   .count { padding: 0 0.45rem; border-radius: 999px; background: var(--hover); font-size: 0.75rem; }
   .sync { font-size: 0.76rem; color: var(--muted); }
-  @media (max-width: 650px) { .head { left: auto; right: 1rem; transform: none; } }
+
   .plus:disabled { opacity: 0.5; cursor: wait; }
 
   /* El lienzo: puntos que se mueven y escalan con la vista, así se lee
@@ -724,10 +746,6 @@
   .empty p { max-width: 22rem; }
 
   .ctrl {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    z-index: 4;
     display: flex;
     align-items: center;
     gap: 0.2rem;
@@ -738,8 +756,6 @@
     font-size: 0.78rem;
     box-shadow: 0 4px 14px rgb(0 0 0 / 0.15);
   }
-  /* Presence owns the first top-right row, regardless of avatar count. */
-  .edge-to-edge .ctrl { top: 4rem; }
   .ctrl button { width: 26px; height: 26px; border: 0; border-radius: 999px; background: none; color: var(--text); cursor: pointer; }
   .ctrl button:hover { background: var(--hover); }
   .ctrl span { min-width: 2.8rem; text-align: center; color: var(--muted); }
@@ -770,10 +786,14 @@
   .new { flex: none; padding: 0.45rem; border-radius: 8px; }
   .new:hover { background: var(--hover); }
   @media (max-width: 650px) {
-    .ctrl { top: auto; bottom: 6rem; }
+    /* En un teléfono no cabe la fila: cada pieza vuelve a su esquina. */
+    .topbar { display: contents; }
+    .head { position: absolute; z-index: 4; top: 1rem; right: 1rem; max-width: calc(100% - 2rem); }
+    .ctrl { position: absolute; z-index: 4; bottom: 6rem; right: 1rem; }
     .edge-to-edge .head { top: 4rem; }
     .edge-to-edge .read-modes { top: 8rem; }
-    .edge-to-edge .ctrl { top: auto; bottom: 10.5rem; }
+    .edge-to-edge .ctrl { bottom: 13rem; }
+    .wrap .read-modes.bottom { bottom: 4.75rem; }
   }
   @media (prefers-reduced-motion: reduce) { .node, .wrap :global(.toolbox) { transition: none; } }
   .find { font-size: 0.82rem; }

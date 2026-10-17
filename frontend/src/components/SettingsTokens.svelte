@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FilterPick from './FilterPick.svelte';
   import Loading from './Loading.svelte';
   import Icon from './Icon.svelte';
   // Tokens: las llaves con que los agentes de una persona entran al MCP.
@@ -148,9 +149,8 @@
         placeholder="¿Para qué agente? p. ej. Claude Code del portátil"
         maxlength="80"
         bind:value={name} />
-      <select class="select w-auto" bind:value={days} aria-label="caducidad">
-        {#each EXPIRY as x (x.days)}<option value={x.days}>{x.label}</option>{/each}
-      </select>
+      <span class="expiry"><FilterPick items={EXPIRY.map((x) => ({ value: String(x.days), label: x.label }))} value={String(days)}
+        allowEmpty={false} label="caducidad" onchange={(v) => (days = Number(v))} /></span>
       <button class="btn btn-sm preset-filled-primary-500" type="submit" disabled={creating || !name.trim()}>
         {#if creating}<Loading compact label="Generando token" />{:else}Generar{/if}
       </button>
@@ -301,4 +301,5 @@
   }
   :global(.more:hover) { background: var(--hover); color: var(--text); }
   .danger { color: var(--color-error-500); }
+  .expiry { width: 10rem; flex: none; }
 </style>

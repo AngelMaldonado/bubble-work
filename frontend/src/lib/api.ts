@@ -255,7 +255,7 @@ export type Person = {
 };
 
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
-export type Features = { id: string; sequence: boolean; updated?: string };
+export type Features = { id: string; sequence: boolean; roadmap?: boolean; updated?: string };
 
 /** Lo que una persona eligió y tiene que seguirla entre dispositivos.
  *
@@ -274,6 +274,9 @@ export type Prefs = {
   /** qué forma tiene el tablero: la línea de ejecución o el kanban. Sólo
    *  significa algo con la función de secuencia encendida. */
   view?: 'sequence' | 'pool';
+  /** el día en que empieza la semana (`Date.getDay()`: 0 domingo … 6 sábado);
+   *  sin él, el lunes */
+  week_start?: number;
 };
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */

@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TeamPick from './TeamPick.svelte';
   // Canales: por dónde entra al inbox lo que no se escribe en la app.
   //
   // Cada canal es un plugin del servidor; esta pantalla enseña los que el
@@ -114,12 +115,10 @@
     enciende el canal, y dice quién lo mandó.
   </p>
   {#if led.length > 1}
-    <label class="set-row team-pick">
+    <div class="set-row team-row">
       <span>Canal del equipo</span>
-      <select class="select" bind:value={team}>
-        {#each led as t (t.id)}<option value={t.id}>{t.personal ? '🔒 ' : ''}{t.name}</option>{/each}
-      </select>
-    </label>
+      <TeamPick teams={led} value={team} label="Canal del equipo" onchange={(id) => (team = id)} />
+    </div>
   {:else if led.length === 1}
     <p class="faint text-sm">Canal del equipo <b>{led[0].name}</b>.</p>
   {/if}
@@ -249,6 +248,5 @@
   .groups { display: flex; flex-wrap: wrap; gap: 0.35rem; margin: 0; padding: 0; list-style: none; }
   .groups button { padding: 0.2rem 0.6rem; border: 1px solid var(--line); border-radius: 999px; font-size: 0.8rem; }
   .groups button.on { background: var(--hover); border-color: currentColor; font-weight: 600; }
-  .team-pick { gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
-  .team-pick .select { max-width: 18rem; }
+  .team-row { gap: 0.6rem; align-items: center; margin-bottom: 0.75rem; }
 </style>

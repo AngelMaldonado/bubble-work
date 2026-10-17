@@ -588,11 +588,40 @@
     ondragleave={(e) => { if (e.target === canvas) dropping = false; }}
     ondrop={dropOnCanvas}>
 
-    <header class="head">
-      <span class="pane-name display"><Icon of="pin" tint /> Mi espacio</span>
-      <span class="count" title="notas">{notes.length}</span>
-      {#if saving}<Loading compact label="Guardando" />{/if}
-    </header>
+    <!-- Arriba: los controles en el borde izquierdo y el badge al centro; la
+         fila de alinear, debajo de los controles. -->
+    <div class="topbar">
+      <div class="ctrl">
+        <button onclick={add} class="add" disabled={!loaded || !!busy} title="Nueva nota" aria-label="Nueva nota">
+          {#if busy === 'new'}<Loading compact label="Creando nota" />{:else}+ Nota{/if}
+        </button>
+        <span class="sep" aria-hidden="true"></span>
+        <button onclick={() => zoomBy(1 / 1.2)} title="Alejar" aria-label="Alejar">−</button>
+        <span class="zoom">{Math.round(view.z * 100)}%</span>
+        <button onclick={() => zoomBy(1.2)} title="Acercar" aria-label="Acercar">+</button>
+        <button onclick={fit} title="Ver todo" aria-label="Ver todo">⤢</button>
+      </div>
+      <header class="head">
+        <span class="pane-name display"><Icon of="pin" tint /> Mi espacio</span>
+        <span class="count" title="notas">{notes.length}</span>
+        {#if saving}<Loading compact label="Guardando" />{/if}
+      </header>
+      {#if selected.length >= 2}
+        <!-- Segunda fila del HUD, debajo de los controles: sólo con dos o más. -->
+        <div class="ctrl align" role="toolbar" aria-label="Alinear notas seleccionadas">
+          <span class="zoom" title="Notas seleccionadas">{selected.length} sel.</span>
+          <span class="sep" aria-hidden="true"></span>
+          {#each ALIGN as a, i (a.k)}
+            {#if i === 3 || i === 6}<span class="sep" aria-hidden="true"></span>{/if}
+            <button onclick={() => align(a.k)} title={a.min > 2 ? `${a.label} (3 o más)` : a.label} aria-label={a.label} disabled={selected.length < a.min}>
+              {@render glyph(a.k)}
+            </button>
+          {/each}
+          <span class="sep" aria-hidden="true"></span>
+          <button onclick={() => (selected = [])} title="Quitar selección (Esc)" aria-label="Quitar selección">×</button>
+        </div>
+      {/if}
+    </div>
 
     {#if !loaded}
       <Loading label="Cargando tu espacio" />
@@ -694,7 +723,10 @@
                       <span class="cname display" aria-hidden="true">{NOTE_COLOR_NAMES[i]}</span>
                     </button>
                   {/each}
-                </div>
+     {#if marquee}
+      <div class="marquee" aria-hidden="true" style:left="{marquee.x}px" style:top="{marquee.y}px" style:width="{marquee.w}px" style:height="{marquee.h}px"></div>
+    {/if}
+               </div>
               </div>
             {:else if menuFor === 'p:' + n.id}
               <!-- svelte-ignore a11y_interactive_supports_focus -->
@@ -727,36 +759,6 @@
 
     {#if error}<p class="oops" role="alert">{error} <button onclick={() => (error = '')}>cerrar</button></p>{/if}
 
-    <div class="ctrl">
-      <button onclick={add} class="add" disabled={!loaded || !!busy} title="Nueva nota" aria-label="Nueva nota">
-        {#if busy === 'new'}<Loading compact label="Creando nota" />{:else}+ Nota{/if}
-      </button>
-      <span class="sep" aria-hidden="true"></span>
-      <button onclick={() => zoomBy(1 / 1.2)} title="Alejar" aria-label="Alejar">−</button>
-      <span class="zoom">{Math.round(view.z * 100)}%</span>
-      <button onclick={() => zoomBy(1.2)} title="Acercar" aria-label="Acercar">+</button>
-      <button onclick={fit} title="Ver todo" aria-label="Ver todo">⤢</button>
-    </div>
-
-    {#if marquee}
-      <div class="marquee" aria-hidden="true" style:left="{marquee.x}px" style:top="{marquee.y}px" style:width="{marquee.w}px" style:height="{marquee.h}px"></div>
-    {/if}
-
-    {#if selected.length >= 2}
-      <!-- Segunda fila del HUD, debajo de los controles: sólo con dos o más. -->
-      <div class="ctrl align" role="toolbar" aria-label="Alinear notas seleccionadas">
-        <span class="zoom" title="Notas seleccionadas">{selected.length} sel.</span>
-        <span class="sep" aria-hidden="true"></span>
-        {#each ALIGN as a, i (a.k)}
-          {#if i === 3 || i === 6}<span class="sep" aria-hidden="true"></span>{/if}
-          <button onclick={() => align(a.k)} title={a.min > 2 ? `${a.label} (3 o más)` : a.label} aria-label={a.label} disabled={selected.length < a.min}>
-            {@render glyph(a.k)}
-          </button>
-        {/each}
-        <span class="sep" aria-hidden="true"></span>
-        <button onclick={() => (selected = [])} title="Quitar selección (Esc)" aria-label="Quitar selección">×</button>
-      </div>
-    {/if}
 
   </div>
 </div>
@@ -791,8 +793,17 @@
   .canvas.dropping { box-shadow: inset 0 0 0 3px color-mix(in oklab, var(--accent) 55%, transparent); }
   .world { position: absolute; left: 0; top: 0; transform-origin: 0 0; }
 
+  .topbar {
+    position: absolute; top: 1rem; left: 1rem; right: 1rem; z-index: 10001;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.6rem;
+    pointer-events: none;
+  }
+  .topbar > * { pointer-events: auto; }
+  .topbar > .ctrl { grid-column: 1; justify-self: start; }
+  .topbar > .head { grid-column: 2; grid-row: 1; }
+  .topbar > .ctrl.align { grid-row: 2; }
   .head {
-    position: absolute; top: 1rem; left: 50%; transform: translateX(-50%); z-index: 10001;
+    position: relative;
     display: flex; align-items: center; gap: 0.5rem; min-height: 42px; padding: 0.5rem 0.9rem;
     border: 1px solid var(--line); border-radius: 999px; background: var(--surface-solid);
     box-shadow: 0 4px 16px rgb(0 0 0 / 0.16); cursor: default; white-space: nowrap;
@@ -801,7 +812,7 @@
   .count { padding: 0 0.45rem; border-radius: 999px; background: var(--hover); font-size: 0.75rem; }
 
   .ctrl {
-    position: absolute; top: 4rem; right: 1rem; z-index: 10001; display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem;
+    display: flex; align-items: center; gap: 0.2rem; padding: 0.2rem;
     border: 1px solid var(--line); border-radius: 999px; background: var(--surface-solid); font-size: 0.78rem;
     box-shadow: 0 4px 14px rgb(0 0 0 / 0.15); cursor: default;
   }
@@ -811,7 +822,6 @@
   .ctrl .add:hover { background: color-mix(in oklab, var(--accent) 85%, black); }
   .ctrl .sep { width: 1px; height: 18px; background: var(--line); margin: 0 0.2rem; }
   .zoom { min-width: 2.8rem; text-align: center; color: var(--muted); }
-  .ctrl.align { top: 6.6rem; }
   .ctrl button:disabled { opacity: 0.35; }
   .glyph { width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; vertical-align: middle; }
   .glyph rect { fill: currentColor; fill-opacity: 0.28; }
@@ -928,9 +938,10 @@
   @media (max-width: 650px) {
     /* La presencia es dueña de la esquina superior derecha: el título va a su
        izquierda. */
-    .head { left: 1rem; right: auto; transform: none; max-width: calc(100% - 6.5rem); }
+    .topbar { display: contents; }
+    .head { position: absolute; z-index: 10001; top: 1rem; left: 1rem; max-width: calc(100% - 6.5rem); }
     .pane-name { font-size: 1.15rem; }
-    .ctrl { top: auto; bottom: 10.5rem; }
+    .ctrl { position: absolute; z-index: 10001; right: 1rem; bottom: 10.5rem; }
     .ctrl.align { bottom: 13.1rem; max-width: calc(100% - 2rem); overflow-x: auto; }
   }
   @media (prefers-reduced-motion: reduce) { .tools, .note { transition: none; } .note > .pop { animation: none; } .note.moving { transform: none; } }

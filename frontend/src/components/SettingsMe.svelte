@@ -5,8 +5,30 @@
   // nuevo por correo, y esta instancia no manda correos.
   import { api, avatarUrl, type Person } from '../lib/api';
   import { limited } from '../lib/limits.svelte';
+  import FilterPick from './FilterPick.svelte';
+  import { weekStart } from '../lib/weekStart.svelte';
+  import { WEEKDAYS } from '../lib/week';
 
   let { me, onme }: { me: Person; onme?: (p: Person) => void } = $props();
+
+  // ---- calendario ----
+  // El día en que empieza la semana: lo usan el roadmap (sus semanas, sus metas,
+  // el número de semana), el calendario del planeador y los selectores de fecha.
+  weekStart.load().catch(() => {});
+  const dayItems = WEEKDAYS.map((d, i) => ({ value: String(i), label: d[0].toUpperCase() + d.slice(1) }));
+  // El lunes primero, como se lee una semana aquí; el domingo al final.
+  const weekItems = [...dayItems.slice(1), dayItems[0]];
+  let weekMsg = $state('');
+  let weekErr = $state('');
+  async function saveWeek(v: string) {
+    weekMsg = weekErr = '';
+    try {
+      await weekStart.set(Number(v));
+      weekMsg = 'Guardado.';
+    } catch (e) {
+      weekErr = (e as Error).message;
+    }
+  }
 
   // ---- nombre ----
   let name = $state('');
@@ -168,6 +190,25 @@
         {#if nameErr}<p class="set-err" role="alert">{nameErr}</p>{/if}
         {#if avatarErr}<p class="set-err" role="alert">{avatarErr}</p>{/if}
       </div>
+    </div>
+  </div>
+
+  <div class="set-card">
+    <h3>Calendario</h3>
+    <div class="fields">
+      <div class="field">
+        <span class="name" id="week-start-label">La semana empieza en</span>
+        <div class="set-row">
+          <FilterPick items={weekItems} value={String(weekStart.day)} label="La semana empieza en" allowEmpty={false} onchange={saveWeek} />
+          {#if weekMsg}<span class="set-ok">{weekMsg}</span>{/if}
+        </div>
+      </div>
+      <p class="help">
+        Lo usan el roadmap (dónde empieza y termina cada semana, y su número), el calendario del
+        planeador y los selectores de fecha. Con el lunes, la semana se numera como ISO 8601; con
+        otro día, la semana 1 es la que tiene el 1 de enero.
+      </p>
+      {#if weekErr}<p class="set-err" role="alert">{weekErr}</p>{/if}
     </div>
   </div>
 

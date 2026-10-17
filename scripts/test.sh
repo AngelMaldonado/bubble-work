@@ -1754,6 +1754,11 @@ chk ">>> un member no la enciende" \
   "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $A" -H "$JS" -d '{"sequence":true}')" 404
 chk ">>> el lead global sí" \
   "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":true}')" 200
+chk ">>> el roadmap nace apagado" "$(list features "$A" | j "['items'][0]['roadmap']")" False
+chk ">>> un member no lo enciende" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $A" -H "$JS" -d '{"roadmap":true}')" 404
+chk ">>> el lead global sí, y apagarlo no borra nada" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"roadmap":true}')" 200
 chk ">>> un member no pone la prioridad de un hilo" "$(tpatch "$A" "$SQ1" '{"priority":"P1"}')" 404
 chk ">>> ni lo mete en la secuencia" "$(tpatch "$A" "$SQ1" '{"sequence":10}')" 404
 chk "...pero sigue pudiendo renombrarlo" "$(tpatch "$A" "$SQ1" '{"name":"Paso uno"}')" 200

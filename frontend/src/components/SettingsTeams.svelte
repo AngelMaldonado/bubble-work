@@ -1,4 +1,5 @@
 <script lang="ts">
+  import FilterPick from './FilterPick.svelte';
   // Equipos: los CONTEXTOS de trabajo.
   //
   // Un equipo tiene sus proyectos, objetivos, secuencia, calendario, inbox y
@@ -49,6 +50,7 @@
   }
 
   const nameOf = (p: Person) => p.display_name || p.email;
+  const ROLES = [{ value: 'member', label: 'member' }, { value: 'lead', label: 'lead' }];
   const outside = (t: Team) => people.filter((p) => !t.members?.some((m) => m.user === p.id));
 
   function createShared() {
@@ -144,11 +146,10 @@
                      cambia eso, así que no se ofrece cambiarla. -->
                 <span class="faint" title="Lead de todo equipo compartido">lead global</span>
               {:else if lead}
-                <select class="select role-pick" value={m.role} aria-label={`Papel de ${m.name} en ${t.name}`}
-                  onchange={(e) => run(`role:${t.id}`, () => api.setTeamMember(t.id, m.user, (e.currentTarget as HTMLSelectElement).value as 'lead' | 'member'))}>
-                  <option value="member">member</option>
-                  <option value="lead">lead</option>
-                </select>
+                <span class="role-pick">
+                  <FilterPick items={ROLES} value={m.role} allowEmpty={false} label={`Papel de ${m.name} en ${t.name}`}
+                    onchange={(r) => r && r !== m.role && run(`role:${t.id}`, () => api.setTeamMember(t.id, m.user, r as 'lead' | 'member'))} />
+                </span>
                 <button class="link danger" aria-label={`Quitar a ${m.name} de ${t.name}`}
                   onclick={() => run(`rm:${t.id}`, () => api.removeTeamMember(t.id, m.user))}>quitar</button>
               {:else}
@@ -161,10 +162,10 @@
         </ul>
         {#if lead && outside(t).length}
           <form class="set-row add" onsubmit={(e) => { e.preventDefault(); const u = adding[t.id]; if (u) run(`add:${t.id}`, () => api.setTeamMember(t.id, u, 'member')); adding[t.id] = ''; }}>
-            <select class="select grow" bind:value={adding[t.id]} aria-label={`Agregar a ${t.name}`}>
-              <option value="">Agregar a alguien…</option>
-              {#each outside(t) as p (p.id)}<option value={p.id}>{nameOf(p)}</option>{/each}
-            </select>
+            <span class="grow">
+              <FilterPick items={outside(t).map((p) => ({ value: p.id, label: nameOf(p) }))} bind:value={adding[t.id]}
+                any="Agregar a alguien…" label={`Agregar a ${t.name}`} />
+            </span>
             <button class="btn btn-sm preset-tonal-primary" disabled={!adding[t.id] || !!busy}>Agregar</button>
           </form>
         {/if}
@@ -191,6 +192,6 @@
   .members { display: grid; gap: 0.3rem; margin: 0; padding: 0; list-style: none; }
   .members li { display: flex; align-items: center; gap: 0.6rem; }
   .who { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-  .role-pick { width: auto; padding-block: 0.15rem; font-size: 0.82rem; }
+  .role-pick { width: 9rem; flex: none; }
   .grow { flex: 1; min-width: 0; }
 </style>

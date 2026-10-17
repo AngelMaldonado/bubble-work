@@ -3,7 +3,7 @@
   import Icon from './components/Icon.svelte';
   import { api, type Board as BoardData, type Features, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { isEditable } from './lib/keys';
-  import { promptsUrl, allUrl, artifactUrl, boardUrl, inventoryUrl, parse, plannerUrl, readonlyInboxUrl, sequenceUrl, settingsUrl, spaceUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { promptsUrl, allUrl, artifactUrl, boardUrl, inventoryUrl, parse, plannerUrl, readonlyInboxUrl, roadmapUrl, sequenceUrl, settingsUrl, spaceUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
   import Board from './components/Board.svelte';
@@ -11,6 +11,7 @@
   import Wiki from './components/Wiki.svelte';
   import Planner from './components/Planner.svelte';
   import ReadPlanner from './components/ReadPlanner.svelte';
+  import Roadmap from './components/Roadmap.svelte';
   import { rememberAttentionReturn, takeAttentionReturn } from './lib/attentionReturn';
   import { workspaceBuoyancy } from './lib/workspaceBuoyancy';
   import Inventory from './components/Inventory.svelte';
@@ -21,6 +22,7 @@
   import ArtifactView from './components/ArtifactView.svelte';
   import PersonalSpace from './components/PersonalSpace.svelte';
   import { projectColors } from './lib/projectColors.svelte';
+  import { weekStart } from './lib/weekStart.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
@@ -77,7 +79,7 @@
   const isAll = $derived(route.kind === 'all');
   const readPlanning = $derived(route.kind === 'sequence' || (route.kind === 'planner' && (me?.role !== 'lead' || !!route.inboxOnly)));
   /** las pantallas que dibuja el shell, y por eso tienen esquina */
-  const onShell = $derived(route.kind === 'board' || route.kind === 'all' || route.kind === 'sequence' || route.kind === 'space');
+  const onShell = $derived(route.kind === 'board' || route.kind === 'all' || route.kind === 'sequence' || route.kind === 'roadmap' || route.kind === 'space');
   const current = $derived(
     isAll
       ? null
@@ -97,6 +99,10 @@
   // `/secuencia` con la función apagada no es una pantalla: se va a Todos.
   $effect(() => {
     if (ready && route.kind === 'sequence' && features.id && !features.sequence) go(allUrl, true);
+  });
+  // Lo mismo con el roadmap.
+  $effect(() => {
+    if (ready && route.kind === 'roadmap' && features.id && !features.roadmap) go(allUrl, true);
   });
   // The box that scrolls. The minimap needs it: the shell holds still and the
   // pane moves, so a spy listening to the window sees a page that never scrolls.
@@ -121,6 +127,7 @@
       api.version().then((v) => (serverVersion = devLatest(v)));
       loadHeat();
       projectColors.load().catch(() => {});
+      weekStart.load().catch(() => {});
     }
     ready = true;
   }
@@ -578,6 +585,9 @@
     ...(features.sequence
       ? [{ id: 'sequence', icon: '🧭', title: 'Secuencia', hint: 'qué va ahora y qué sigue', run: () => go(sequenceUrl) }]
       : []),
+    ...(features.roadmap
+      ? [{ id: 'roadmap', icon: '🗺', title: 'Roadmap', hint: 'el calendario como un camino: quién va dónde', run: () => go(roadmapUrl) }]
+      : []),
     { id: 'settings', icon: '⚙', title: 'Ajustes', hint: isLead ? 'flotabilidad · usuarios · mi usuario · tokens' : 'mi usuario · tokens', run: () => go(settingsUrl()) },
     { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: signOut },
   ]);
@@ -823,6 +833,7 @@
       // secuencia del departamento porque es lo tuyo.
       { id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true },
       ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
+      ...(features.roadmap ? [{ id: 'roadmap', name: 'Roadmap', face: '🗺', href: roadmapUrl, top: true }] : []),
       { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
       // La forma de trabajar que leen los agentes: el lead edita la de cada rol.
@@ -838,6 +849,8 @@
       ? 'planner'
       : route.kind === 'sequence'
         ? 'sequence'
+        : route.kind === 'roadmap'
+        ? 'roadmap'
         : route.kind === 'inventory'
         ? 'inventory'
         : route.kind === 'prompts'
@@ -851,6 +864,8 @@
           ? allUrl
           : id === 'sequence'
             ? sequenceUrl
+          : id === 'roadmap'
+            ? roadmapUrl
           : id === 'space'
             ? spaceUrl
             : id === 'inventory'
@@ -864,7 +879,7 @@
                 : plannerUrl,
       )}
     onsignout={signOut}
-    current={route.kind === 'sequence' || route.kind === 'space' ? '' : (current?.id ?? '')}
+    current={route.kind === 'sequence' || route.kind === 'roadmap' || route.kind === 'space' ? '' : (current?.id ?? '')}
     label="Proyectos"
     newLabel="Nuevo proyecto"
     version={updating || versionLabel}
@@ -881,10 +896,20 @@
     oncreate={createWorkspace}
     teamList={teams.list}
     team={teams.current}
-    onteam={(id) => { teams.set(id); if (current && !teams.inScope(current)) go(allUrl); }}
+    onteam={(id) => {
+      teams.set(id);
+      // Sólo una pantalla de UN proyecto se queda sin piso al cambiar de equipo.
+      // Roadmap, Secuencia y Mi espacio siguen al equipo: se quedan donde están
+      // (`current` cae a `workspaces[0]` también ahí, y no cuenta).
+      if (current && 'slug' in route && route.slug && !teams.inScope(current)) go(allUrl);
+    }}
     onmove={me?.role === 'lead' ? moveWorkspace : undefined}>
     {#if route.kind === 'space' && me}
       {#key me.id}<PersonalSpace workspaces={sorted} />{/key}
+    {:else if route.kind === 'roadmap' && me && features.roadmap}
+      <Roadmap
+        onopenboard={(slug) => { backTo.set(roadmapUrl); go(boardUrl(slug)); }}
+        onopen={(slug, seq) => { backTo.set(roadmapUrl); go(threadUrl(slug, seq)); }} />
     {:else if route.kind === 'sequence' && me && features.sequence}
       <SequenceView
         {me}
@@ -925,7 +950,7 @@
          enseñar. -->
     {#snippet corner()}
       <div class="corner-dock">
-        {#if current && route.kind !== 'sequence' && route.kind !== 'space'}
+        {#if current && route.kind !== 'sequence' && route.kind !== 'roadmap' && route.kind !== 'space'}
           <Repos workspace={current} canWrite={hereLead} />
         {/if}
         <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />

@@ -45,14 +45,10 @@
   }
 </script>
 {#snippet modes()}
+  <!-- En la píldora de abajo al centro. El equipo es el de la columna: aquí
+       no se elige otro. Quien no es lead sólo ve lo suyo, y se dice. -->
   <div class="reader-hud">
-    <span class="reader-state">Sólo lectura · {scope==='all' ? 'Equipo' : 'Mi trabajo'}</span>
-    {#if teams.list.length > 1}
-      <select class="select team" value={teams.current} aria-label="Equipo de la secuencia"
-        onchange={(e) => teams.set((e.currentTarget as HTMLSelectElement).value)}>
-        {#each teams.list as t (t.id)}<option value={t.id}>{t.personal ? '🔒 ' : ''}{t.name}</option>{/each}
-      </select>
-    {/if}
+    {#if !isLead}<span class="reader-state">Lo mío</span>{/if}
     {#if isLead}<div class="seg" role="group" aria-label="alcance">
       <button class:on={scope==='all'} aria-pressed={scope==='all'} onclick={() => scope='all'}>Equipo</button>
       <button class:on={scope==='mine'} aria-pressed={scope==='mine'} onclick={() => scope='mine'}>Lo mío</button>
@@ -65,16 +61,15 @@
   </div>
 {/snippet}
 <div class="sequence-reader">
-  <div class="panel">{#key `${mode}.${scope}.${teams.current}`}<SequenceCanvas readonly edgeToEdge loading={!board && !error} threads={rows} onopen={open} {modes} what={mode==='tasks' ? 'hilos' : 'módulos'} />{/key}</div>
+  <div class="panel">{#key `${mode}.${scope}.${teams.current}`}<SequenceCanvas readonly edgeToEdge modesBottom loading={!board && !error} threads={rows} onopen={open} {modes} what={mode==='tasks' ? 'hilos' : 'módulos'} />{/key}</div>
 </div>
 <style>
  .sequence-reader {height:100%;min-height:0;display:flex;flex-direction:column;}
- .reader-hud {display:flex;flex-direction:column;align-items:flex-start;gap:0.5rem;max-width:100%;}
- .reader-state {font-size:0.75rem;color:var(--muted);padding:0.2rem 0.5rem;border-radius:7px;background:var(--surface-solid);}
+ .reader-hud {display:contents;}
+ .reader-state {font-size:0.8rem;font-weight:700;color:var(--muted);padding:0.3rem 0.7rem;border-radius:10px;border:1px solid var(--line);background:var(--surface-solid);}
  .reader-error {font-size:0.8rem;color:var(--color-error-500);padding:0.5rem;background:var(--surface-solid);border-radius:7px;max-width:100%;overflow-wrap:anywhere;}
  .reader-error button {text-decoration:underline;}
  .panel {flex:1;min-height:0;}
- .team {font-size:0.82rem;font-weight:600;max-width:14rem;padding-block:0.2rem;}
  .seg {display:flex;flex-wrap:wrap;max-width:100%;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--surface-solid);}
  .seg button {padding:0.3rem 0.7rem;border-radius:7px;font-size:0.85rem;}
  .seg button.on {background:var(--hover);font-weight:700;}

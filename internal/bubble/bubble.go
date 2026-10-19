@@ -45,6 +45,7 @@ func Register(app core.App, t *tree.Tree) {
 	registerReadPlanner(app)
 	registerPresence(app)
 	registerAssets(app, t)
+	registerAttachments(app, t)
 	registerLimits(app)
 	registerTokens(app)
 	registerPeople(app)

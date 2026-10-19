@@ -11,6 +11,7 @@ require (
 	github.com/yuin/goldmark v1.8.5
 	go.abhg.dev/goldmark/toc v0.12.0
 	go.mau.fi/whatsmeow v0.0.0-20260916100317-2375e1751bbd
+	golang.org/x/image v0.45.0
 	google.golang.org/protobuf v1.36.12
 	modernc.org/sqlite v1.57.0
 )
@@ -49,7 +50,6 @@ require (
 	go.mau.fi/util v0.10.1 // indirect
 	golang.org/x/crypto v0.57.0 // indirect
 	golang.org/x/exp v0.0.0-20260908205506-85c1c2202aba // indirect
-	golang.org/x/image v0.45.0 // indirect
 	golang.org/x/net v0.59.0 // indirect
 	golang.org/x/oauth2 v0.36.0 // indirect
 	golang.org/x/sync v0.23.0 // indirect

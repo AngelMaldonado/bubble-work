@@ -259,10 +259,12 @@
   }
   function spaceKey(e: KeyboardEvent) {
     if (doom || menuFor || editing) return;
-    const t = e.target as HTMLElement;
-    if (t.closest('input, textarea, [contenteditable], .cm-editor')) return;
+    // El autofill y otras extensiones mandan `keydown` sin `key`, o con
+    // `window` como destino: ni `.closest` ni `.toLowerCase` se dan por hechos.
+    const t = e.target;
+    if (t instanceof Element && t.closest('input, textarea, [contenteditable], .cm-editor')) return;
     if (e.key === 'Escape' && selected.length) { selected = []; return; }
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'a' && notes.length) { e.preventDefault(); selected = notes.map((n) => n.id); }
+    if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === 'a' && notes.length) { e.preventDefault(); selected = notes.map((n) => n.id); }
   }
 
   /** Marca la caja cuando su texto no cabe: ahí se corta con «…». */

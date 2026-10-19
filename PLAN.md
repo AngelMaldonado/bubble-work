@@ -1532,13 +1532,48 @@ Lo que se descartó:
 
 ## Ajustes: flotabilidad, personas, perfil y tokens de agente
 
-Una pantalla `/ajustes/<tab>` con el layout del planeador (barra propia, ← al
-board) y tabs de Skeleton controladas por la dirección: la tab se enlaza y
-sobrevive a recargar. Entra desde el menú del pie de la columna y ⌘K.
+Una pantalla `/ajustes/<categoría>` con barra propia y ← al board, y una
+**columna con las categorías** (la `Navigation` de Skeleton, como la del hilo o
+el toolbox de la secuencia; se encoge a rail con la misma preferencia que la de
+proyectos, y siempre en una pantalla angosta; la lista desplaza sola, con el
+desvanecido en el borde, igual que la de proyectos). Cada fila es un ancla con su
+dirección: la categoría se enlaza y sobrevive a recargar. Antes eran tabs de
+Skeleton; se cambiaron por la columna, que deja ver todas las categorías con su
+icono y no compite por el ancho con el contenido. Entra desde el menú del pie de
+la columna y ⌘K.
 
+- **Usuarios**: la lista de personas con un botón «+ Dar de alta» que abre un
+  diálogo (correo, nombre, contraseña, rol); al crearla, el mismo diálogo enseña
+  la contraseña una vez. Antes el formulario era una tarjeta fija arriba de la
+  lista.
+- **Equipos**: la explicación de qué es un equipo va en un icono ⓘ con tooltip,
+  junto al título, y no como párrafo fijo; el equipo en el que trabajas ya no
+  lleva la barra de color a la izquierda (lo dice «trabajando aquí»). El nombre
+  se edita pulsándolo (Enter o salir guarda, Escape cancela), borrar es un botón
+  danger con el asset de basura, los badges son más grandes, y cada miembro es
+  la misma fila de persona que en Usuarios (`PersonTile`: cara, nombre, correo).
+- **Cada sección lleva su título** en la fuente display; la de los tokens se
+  llama **Agente** (la dirección sigue siendo `/ajustes/tokens`).
+- **Canales → WhatsApp**: el logo de WhatsApp; el número vinculado se ve en un
+  campo deshabilitado (para cambiarlo se desvincula) y, sin número, se dice de
+  frente «Falta vincular un número»; el grupo se elige en un dropdown con los
+  grupos de la cuenta. El número y el grupo se guardan en la configuración del
+  canal, así que se ven también con el canal apagado.
+
+- **Funciones** incluye **Mi espacio** (`features.space`), encendida por
+  defecto (la migración la enciende en la fila existente): apagada sale de la
+  columna y `/mi-espacio` lleva a Todos; las notas se quedan. Las tools del MCP
+  de notas personales no dependen de ella.
+- **Planas:** las secciones van sobre el fondo, sin caja, separadas por una
+  línea fina; sólo el token recién generado lleva un fondo (se enseña una vez).
 - **Flotabilidad** (*buoyancy*): edita la fila `tuning` en palabras de lo que
-  produce (días, ciclos, % que sigue flotando). La leen todos, la cambia el lead
+  produce (días, ciclos, % que sigue flotando), con un slider de Skeleton por número, de
+  uno en uno y con marcas (antes eran campos numéricos) y los iconos de banda en su versión iluminada. La leen todos, la cambia el lead
   global; recalibrar sigue siendo un UPDATE, no una migración.
+  **Artefactos temporales:** en la misma pantalla, un slider (1 a 180 días)
+  para `tuning.artifact_days`: cuántos días sin movimiento tarda en borrarse un
+  artefacto no fijado (30 por defecto). Ya era un valor de esa fila que leían
+  el job y la caducidad que muestra cada pantalla; faltaba dónde cambiarlo.
 - **Mi usuario**: nombre visible, avatar (`users.avatar`, 2 MB, sin SVG) y
   contraseña. El correo es de sólo lectura: cambiarlo bien pide verificar por
   correo, y la instancia no manda correos.
@@ -1554,6 +1589,22 @@ revocar son rutas propias: la huella la calcula el servidor. Se permite «sin
 caducidad» (decisión del usuario). El token se enseña una vez, con el prompt de
 conexión ya relleno; el 🤖 lleva a Ajustes → Tokens en vez de copiar la sesión.
 El JWT de sesión se sigue aceptando en `/mcp`, así lo ya configurado no se rompe.
+
+**Conectar desde Ajustes → Agente:** cada token tuyo tiene «Copiar prompt»; como
+el servidor sólo guarda la huella, el prompt va con un hueco `<TU_TOKEN bw_…>` y
+una nota que dice cuál pegar (no se finge que se puede recuperar). Y los
+comandos por harness, con su botón de copiar —completos con el token al
+generarlo, con `<TU_TOKEN>` en la lista fija—, según su documentación:
+Claude Code `claude mcp add --scope user --transport http bubble-work <url>
+--header "Authorization: Bearer …"`; Codex `codex mcp add bubble-work --url <url>
+--bearer-token-env-var BUBBLE_WORK_TOKEN` (lee el token de esa variable);
+Antigravity no tiene comando: una entrada `serverUrl` + `headers` en
+`~/.gemini/config/mcp_config.json` (o `.agents/mcp_config.json`).
+
+**Los revocados se purgan:** un job (`bubbleTokensPurge`, cada hora) borra los
+tokens revocados hace más de una semana. Esa semana deja ver «se revocó, y
+cuándo»; después ya no abren nada ni dicen nada nuevo. Los caducados se quedan:
+se pueden extender.
 
 Lo que se descartó:
 
@@ -1578,6 +1629,16 @@ borra y restaura desde la app; los candados (no borrarse ni quitarse el rol a un
 mismo, no dejar el departamento sin lead global) están en el servidor, porque una
 regla no sabe contar cuántos leads quedarían. El borrado duro por la API se
 cierra: la regla por defecto de PocketBase dejaba a cada persona borrarse.
+
+**A los 30 días, se purgan sus datos personales** (decisión del usuario): un
+job diario (`bubblePeoplePurge`) borra los tokens, preferencias, presencia, Mi
+espacio (notas y archivos), accesos al inventario, membresías de proyecto y de
+equipo, el avatar y su equipo personal si no tiene proyectos (con proyectos se
+queda: es trabajo). La cuenta se queda —nombre y correo— como firma de lo que
+escribió, y `users.purged_at` dice cuándo se purgó. Dentro de los 30 días,
+restaurar la deja como estaba; después vuelve sin nada de eso, y Ajustes →
+Usuarios lo dice. Rechazado también aquí el borrado total (pasar su autoría a
+una «persona eliminada»): se perdería el nombre en toda su historia.
 
 Lo que se descartó:
 
@@ -2614,6 +2675,39 @@ Validado:
 - `just check` (760 live, 40 frontend). Las pruebas cubren, con un segundo lead global y su equipo personal: lo que no ve el otro lead (equipo, proyecto, tablero, hilos, documento, cambios, ideas, objetivos, por REST y por MCP); el proyecto compartido con una persona sin abrirle el equipo; objetivos, secuencia, cola y canal por equipo; crear un equipo compartido y un lead que no es global; mover proyectos con sus reglas; borrar sólo equipos vacíos.
 - `/tmp/bw-pw/r23.mjs`: el recorrido en el navegador.
 - La migración, probada sobre una copia de `pb_data` real.
+
+## El agente ve y sube adjuntos *(built)*
+
+Hasta aquí el agente no veía las imágenes ni los archivos de un hilo, ni podía
+subir uno: los adjuntos se sirven por REST y su token sólo abre `/mcp`. Ahora, en
+los cuatro lugares donde hay adjuntos —`assets/` de un proyecto (git), los
+archivos de una idea del inbox, Mi espacio y las imágenes del inventario—, con
+las reglas de cada uno (un proyecto que ves; una idea tuya o de un equipo que
+lideras; Mi espacio sólo su dueño, ni el lead global; el inventario si te lo
+asignaron):
+
+- **`attachment_read`** manda una imagen como contenido `image` del MCP,
+  **reducida ligeramente** (lado largo de 2000 px como mucho; una chica va tal
+  cual; PNG o JPEG), un texto (txt, csv, json, svg) como texto, y **siempre un
+  comando de descarga de un solo uso** (10 minutos). La descarga es el camino
+  garantizado: Claude Code y Codex le pasan la imagen al modelo, pero Antigravity
+  no lo documenta, y un PDF no viaja bien en ningún cliente (Codex descarta los
+  bloques `resource`). Los tres tienen terminal y leen un archivo del disco.
+- **`attachment_list`** da los adjuntos de un lugar; **`document_read`** dice en
+  su cabecera qué adjuntos cita el documento.
+- **`attachment_upload`** da un **enlace firmado** de un solo uso (10 minutos)
+  para subir con `curl -F`, a `assets/` de un proyecto (mismo límite, tipos y
+  commit firmado que desde la app; la respuesta trae el markdown para citarlo),
+  a una idea o a Mi espacio. Subir no calienta nada: lo que lo cita, sí.
+
+Los enlaces viven en memoria (un reinicio los invalida, y vencen solos) y se
+re-comprueba a la persona al usarlos.
+
+Rechazado: **mandar el archivo en base64 dentro de la llamada** (el modelo
+escribiría el archivo token por token: una imagen de 1 MB son cientos de miles
+de tokens); **abrirle al token del agente las rutas REST de adjuntos** (rompe que
+el token sólo abra `/mcp`, y obliga a tener el token en la terminal); **la imagen
+original sin reducir** (contexto pagado por píxeles que el modelo reduce igual).
 
 ## Roadmap: el calendario como un camino *(built)*
 

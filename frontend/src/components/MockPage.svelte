@@ -45,7 +45,7 @@
   // already know is yours is the one that should not have to be searched for.
   // ⌘K, because the omnibar is the one control worth a shortcut.
   function hotkey(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === 'k') {
       e.preventDefault();
       search();
     }

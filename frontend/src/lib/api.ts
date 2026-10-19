@@ -255,7 +255,7 @@ export type Person = {
 };
 
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
-export type Features = { id: string; sequence: boolean; roadmap?: boolean; updated?: string };
+export type Features = { id: string; sequence: boolean; roadmap?: boolean; /** Mi espacio; sin la columna (servidor viejo) cuenta como encendido */ space?: boolean; updated?: string };
 
 /** Lo que una persona eligió y tiene que seguirla entre dispositivos.
  *
@@ -300,6 +300,9 @@ export type Tuning = {
   decay_cycles: number;
   grace_cycles: number;
   ownerless_is_rip: boolean;
+  /** a cuántos días de su último movimiento se borra un artefacto temporal
+   *  no fijado; sin valor (o 0), 30 */
+  artifact_days?: number;
   updated?: string;
 };
 
@@ -441,7 +444,7 @@ export type AgentToken = {
 };
 
 /** Una persona vista desde la gestión de usuarios. */
-export type PersonAdmin = Person & { deleted_at?: string };
+export type PersonAdmin = Person & { deleted_at?: string; /** cuándo el job purgó sus datos personales */ purged_at?: string };
 
 /** La URL del avatar de una persona, o vacío. `thumb` pide una de las
  *  miniaturas que declara la migración (`64x64`, `160x160`). */

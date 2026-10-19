@@ -26,3 +26,43 @@ export async function setupPrompt(url: string, token: string): Promise<string> {
   }
   return template.replaceAll('{{url}}', url).replaceAll('{{token}}', token);
 }
+
+/** Cómo se agrega el servidor a mano en cada harness, según su documentación
+ *  (revisada 2026-10): Claude Code y Codex tienen un comando; Antigravity no,
+ *  se edita su `mcp_config.json`. El nombre del servidor es `bubble-work`. */
+export type Harness = { id: string; name: string; how: string; code: string; lang: 'sh' | 'json' };
+export const SERVER_NAME = 'bubble-work';
+export function harnessCommands(url: string, token: string): Harness[] {
+  return [
+    {
+      id: 'claude',
+      name: 'Claude Code',
+      how: 'En la terminal. --scope user lo deja en todos tus proyectos; sin él, sólo en el actual.',
+      lang: 'sh',
+      code: `claude mcp add --scope user --transport http ${SERVER_NAME} ${url} \\\n  --header "Authorization: Bearer ${token}"`,
+    },
+    {
+      id: 'codex',
+      name: 'Codex',
+      how: 'En la terminal. Codex lee el token de una variable de entorno: deja el export en tu ~/.zshrc (o ~/.bashrc) para que exista en cada sesión.',
+      lang: 'sh',
+      code: `export BUBBLE_WORK_TOKEN="${token}"\ncodex mcp add ${SERVER_NAME} --url ${url} --bearer-token-env-var BUBBLE_WORK_TOKEN`,
+    },
+    {
+      id: 'antigravity',
+      name: 'Antigravity',
+      how: 'No tiene comando: agrega esta entrada a mcpServers en ~/.gemini/config/mcp_config.json (en el IDE: Manage MCP Servers → View raw config), o en .agents/mcp_config.json para un solo proyecto.',
+      lang: 'json',
+      code: JSON.stringify({ mcpServers: { [SERVER_NAME]: { serverUrl: url, headers: { Authorization: `Bearer ${token}` } } } }, null, 2),
+    },
+  ];
+}
+
+/** Para un token que ya existe el servidor sólo guarda su huella: el prompt va
+ *  con un hueco que dice cuál pegar, en vez de fingir que se puede recuperar. */
+export function tokenPlaceholder(prefix: string) {
+  return `<TU_TOKEN ${prefix}…>`;
+}
+export function placeholderNote(name: string, prefix: string) {
+  return `Antes de seguir: este prompt no trae el token, porque Bubble Work no lo vuelve a enseñar. Reemplaza ${tokenPlaceholder(prefix)} por el token «${name}» que guardaste al generarlo (empieza con ${prefix}). Si no lo tienes, pídeme que genere uno nuevo.\n\n`;
+}

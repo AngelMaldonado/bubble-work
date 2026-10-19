@@ -100,6 +100,13 @@
   $effect(() => {
     if (ready && route.kind === 'sequence' && features.id && !features.sequence) go(allUrl, true);
   });
+  // Mi espacio: encendido salvo que el departamento lo apague. Antes de leer las
+  // funciones (o con un servidor sin la columna) cuenta como encendido, para que
+  // la entrada no parpadee.
+  const spaceOn = $derived(features.space !== false);
+  $effect(() => {
+    if (ready && route.kind === 'space' && features.id && !spaceOn) go(allUrl, true);
+  });
   // Lo mismo con el roadmap.
   $effect(() => {
     if (ready && route.kind === 'roadmap' && features.id && !features.roadmap) go(allUrl, true);
@@ -661,7 +668,7 @@
   // dejar rastro: dejaba de funcionar y no había error que mirar. `isEditable`
   // es lo que sigue devolviendo la tecla a quien de verdad la necesita.
   function hotkeys(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === 'k') {
       if (isEditable(e.target)) return;
       e.preventDefault();
       omni = true;
@@ -831,7 +838,7 @@
       // que se ejecuta. Cada quien la ve con su alcance.
       // Tu lienzo personal: arriba, con lo que se mira a diario, y antes de la
       // secuencia del departamento porque es lo tuyo.
-      { id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true },
+      ...(spaceOn ? [{ id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true }] : []),
       ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
       ...(features.roadmap ? [{ id: 'roadmap', name: 'Roadmap', face: '🗺', href: roadmapUrl, top: true }] : []),
       { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl },
@@ -904,7 +911,7 @@
       if (current && 'slug' in route && route.slug && !teams.inScope(current)) go(allUrl);
     }}
     onmove={me?.role === 'lead' ? moveWorkspace : undefined}>
-    {#if route.kind === 'space' && me}
+    {#if route.kind === 'space' && me && spaceOn}
       {#key me.id}<PersonalSpace workspaces={sorted} />{/key}
     {:else if route.kind === 'roadmap' && me && features.roadmap}
       <Roadmap

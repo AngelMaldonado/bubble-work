@@ -57,7 +57,36 @@ func expiryIn(from time.Time, days int) types.DateTime {
 // sesión válida siga ganando y esto sólo mire lo que no era una.
 const tokenAuthPriority = apis.DefaultLoadAuthTokenMiddlewarePriority + 1
 
+// revokedTokenKeep: cuánto se queda a la vista un token revocado. Una semana
+// dice «se revocó, y cuándo» a quien lo busque; después ya no abre nada ni
+// dice nada nuevo, y la lista es de los que sirven.
+const revokedTokenKeep = 7 * 24 * time.Hour
+
+// sweepRevokedTokens borra los tokens revocados hace más de `revokedTokenKeep`.
+// Sólo los revocados: uno caducado se puede extender, así que se queda.
+func sweepRevokedTokens(app core.App, now time.Time) int {
+	cutoff := now.Add(-revokedTokenKeep).UTC()
+	rows, err := app.FindRecordsByFilter("agent_tokens", "revoked_at != '' && revoked_at < {:c}", "", 0, 0,
+		dbx.Params{"c": cutoff.Format("2006-01-02 15:04:05.000Z")})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range rows {
+		if err := app.Delete(r); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
 func registerTokens(app core.App) {
+	app.Cron().MustAdd("bubbleTokensPurge", "23 * * * *", func() {
+		if n := sweepRevokedTokens(app, time.Now()); n > 0 {
+			app.Logger().Info("revoked tokens purged", "count", n)
+		}
+	})
+
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		se.Router.Bind(&hook.Handler[*core.RequestEvent]{
 			Id:       "bubbleAgentToken",

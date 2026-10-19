@@ -25,6 +25,11 @@ export type Match = { score: number; ranges: Range[] };
 /** A word starts after a space, a slash, a dash or a case change. */
 function boundary(text: string, i: number): boolean {
   if (i === 0) return true;
+  // `i` es una posición en el texto PLEGADO, y aquí se lee el original. Si
+  // plegar cambió el largo (texto en NFD, o un alfabeto que se descompone),
+  // la posición puede caer fuera: se dice «no es inicio» en vez de leer una
+  // letra que no existe (y tronar en `.toLowerCase()` de undefined).
+  if (i >= text.length) return false;
   const prev = text[i - 1];
   if (/[\s/\-_.#·:]/.test(prev)) return true;
   return prev === prev.toLowerCase() && text[i] !== text[i].toLowerCase();

@@ -41,6 +41,20 @@
   <div class="set-card">
     <div class="feature">
       <Switch
+        checked={features.space !== false}
+        disabled={saving || !features.id}
+        onCheckedChange={(e: { checked: boolean }) => set({ space: e.checked })}>
+        <Switch.Control><Switch.Thumb /></Switch.Control>
+        <Switch.Label><Icon of="pin" tint /> Mi espacio</Switch.Label>
+        <Switch.HiddenInput />
+      </Switch>
+      <p class="help">
+        Un lienzo personal de post-its: notas, imágenes y enlaces a proyectos, sólo para quien las
+        escribe. Encendido aparece como «Mi espacio» en la columna. Apagarlo no borra ninguna nota.
+      </p>
+    </div>
+    <div class="feature">
+      <Switch
         checked={features.sequence}
         disabled={saving || !features.id}
         onCheckedChange={(e: { checked: boolean }) => set({ sequence: e.checked })}>

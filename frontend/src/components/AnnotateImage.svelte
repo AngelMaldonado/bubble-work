@@ -324,7 +324,7 @@
   function keys(e: KeyboardEvent) {
     if (e.target === field) return;
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === 'z') {
+    if (mod && e.key?.toLowerCase() === 'z') {
       e.preventDefault();
       undo();
     } else if (mod && e.key === 'Enter') {

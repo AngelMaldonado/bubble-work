@@ -1,13 +1,20 @@
 <script lang="ts">
-  // Ajustes: una pantalla con tabs, como el planeador — su propia barra y su
-  // propia vuelta, sin la columna de proyectos.
+  // Ajustes: su propia barra y su propia vuelta, y una columna con las
+  // categorías —la `Navigation` de Skeleton, como la del hilo o la del toolbox
+  // de la secuencia—, que se encoge a rail igual que la de proyectos.
   //
-  // La tab va en la DIRECCIÓN (`/ajustes/tokens`): «mira tus tokens» se manda
-  // como enlace, y recargar no te devuelve a la primera tab. Por eso las tabs
-  // de Skeleton van controladas: el valor lo dice la ruta y cambiar de tab es
-  // navegar.
-  import { Tabs } from '@skeletonlabs/skeleton-svelte';
-  import type { Features, Person } from '../lib/api';
+  // La categoría va en la DIRECCIÓN (`/ajustes/tokens`): «mira tus tokens» se
+  // manda como enlace, y recargar no te devuelve a la primera. Por eso cada fila
+  // es un ancla con su dirección, y elegirla es navegar.
+  import { Navigation, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
+  import InfoIcon from '@lucide/svelte/icons/info';
+  import PanelLeftIcon from '@lucide/svelte/icons/panel-left';
+  import { avatarUrl, type Features, type Person } from '../lib/api';
+  import { settingsUrl } from '../lib/routes';
+  import { rail } from '../lib/filters.svelte';
+  import { narrow } from '../lib/viewport.svelte';
+  import Icon from './Icon.svelte';
+  import { edgeFade } from '../lib/fade.svelte';
   import SettingsFeatures from './SettingsFeatures.svelte';
   import SettingsChannels from './SettingsChannels.svelte';
   import SettingsBuoyancy from './SettingsBuoyancy.svelte';
@@ -47,16 +54,26 @@
   const tabs = $derived([
     ...(isLead
       ? [
-          { id: 'flotabilidad', label: 'Flotabilidad' },
-          { id: 'usuarios', label: 'Usuarios' },
-          { id: 'funciones', label: 'Funciones' },
+          { id: 'flotabilidad', label: 'Flotabilidad', face: '🫧' },
+          { id: 'usuarios', label: 'Usuarios', face: '🚪' },
+          { id: 'funciones', label: 'Funciones', face: '🛠' },
         ]
       : []),
-    { id: 'equipos', label: 'Equipos' },
-    ...(isLead || leadsATeam ? [{ id: 'canales', label: 'Canales' }] : []),
-    { id: 'mi-usuario', label: 'Mi usuario' },
-    { id: 'tokens', label: 'Tokens' },
+    { id: 'equipos', label: 'Equipos', face: '👥' },
+    ...(isLead || leadsATeam ? [{ id: 'canales', label: 'Canales', face: '💬' }] : []),
+    { id: 'mi-usuario', label: 'Mi usuario', face: '' },
+    // La dirección sigue siendo `tokens` (la enlaza «Conectar tu IA»); lo que se
+    // lee es lo que conecta: tu agente.
+    { id: 'tokens', label: 'Agente', face: '🤖' },
   ]);
+
+  // Encogida o abierta, como la columna de proyectos (la misma preferencia); en
+  // una pantalla angosta, siempre rail.
+  let railed = $state(rail.get());
+  const shut = $derived(narrow.on || railed);
+  const layout = $derived(shut ? 'rail' : 'sidebar');
+  // La lista se desvanece en el borde que aún tiene filas detrás, como la de proyectos.
+  const listFade = edgeFade();
 
   // Una tab que no te corresponde —un enlace a `/ajustes/flotabilidad` pegado
   // a un member— cae en la primera que sí.
@@ -74,40 +91,85 @@
   </div>
 
   <div class="body">
-    <Tabs value={current} onValueChange={(e: { value: string }) => ontab?.(e.value)}>
-      <Tabs.List>
-        {#each tabs as t (t.id)}
-          <Tabs.Trigger value={t.id}>{t.label}</Tabs.Trigger>
-        {/each}
-        <Tabs.Indicator />
-      </Tabs.List>
+    <Navigation {layout} class="set-nav">
+      <Navigation.Content>
+        <Navigation.Header>
+          <Navigation.Trigger onclick={() => { railed = !railed; rail.set(railed); }} title={shut ? 'expandir' : 'colapsar'}>
+            <PanelLeftIcon class={shut ? 'size-5' : 'size-4'} />
+            {#if !shut}<span class="side-title">Categorías</span>{/if}
+          </Navigation.Trigger>
+        </Navigation.Header>
+        <Navigation.Group class="cats" style={listFade.style} {@attach listFade.attach}>
+          <Navigation.Menu>
+            {#each tabs as t (t.id)}
+              <div class="row" class:on={current === t.id}>
+                <!-- Un ancla y no un `Navigation.Trigger`: es un LUGAR, con
+                     dirección. Lleva a mano los `data-part` de Skeleton para
+                     verse como sus filas (lo mismo que las fijadas de la
+                     columna de proyectos). -->
+                <a class="cat" data-scope="navigation" data-part="trigger" data-layout={layout}
+                  href={settingsUrl(t.id)} title={t.label} aria-current={current === t.id ? 'page' : undefined}
+                  onclick={(e) => {
+                    if (e.metaKey || e.ctrlKey || e.shiftKey || e.button !== 0 || !ontab) return;
+                    e.preventDefault();
+                    ontab(t.id);
+                  }}>
+                  {#if t.face}
+                    <Icon of={t.face} size="22px" tint />
+                  {:else}
+                    <span class="me" aria-hidden="true">
+                      {#if me.avatar}<img src={avatarUrl(me, '64x64')} alt="" />{:else}{(me.display_name || me.email || '?')[0].toUpperCase()}{/if}
+                    </span>
+                  {/if}
+                  <span data-scope="navigation" data-part="trigger-text" data-layout={layout}>{t.label}</span>
+                </a>
+              </div>
+            {/each}
+          </Navigation.Menu>
+        </Navigation.Group>
+      </Navigation.Content>
+    </Navigation>
 
-      {#if isLead}
-        <Tabs.Content value="flotabilidad">
-          <SettingsBuoyancy canEdit />
-        </Tabs.Content>
-        <Tabs.Content value="usuarios">
-          <SettingsPeople {me} />
-        </Tabs.Content>
-        <Tabs.Content value="funciones">
-          <SettingsFeatures {features} {onfeatures} />
-        </Tabs.Content>
-      {/if}
-      <Tabs.Content value="equipos">
-        <SettingsTeams {me} />
-      </Tabs.Content>
-      {#if isLead || leadsATeam}
-        <Tabs.Content value="canales">
-          <SettingsChannels />
-        </Tabs.Content>
-      {/if}
-      <Tabs.Content value="mi-usuario">
-        <SettingsMe {me} {onme} />
-      </Tabs.Content>
-      <Tabs.Content value="tokens">
-        <SettingsTokens {me} />
-      </Tabs.Content>
-    </Tabs>
+    <main class="pane">
+      <div class="column">
+        <!-- El título de la sección, como el de cualquier pantalla: en display. -->
+        <header class="sec-head">
+          <h1 class="display sec-title">{tabs.find((t) => t.id === current)?.label}</h1>
+          {#if current === 'equipos'}
+            <!-- Qué es un equipo, a un clic: quien ya lo leyó no lo vuelve a
+                 cargar encima de la lista cada vez que entra. -->
+            <Tooltip positioning={{ placement: 'bottom-start' }} openDelay={80} closeDelay={80} interactive>
+              <Tooltip.Trigger class="info" aria-label="Qué es un equipo">
+                <InfoIcon class="size-4" />
+              </Tooltip.Trigger>
+              <Portal>
+                <Tooltip.Positioner>
+                  <Tooltip.Content class="team-help">
+                    <p>
+                      Un equipo es un <b>contexto</b>: sus proyectos, objetivos, secuencia, calendario, inbox de ideas y
+                      canal de WhatsApp son suyos y no se mezclan con los de otro. El equipo en el que trabajas se elige
+                      arriba de la columna de proyectos, y es también a dónde va lo que tu IA crea sin decir equipo.
+                    </p>
+                    <p>Un lead global es lead de todo equipo que no sea personal.</p>
+                    <p>
+                      Un <b>equipo personal</b> es tu contexto privado: sólo lo ves tú, ni siquiera otro lead global.
+                      Para trabajar con alguien ahí, invítalo a un <b>proyecto</b> del equipo: verá ese proyecto y nada más.
+                    </p>
+                  </Tooltip.Content>
+                </Tooltip.Positioner>
+              </Portal>
+            </Tooltip>
+          {/if}
+        </header>
+        {#if current === 'flotabilidad'}<SettingsBuoyancy canEdit />
+        {:else if current === 'usuarios'}<SettingsPeople {me} />
+        {:else if current === 'funciones'}<SettingsFeatures {features} {onfeatures} />
+        {:else if current === 'equipos'}<SettingsTeams {me} />
+        {:else if current === 'canales'}<SettingsChannels />
+        {:else if current === 'mi-usuario'}<SettingsMe {me} {onme} />
+        {:else}<SettingsTokens {me} />{/if}
+      </div>
+    </main>
   </div>
 </div>
 
@@ -144,30 +206,60 @@
   .back:hover { color: var(--text); background: var(--hover); }
   .ttl { margin: 0; font-size: 0.95rem; font-weight: 700; }
 
-  /* Una columna legible y centrada, que desplaza entera: son formularios, y un
-     formulario a todo el ancho de un monitor se lee de lado a lado. */
-  .body {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    width: 100%;
-    max-width: 860px;
-    margin: 0 auto;
-    padding: 1.25rem 1rem 4rem;
+  .body { flex: 1; min-height: 0; display: flex; align-items: stretch; }
+
+  /* La columna: sin fondo, una línea a la derecha, todo el alto (las mismas
+     reglas que la del hilo). `class="set-nav"` va a un componente, así que se
+     ancla en `.body`, que sí es nuestro. */
+  .body :global(.set-nav) { flex: none; height: 100%; display: flex; flex-direction: column; overflow: hidden; border-right: 1px solid var(--line); background: transparent; }
+  .body :global(.set-nav [data-part='content'][data-layout='sidebar']) { flex: 1 1 auto; min-height: 0; display: flex; flex-direction: column; align-items: stretch; gap: 0.75rem; }
+  .body :global(.set-nav [data-part='group']) { align-items: stretch; min-width: 0; }
+  /* La LISTA desplaza, no la columna: las mismas reglas que la de proyectos
+     (Shell.svelte). En rail el grupo es `display: contents` y no tiene caja que
+     desplazar, así que se le da una. La barra va sobre el borde de la columna. */
+  .body :global(.set-nav[data-layout='rail'] .cats) { display: flex; flex-direction: column; gap: 1rem; }
+  .body :global(.set-nav .cats) {
+    flex: 1 1 auto; min-height: 0; overflow-y: auto;
+    width: auto; margin-inline: -1rem; padding-inline: 1rem 1.5rem;
+    scrollbar-width: thin;
+    scrollbar-color: color-mix(in oklab, var(--muted) 35%, transparent) transparent;
   }
-  .body :global([data-scope='tabs'][data-part='content']) { padding-top: 1.25rem; }
+  .body :global(.set-nav[data-layout='rail'] .cats) { scrollbar-width: none; }
+  .body :global(.set-nav[data-layout='rail'] .cats::-webkit-scrollbar) { display: none; }
+  .side-title { font-size: 0.7rem; font-weight: 800; letter-spacing: 0.09em; text-transform: uppercase; color: var(--faint); }
+  .row { display: flex; width: 100%; }
+  .cat, .cat:visited { text-decoration: none; color: inherit; }
+  /* La elegida lleva fondo y borde, como el proyecto elegido en la columna. */
+  .row.on .cat { background: var(--hover); box-shadow: inset 0 0 0 1px var(--line); font-weight: 600; }
+  .me { flex: none; display: grid; place-content: center; width: 22px; height: 22px; overflow: hidden; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.7rem; font-weight: 700; }
+  .me img { width: 100%; height: 100%; object-fit: cover; }
+
+  /* El contenido desplaza solo, en una columna legible y centrada: son
+     formularios, y uno a todo el ancho de un monitor se lee de lado a lado. */
+  .pane { flex: 1; min-width: 0; overflow-y: auto; }
+  .sec-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
+  .sec-title { margin: 0; font-size: 1.9rem; line-height: 1.1; }
+  .sec-head :global(.info) { display: grid; place-content: center; width: 26px; height: 26px; border-radius: 999px; color: var(--muted); }
+  .sec-head :global(.info:hover), .sec-head :global(.info[data-state='open']) { background: var(--hover); color: var(--text); }
+  /* El tooltip del tema es de una línea; éste es un párrafo. */
+  :global([data-scope='tooltip'][data-part='content'].team-help) { display: grid; gap: 0.5rem; width: max-content; max-width: min(26rem, calc(100vw - 2rem)); white-space: normal; padding: 0.65rem 0.8rem; font-size: 0.8rem; font-weight: 500; line-height: 1.45; }
+  :global(.team-help p) { margin: 0; }
+  .column { width: 100%; max-width: 860px; margin: 0 auto; padding: 1.25rem 1rem 4rem; }
 
   /* Lo común a las cuatro secciones, una vez aquí. */
-  .body :global(.set-section) { display: flex; flex-direction: column; gap: 1rem; }
+  .body :global(.set-section) { display: flex; flex-direction: column; gap: 1.25rem; }
   .body :global(.set-lead) { margin: 0; color: var(--muted); font-size: 0.88rem; line-height: 1.5; }
-  .body :global(.set-card) {
-    padding: 1rem;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--surface);
-  }
+  /* Las secciones van PLANAS sobre el fondo, sin caja: una línea fina las
+     separa. Una caja por bloque era ruido en una pantalla que sólo tiene
+     bloques. */
+  .body :global(.set-card) { padding: 0; border: 0; border-radius: 0; background: none; }
+  .body :global(.set-card + .set-card),
+  .body :global(.set-err + .set-card) { padding-top: 1.25rem; border-top: 1px solid var(--line); }
   .body :global(.set-card h3) { margin: 0 0 0.6rem; font-size: 0.95rem; font-weight: 700; }
   .body :global(.set-row) { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; }
+  /* Un título dentro de una fila se centra con lo que lleva al lado (el logo, un
+     badge): sin el margen inferior del título de una sección. */
+  .body :global(.set-row > h3) { margin: 0; line-height: 1.2; }
   .body :global(.set-err) {
     margin: 0;
     padding: 0.45rem 0.7rem;

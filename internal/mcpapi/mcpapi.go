@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -132,7 +133,7 @@ type toolEntry struct {
 
 // toolGroups es el orden de las categorías en la tabla.
 var toolGroups = []string{"Guía", "Equipos", "Personas y cambios", "Proyectos", "Módulos (burbujas)", "Hilos",
-	"Documentos", "Comentarios", "Inbox (ideas)", "Artefactos temporales", "Plan y secuencia",
+	"Documentos", "Adjuntos", "Comentarios", "Inbox (ideas)", "Artefactos temporales", "Plan y secuencia",
 	"Mi espacio", "Pines", "Infraestructura"}
 
 // toolbox junta lo que se registra en un servidor.
@@ -611,6 +612,111 @@ func build() *mcp.Server {
 			return nil, nil, err
 		}
 		return jsonOut(map[string]any{"id": rec.Id, "url": rec.GetString("url")}), nil, nil
+	})
+
+	// ---- Adjuntos --------------------------------------------------------------
+
+	type attachListArg struct {
+		Where string `json:"where" jsonschema:"project, idea, space (tu Mi espacio) o inventory"`
+		ID    string `json:"id,omitempty" jsonschema:"el proyecto (id o slug) o la idea; space e inventory no lo piden"`
+	}
+	add(tb, "Adjuntos", reads, "Listar adjuntos", &mcp.Tool{
+		Name: "attachment_list",
+		Description: "Los adjuntos de un lugar: `assets/` de un proyecto, los archivos de una idea del inbox, " +
+			"los de tu Mi espacio o las imágenes del inventario. Cada uno trae su `ref`, que es lo que " +
+			"`attachment_read` recibe.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in attachListArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := bubble.ListAttachments(c.app, c.auth, c.tree, in.Where, in.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(out), nil, nil
+	})
+
+	type attachReadArg struct {
+		Project   string `json:"project,omitempty" jsonschema:"con path: el proyecto (id o slug)"`
+		Path      string `json:"path,omitempty" jsonschema:"con project: assets/…, como lo cita el documento"`
+		Idea      string `json:"idea,omitempty" jsonschema:"con file: la idea del inbox"`
+		File      string `json:"file,omitempty" jsonschema:"con idea: el nombre que da inbox_read"`
+		Space     string `json:"space,omitempty" jsonschema:"un archivo de tu Mi espacio (attachment_list where=space)"`
+		Inventory string `json:"inventory,omitempty" jsonschema:"una cosa o un grupo del inventario con imagen"`
+	}
+	add(tb, "Adjuntos", reads, "Ver adjunto", &mcp.Tool{
+		Name: "attachment_read",
+		Description: "Te deja VER un adjunto: una imagen llega como imagen (reducida a 2000 px de lado si es " +
+			"más grande), un texto (txt, csv, json, svg) como texto. Siempre trae además un comando de " +
+			"descarga de un solo uso (10 minutos): si tu harness no te muestra la imagen, o es un PDF, " +
+			"descárgalo y ábrelo con tu herramienta de archivos. Di cuál: project+path, idea+file, space o inventory.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in attachReadArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		ref := bubble.AttachRef{Project: in.Project, Path: in.Path, Idea: in.Idea, File: in.File, Space: in.Space, Inv: in.Inventory}
+		url, a, err := bubble.DownloadLink(c.app, c.auth, c.tree, c.base, ref)
+		if err != nil {
+			return nil, nil, err
+		}
+		local := "/tmp/" + a.Name
+		head := fmt.Sprintf("%s · %s · %s · %d bytes\nDescarga (un solo uso, 10 min): curl -fsSL -o %q %q\n",
+			a.Where, a.Name, a.MIME, len(a.Bytes), local, url)
+		res := &mcp.CallToolResult{}
+		switch {
+		case bubble.IsText(a):
+			body := string(a.Bytes)
+			const capText = 100 << 10
+			if len(body) > capText {
+				body = body[:capText] + "\n…(cortado: descárgalo para leerlo entero)"
+			}
+			res.Content = []mcp.Content{&mcp.TextContent{Text: head + "\n" + body}}
+		default:
+			if img, mt, ok := bubble.ForModel(a); ok {
+				note := "Va la imagen abajo"
+				if len(img) != len(a.Bytes) {
+					note += " (reducida para el modelo; la descarga es la original)"
+				}
+				res.Content = []mcp.Content{
+					&mcp.TextContent{Text: head + note + ". Si no la ves, descárgala y ábrela."},
+					&mcp.ImageContent{Data: img, MIMEType: mt},
+				}
+			} else {
+				res.Content = []mcp.Content{&mcp.TextContent{Text: head + "No se manda en línea (" + a.MIME +
+					"): descárgalo y ábrelo con tu herramienta de archivos."}}
+			}
+		}
+		return res, nil, nil
+	})
+
+	type attachUploadArg struct {
+		Project string `json:"project,omitempty" jsonschema:"subir a assets/ de este proyecto (id o slug), para citarlo en un hilo o en la wiki"`
+		Idea    string `json:"idea,omitempty" jsonschema:"subir a los archivos de esta idea del inbox (sólo imágenes)"`
+		Space   bool   `json:"space,omitempty" jsonschema:"subir a tu Mi espacio"`
+		Note    string `json:"note,omitempty" jsonschema:"con space: pegarlo a esta nota de Mi espacio"`
+		Name    string `json:"name,omitempty" jsonschema:"el nombre con el que se guarda; vacío = el del archivo"`
+	}
+	add(tb, "Adjuntos", adds, "Subir adjunto", &mcp.Tool{
+		Name: "attachment_upload",
+		Description: "Da un comando para SUBIR un archivo tuyo con curl, sin pasarlo por la conversación: " +
+			"a assets/ de un proyecto, a una idea del inbox o a tu Mi espacio. El enlace vale una vez y 10 " +
+			"minutos. Subir a un proyecto no calienta nada: cítalo después en el documento del hilo con " +
+			"document_edit (la respuesta del curl trae el markdown para citarlo).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in attachUploadArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		url, err := bubble.UploadLink(c.app, c.auth, c.base, bubble.UploadTarget{
+			Project: in.Project, Idea: in.Idea, Space: in.Space, Note: in.Note, Name: in.Name})
+		if err != nil {
+			return nil, nil, err
+		}
+		return text(fmt.Sprintf("Sube el archivo con (un solo uso, 10 min; cambia RUTA por la ruta local):\n"+
+			"curl -fsS -F \"file=@RUTA\" %q\n\nResponde con un JSON: dónde quedó y, en un proyecto, el markdown "+
+			"para citarlo (`markdown`).", url)), nil, nil
 	})
 
 	// ---- Documentos ------------------------------------------------------------
@@ -1269,7 +1375,7 @@ func build() *mcp.Server {
 	add(tb, "Inbox (ideas)", reads, "Leer idea", &mcp.Tool{
 		Name: "inbox_read",
 		Description: "Una idea completa: su texto, su cuerpo (el mensaje entero, si vino por WhatsApp) y sus " +
-			"archivos. Sigue siendo una idea: leerla no la vuelve trabajo.",
+			"archivos (míralos con attachment_read, idea+file). Sigue siendo una idea: leerla no la vuelve trabajo.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ideaArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1830,6 +1936,11 @@ func docText(d bubble.Doc, from, lines int) string {
 	if d.Done > 0 {
 		head += " · " + strconv.Itoa(d.Done) + " hechas"
 	}
+	// Lo que cita: sin esto, un agente lee «![](assets/x.png)» y no sabe que
+	// puede mirarlo.
+	if cited := citedAssets(d.Content); len(cited) > 0 {
+		head += " · adjuntos: " + strings.Join(cited, ", ") + " (míralos con attachment_read)"
+	}
 	if total == 0 {
 		// Un documento vacío EXISTE: se escribe con el hash del vacío. Devolver
 		// la cabecera sola parecería un error de lectura.
@@ -1853,6 +1964,25 @@ func docText(d bubble.Doc, from, lines int) string {
 	}
 	head += ")\n\n"
 	return head + body + "\n"
+}
+
+// assetRef encuentra lo que un documento cita de assets/.
+var assetRef = regexp.MustCompile(`assets/[^\s)"'<>\]]+`)
+
+// citedAssets: los adjuntos que cita un documento, sin repetir, hasta 12.
+func citedAssets(content string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, m := range assetRef.FindAllString(content, -1) {
+		if !seen[m] && tree.IsAttachment(m) {
+			seen[m] = true
+			out = append(out, m)
+			if len(out) == 12 {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // wide es cuánto se manda de un documento que nadie acotó.

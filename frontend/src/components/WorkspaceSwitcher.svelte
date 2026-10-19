@@ -224,7 +224,7 @@
         cancel();
         return;
     }
-    if (e.key.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.key?.length === 1 && !e.ctrlKey && !e.metaKey && !e.altKey) {
       e.preventDefault();
       jump(e.key.toLowerCase());
     }

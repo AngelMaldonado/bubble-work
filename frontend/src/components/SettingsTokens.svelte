@@ -10,7 +10,8 @@
   // generarlo, junto al prompt que conecta al asistente.
   import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
   import { api, type AgentToken, type Person } from '../lib/api';
-  import { setupPrompt } from '../lib/connect';
+  import { placeholderNote, setupPrompt, tokenPlaceholder } from '../lib/connect';
+  import HarnessCommands from './HarnessCommands.svelte';
   import { ago, when } from '../lib/when';
   import Confirm, { type Doom } from './Confirm.svelte';
 
@@ -84,6 +85,21 @@
     }
   }
 
+  // Copiar el prompt de un token que ya existe. El servidor sólo tiene su
+  // huella: el prompt va con un hueco y una nota que dice cuál token pegar.
+  let rowCopied = $state('');
+  async function copyRow(t: Row) {
+    try {
+      const text = placeholderNote(t.name, t.prefix) + (await setupPrompt(mcpUrl, tokenPlaceholder(t.prefix)));
+      await navigator.clipboard.writeText(text);
+      rowCopied = t.id;
+      setTimeout(() => (rowCopied = ''), 1800);
+    } catch {
+      error = 'El navegador no dejó copiar al portapapeles.';
+    }
+  }
+  const mcpUrl = `${location.origin}/mcp`;
+
   // ---- lo demás ----
   type Status = { key: 'revoked' | 'expired' | 'soon' | 'ok' | 'forever'; text: string };
   function status(t: AgentToken): Status {
@@ -133,7 +149,7 @@
 
 <section class="set-section">
   <p class="set-lead">
-    Cada agente —Claude Code, Codex, Cursor— entra al MCP con un token propio y trabaja como tú:
+    Cada agente —Claude Code, Codex, Antigravity— entra al MCP con un token propio y trabaja como tú:
     mismas reglas, y lo que escribe queda firmado con tu nombre. Revocar uno no toca a los demás
     ni cierra tu sesión.
   </p>
@@ -175,6 +191,10 @@
         </button>
         <button class="btn btn-sm preset-tonal-surface ml-auto" onclick={() => (fresh = null)}>Ya lo guardé</button>
       </div>
+      <details class="manual">
+        <summary>O agrégalo a mano en tu harness</summary>
+        <HarnessCommands url={mcpUrl} token={fresh.token} />
+      </details>
     </div>
   {/if}
 
@@ -222,7 +242,16 @@
                 · {t.last_used_at ? `usado ${ago(t.last_used_at)}` : 'nunca usado'}
               </p>
             </div>
-            <span class="badge {st.key}">{st.text}</span>
+            <!-- Un revocado se queda una semana y lo borra un job (tokens.go). -->
+            <span class="badge {st.key}" title={st.key === 'revoked' ? 'Se borra solo a la semana de revocado' : undefined}>{st.text}</span>
+            {#if st.key !== 'revoked' && t.owner === me.id}
+              <!-- El prompt de conexión, con un hueco para el token: el servidor
+                   no lo tiene, sólo su huella. -->
+              <button class="btn btn-sm preset-tonal-surface copy-prompt" onclick={() => copyRow(t)}
+                title="Copia el prompt de conexión; el token lo pegas tú (empieza con {t.prefix})">
+                {rowCopied === t.id ? '✓ copiado' : 'Copiar prompt'}
+              </button>
+            {/if}
             {#if st.key !== 'revoked'}
               <Menu onSelect={(e: { value: string }) => act(t, e.value)}>
                 <Menu.Trigger class="more" aria-label="acciones de {t.name}">⋯</Menu.Trigger>
@@ -248,6 +277,15 @@
       </ul>
     {/if}
   </div>
+  <!-- Conectar a mano, sin pegarle un prompt al asistente. -->
+  <div class="set-card">
+    <h3>Comandos por harness</h3>
+    <p class="help">
+      Para agregar el servidor tú mismo. Reemplaza <code>&lt;TU_TOKEN&gt;</code> por un token tuyo; al
+      generar uno nuevo, aquí arriba salen ya con él.
+    </p>
+    <HarnessCommands url={mcpUrl} token="<TU_TOKEN>" />
+  </div>
 </section>
 
 <Confirm bind:ask={doom} />
@@ -255,7 +293,8 @@
 <style>
   .grow { flex: 1; min-width: 14rem; }
   .help { margin: 0 0 0.6rem; color: var(--faint); font-size: 0.8rem; line-height: 1.45; }
-  .fresh { border-color: color-mix(in oklab, var(--accent, var(--text)) 45%, var(--line)); }
+  /* El token recién generado sí se resalta (se enseña una vez): un fondo suave. */
+  .fresh { padding: 1rem !important; border-radius: 12px; background: color-mix(in oklab, var(--accent) 10%, transparent) !important; }
   .secret {
     display: block;
     margin: 0 0 0.75rem;
@@ -302,4 +341,8 @@
   :global(.more:hover) { background: var(--hover); color: var(--text); }
   .danger { color: var(--color-error-500); }
   .expiry { width: 10rem; flex: none; }
+  .copy-prompt { flex: none; }
+  .manual { margin-top: 0.9rem; }
+  .manual summary { cursor: pointer; font-size: 0.82rem; font-weight: 600; color: var(--muted); }
+  .manual[open] summary { margin-bottom: 0.75rem; }
 </style>

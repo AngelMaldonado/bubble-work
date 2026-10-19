@@ -13,6 +13,8 @@
   import { api, avatarUrl, type Person, type PersonAdmin } from '../lib/api';
   import { ago } from '../lib/when';
   import Confirm, { type Doom } from './Confirm.svelte';
+  import PersonTile from './PersonTile.svelte';
+  import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
 
   let { me }: { me: Person } = $props();
 
@@ -77,6 +79,10 @@
   }
 
   // ---- alta ----
+  // En un diálogo, abierto desde la tabla: dar de alta es una acción sobre la
+  // lista, no una sección fija que ocupa la pantalla cada vez que se entra.
+  let adding = $state(false);
+  let addErr = $state('');
   let email = $state('');
   let fullName = $state('');
   let role = $state<'member' | 'lead'>('member');
@@ -91,18 +97,27 @@
     password = btoa(String.fromCharCode(...bytes)).replace(/[+/=]/g, '').slice(0, 16);
   }
 
+  function openAdd() {
+    email = fullName = password = '';
+    role = 'member';
+    created = null;
+    addErr = '';
+    adding = true;
+  }
+
   async function create(e: SubmitEvent) {
     e.preventDefault();
     creating = true;
-    error = '';
+    addErr = '';
     try {
       await api.createPerson({ email: email.trim(), name: fullName.trim(), password, role });
+      // El diálogo pasa a enseñar la contraseña: es la única vez que se ve.
       created = { email: email.trim(), password };
       email = fullName = password = '';
       role = 'member';
       await load();
     } catch (err) {
-      error = (err as Error).message;
+      addErr = (err as Error).message;
     } finally {
       creating = false;
     }
@@ -115,7 +130,7 @@
       copied = true;
       setTimeout(() => (copied = false), 1800);
     } catch {
-      error = 'El navegador no dejó copiar al portapapeles.';
+      addErr = 'El navegador no dejó copiar al portapapeles.';
     }
   }
 </script>
@@ -128,41 +143,6 @@
 
   {#if error}<p class="set-err" role="alert">{error}</p>{/if}
 
-  <form class="set-card" onsubmit={create}>
-    <h3>Dar de alta</h3>
-    <div class="form">
-      <input class="input" type="email" required placeholder="correo" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={email} />
-      <input class="input" placeholder="nombre visible (opcional)" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" maxlength="100" bind:value={fullName} />
-      <div class="set-row">
-        <input class="input grow" type="text" required minlength="8" placeholder="contraseña (mín. 8)" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={password} />
-        <button type="button" class="btn btn-sm preset-tonal-surface" onclick={generate}>generar</button>
-      </div>
-      <div class="set-row">
-        <span class="role-pick"><FilterPick items={ROLES} bind:value={role} allowEmpty={false} label="rol" /></span>
-        <button class="btn btn-sm preset-filled-primary-500" type="submit" disabled={creating || !email.trim() || password.length < 8}>
-          {#if creating}<Loading compact label="Creando persona" />{:else}Dar de alta{/if}
-        </button>
-      </div>
-    </div>
-  </form>
-
-  {#if created}
-    <div class="set-card" role="status">
-      <h3>✓ {created.email} ya puede entrar</h3>
-      <p class="help">
-        Pásale la dirección, su correo y esta contraseña por un canal privado. No se vuelve a
-        enseñar; puede cambiarla desde Ajustes → Mi usuario.
-      </p>
-      <code class="secret">{created.password}</code>
-      <div class="set-row">
-        <button class="btn btn-sm preset-filled-primary-500" onclick={copyCreds}>
-          {copied ? '✓ copiado' : 'Copiar dirección, correo y contraseña'}
-        </button>
-        <button class="btn btn-sm preset-tonal-surface ml-auto" onclick={() => (created = null)}>Listo</button>
-      </div>
-    </div>
-  {/if}
-
   <div class="set-card">
     <div class="set-row">
       <h3 class="m-0">Personas</h3>
@@ -171,6 +151,7 @@
           <input type="checkbox" bind:checked={showDeleted} /> ver las borradas ({deletedCount})
         </label>
       {/if}
+      <button class="btn btn-sm preset-filled-primary-500" class:ml-auto={!deletedCount} onclick={openAdd}>+ Dar de alta</button>
     </div>
 
     {#if !loaded}
@@ -180,46 +161,44 @@
         {#each shown as p (p.id)}
           {@const self = p.id === me.id}
           {@const lastLead = p.role === 'lead' && liveLeads <= 1}
-          <li class="person" class:dead={!!p.deleted_at}>
-            <span class="av" aria-hidden="true">
-              {#if p.avatar}<img src={avatarUrl(p, '64x64')} alt="" />{:else}{nameOf(p)[0]?.toUpperCase()}{/if}
-            </span>
-            <div class="min-w-0 flex-1">
-              <p class="pname">{nameOf(p)}{#if self}<span class="faint"> · tú</span>{/if}</p>
-              <p class="meta">
-                {p.display_name ? p.email : ''}
-                {#if p.deleted_at}
-                  · borrada {ago(p.deleted_at)}
-                {:else}
-                  {p.display_name ? '·' : ''}
-                  {(projects[p.id] ?? []).length
-                    ? `${projects[p.id].length} ${projects[p.id].length === 1 ? 'proyecto' : 'proyectos'}`
-                    : 'sin proyectos'}
-                  {#if seen(p.id)}· visto {ago(seen(p.id))}{/if}
-                {/if}
-              </p>
-            </div>
-            {#if p.deleted_at}
-              <button class="btn btn-sm preset-tonal-surface" onclick={() => run(api.restorePerson(p.id))}>Restaurar</button>
-            {:else}
-              {#if self || lastLead}
-                <!-- Bloqueado: se dice por qué en vez de ofrecer un menú inerte. -->
-                <span class="role-fixed" title={self ? 'tu propio rol lo cambia otro lead' : 'es el último lead global'}>
-                  {p.role === 'lead' ? 'lead global' : 'member'}
-                </span>
+          <PersonTile person={p} name={nameOf(p)} you={self} dead={!!p.deleted_at}>
+            {#snippet meta()}
+              {p.display_name ? p.email : ''}
+              {#if p.deleted_at}
+                · borrada {ago(p.deleted_at)}
+                {#if p.purged_at}· datos purgados{:else}· sus datos se purgan a los 30 días{/if}
               {:else}
-                <span class="role-pick"><FilterPick items={ROLES} value={p.role} allowEmpty={false} label={`rol de ${p.display_name || p.email}`}
-                  onchange={(r) => r && r !== p.role && setRole(p, r as 'lead' | 'member')} /></span>
+                {p.display_name ? '·' : ''}
+                {(projects[p.id] ?? []).length
+                  ? `${projects[p.id].length} ${projects[p.id].length === 1 ? 'proyecto' : 'proyectos'}`
+                  : 'sin proyectos'}
+                {#if seen(p.id)}· visto {ago(seen(p.id))}{/if}
               {/if}
-              <button
-                class="btn btn-sm preset-tonal-surface"
-                onclick={() => remove(p)}
-                disabled={self || lastLead}
-                title={self ? 'no puedes borrarte a ti mismo' : lastLead ? 'es el último lead global' : ''}>
-                Borrar
-              </button>
-            {/if}
-          </li>
+            {/snippet}
+            {#snippet actions()}
+              {#if p.deleted_at}
+                <button class="btn btn-sm preset-tonal-surface" onclick={() => run(api.restorePerson(p.id))}
+                  title={p.purged_at ? 'Vuelve sin sus proyectos, equipos ni tokens: se purgaron' : ''}>Restaurar</button>
+              {:else}
+                {#if self || lastLead}
+                  <!-- Bloqueado: se dice por qué en vez de ofrecer un menú inerte. -->
+                  <span class="role-fixed" title={self ? 'tu propio rol lo cambia otro lead' : 'es el último lead global'}>
+                    {p.role === 'lead' ? 'lead global' : 'member'}
+                  </span>
+                {:else}
+                  <span class="role-pick"><FilterPick items={ROLES} value={p.role} allowEmpty={false} label={`rol de ${p.display_name || p.email}`}
+                    onchange={(r) => r && r !== p.role && setRole(p, r as 'lead' | 'member')} /></span>
+                {/if}
+                <button
+                  class="btn btn-sm preset-tonal-error"
+                  onclick={() => remove(p)}
+                  disabled={self || lastLead}
+                  title={self ? 'no puedes borrarte a ti mismo' : lastLead ? 'es el último lead global' : ''}>
+                  <Icon of="trash" danger /> Borrar
+                </button>
+              {/if}
+            {/snippet}
+          </PersonTile>
         {/each}
       </ul>
     {/if}
@@ -228,10 +207,61 @@
 
 <Confirm bind:ask={doom} />
 
+{#if adding}
+  <Dialog open onOpenChange={(e: { open: boolean }) => { if (!e.open) adding = false; }}>
+    <Portal>
+      <Dialog.Backdrop class="scrim" style="z-index: var(--z-drawer-scrim)" />
+      <Dialog.Positioner class="fixed inset-0 flex items-center justify-center p-4" style="z-index: var(--z-drawer)">
+        <Dialog.Content class="card bg-surface-100-900 w-full max-w-md space-y-4 p-5 shadow-xl">
+          {#if created}
+            <Dialog.Title class="text-lg font-bold">✓ {created.email} ya puede entrar</Dialog.Title>
+            <Dialog.Description class="muted text-sm">
+              Pásale la dirección, su correo y esta contraseña por un canal privado. No se vuelve a
+              enseñar; puede cambiarla desde Ajustes → Mi usuario.
+            </Dialog.Description>
+            <code class="secret">{created.password}</code>
+            {#if addErr}<p class="dlg-err" role="alert">{addErr}</p>{/if}
+            <div class="flex flex-wrap justify-end gap-2">
+              <button class="btn btn-sm preset-tonal-surface" onclick={openAdd}>Dar de alta a otra</button>
+              <button class="btn btn-sm preset-filled-primary-500" onclick={copyCreds}>
+                {copied ? '✓ copiado' : 'Copiar dirección, correo y contraseña'}
+              </button>
+              <button class="btn btn-sm preset-tonal-surface" onclick={() => (adding = false)}>Listo</button>
+            </div>
+          {:else}
+            <Dialog.Title class="text-lg font-bold">Dar de alta</Dialog.Title>
+            <form class="form" onsubmit={create}>
+              <input class="input" type="email" required placeholder="correo" aria-label="Correo"
+                {@attach (el: HTMLInputElement) => el.focus()}
+                autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={email} />
+              <input class="input" placeholder="nombre visible (opcional)" aria-label="Nombre visible" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" maxlength="100" bind:value={fullName} />
+              <div class="pw">
+                <input class="input grow" type="text" required minlength="8" placeholder="contraseña (mín. 8)" aria-label="Contraseña" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" bind:value={password} />
+                <button type="button" class="btn btn-sm preset-tonal-surface" onclick={generate}>generar</button>
+              </div>
+              <span class="role-pick"><FilterPick items={ROLES} bind:value={role} allowEmpty={false} label="rol" /></span>
+              {#if addErr}<p class="dlg-err" role="alert">{addErr}</p>{/if}
+              <div class="flex justify-end gap-2">
+                <button type="button" class="btn btn-sm preset-tonal-surface" onclick={() => (adding = false)}>Cancelar</button>
+                <button class="btn btn-sm preset-filled-primary-500" type="submit" disabled={creating || !email.trim() || password.length < 8}>
+                  {#if creating}<Loading compact label="Creando persona" />{:else}Dar de alta{/if}
+                </button>
+              </div>
+            </form>
+          {/if}
+        </Dialog.Content>
+      </Dialog.Positioner>
+    </Portal>
+  </Dialog>
+{/if}
+
 <style>
-  .form { display: flex; flex-direction: column; gap: 0.6rem; max-width: 30rem; }
-  .grow { flex: 1; min-width: 10rem; }
-  .help { margin: 0 0 0.6rem; color: var(--faint); font-size: 0.8rem; line-height: 1.45; }
+  .form { display: flex; flex-direction: column; gap: 0.6rem; }
+  .grow { flex: 1; min-width: 0; }
+  /* El diálogo se dibuja en un portal, fuera de `.body` de Ajustes, así que no
+     le llegan sus `.set-row` ni `.set-err`: los suyos, aquí. */
+  .pw { display: flex; align-items: center; gap: 0.6rem; }
+  .dlg-err { margin: 0; padding: 0.45rem 0.7rem; border-radius: 8px; background: color-mix(in oklab, var(--color-error-500) 12%, transparent); font-size: 0.82rem; }
   .secret {
     display: block;
     margin: 0 0 0.75rem;
@@ -242,30 +272,6 @@
     user-select: all;
   }
   .list { margin: 0.6rem 0 0; padding: 0; list-style: none; }
-  .person {
-    display: flex;
-    align-items: center;
-    gap: 0.75rem;
-    padding: 0.55rem 0;
-    border-top: 1px solid var(--line);
-  }
-  .person.dead { opacity: 0.6; }
-  .av {
-    display: grid;
-    flex: none;
-    place-content: center;
-    width: 32px;
-    height: 32px;
-    overflow: hidden;
-    border-radius: 999px;
-    background: var(--hover);
-    color: var(--muted);
-    font-size: 0.85rem;
-    font-weight: 700;
-  }
-  .av img { width: 100%; height: 100%; object-fit: cover; }
-  .pname { margin: 0; font-size: 0.9rem; font-weight: 600; }
-  .meta { margin: 0.1rem 0 0; color: var(--faint); font-size: 0.76rem; }
-  .role-pick { width: 10rem; flex: none; }
+  .role-pick { width: 10rem; flex: 0 1 10rem; }
   .role-fixed { padding: 0.2rem 0.6rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.8rem; font-weight: 700; }
 </style>

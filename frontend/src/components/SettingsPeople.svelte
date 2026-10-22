@@ -10,11 +10,14 @@
   // candados —no borrarse a uno mismo, no dejar el departamento sin lead
   // global— están en el servidor; aquí sólo se evita ofrecer lo que va a
   // rechazar.
-  import { api, avatarUrl, type Person, type PersonAdmin } from '../lib/api';
+  import { api, avatarUrl, type AgentReleases, type Person, type PersonAdmin } from '../lib/api';
+  import { agentsByPerson, type PersonAgents } from '../lib/agentClients';
   import { ago } from '../lib/when';
   import Confirm, { type Doom } from './Confirm.svelte';
   import PersonTile from './PersonTile.svelte';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
+  import ClientLogo from './ClientLogo.svelte';
+  import AgentsMdBadge from './AgentsMdBadge.svelte';
 
   let { me }: { me: Person } = $props();
 
@@ -23,6 +26,11 @@
   // Cuándo latió cada una por última vez: lo más parecido a «último acceso»
   // que el servidor sabe sin guardar nada nuevo.
   let beats = $state<Record<string, string>>({});
+  // Con qué agentes trabaja cada una y qué AGENTS.md les llegó: sale de sus
+  // tokens, que el lead global ve todos. Si falla (un servidor anterior), la
+  // lista sale como antes.
+  let agents = $state<Record<string, PersonAgents>>({});
+  let releases = $state<AgentReleases | null>(null);
   let loaded = $state(false);
   let error = $state('');
   let doom = $state<Doom>(null);
@@ -35,6 +43,13 @@
       projects = by;
       beats = Object.fromEntries(pulse.map((r) => [r.id, r.at]));
       error = '';
+      Promise.all([api.tokens(), api.agentReleases()]).then(
+        ([tokens, cur]) => {
+          releases = cur;
+          agents = agentsByPerson(tokens, cur);
+        },
+        () => (agents = {}),
+      );
     } catch (e) {
       error = (e as Error).message;
     } finally {
@@ -176,6 +191,22 @@
               {/if}
             {/snippet}
             {#snippet actions()}
+              {@const ag = p.deleted_at ? undefined : agents[p.id]}
+              {#if ag}
+                <!-- El CLIENTE de cada agente (MCP no dice el modelo) y la última
+                     release de agents_md que le llegó a alguno. -->
+                <span class="clients">
+                  {#each ag.clients as c (c.key)}
+                    <ClientLogo brand={c}
+                      tip={`${c.name}${c.version ? ' ' + c.version : ''} · ${c.tokens === 1 ? '1 token' : `${c.tokens} tokens`} · usado ${ago(c.last)}`} />
+                  {/each}
+                </span>
+                {#if ag.release || ag.neverRead}
+                  {@const role = ag.release?.role ?? (p.role === 'lead' ? 'planner' : 'operators')}
+                  <AgentsMdBadge read={ag.release?.id} at={ag.release?.at} {role}
+                    want={(role === 'planner' ? releases?.planner : releases?.operators) ?? ''} />
+                {/if}
+              {/if}
               {#if p.deleted_at}
                 <button class="btn btn-sm preset-tonal-surface" onclick={() => run(api.restorePerson(p.id))}
                   title={p.purged_at ? 'Vuelve sin sus proyectos, equipos ni tokens: se purgaron' : ''}>Restaurar</button>
@@ -273,5 +304,7 @@
   }
   .list { margin: 0.6rem 0 0; padding: 0; list-style: none; }
   .role-pick { width: 10rem; flex: 0 1 10rem; }
+  /* Sus agentes: un ClientLogo por cliente (logo o inicial). */
+  .clients { display: inline-flex; align-items: center; gap: 0.3rem; }
   .role-fixed { padding: 0.2rem 0.6rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.8rem; font-weight: 700; }
 </style>

@@ -34,6 +34,8 @@ type caller struct {
 	tree *tree.Tree
 	// where this agent reached the server; what its links and scripts use
 	base string
+	// the agent token it came in with; empty for a browser session
+	token string
 }
 
 type ctxKey struct{}
@@ -60,23 +62,24 @@ func Register(app core.App, t *tree.Tree) {
 	// The first build runs before the database is open: it only registers the
 	// built-in descriptions as the originals (with no app, Prompt returns them).
 	// The first request builds again, now reading the edits.
-	srv := build()
+	srv, tb := build()
 	promptApp = app
 	var (
 		mu    sync.Mutex
 		built = int64(-1)
 	)
-	current := func() *mcp.Server {
+	current := func() (*mcp.Server, *toolbox) {
 		mu.Lock()
 		defer mu.Unlock()
 		if g := bubble.PromptsGen(); g != built {
-			srv, built = build(), g
+			srv, tb = build()
+			built = g
 		}
-		return srv
+		return srv, tb
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return current() },
+		func(*http.Request) *mcp.Server { s, _ := current(); return s },
 		&mcp.StreamableHTTPOptions{
 			// Stateless: PocketBase may run behind anything, and a session held in
 			// one process is a session the next request may not find.
@@ -91,14 +94,21 @@ func Register(app core.App, t *tree.Tree) {
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		mount := func(e *core.RequestEvent) error {
+			tok, _ := e.Get(bubble.AgentTokenKey).(string)
 			ctx := context.WithValue(e.Request.Context(), ctxKey{},
-				&caller{app: e.App, auth: e.Auth, tree: t, base: bubble.BaseURL(e.App, e.Request)})
+				&caller{app: e.App, auth: e.Auth, tree: t, base: bubble.BaseURL(e.App, e.Request), token: tok})
 			handler.ServeHTTP(e.Response, e.Request.WithContext(ctx))
 			return nil
 		}
 		for _, m := range []string{"GET", "POST", "DELETE"} {
 			se.Router.Route(m, "/mcp", mount).Bind(apis.RequireAuth())
 		}
+		// Las releases vigentes, para comparar en Ajustes → Tokens lo que leyó
+		// cada agente. Son huellas: no dicen nada del contenido.
+		se.Router.GET("/api/agents/release", func(e *core.RequestEvent) error {
+			_, tb := current()
+			return e.JSON(http.StatusOK, releases(e.App, e.Auth, tb.entries))
+		}).Bind(apis.RequireAuth("users"))
 		return se.Next()
 	})
 }
@@ -201,12 +211,15 @@ func catalog(entries []toolEntry) string {
 	return b.String()
 }
 
-func build() *mcp.Server {
+func build() (*mcp.Server, *toolbox) {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "bubble-work",
 		Version: "3",
 	}, nil)
 	tb := &toolbox{s: s}
+	// `instructions` por quien se conecta (release.go): el cargador que llega en
+	// cada sesión sin depender de que el modelo se acuerde de `agents_md`.
+	s.AddReceivingMiddleware(instructionsMiddleware(tb))
 
 	// La guía es también un PROMPT MCP, de los mismos bytes: no todos los
 	// clientes listan prompts, pero los que sí la encuentran ahí.
@@ -236,29 +249,29 @@ func build() *mcp.Server {
 			"Trae las entidades, el ciclo de trabajo, cómo se escribe, todas las tools por categoría y, al " +
 			"final, lo que mantiene el lead global, que manda. Al lead le llega la de quien planea; a los demás, " +
 			"la de quien opera; `role` lee la otra. Se lee en vivo: manda sobre lo que recuerdes.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in agentsArg) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in agentsArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		doc, err := bubble.ReadAgents(c.app, c.auth, in.Role)
+		// Un solo documento: la guía (editable en Prompts), la tabla de tools
+		// (generada del registro), cómo se escribe markdown, la sección vigente
+		// del prompt de conexión, y al final la forma de trabajar del
+		// departamento, que manda si contradice lo anterior. La cabecera dice su
+		// release (release.go).
+		r, err := releaseFor(c.app, c.auth, in.Role, tb.entries)
 		if err != nil {
 			return nil, nil, err
 		}
-		// Un solo documento: la guía (editable en Prompts), la tabla de tools
-		// (generada del registro), cómo se escribe markdown, y al final la forma
-		// de trabajar del departamento, que manda si contradice lo anterior.
-		head := fmt.Sprintf("AGENTS.md (%s) · todavía no hay ninguna versión", doc.Role)
-		dept := "El lead todavía no ha escrito la forma de trabajar de este rol. Sigue la guía y el `README.md` de cada proyecto."
-		if doc.Version != "" {
-			head = fmt.Sprintf("AGENTS.md (%s) · versión %s · %s · por %s", doc.Role, doc.Version, doc.Created, doc.Author)
-			dept = doc.Content
+		// Lo que se le entregó a este agente, sólo si es la de SU rol: el lead
+		// que lee la de operadores no la tiene por eso.
+		if in.Role == "" || in.Role == bubble.AgentsRole(c.auth) {
+			bubble.NoteAgentRelease(c.app, c.token, r.doc.Role, r.id)
 		}
-		return text(head + "\n\n" +
-			bubble.SystemPrompt(c.app, "agents_guide") + "\n\n" +
-			catalog(tb.entries) + "\n---\n\n" +
-			bubble.SystemPrompt(c.app, "markdown") + "\n\n---\n\n" +
-			"# Forma de trabajar del departamento (" + doc.Role + ")\n\n" + dept + "\n"), nil, nil
+		if req != nil {
+			bubble.NoteAgentClient(c.app, c.token, clientOf(req.Session))
+		}
+		return text(agentsHead(r) + "\n\n" + r.body), nil, nil
 	})
 
 	// ---- Proyectos -------------------------------------------------------------
@@ -1878,7 +1891,7 @@ func build() *mcp.Server {
 		}
 		return jsonOut(map[string]any{"item": in.Item, "deleted": true}), nil, nil
 	})
-	return s
+	return s, tb
 }
 
 // locate resolves either addressing form to one document. Both are accepted

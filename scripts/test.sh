@@ -921,12 +921,25 @@ chk ">>> ...y trae la sección que un agente se instala, con el hueco del proyec
   "$(curl -s "$API/api/connect" | grep -c '<SLUG>')" 2
 chk ">>> ...y la sección obliga a leer agents_md" \
   "$(curl -s "$API/api/connect" | grep -c 'llama a `agents_md` y síguela')" 1
+# La sección lleva su versión, que pone el servidor; la misma va en una
+# cabecera para los comandos por harness.
+CONNV=$(curl -s -D - -o /dev/null "$API/api/connect" | tr -d '\r' | sed -nE 's/^[Xx]-[Bb]ubble-[Cc]onnect-[Vv]ersion: (.*)$/\1/p')
+chk ">>> el prompt de conexión dice su versión en una cabecera" "${#CONNV}" 16
+chk "...y la marca en la sección que se instala" \
+  "$(curl -s "$API/api/connect" | grep -c "^Versión de esta sección: \`bubble-work connect $CONNV\`.$")" 1
+chk "...y pide mandarla en X-Bubble-Connect" \
+  "$(curl -s "$API/api/connect" | grep -c "X-Bubble-Connect: $CONNV")" 1
+chk "...sin dejar el hueco de la versión" \
+  "$(curl -s "$API/api/connect" | grep -c '{{version}}')" 0
 chk ">>> house_rules ya no existe: era una segunda copia" \
   "$(curl -s "$API/api/house-rules" | grep -c '<SLUG>')" 0
 
 # ---- AGENTS.md del departamento: lo escribe el lead, lo lee cada agente ----
 chk ">>> sin versiones, agents_md lo dice en vez de fallar" \
-  "$(mcptext "$A" agents_md '{}' | head -1)" "AGENTS.md (operators) · todavía no hay ninguna versión"
+  "$(mcptext "$A" agents_md '{}' | head -1 | sed -E 's/release [0-9a-f]{16}/release R/')" \
+  "AGENTS.md (operators) · release R · el departamento todavía no ha escrito ninguna versión"
+chk "...y trae la sección vigente, para reemplazar una vieja" \
+  "$(mcptext "$A" agents_md '{}' | grep -c "^Versión de esta sección: \`bubble-work connect $CONNV\`.$")" 1
 ARG="{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}"
 chk ">>> un member NO crea una versión" \
   "$(pcode agents_md "$A" "$ARG")" 400
@@ -1346,7 +1359,42 @@ chk ">>> sólo un lead del equipo ordena la secuencia" \
 ARG="{\"thread\":\"$T2\",\"sequence\":30}"
 chk "...el lead sí" "$(mcptext "$C" sequence_set "$ARG" | j "['sequence']")" 30
 mcptext "$C" sequence_set "{\"thread\":\"$T2\",\"sequence\":0}" >/dev/null
+T2SEQ=$(curl -s "$API/api/collections/threads/records/$T2" -H "Authorization: $SU" | j "['seq']")
 curl -s -X DELETE "$API/api/collections/threads/records/$T2" -H "Authorization: $A" >/dev/null
+
+# E1, contador por proyecto: con MAX(seq)+1, borrar el último hilo regalaba su
+# número (y su URL /w/alpha/t/N) al siguiente.
+NUM1=$(mcptext "$A" thread_create '{"project":"alpha","name":"Después del borrado"}')
+chk ">>> borrar el último hilo no libera su número (MCP)" "$(echo "$NUM1" | j "['seq']")" "$((T2SEQ + 1))"
+NUMID=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Otro después\"}")
+chk "...ni por REST, que usa el mismo contador" "$(echo "$NUMID" | j "['seq']")" "$((T2SEQ + 2))"
+curl -s -X DELETE "$API/api/collections/threads/records/$(echo "$NUMID" | j "['id']")" -H "Authorization: $A" >/dev/null
+NUM3=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Tercero\"}")
+chk "...y tampoco tras borrar el creado por REST" "$(echo "$NUM3" | j "['seq']")" "$((T2SEQ + 3))"
+rm -f /tmp/bubble-par-*.json
+# Sólo estos curl: un `wait` sin pids esperaría también al servidor de pruebas.
+PAR=""
+for i in 1 2 3 4 5 6 7 8; do
+  curl -s -o "/tmp/bubble-par-$i.json" -X POST "$API/api/collections/threads/records" -H "Authorization: $A" -H "$JS" \
+    -d "{\"workspace\":\"$ALPHA\",\"name\":\"Paralelo $i\"}" &
+  PAR="$PAR $!"
+done
+# shellcheck disable=SC2086
+wait $PAR
+chk ">>> ocho altas a la vez: ocho hilos, ocho números distintos y seguidos" \
+  "$(python3 -c 'import json,glob
+r=[json.load(open(f)) for f in glob.glob("/tmp/bubble-par-*.json")]
+s=sorted(x.get("seq",0) for x in r)
+print(len(r), len(set(s)), s[-1]-s[0] if s else -1, all(x.get("id") for x in r))')" "8 8 7 True"
+for f in /tmp/bubble-par-*.json; do
+  curl -s -X DELETE "$API/api/collections/threads/records/$(j "['id']" < "$f")" -H "Authorization: $A" >/dev/null
+done
+rm -f /tmp/bubble-par-*.json
+for x in "$NUM1" "$NUM3"; do
+  curl -s -X DELETE "$API/api/collections/threads/records/$(echo "$x" | j "['id']")" -H "Authorization: $A" >/dev/null
+done
+chk ">>> el contador es interno: no hay colección que leer" \
+  "$(code "$API/api/collections/thread_counters/records" -H "Authorization: $SU")" 404
 
 # A esta altura bob es el lead de alpha y alice, miembro (las pruebas de
 # membresía de arriba los intercambiaron).
@@ -1724,6 +1772,47 @@ chk ">>> alice genera un token de agente, y se le enseña una vez" "${TOK:0:3}" 
 chk "...sin caducidad si se pide así" "$(echo "$NEWTOK" | j "['expires_at']")" ""
 chk ">>> con él, un agente entra al MCP como alice" \
   "$(mcptext "Bearer $TOK" project_list '{}' | grep -c '"alpha"')" 1
+
+# Releases: qué tiene cada agente. El `initialize` trae `instructions` con la
+# release vigente; el servidor anota su cliente, con qué versión del prompt se
+# instaló y qué release de agents_md se le entregó.
+tokrec(){ curl -s "$API/api/collections/agent_tokens/records/$TOKID" -H "Authorization: $A" | j "['$1']"; }
+INIT=$(curl -s -X POST "$API/mcp" -H "Authorization: Bearer $TOK" -H "X-Bubble-Connect: $CONNV" -H "$JS" \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.2"}}}' \
+  | sed -nE 's/^data: (.*)$/\1/p' | tail -1)
+INS=$(echo "$INIT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"].get("instructions",""))')
+REL=$(echo "$INS" | head -1 | sed -nE 's/.*release ([0-9a-f]{16}).*/\1/p')
+chk ">>> el initialize trae instructions con la release vigente" "${#REL}" 16
+chk "...que caben en lo que entrega Claude Code" \
+  "$(echo "$INIT" | python3 -c 'import sys,json;s=json.load(sys.stdin)["result"]["instructions"];print(len(s.encode("utf-16-le"))//2<=2048)')" True
+chk "...y mandan a agents_md y a la sección vigente" \
+  "$(echo "$INS" | grep -c -e '`agents_md`' -e "bubble-work connect $CONNV")" 2
+chk "...la misma release que dice /api/agents/release" \
+  "$(curl -s "$API/api/agents/release" -H "Authorization: $A" | j "['operators']")" "$REL"
+chk ">>> el servidor anota el cliente del agente" "$(tokrec client)" "claude-code 2.1.2"
+chk "...y con qué versión del prompt se instaló" "$(tokrec connect_version)" "$CONNV"
+chk "...y todavía no leyó agents_md" "$(tokrec release_read)" ""
+chk ">>> agents_md dice la misma release en su cabecera" \
+  "$(mcptext "Bearer $TOK" agents_md '{}' | head -1 | grep -c "release $REL")" 1
+chk "...y queda anotado que se le entregó" "$(tokrec release_read)/$(tokrec release_role)" "$REL/operators"
+chk "...con su hora" "$([ -n "$(tokrec release_read_at)" ] && echo si || echo no)" si
+chk ">>> una cabecera de versión basura se ignora" \
+  "$(curl -s -o /dev/null -X POST "$API/mcp" -H "Authorization: Bearer $TOK" -H 'X-Bubble-Connect: <b>x</b>' -H "$JS" \
+     -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'; tokrec connect_version)" "$CONNV"
+chk ">>> la sesión del navegador no anota nada en ningún token" \
+  "$(mcptext "$A" agents_md '{}' >/dev/null; tokrec release_read)" "$REL"
+# El lead publica otra forma de trabajar: la release cambia, y el agente que
+# leyó la anterior queda atrás hasta su siguiente lectura.
+post agents_md "$C" "{\"role\":\"operators\",\"content\":\"# WoW v3\",\"author\":\"$CID\"}" >/dev/null
+REL2=$(curl -s "$API/api/agents/release" -H "Authorization: $A" | j "['operators']")
+chk ">>> publicar el AGENTS.md cambia la release" "$([ "$REL2" != "$REL" ] && [ ${#REL2} = 16 ] && echo si || echo no)" si
+chk "...y el agente sigue con la anterior" "$(tokrec release_read)" "$REL"
+chk "...hasta que vuelve a leer" \
+  "$(mcptext "Bearer $TOK" agents_md '{}' >/dev/null; tokrec release_read)" "$REL2"
+chk ">>> la release es la del contenido: leerla otra vez no la cambia" \
+  "$(curl -s "$API/api/agents/release" -H "Authorization: $A" | j "['operators']")" "$REL2"
+chk ">>> las releases son de quien tiene sesión" "$(code "$API/api/agents/release")" 401
 chk ">>> la huella no sale nunca por la API" \
   "$(list agent_tokens "$A" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("si" if d["totalItems"]==1 and "hash" not in d["items"][0] else "no")')" si
 chk ">>> bob no ve el token de alice" "$(list agent_tokens "$B" | j "['totalItems']")" 0
@@ -2411,6 +2500,15 @@ chk ">>> la guía editada es la que sirve agents_md" \
 chk ">>> ...y la tabla de tools sigue: se genera, no se edita" \
   "$(mcptext "$A" agents_md '{}' | grep -c '^## Tools por categoría')" 1
 curl -s -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"agents_guide","reset":true}' >/dev/null
+# Las instructions llegan en cada sesión y Claude Code las corta a 2 048
+# caracteres sin avisar: lo que no cabe, no se guarda.
+LONGINS=$(python3 -c 'import json;print(json.dumps({"key":"instructions","content":"x"*2100}))')
+chk ">>> unas instructions de más de 2 048 caracteres se rechazan" \
+  "$(code -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d "$LONGINS")" 400
+curl -s -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"instructions","content":"EDITADAS release {{release}} ({{role}})"}' >/dev/null
+chk "...y unas que caben llegan en el siguiente initialize, rellenadas" \
+  "$(mcp "$A" initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}' | j "['result']['instructions']" | sed -E 's/[0-9a-f]{16}/R/')" "EDITADAS release R (operators)"
+curl -s -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"instructions","reset":true}' >/dev/null
 chk ">>> un prompt vacío se rechaza: hay que restaurar" \
   "$(code -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"grill","content":"  "}')" 400
 chk ">>> el AGENTS.md se guarda por la misma puerta" \
@@ -2480,6 +2578,18 @@ chk "...ni sus hilos" "$(code "$API/api/collections/threads/records/$GT" -H "Aut
 chk "...ni el documento" "$(code "$API/api/threads/$GT/document" -H "Authorization: $C")" 404
 chk "...ni en el tablero de todos" \
   "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any(w["id"]=="'"$GWS"'" for w in json.load(sys.stdin)["workspaces"]))')" False
+# «Todos los equipos»: la vista del lead global junta los compartidos y deja
+# fuera lo personal, también lo suyo. Sin scope, su tablero sigue igual.
+chk ">>> gina ve su proyecto personal en su tablero de todos" \
+  "$(curl -s "$API/api/board" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any(w["id"]=="'"$GWS"'" for w in json.load(sys.stdin)["workspaces"]))')" True
+chk "...pero no en Todos los equipos: ni el proyecto, ni sus hilos" \
+  "$(curl -s "$API/api/board?scope=shared" -H "Authorization: $GI" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any(w["id"]=="'"$GWS"'" for w in d["workspaces"]), any(t["workspace"]=="'"$GWS"'" for t in d["threads"]), any(b["workspace"]=="'"$GWS"'" for b in d["bubbles"]))')" "False False False"
+chk "...y sí TI, con lo de carol" \
+  "$(curl -s "$API/api/board?scope=shared" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any(w["id"]=="'"$ALPHA"'" for w in json.load(sys.stdin)["workspaces"]))')" True
+chk "...sin un solo proyecto de un equipo personal" \
+  "$(curl -s "$API/api/board?scope=shared" -H "Authorization: $GI" | python3 -c 'import sys,json;print(sum(1 for w in json.load(sys.stdin)["workspaces"] if w.get("team")=="'"$GP"'"))')" 0
+chk ">>> Todos los equipos no es de un member" "$(code "$API/api/board?scope=shared" -H "Authorization: $A")" 403
+chk ">>> un scope desconocido se rechaza" "$(code "$API/api/board?scope=todo" -H "Authorization: $GI")" 400
 ARG="{\"thread\":\"$GT\"}"
 chk "...ni por MCP" "$(mcptext "$C" thread_get "$ARG" | grep -c 'not found')" 1
 chk "...ni en lo que cambió" \
@@ -2604,6 +2714,19 @@ ARG="{\"name\":\"Almacén\",\"team\":\"Operaciones\"}"
 OWS=$(mcptext "$A" project_create "$ARG" | j "['id']")
 chk "...y alice crea un proyecto ahí, por nombre del equipo" \
   "$(curl -s "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" | j "['team']")" "$OPS"
+# E1: el equipo de un hilo lo deriva el servidor del de su proyecto.
+ARG="{\"workspace\":\"$OWS\",\"name\":\"Inventario\",\"team\":\"$GP\"}"
+OTH=$(post threads "$A" "$ARG" | j "['id']")
+chk ">>> un hilo es del equipo de su proyecto, aunque el cliente diga otro" \
+  "$(curl -s "$API/api/collections/threads/records/$OTH" -H "Authorization: $SU" | j "['team']")" "$OPS"
+ARG="{\"project\":\"$OWS\",\"name\":\"Conteo\"}"
+OTM=$(mcptext "$A" thread_create "$ARG" | j "['id']")
+chk "...también el creado por MCP" \
+  "$(curl -s "$API/api/collections/threads/records/$OTM" -H "Authorization: $SU" | j "['team']")" "$OPS"
+ARG="{\"team\":\"$GP\"}"
+curl -s -o /dev/null -X PATCH "$API/api/collections/threads/records/$OTH" -H "Authorization: $A" -H "$JS" -d "$ARG"
+chk "...y no se cambia a mano" \
+  "$(curl -s "$API/api/collections/threads/records/$OTH" -H "Authorization: $SU" | j "['team']")" "$OPS"
 ARG="{\"team\":\"$TI\"}"
 chk ">>> alice no mueve el proyecto a TI: no es lead global" \
   "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $A" -H "$JS" -d "$ARG")" 403
@@ -2613,11 +2736,88 @@ chk ">>> carol no lo mueve al equipo personal de gina" \
 ARG="{\"team\":\"$TI\"}"
 chk ">>> carol sí lo mueve a TI: lidera los dos" \
   "$(curl -s -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "$ARG" | j "['team']")" "$TI"
+chk "...y sus hilos se van con él" \
+  "$(sucount threads "workspace = '$OWS' && team = '$TI'")/$(sucount threads "workspace = '$OWS' && team != '$TI'")" "2/0"
+chk ">>> ningún hilo con proyecto está sin equipo" "$(sucount threads "workspace != '' && team = ''")" 0
 chk ">>> un equipo con proyectos no se borra" \
   "$(code -X DELETE "$API/api/teams/$GP" -H "Authorization: $GI")" 400
 chk ">>> uno vacío sí" "$(code -X DELETE "$API/api/teams/$OPS" -H "Authorization: $C")" 204
 chk ">>> team_list: los equipos y el papel en cada uno" \
   "$(mcptext "$GI" team_list '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(sorted((t["name"],t["role"],t["personal"]) for t in d["teams"]))')" "[('Personal · Gina', 'lead', True), ('TI', 'lead', False)]"
+
+# ------------------------------------------------ sin contextos ----
+# Se quitaron (20 oct): la vista de blobs agrupa por los tags del frontmatter.
+echo
+chk ">>> ya no hay colección de contextos" "$(code "$API/api/collections/contexts/records" -H "Authorization: $SU")" 404
+chk "...ni campo context en el tablero" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any("context" in b for b in json.load(sys.stdin)["bubbles"]))')" False
+
+# ------------------------------------------------ tags del frontmatter ----
+# La fuente es el documento del hilo; `threads.tags` es un índice que escribe
+# el servidor. Cambiar sólo los tags clasifica: no calienta ni da pulso.
+TG=$(mcptext "$C" thread_create '{"project":"alpha","name":"Con tags"}' | j "['id']")
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [Pagos, \"#cliente/ACME\", pagos]\n---\n# Plan\n\n- [ ] cobrar\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> los tags salen del frontmatter, normalizados y sin repetir" \
+  "$(mcptext "$C" thread_get "{\"thread\":\"$TG\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tags"])')" "['pagos', 'cliente/acme']"
+chk "...y el tablero los trae" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;print([t.get("tags") for t in json.load(sys.stdin)["threads"] if t["id"]=="'"$TG"'"][0])')" "['pagos', 'cliente/acme']"
+chk "...el frontmatter no se dibuja" \
+  "$(curl -s "$API/api/threads/$TG/document" -H "Authorization: $C" | python3 -c 'import sys,json;h=json.load(sys.stdin)["html"];print("tags:" in h, "cobrar" in h)')" "False True"
+EVW() { curl -s "$API/api/collections/thread_evidence/records/$TG" -H "Authorization: $SU" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["warm_count"], d["last_warm_at"], d["last_any_at"])'; }
+BEFORE=$(EVW)
+sleep 1
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [infra]\n---\n# Plan\n\n- [ ] cobrar\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> cambiar sólo los tags se registra como clasificación" \
+  "$(EV "target='$TG'%20%26%26%20kind='document-classified'" "$SU" | j "['totalItems']")" 1
+chk "...no calienta ni cuenta como pulso" "$(EVW)" "$BEFORE"
+chk "...y el índice sigue al documento" \
+  "$(mcptext "$C" thread_get "{\"thread\":\"$TG\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tags"])')" "['infra']"
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [infra]\n---\n# Plan\n\n- [x] cobrar\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> cambiar el cuerpo sí es evidencia, como siempre" \
+  "$(EV "target='$TG'%20%26%26%20kind='document-changed'" "$SU" | j "['totalItems']")" 2
+chk ">>> un cliente no escribe el índice" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$TG" -H "Authorization: $C" -H "$JS" -d '{"tags":["falso"]}')/$(mcptext "$C" thread_get "{\"thread\":\"$TG\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tags"])')" "200/['infra']"
+# Lo escrito: palabras del Markdown (sin frontmatter) y archivos (páginas más
+# imágenes citadas, sin repetir). Índice del servidor, como los tags.
+WF() { curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;t=[t for t in json.load(sys.stdin)["threads"] if t["id"]=="'"$TG"'"][0];print(t.get("words",0), t.get("files",0))'; }
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [infra]\n---\n# Plan\n\nuno dos tres\n\n![foto](assets/foto.png)\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> lo escrito se mide: palabras sin frontmatter e imágenes citadas" "$(WF)" "6 1"
+TGDIR=$(curl -s "$API/api/collections/threads/records/$TG" -H "Authorization: $SU" | j "['doc_path']" | sed 's/\.md$//')
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"project":"alpha","path":sys.argv[1]+"/notas.md","base":sys.argv[2],"content":"cuatro cinco ![otra](assets/foto.png) ![b](assets/b.png)\n"}))' "$TGDIR" "$E0")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk "...una página suma su texto, ella misma y lo que cita, sin repetir" "$(WF)" "10 3"
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"project":"alpha","path":sys.argv[1]+"/notas.md"}))' "$TGDIR")
+mcptext "$C" document_delete "$ARG" >/dev/null
+chk "...y borrarla lo resta" "$(WF)" "6 1"
+chk ">>> un cliente no escribe lo escrito" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$TG" -H "Authorization: $C" -H "$JS" -d '{"doc_words":999,"doc_files":9}')/$(WF)" "200/6 1"
+curl -s -X DELETE "$API/api/collections/threads/records/$TG" -H "Authorization: $C" >/dev/null
+
+# Las aristas del grafo: relaciones declaradas, con los dos extremos visibles y
+# del mismo equipo.
+LA=$(mcptext "$C" thread_create '{"project":"alpha","name":"Antes"}' | j "['id']")
+LB=$(mcptext "$C" thread_create '{"project":"alpha","name":"Después"}' | j "['id']")
+ARG="{\"thread\":\"$LB\",\"related\":\"$LA\",\"type\":\"blocked_by\"}"
+mcptext "$C" thread_relate "$ARG" >/dev/null
+chk ">>> el tablero trae la dependencia, de lo que va antes a lo que espera" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any((l["from"]=="'"$LA"'" and l["to"]=="'"$LB"'" and l["kind"]=="dependency") for l in json.load(sys.stdin)["links"]))')" True
+chk "...y el de todos también" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(sum(1 for l in json.load(sys.stdin)["links"] if l["from"]=="'"$LA"'" and l["to"]=="'"$LB"'"))')" 1
+post thread_relations "$GI" "{\"thread\":\"$GT\",\"type\":\"relates_to\",\"related\":\"$LA\"}" >/dev/null
+chk ">>> una relación entre equipos no es arista, ni para quien ve los dos" \
+  "$(curl -s "$API/api/board" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any("'"$GT"'" in (l["from"],l["to"]) for l in json.load(sys.stdin)["links"]))')" False
+chk "...y quien no ve un extremo no recibe su id" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print("'"$GT"'" in json.dumps(json.load(sys.stdin)["links"]))')" False
+chk ">>> en el tablero de lectura de un member, sólo aristas entre lo suyo" \
+  "$(curl -s "$API/api/planner/read" -H "Authorization: $B" | python3 -c 'import sys,json;b=json.load(sys.stdin)["board"];ids={t["id"] for t in b["threads"]};print(all(l["from"] in ids and l["to"] in ids for l in b["links"]))')" True
 
 chk ">>> el superuser SÍ ve el board (se salta las reglas en todos lados o en ninguno)" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $SU")" 200

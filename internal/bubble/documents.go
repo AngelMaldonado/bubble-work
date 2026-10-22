@@ -339,14 +339,18 @@ func registerDocuments(app core.App, t *tree.Tree) {
 		// que ponga el proxy de enfrente, y un prompt con la URL equivocada es
 		// un prompt que configura un servidor que no existe. Y el token no
 		// vuelve a viajar por una respuesta que nadie necesitaba.
+		//
+		// `{{version}}` sí lo pone el servidor: es la huella de la sección
+		// (release.go). Va también en una cabecera, para los comandos por harness.
 		se.Router.GET("/api/connect", func(e *core.RequestEvent) error {
 			e.Response.Header().Set("Content-Type", "text/markdown; charset=utf-8")
-			_, err := e.Response.Write([]byte(SystemPrompt(e.App, "connect")))
+			e.Response.Header().Set("X-Bubble-Connect-Version", ConnectVersion(e.App))
+			_, err := e.Response.Write([]byte(ConnectText(e.App)))
 			return err
 		})
 
 		se.Router.DELETE("/api/workspaces/{id}/document", func(e *core.RequestEvent) error {
-			_, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
+			ws, repo, err := reachWorkspace(e, e.Request.PathValue("id"))
 			if err != nil {
 				return err
 			}
@@ -363,6 +367,7 @@ func registerDocuments(app core.App, t *tree.Tree) {
 			if err := t.Remove(repo, doc, actorLabel(e.Auth), "delete: "+doc); err != nil {
 				return e.BadRequestError(err.Error(), err)
 			}
+			indexOwner(e.App, t, ws, repo, doc)
 			return e.JSON(http.StatusOK, map[string]any{"path": doc, "deleted": true})
 		}).Bind(apis.RequireAuth())
 
@@ -463,6 +468,11 @@ func pagesOf(t *tree.Tree, repo, docPath string) []string {
 	if err != nil {
 		return nil
 	}
+	return pagesFrom(entries, docPath)
+}
+
+// pagesFrom es pagesOf sobre un árbol ya leído (al reindexar, uno por repo).
+func pagesFrom(entries []tree.Entry, docPath string) []string {
 	dir := pagesDir(docPath) + "/"
 	var out []string
 	for _, e := range entries {

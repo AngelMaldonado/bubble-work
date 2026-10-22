@@ -20,7 +20,9 @@
   import type { SeqThread } from './SequencePane.svelte';
   import Glyphs from './Glyphs.svelte';
   import Icon from './Icon.svelte';
-  import { Navigation } from '@skeletonlabs/skeleton-svelte';
+  import { Navigation, Menu, Portal } from '@skeletonlabs/skeleton-svelte';
+  import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+  import CheckIcon from '@lucide/svelte/icons/check';
   import Loading from './Loading.svelte';
   import { api } from '../lib/api';
   import { sequenceLayers, connectSequence, sequenceChanges } from '../lib/sequencePlan';
@@ -48,6 +50,7 @@
     entriesOn = false,
     onentry,
     onentrydrop,
+    titleMenu,
   }: {
     threads?: SeqThread[];
     queue?: SeqThread[];
@@ -76,6 +79,9 @@
      *  el id del hilo nuevo (o nada si se canceló). El lienzo la deja donde
      *  se soltó, igual que algo arrastrado desde la cola. */
     onentrydrop?: (id: string) => Promise<string | null | undefined> | string | null | undefined;
+    /** El título se vuelve un menú: elegir qué secuencia se ve (en «Todos los
+     *  equipos», el equipo). `title` sigue siendo lo que se lee en la insignia. */
+    titleMenu?: { label: string; options: { value: string; label: string }[]; value: string; onselect: (value: string) => void };
   } = $props();
 
   const W = 230; // ancho de un nodo
@@ -201,6 +207,15 @@
     view = { x: r.width / 2 - W / 2 + 120, y: 112, z: 1 };
   });
 
+  // Una secuencia vacía se abre con su mensaje al centro.
+  let emptyCentered = false;
+  $effect(() => {
+    if (loading || nodes.length || !canvas) { if (nodes.length) emptyCentered = false; return; }
+    if (emptyCentered) return;
+    emptyCentered = true;
+    centerOrigin();
+  });
+
   function toWorld(cx: number, cy: number) {
     const r = canvas!.getBoundingClientRect();
     return { x: (cx - r.left - view.x) / view.z, y: (cy - r.top - view.y) / view.z };
@@ -225,8 +240,16 @@
     const z = Math.min(1.8, Math.max(0.35, view.z * f));
     view = { x: px - ((px - view.x) * z) / view.z, y: py - ((py - view.y) * z) / view.z, z };
   }
+  // Sin pasos, el mensaje vive en el origen del lienzo (como en Mi espacio):
+  // encuadrar es centrarlo.
+  function centerOrigin() {
+    if (!canvas) return;
+    const r = canvas.getBoundingClientRect();
+    view = { x: r.width / 2, y: r.height / 2, z: 1 };
+  }
   function fit() {
-    if (!canvas || !nodes.length) return;
+    if (!canvas) return;
+    if (!nodes.length) { centerOrigin(); return; }
     const ps = nodes.map(at);
     const x0 = Math.min(...ps.map((p) => p.x)), x1 = Math.max(...ps.map((p) => p.x + W));
     const y0 = Math.min(...ps.map((p) => p.y - 44)), y1 = Math.max(...ps.map((p) => p.y + H + 36));
@@ -460,7 +483,33 @@
         <button onclick={fit} title="Ver todo">⤢</button>
       </div>
       <header class="head">
-        <span class="pane-name display"><Glyphs text={title} tint /></span>
+        {#if titleMenu}
+          <Menu positioning={{ placement: 'bottom' }} onSelect={(e: { value: string }) => titleMenu.onselect(e.value)}>
+            <Menu.Trigger>
+              {#snippet element(attributes: Record<string, unknown>)}
+                <button {...attributes} class="title-pick" aria-label={`${titleMenu.label}: ${titleMenu.options.find((o) => o.value === titleMenu.value)?.label ?? ''}`}>
+                  <span class="pane-name display"><Glyphs text={title} tint /></span>
+                  <ChevronDownIcon class="size-4 chev" aria-hidden="true" />
+                </button>
+              {/snippet}
+            </Menu.Trigger>
+            <Portal>
+              <Menu.Positioner>
+                <Menu.Content class="shell-menu team-menu">
+                  {#each titleMenu.options as o (o.value)}
+                    <Menu.Item value={o.value}>
+                      <span class="face"><Icon of="people" tint /></span>
+                      <Menu.ItemText>{o.label}</Menu.ItemText>
+                      {#if o.value === titleMenu.value}<CheckIcon class="size-4 check" aria-label="actual" />{/if}
+                    </Menu.Item>
+                  {/each}
+                </Menu.Content>
+              </Menu.Positioner>
+            </Portal>
+          </Menu>
+        {:else}
+          <span class="pane-name display"><Glyphs text={title} tint /></span>
+        {/if}
         <span class="count" title="pasos en la secuencia">{layers.length}</span>
         {#if saving}<Loading compact label="Guardando secuencia" />{/if}
         {#if saveError}<span class="sync" role="alert">{saveError}</span>{/if}
@@ -535,15 +584,17 @@
             onpointerdown={(e) => startLink(e, t.id)}>+</button>{/if}
         </div>
       {/each}
+      {#if !loading && !nodes.length}
+        <!-- En el origen del lienzo, no pegado a la pantalla: se mueve con él,
+             como en Mi espacio. -->
+        <div class="origin">
+          <Icon of="compass" size="3.5rem" tint />
+          <p>{readonly ? 'Todavía no hay pasos de esta secuencia en tu alcance.' : `Arrastra ${what} desde la caja para armar la secuencia. El primero que sueltes es el paso 1.`}</p>
+        </div>
+      {/if}
     </div>
 
-    {#if loading}<div class="loading-layer"><Loading /></div>
-    {:else if !nodes.length}
-      <div class="empty">
-        <Icon of="compass" size="3.5rem" tint />
-        <p>{readonly ? 'Todavía no hay pasos de esta secuencia en tu alcance.' : `Arrastra ${what} desde la caja para armar la secuencia. El primero que sueltes es el paso 1.`}</p>
-      </div>
-    {/if}
+    {#if loading}<div class="loading-layer"><Loading /></div>{/if}
 
     {#if readonly && modes}<div class="read-modes" class:bottom={modesBottom}>{@render modes()}</div>{/if}
   </div>
@@ -589,6 +640,10 @@
     cursor: default;
   }
   .pane-name { font-size: 1.5rem; white-space: nowrap; }
+  .title-pick { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0 0.2rem 0 0; border-radius: 12px; }
+  .title-pick:hover { color: var(--accent); }
+  .title-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .title-pick :global(.chev) { color: var(--muted); }
   .count { padding: 0 0.45rem; border-radius: 999px; background: var(--hover); font-size: 0.75rem; }
   .sync { font-size: 0.76rem; color: var(--muted); }
 
@@ -607,6 +662,8 @@
     background-position: var(--gx) var(--gy);
     cursor: grab;
     touch-action: none;
+    /* Un gesto de trackpad que llega al borde no rebota el pane entero. */
+    overscroll-behavior: contain;
     user-select: none;
     -webkit-user-select: none;
   }
@@ -732,18 +789,8 @@
   }
   .plus:hover { transform: scale(1.18); background: var(--accent); color: white; }
 
-  .empty {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 0.7rem;
-    color: var(--muted);
-    text-align: center;
-    pointer-events: none;
-  }
-  .empty p { max-width: 22rem; }
+  .origin { position: absolute; left: 0; top: 0; width: 22rem; transform: translate(-50%, -50%); display: grid; justify-items: center;
+    gap: 0.7rem; color: var(--muted); text-align: center; pointer-events: none; }
 
   .ctrl {
     display: flex;

@@ -986,18 +986,20 @@ func InvItemDelete(app core.App, auth *core.Record, id string) error {
 
 // ThreadInfo es la ficha de un hilo: todo lo que no es su documento.
 type ThreadInfo struct {
-	ID        string         `json:"id"`
-	Seq       int            `json:"seq"`
-	Name      string         `json:"name"`
-	Project   string         `json:"project"`
-	Team      TeamRef        `json:"team"`
-	Bubble    string         `json:"bubble,omitempty"`
-	BubbleNm  string         `json:"bubble_name,omitempty"`
-	State     string         `json:"state"`
-	Group     string         `json:"state_group"`
-	States    []StateView    `json:"states"`
-	Assignees []Person       `json:"assignees"`
-	Labels    []string       `json:"labels"`
+	ID        string      `json:"id"`
+	Seq       int         `json:"seq"`
+	Name      string      `json:"name"`
+	Project   string      `json:"project"`
+	Team      TeamRef     `json:"team"`
+	Bubble    string      `json:"bubble,omitempty"`
+	BubbleNm  string      `json:"bubble_name,omitempty"`
+	State     string      `json:"state"`
+	Group     string      `json:"state_group"`
+	States    []StateView `json:"states"`
+	Assignees []Person    `json:"assignees"`
+	Labels    []string    `json:"labels"`
+	// Los tags del frontmatter de su documento: se cambian editándolo.
+	Tags      []string       `json:"tags"`
 	Due       string         `json:"due_date,omitempty"`
 	Priority  string         `json:"priority,omitempty"`
 	Sequence  int            `json:"sequence,omitempty"`
@@ -1037,7 +1039,7 @@ func ThreadGet(app core.App, auth *core.Record, id string) (ThreadInfo, error) {
 		Team:   TeamRefOf(app, ws.GetString("team")),
 		Bubble: th.GetString("bubble"), Priority: th.GetString("priority"), Sequence: th.GetInt("sequence"),
 		DocPath: th.GetString("doc_path"), Assignees: peopleNamed(app, th.GetStringSlice("assignees")),
-		Labels: []string{}, Relations: []RelationView{}, Evidence: []Evidence{}, States: []StateView{},
+		Labels: []string{}, Tags: append([]string{}, threadTags(th)...), Relations: []RelationView{}, Evidence: []Evidence{}, States: []StateView{},
 	}
 	if b, err := app.FindRecordById("bubbles", v.Bubble); err == nil {
 		v.BubbleNm = b.GetString("name")

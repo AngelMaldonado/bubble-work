@@ -5,6 +5,8 @@
 // express — the board, documents, the tree, search, assets. Both are the same
 // origin (vite proxies in development), so nothing here deals with CORS.
 
+import { named } from './people';
+
 export type Lifecycle = 'hot' | 'dormant' | 'rip' | 'closed';
 
 export type Heat = {
@@ -30,6 +32,12 @@ export type ThreadHeat = {
   assignees?: string[];
   /** when anything last happened to it, RFC3339 — the row says it in words */
   at?: string;
+  /** los tags del frontmatter de su documento, en el orden escrito */
+  tags?: string[];
+  /** palabras de su Markdown (documento y páginas, sin frontmatter) */
+  words?: number;
+  /** páginas de su carpeta e imágenes que cita */
+  files?: number;
   /** su PROPIA prioridad (P1…P4), separada de la de su burbuja */
   priority?: string;
   /** su paso en la secuencia del departamento; 0 o ausente, fuera de ella */
@@ -131,11 +139,18 @@ export type Board = {
   workspaces: BoardWorkspace[];
   bubbles: BubbleHeat[];
   threads: ThreadHeat[];
+  /** relaciones declaradas entre hilos de este board y del mismo equipo: las
+   *  aristas de la vista Blobs. Un servidor viejo no las manda. */
+  links?: BoardLink[];
 };
+
+/** Una relación entre dos hilos. `dependency` va de lo que se hace antes a lo
+ *  que espera; `related` no tiene sentido. */
+export type BoardLink = { from: string; to: string; kind: 'dependency' | 'related' };
 
 /** Lo justo de un workspace para etiquetar una fila y para construir la
  *  dirección que la abre. */
-export type BoardWorkspace = { id: string; slug: string; name: string; team?: string };
+export type BoardWorkspace = { id: string; slug: string; name: string; team?: string; team_name?: string };
 
 export type Workspace = { id: string; name: string; slug: string; team?: string };
 
@@ -418,17 +433,6 @@ export class ApiError extends Error {
   }
 }
 
-/** Cómo se nombra a una persona: su nombre, o su correo, o `fallback`. Una
- *  persona borrada lo dice: lo que escribió se queda con su firma, y leerla sin
- *  saber que ya no está es preguntarle algo a quien no va a contestar. */
-function named(
-  u: { display_name?: string; email?: string; deleted_at?: string } | undefined,
-  fallback: string,
-) {
-  const name = u?.display_name || u?.email || fallback;
-  return u?.deleted_at ? `${name} (eliminado)` : name;
-}
-
 /** Un token de agente, tal como lo enseña el servidor: nunca la huella. */
 export type AgentToken = {
   id: string;
@@ -441,7 +445,21 @@ export type AgentToken = {
   created: string;
   /** sólo en la respuesta de crear: la única vez que sale */
   token?: string;
+  // Lo que el servidor ve que tiene este agente. Vacío si nunca lo vio, o si
+  // el servidor es anterior a esto.
+  /** `clientInfo` de su último initialize: «claude-code 2.1.2» */
+  client?: string;
+  /** la cabecera X-Bubble-Connect: con qué sección se instaló */
+  connect_version?: string;
+  /** la última release de agents_md que se le entregó, de qué rol y cuándo */
+  release_read?: string;
+  release_role?: string;
+  release_read_at?: string;
 };
+
+/** Las releases vigentes: la de `agents_md` por rol y la de la sección que
+ *  instala el prompt de conexión. Huellas del texto. */
+export type AgentReleases = { operators?: string; planner?: string; connect?: string };
 
 /** Una persona vista desde la gestión de usuarios. */
 export type PersonAdmin = Person & { deleted_at?: string; /** cuándo el job purgó sus datos personales */ purged_at?: string };
@@ -974,6 +992,11 @@ class Api {
     return this.call<AgentToken>(`/api/tokens/${id}/revoke`, { method: 'POST', body: '{}' });
   }
 
+  /** Contra qué se compara lo que leyó cada agente. */
+  agentReleases() {
+    return this.call<AgentReleases>('/api/agents/release');
+  }
+
   // ---- gestión de personas (lead global) ----
 
   // ---- prioridad de un hilo y secuencia (lead global) ----
@@ -1342,9 +1365,12 @@ class Api {
    *  Lo agrega el servidor y no este cliente. Pedir un board por workspace
    *  serían N respuestas calculadas en N instantes distintos —el calor es
    *  función del tiempo— y comparar dos burbujas medidas contra dos «ahora» es
-   *  exactamente lo que esta pantalla existe para no hacer. */
-  allBoard() {
-    return this.call<Board>('/api/board');
+   *  exactamente lo que esta pantalla existe para no hacer.
+   *
+   *  `shared` es «Todos los equipos» (sólo lead global): el servidor deja fuera
+   *  todo proyecto de un equipo personal, también el tuyo. */
+  allBoard(scope: '' | 'shared' = '') {
+    return this.call<Board>(scope ? `/api/board?scope=${scope}` : '/api/board');
   }
 
   /** Qué se movió, por archivo. Lo calcula git, que ya tiene la respuesta:

@@ -26,6 +26,13 @@ Al final de este documento está la **forma de trabajar del departamento**, la q
   - el del hilo, en `threads/`, más la carpeta junto a él para lo que el hilo necesite aparte (una investigación, un diseño, un log);
   - la **wiki**, en `docs/`: guías, referencias y notas que duran más que un hilo. Anida libremente. Escribir ahí se registra pero no calienta nada;
   - el `README.md` del proyecto: su portada y sus convenciones.
+- **Tags**: de qué trata un hilo, en el frontmatter de SU documento, al principio del archivo:
+  ```
+  ---
+  tags: [pagos, cliente/acme]
+  ---
+  ```
+  Los escribes tú con la persona: ella conoce su área. Antes de inventar uno, mira los que ya usa el equipo (`project_board` y `thread_get` traen los de cada hilo) y reutiliza el mismo nombre; se comparan sin `#` y sin mayúsculas, y `/` hace jerarquías. El primero importa: la vista de blobs del tablero agrupa cada hilo por su primer tag, y cada módulo por el que más se repite entre sus hilos. Cambiar sólo los tags no calienta nada (se registra como clasificación); no dan permisos ni cambian fechas, asignados o prioridad. El frontmatter no se dibuja al leer el documento.
 - **Evidencia**: un enlace externo pegado a un hilo (commit, PR, entregable publicado). Es la prueba de que la realidad cambió fuera de esta herramienta.
 - **Comentario**: lo que se dice sobre un hilo. Es pulso, no evidencia (ver «Calor»).
 - **Objetivo**: para qué es el trabajo. Es de un EQUIPO, no de un proyecto: los módulos de cualquiera de sus proyectos cuelgan de él (nunca de un objetivo de otro equipo). Los definen y los leen los leads del equipo.

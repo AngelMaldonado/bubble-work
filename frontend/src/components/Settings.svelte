@@ -236,7 +236,12 @@
 
   /* El contenido desplaza solo, en una columna legible y centrada: son
      formularios, y uno a todo el ancho de un monitor se lee de lado a lado. */
-  .pane { flex: 1; min-width: 0; overflow-y: auto; }
+  /* `position: relative`: el pane es el bloque contenedor de lo que lleva dentro.
+     Sin él, un hijo `position: absolute` (el `label.sr-only` de cada FilterPick)
+     se posicionaba contra <body>, escapaba del recorte del pane y alargaba el
+     documento: dos barras de scroll, la del pane y la de la página, en cuanto
+     la lista de Usuarios pasaba del pliegue. */
+  .pane { position: relative; flex: 1; min-width: 0; overflow-y: auto; }
   .sec-head { display: flex; align-items: center; gap: 0.5rem; margin-bottom: 1rem; }
   .sec-title { margin: 0; font-size: 1.9rem; line-height: 1.1; }
   .sec-head :global(.info) { display: grid; place-content: center; width: 26px; height: 26px; border-radius: 999px; color: var(--muted); }

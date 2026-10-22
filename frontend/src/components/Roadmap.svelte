@@ -54,7 +54,8 @@
   async function load() {
     const turn = ++generation;
     try {
-      const [b, ps, ce] = await Promise.all([api.allBoard(), api.people(), api.calendarEvents()]);
+      // En «Todos los equipos» lo personal ni siquiera viaja: lo recorta el servidor.
+      const [b, ps, ce] = await Promise.all([api.allBoard(teams.viewing ? 'shared' : ''), api.people(), api.calendarEvents()]);
       if (stopped || turn !== generation) return;
       board = b;
       people = ps;
@@ -64,7 +65,10 @@
       if (!stopped && turn === generation) error = (e as Error).message;
     }
   }
-  load();
+  $effect(() => {
+    teams.viewing;
+    untrack(load);
+  });
   let timer: ReturnType<typeof setTimeout> | undefined;
   const offs = ['threads', 'bubbles', 'calendar_events', 'memberships', 'workspaces'].map((c) =>
     live.watch(c, () => { clearTimeout(timer); timer = setTimeout(load, 200); }),
@@ -108,11 +112,12 @@
   };
 
   // El equipo elegido; los proyectos de otro equipo a los que te invitaron
-  // entran siempre (como en la columna).
+  // entran siempre (como en la columna). En «Todos los equipos», los de los
+  // compartidos.
   const shownWs = $derived.by(() => {
     const T = teams.current;
     return new Map((board?.workspaces ?? [])
-      .filter((w) => !T || !w.team || w.team === T || !teams.mine(w.team))
+      .filter((w) => !T || teams.inScope(w))
       .map((w) => [w.id, w]));
   });
 
@@ -194,7 +199,7 @@
     const from = isoDay(laneStart(lo));
     const to = isoDay(addDays(laneStart(hi + 1), -1));
     return dates
-      .filter((e) => !T || !e.team || e.team === T)
+      .filter((e) => !T || !e.team || teams.inView(e.team))
       // En «Año» lo que se repite cada día o cada semana taparía el trabajo.
       .filter((e) => unit !== 'quarter' || !['daily', 'weekly', 'biweekly'].includes(e.repeat ?? ''))
       .flatMap((e) => occurrences(e.start, e.repeat ?? '', from, to).map((day) => ({

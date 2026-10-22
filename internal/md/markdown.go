@@ -28,6 +28,8 @@ var gm = goldmark.New(
 
 // RenderHTML converts GFM Markdown to safe HTML for the web interior view.
 func RenderHTML(markdown string) string {
+	// El frontmatter es clasificación, no texto: no se dibuja.
+	markdown = StripFrontmatter(markdown)
 	if strings.TrimSpace(markdown) == "" {
 		return ""
 	}
@@ -96,6 +98,8 @@ const tocMin = 3
 // It arrives as a closed <details>: one line until somebody opens it. An
 // always-open TOC is the same space problem as an always-open image.
 func RenderThreadHTML(markdown string) string {
+	// El frontmatter es clasificación, no texto: no se dibuja.
+	markdown = StripFrontmatter(markdown)
 	if strings.TrimSpace(markdown) == "" {
 		return ""
 	}

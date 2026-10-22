@@ -48,8 +48,24 @@ func registerBoard(app core.App) {
 		// La frontera la aplica el servidor, como en todas partes: quien no es
 		// lead global ve exactamente los workspaces de los que es miembro, y un
 		// board vacio es la respuesta correcta para quien no es de ninguno.
+		//
+		// `?scope=shared` es «Todos los equipos»: la vista del lead global que
+		// junta los equipos COMPARTIDOS. Deja fuera todo proyecto de un equipo
+		// personal —también el suyo, y el de otro al que lo invitaron—, porque
+		// esa vista se enseña en una pantalla compartida y lo personal no se
+		// mezcla ahí. El cliente ya filtra; esto es para que filtrar mal en el
+		// navegador no baste para colarlo.
 		se.Router.GET("/api/board", func(e *core.RequestEvent) error {
-			b, err := AllBoards(e)
+			var b Board
+			var err error
+			switch scope := e.Request.URL.Query().Get("scope"); scope {
+			case "":
+				b, err = AllBoards(e)
+			case "shared":
+				b, err = SharedBoards(e)
+			default:
+				return e.BadRequestError("scope es vacío o shared", nil)
+			}
 			if err != nil {
 				return err
 			}
@@ -80,6 +96,13 @@ type ThreadHeat struct {
 	// and the server does not have one.
 	Assignees []string `json:"assignees,omitempty"`
 	At        string   `json:"at,omitempty"`
+	// Los tags del frontmatter de su documento, en el orden escrito: la vista
+	// de blobs agrupa por ellos. Clasificación, no evidencia.
+	Tags []string `json:"tags,omitempty"`
+	// Cuánto tiene escrito: palabras de su Markdown (documento y páginas) y
+	// archivos (páginas e imágenes citadas). Para medir en Blobs; no es calor.
+	Words int `json:"words,omitempty"`
+	Files int `json:"files,omitempty"`
 	// La prioridad de ESTA pieza (P1…P4), separada de la de su burbuja: la
 	// escribe el lead, no se deriva.
 	Priority string `json:"priority,omitempty"`
@@ -154,6 +177,73 @@ type Board struct {
 	Workspaces []BoardWorkspace `json:"workspaces"`
 	Bubbles    []BubbleHeat     `json:"bubbles"`
 	Threads    []ThreadHeat     `json:"threads"`
+	// Las relaciones declaradas entre hilos de ESTE tablero y del mismo equipo:
+	// las aristas del grafo. Sólo con los dos extremos aquí, así que nunca
+	// nombran un hilo que quien mira no ve.
+	Links []BoardLink `json:"links"`
+}
+
+// BoardLink es una relación entre dos hilos, como la dibuja el grafo:
+// `dependency` va de lo que se hace antes a lo que espera; `related` no tiene
+// sentido, y sus extremos van en orden de id.
+type BoardLink struct {
+	From string `json:"from"`
+	To   string `json:"to"`
+	Kind string `json:"kind"`
+}
+
+// linksAmong son las relaciones entre los hilos dados, de un mismo equipo.
+// `teamOf` dice el equipo de cada proyecto.
+func linksAmong(app core.App, threads []ThreadHeat, teamOf map[string]string) []BoardLink {
+	out := []BoardLink{}
+	if len(threads) == 0 {
+		return out
+	}
+	wsOf := make(map[string]string, len(threads))
+	ids := make([]any, 0, len(threads))
+	for _, t := range threads {
+		wsOf[t.ID] = t.Workspace
+		ids = append(ids, t.ID)
+	}
+	rows, err := app.FindAllRecords("thread_relations", dbx.In("thread", ids...))
+	if err != nil {
+		return out
+	}
+	seen := map[BoardLink]bool{}
+	for _, r := range rows {
+		a, b := r.GetString("thread"), r.GetString("related")
+		wa, okA := wsOf[a]
+		wb, okB := wsOf[b]
+		if !okA || !okB || a == b || teamOf[wa] != teamOf[wb] {
+			continue
+		}
+		l := BoardLink{Kind: "related"}
+		switch r.GetString("type") {
+		case "blocking":
+			l = BoardLink{From: a, To: b, Kind: "dependency"}
+		case "blocked_by":
+			l = BoardLink{From: b, To: a, Kind: "dependency"}
+		default:
+			l.From, l.To = a, b
+			if l.From > l.To {
+				l.From, l.To = l.To, l.From
+			}
+		}
+		if !seen[l] {
+			seen[l] = true
+			out = append(out, l)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].From != out[j].From {
+			return out[i].From < out[j].From
+		}
+		if out[i].To != out[j].To {
+			return out[i].To < out[j].To
+		}
+		return out[i].Kind < out[j].Kind
+	})
+	return out
 }
 
 // BoardWorkspace is enough of a workspace to label a row and to build the
@@ -218,12 +308,15 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 		priority string
 		sequence int
 		due      string
+		tags     []string
+		words    int
+		files    int
 	}
 	planned := map[string]plan{}
 	steps := liveSteps(app, ws.GetString("team"))
 	if recs, err := app.FindAllRecords("threads", dbx.HashExp{"workspace": ws.Id}); err == nil {
 		for _, t := range recs {
-			planned[t.Id] = plan{t.GetString("priority"), t.GetInt("sequence"), day(t.GetDateTime("due_date"))}
+			planned[t.Id] = plan{t.GetString("priority"), t.GetInt("sequence"), day(t.GetDateTime("due_date")), threadTags(t), t.GetInt("doc_words"), t.GetInt("doc_files")}
 		}
 	}
 	byBubble := map[string][]heat.Result{}
@@ -262,6 +355,9 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 			Priority:  planned[r.Id].priority,
 			Sequence:  planned[r.Id].sequence,
 			Due:       planned[r.Id].due,
+			Tags:      planned[r.Id].tags,
+			Words:     planned[r.Id].words,
+			Files:     planned[r.Id].files,
 			Step:      stepOf(steps, planned[r.Id].sequence, completedState(app, r.GetString("state"))),
 		})
 	}
@@ -300,6 +396,7 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 			TeamName: TeamRefOf(app, ws.GetString("team")).Name,
 		}},
 		Bubbles: out, Threads: threads,
+		Links: linksAmong(app, threads, map[string]string{ws.Id: ws.GetString("team")}),
 	}, nil
 }
 
@@ -381,7 +478,8 @@ func AllBoards(e *core.RequestEvent) (Board, error) {
 		return Board{}, e.InternalServerError("no calibration", err)
 	}
 	out := Board{At: now.Format(time.RFC3339), Tuning: tun,
-		Workspaces: []BoardWorkspace{}, Bubbles: []BubbleHeat{}, Threads: []ThreadHeat{}}
+		Workspaces: []BoardWorkspace{}, Bubbles: []BubbleHeat{}, Threads: []ThreadHeat{}, Links: []BoardLink{}}
+	teamOf := map[string]string{}
 
 	for _, ws := range list {
 		b, err := BoardFor(e.App, ws)
@@ -396,7 +494,10 @@ func AllBoards(e *core.RequestEvent) (Board, error) {
 		})
 		out.Bubbles = append(out.Bubbles, b.Bubbles...)
 		out.Threads = append(out.Threads, b.Threads...)
+		teamOf[ws.Id] = ws.GetString("team")
 	}
+	// Entre proyectos del mismo equipo también: una dependencia cruza proyectos.
+	out.Links = linksAmong(e.App, out.Threads, teamOf)
 
 	// Re-sorted across workspaces, by the same rule each board sorts by: the
 	// band first and the buoyancy inside it. Keeping them grouped by project
@@ -409,6 +510,63 @@ func AllBoards(e *core.RequestEvent) (Board, error) {
 		return floats(out.Threads[i].Heat) > floats(out.Threads[j].Heat)
 	})
 	return out, nil
+}
+
+// SharedBoards es «Todos los equipos»: el board de todos, sin un solo proyecto
+// de un equipo personal. Sólo para un lead global (o superusuario): es la
+// única persona que lidera todos los compartidos, así que para nadie más es
+// una vista que exista.
+func SharedBoards(e *core.RequestEvent) (Board, error) {
+	if !isGlobalLead(e.Auth) && !IsSuperuser(e.Auth) {
+		return Board{}, e.ForbiddenError("«Todos los equipos» es una vista del lead global", nil)
+	}
+	b, err := AllBoards(e)
+	if err != nil {
+		return Board{}, err
+	}
+	keep := map[string]bool{}
+	ws := b.Workspaces[:0]
+	for _, w := range b.Workspaces {
+		if w.Team != "" && TeamRefOf(e.App, w.Team).Personal {
+			continue
+		}
+		keep[w.ID] = true
+		ws = append(ws, w)
+	}
+	b.Workspaces = ws
+	bs := b.Bubbles[:0]
+	for _, x := range b.Bubbles {
+		if keep[x.Workspace] {
+			bs = append(bs, x)
+		}
+	}
+	b.Bubbles = bs
+	ts := b.Threads[:0]
+	for _, x := range b.Threads {
+		if keep[x.Workspace] {
+			ts = append(ts, x)
+		}
+	}
+	b.Threads = ts
+	b.Links = linksWithin(b.Links, ts)
+	return b, nil
+}
+
+// linksWithin: las relaciones con los dos extremos entre estos hilos. Todo
+// recorte de un tablero pasa por aquí, para que una arista no nombre un hilo
+// que ya no está.
+func linksWithin(links []BoardLink, threads []ThreadHeat) []BoardLink {
+	keep := make(map[string]bool, len(threads))
+	for _, t := range threads {
+		keep[t.ID] = true
+	}
+	out := []BoardLink{}
+	for _, l := range links {
+		if keep[l.From] && keep[l.To] {
+			out = append(out, l)
+		}
+	}
+	return out
 }
 
 // reachableWorkspaces lists what this person can see, by the same rule

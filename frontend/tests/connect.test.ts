@@ -34,3 +34,19 @@ test('el hueco del token dice cuál pegar', () => {
   expect(tokenPlaceholder('bw_WzQ6PU')).toBe('<TU_TOKEN bw_WzQ6PU…>');
   expect(placeholderNote('Local', 'bw_WzQ6PU')).toContain('«Local»');
 });
+
+test('con versión, la cabecera X-Bubble-Connect va en cada harness', () => {
+  const [claude, codex, anti] = harnessCommands(url, tok, 'a3f1c2d4e5f60718');
+  expect(claude.code).toContain('--header "X-Bubble-Connect: a3f1c2d4e5f60718"');
+  // Codex no la acepta en `mcp add`: va a su config.toml, explicado.
+  expect(codex.code).not.toContain('X-Bubble-Connect');
+  expect(codex.how).toContain('http_headers = { "X-Bubble-Connect" = "a3f1c2d4e5f60718" }');
+  expect(JSON.parse(anti.code).mcpServers['bubble-work'].headers).toEqual({
+    Authorization: 'Bearer bw_abc',
+    'X-Bubble-Connect': 'a3f1c2d4e5f60718',
+  });
+});
+
+test('sin versión (servidor viejo) los comandos quedan como antes', () => {
+  for (const h of harnessCommands(url, tok)) expect(h.code + h.how).not.toContain('X-Bubble-Connect');
+});

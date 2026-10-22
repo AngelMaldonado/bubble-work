@@ -25,6 +25,17 @@
     type MockBubble,
   } from '../lib/mock';
   import { bandFace } from '../lib/bands';
+  import type { Component } from 'svelte';
+  import type { Lifecycle } from '../lib/api';
+
+  // En desarrollo, el tablero lleva encima el modelo propuesto (Burbujas/Hilos,
+  // Contextos/Flotabilidad). Import dinámico bajo DEV: el build lo elimina, y
+  // /theme/mock en producción sigue siendo el tablero de siempre.
+  let ModelBoard = $state<Component<any> | null>(null);
+  if (import.meta.env.DEV) void import('../prototypes/MockModelBoard.svelte').then((m) => (ModelBoard = m.default));
+  let layout = $state<'contexts' | 'flotation'>('flotation');
+  let level = $state<'bubbles' | 'threads'>('bubbles');
+  let openThread = $state<{ name: string; life: Lifecycle; priority: string } | null>(null);
 
   type View = 'board' | 'planner' | 'wiki';
   let view = $state<View>('board');
@@ -159,6 +170,21 @@
   onrename={rename}
   ondelete={remove}
   oncreate={create}>
+  {#if ModelBoard}
+    <ModelBoard
+      title={currentName}
+      {orbs}
+      bind:layout
+      bind:level
+      onopenbubble={(name: string) => {
+        open = bubbles.find((x) => x.name === name) ?? null;
+        drawerOpen = true;
+      }}
+      onopenthread={(t: { name: string; life: Lifecycle; priority: string }) => {
+        openThread = { name: t.name, life: t.life, priority: t.priority };
+        thread = true;
+      }} />
+  {:else}
   <BubbleBoard
     title={currentName}
     bubbles={orbs}
@@ -166,10 +192,14 @@
       open = bubbles.find((x) => x.name === b.name) ?? null;
       drawerOpen = true;
     }} />
+  {/if}
 </Shell>
 
-<!-- The board's table of contents. Only the board has bands to map. -->
+<!-- The board's table of contents. Only the board has bands to map — and only
+     its bubble orbs carry the anchors the minimap scrolls to. -->
+{#if layout === 'flotation' && level === 'bubbles'}
 <Minimap items={mapItems} scroller={paneEl} />
+{/if}
 
 <!-- Who is here, top right. The same component the real app draws; here it
      is fed by fixtures instead of by beats. -->
@@ -241,7 +271,7 @@
   cycleLeft="quedan 6 d"
   cyclePct={57}
   threads={threads}
-  onopenthread={() => { drawerOpen = false; thread = true; }}
+  onopenthread={() => { drawerOpen = false; openThread = null; thread = true; }}
   onnewthread={(name) => (threads = [{ seq: nextSeq++, title: name, lifecycle: 'hot', state: 'Backlog', age: 'ahora' }, ...threads])}
   ondeletethread={(seq) => (threads = threads.filter((t) => t.seq !== seq))} />
 
@@ -288,19 +318,19 @@
   <div class="fixed inset-0" style="z-index: var(--z-view)">
     <ThreadView
       seq={14}
-      title="Evidencia observada, no inferida"
-      lifecycle="hot"
+      title={openThread?.name ?? 'Evidencia observada, no inferida'}
+      lifecycle={openThread?.life ?? 'hot'}
       reason="produjo algo en el ciclo actual"
-      priority="P1"
+      priority={openThread?.priority ?? 'P1'}
       threadState="En curso"
       assignees={['Angel', 'Bea']}
       labels={['backend', 'migración']}
       markdown={threadDoc}
       html={threadHTML}
       revisions={[{ id: 'r1', title: 'Revisión de Bea · 2 sep' }]}
-      onback={() => (thread = false)}
+      onback={() => { thread = false; openThread = null; }}
       onsearch={() => search('Buscar el thread a relacionar…')}
-      onfinish={() => (thread = false)}
+      onfinish={() => { thread = false; openThread = null; }}
       onmove={() => search('¿A qué burbuja se mueve?')}
       ondelete={() => { threads = threads.filter((t) => t.seq !== 14); thread = false; }} />
   </div>

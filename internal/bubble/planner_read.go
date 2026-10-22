@@ -44,6 +44,7 @@ func participantBoard(board Board, user string) Board {
 		}
 	}
 	board.Bubbles, board.Threads, board.Workspaces = bs, ts, ws
+	board.Links = linksWithin(board.Links, ts)
 	return board
 }
 

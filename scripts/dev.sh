@@ -10,6 +10,8 @@
 # replaces the running session rather than stacking a second one on the same port.
 # shellcheck source=./env.sh
 . "$(dirname "$0")/env.sh"
+# shellcheck source=./simulated.sh
+. "$(dirname "$0")/simulated.sh"
 
 # Build FIRST, outside tmux. A compile error belongs on the terminal you are
 # looking at, not buried in a pane you have to go find.
@@ -72,17 +74,29 @@ if ! command -v tmux >/dev/null 2>&1; then
   echo "tmux not found — running the server in the foreground instead." >&2
   banner
   echo "  Ctrl-C stops it."; echo
-  exec "$BUBBLE_BIN" serve --http "$BUBBLE_HTTP" --dir "$BUBBLE_DATA" --dev
+  # Not `exec`: when it stops, the simulated people go with it (simulated.sh).
+  trap : INT
+  "$BUBBLE_BIN" serve --http "$BUBBLE_HTTP" --dir "$BUBBLE_DATA" --dev || true
+  purge_simulated
+  exit 0
 fi
 
 # A rebuild has to replace the running services, not race them for the port.
 tmux kill-session -t "$BUBBLE_TMUX" 2>/dev/null || true
+# The session that just went down takes its simulated people with it.
+purge_simulated
 
 # --dev prints logs and SQL into the pane, which is the whole reason to look at
 # one. remain-on-exit keeps a crashed service's last output on screen instead of
 # closing the window on the error you needed to read.
+#
+# When `serve` stops on its own —Ctrl-C in the pane, or a crash— the window
+# purges the simulated people before showing its last output. `trap : INT`
+# keeps the shell alive through Ctrl-C (a handler, not an ignore: `serve` still
+# gets the signal). Killing the session skips this; stop.sh and the purge above
+# cover that.
 tmux new-session -d -s "$BUBBLE_TMUX" -n server \
-  "BUBBLE_REPOS=$BUBBLE_REPOS $BUBBLE_BIN serve --http $BUBBLE_HTTP --dir $BUBBLE_DATA --dev"
+  "trap : INT; BUBBLE_REPOS=$BUBBLE_REPOS $BUBBLE_BIN serve --http $BUBBLE_HTTP --dir $BUBBLE_DATA --dev; $BUBBLE_BIN simulated purge --dir $BUBBLE_DATA"
 tmux set-option -t "$BUBBLE_TMUX" -w remain-on-exit on >/dev/null
 
 # vite, in its own window. It proxies /api and /mcp back to the server, so there

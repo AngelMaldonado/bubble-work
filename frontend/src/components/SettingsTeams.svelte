@@ -129,7 +129,7 @@
         {/if}
         <span class="badge">{t.personal ? 'personal' : 'compartido'}</span>
         <span class="badge">{t.implicit ? 'lead (global)' : t.role}</span>
-        {#if t.id === teams.current}<span class="badge here">trabajando aquí</span>{:else}
+        {#if t.id === teams.current && !teams.viewing}<span class="badge here">trabajando aquí</span>{:else}
           <button class="btn btn-sm preset-tonal-surface" onclick={() => teams.set(t.id)}>Trabajar aquí</button>{/if}
         {#if lead && (t.personal || isAdmin)}
           <button class="btn btn-sm preset-tonal-error ml-auto" aria-label={`Borrar el equipo ${t.name}`} onclick={() => askDelete(t)}>
@@ -170,7 +170,11 @@
         {#if lead && outside(t).length}
           <form class="set-row add" onsubmit={(e) => { e.preventDefault(); const u = adding[t.id]; if (u) run(`add:${t.id}`, () => api.setTeamMember(t.id, u, 'member')); adding[t.id] = ''; }}>
             <span class="grow">
-              <FilterPick items={outside(t).map((p) => ({ value: p.id, label: nameOf(p) }))} bind:value={adding[t.id]}
+              <!-- Function binding, no `adding[t.id]` a secas: un equipo recién creado
+                   aún no tiene clave, y enlazar `undefined` a un prop con valor por
+                   defecto (`$bindable('')`) es un error de Svelte que tumba Ajustes. -->
+              <FilterPick items={outside(t).map((p) => ({ value: p.id, label: nameOf(p) }))}
+                bind:value={() => adding[t.id] ?? '', (v) => (adding[t.id] = v)}
                 any="Agregar a alguien…" label={`Agregar a ${t.name}`} />
             </span>
             <button class="btn btn-sm preset-tonal-primary" disabled={!adding[t.id] || !!busy}>Agregar</button>

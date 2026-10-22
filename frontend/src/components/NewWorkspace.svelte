@@ -3,6 +3,7 @@
   import { api } from '../lib/api';
   import { limited } from '../lib/limits.svelte';
   import { teams } from '../lib/teams.svelte';
+  import TeamPick from './TeamPick.svelte';
 
   let { onDone }: { onDone: () => void } = $props();
   let name = $state('');
@@ -10,6 +11,10 @@
   let touched = $state(false);
   let error = $state('');
   let busy = $state(false);
+  // En «Todos los equipos» no hay equipo actual a la vista: se elige aquí, a
+  // la vista, y no se toma el escondido de las preferencias.
+  let picked = $state('');
+  const team = $derived(teams.viewing ? picked || teams.sharedTeams[0]?.id || '' : teams.current);
 
   // The slug follows the name until somebody edits it. It is in the URL and in
   // the directory that holds the workspace's markdown, so it is worth seeing —
@@ -27,7 +32,7 @@
     busy = true;
     error = '';
     try {
-      await api.createWorkspace(name.trim(), slug, teams.current);
+      await api.createWorkspace(name.trim(), slug, team);
       onDone();
     } catch (err) {
       error = (err as Error).message;
@@ -60,6 +65,13 @@
     </label>
   </div>
   <p class="faint mt-1 text-xs">El slug nombra el directorio de sus markdown y no cambia después.</p>
+
+  {#if teams.viewing}
+    <div class="mt-3 flex items-center gap-2 text-sm">
+      <span class="muted">Nace en</span>
+      <TeamPick teams={teams.sharedTeams} value={team} label="Equipo del proyecto" onchange={(id) => (picked = id)} />
+    </div>
+  {/if}
 
   {#if error}
     <p class="mt-3 text-sm text-error-500">{error}</p>

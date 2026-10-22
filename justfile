@@ -71,6 +71,11 @@ migrate *ARGS:
 person +ARGS:
     scripts/person.sh {{ARGS}}
 
+# Example data in the DEV server, through its API. `just seed tags | docs | agents`
+# (`agents`: simulated people, purged when the dev goes down)
+seed *ARGS:
+    scripts/seed.sh {{ARGS}}
+
 # Create or update a superuser. `just superuser upsert you@example.com <password>`
 superuser *ARGS:
     scripts/build.sh

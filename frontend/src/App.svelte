@@ -27,7 +27,7 @@
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
-  import { teams } from './lib/teams.svelte';
+  import { teams, ALL_TEAMS } from './lib/teams.svelte';
   import People from './components/People.svelte';
   import Presence from './components/Presence.svelte';
   import { presence } from './lib/presence.svelte';
@@ -156,6 +156,8 @@
     const ws = current;
     const browsing = readPlanning;
     const aggregate = isAll;
+    // «Todos los equipos» lo recorta el servidor: lo personal no viaja.
+    const shared = teams.viewing;
     if (!ws && !aggregate && !browsing) return;
     loadingBoard = true;
     try {
@@ -163,8 +165,8 @@
       // desde aquí serían N respuestas calculadas en N instantes, y el calor es
       // función del tiempo: dos burbujas medidas contra dos «ahora» no se
       // pueden comparar, que es lo único que esta pantalla hace.
-      const got = browsing ? (await api.readPlanner()).board : aggregate ? await api.allBoard() : await api.board(ws!.id);
-      if (turn !== boardGeneration || owner !== api.me?.id || browsing !== readPlanning || aggregate !== isAll || ws?.id !== current?.id) return;
+      const got = browsing ? (await api.readPlanner()).board : aggregate ? await api.allBoard(shared ? 'shared' : '') : await api.board(ws!.id);
+      if (turn !== boardGeneration || owner !== api.me?.id || browsing !== readPlanning || aggregate !== isAll || shared !== teams.viewing || ws?.id !== current?.id) return;
       board = got;
       loadHeat();
       error = '';
@@ -179,6 +181,7 @@
     current?.id;
     isAll;
     readPlanning;
+    teams.viewing;
     board = null;
     loadBoard();
   });
@@ -293,11 +296,17 @@
   // Founding one takes a name AND a slug: the slug is its address on disk — the
   // git repository's directory — so it is derived once here and never follows a
   // rename. A name changes on a Tuesday; a repository must not move with it.
-  async function createWorkspace() {
+  async function createWorkspace(team?: string) {
+    // En «Todos los equipos» el equipo lo dice quien crea («Nuevo proyecto en
+    // …»); el actual de las preferencias está escondido y no se adivina.
+    if (!team && teams.viewing) {
+      error = 'Elige en qué equipo nace el proyecto.';
+      return;
+    }
     const name = 'Proyecto nuevo';
     const slug = 'ws-' + Math.random().toString(36).slice(2, 8);
     try {
-      const made = await api.createWorkspace(name, slug, teams.current);
+      const made = await api.createWorkspace(name, slug, team || teams.current);
       workspaces = [...workspaces, made];
       // Go to it. Which workspace is on screen is the address's answer now, so
       // a new one is somewhere you navigate rather than a variable you set.
@@ -734,6 +743,25 @@
     <button class="btn btn-sm preset-tonal-surface" onclick={() => go('/')}>← volver</button>
   </div>
   <ThemePage />
+{:else if route.kind === 'planner' && isLead && !route.inboxOnly && teams.viewing}
+  <!-- El planeador es de UN equipo: sus objetivos, su calendario, su inbox y
+       su secuencia, y todo lo que se escribe ahí va a ese equipo. Desde
+       «Todos los equipos» escribiría en uno que nadie eligió, así que se pide. -->
+  <div class="mx-auto max-w-md p-6 sm:pt-16">
+    <button class="btn btn-sm preset-tonal-surface mb-4" onclick={back}>← volver</button>
+    <div class="card glass p-4">
+      <h1 class="display mb-2 text-xl">El planeador es de un equipo</h1>
+      <p class="muted mb-4 text-sm">
+        Estás en <b>Todos los equipos</b>, que es una vista para leer. Para planear, entra a uno:
+        lo que escribas ahí queda en ese equipo.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        {#each teams.sharedTeams as t (t.id)}
+          <button class="btn btn-sm preset-tonal-primary" onclick={() => teams.set(t.id)}>Entrar a {t.name}</button>
+        {/each}
+      </div>
+    </div>
+  </div>
 {:else if route.kind === 'planner' && isLead && !route.inboxOnly}
   <!-- The strategic layer gets a screen, not a tab inside the operative one —
        and no workspace: the plan is the department's, not this project's. -->
@@ -841,7 +869,9 @@
       ...(spaceOn ? [{ id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true }] : []),
       ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
       ...(features.roadmap ? [{ id: 'roadmap', name: 'Roadmap', face: '🗺', href: roadmapUrl, top: true }] : []),
-      { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl },
+      // El planeador escribe en UN equipo: desde «Todos los equipos» no hay
+      // cuál, así que se ve pero no se elige.
+      { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl, off: teams.viewing ? 'entra a un equipo' : undefined },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
       // La forma de trabajar que leen los agentes: el lead edita la de cada rol.
       // Quien opera ve sólo el suyo, para leerlo.
@@ -903,8 +933,12 @@
     oncreate={createWorkspace}
     teamList={teams.list}
     team={teams.current}
+    allTeams={teams.canAll}
+    viewingAll={teams.viewing}
+    createIn={teams.viewing ? teams.sharedTeams : []}
     onteam={(id) => {
-      teams.set(id);
+      if (id === ALL_TEAMS) teams.showAll(true);
+      else teams.set(id);
       // Sólo una pantalla de UN proyecto se queda sin piso al cambiar de equipo.
       // Roadmap, Secuencia y Mi espacio siguen al equipo: se quedan donde están
       // (`current` cae a `workspaces[0]` también ahí, y no cuenta).

@@ -8,9 +8,13 @@
   // caduca cuando se decidió (o nunca) y dice cuándo se usó por última vez. El
   // servidor guarda sólo su huella, así que el token se enseña UNA vez, al
   // generarlo, junto al prompt que conecta al asistente.
-  import { Menu, Portal } from '@skeletonlabs/skeleton-svelte';
-  import { api, type AgentToken, type Person } from '../lib/api';
-  import { placeholderNote, setupPrompt, tokenPlaceholder } from '../lib/connect';
+  import { Menu, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
+  import ClientLogo from './ClientLogo.svelte';
+  import AgentsMdBadge from './AgentsMdBadge.svelte';
+  import { api, type AgentReleases, type AgentToken, type Person } from '../lib/api';
+  import { connectVersion, placeholderNote, setupPrompt, tokenPlaceholder } from '../lib/connect';
+  import { agentHealth, short } from '../lib/agentHealth';
+  import { brandOf } from '../lib/agentClients';
   import HarnessCommands from './HarnessCommands.svelte';
   import { ago, when } from '../lib/when';
   import Confirm, { type Doom } from './Confirm.svelte';
@@ -27,7 +31,14 @@
   // administrar casi siempre.
   let everyone = $state(false);
 
+  // Contra qué se compara lo que leyó cada agente. Si falla (un servidor
+  // anterior a esto), la lista sale como antes, sin estado.
+  let releases = $state<AgentReleases | null>(null);
+  let version = $state('');
+
   async function load() {
+    api.agentReleases().then((r) => (releases = r), () => (releases = null));
+    connectVersion().then((v) => (version = v), () => (version = ''));
     try {
       rows = await api.tokens();
       error = '';
@@ -193,7 +204,7 @@
       </div>
       <details class="manual">
         <summary>O agrégalo a mano en tu harness</summary>
-        <HarnessCommands url={mcpUrl} token={fresh.token} />
+        <HarnessCommands url={mcpUrl} token={fresh.token} {version} />
       </details>
     </div>
   {/if}
@@ -219,7 +230,17 @@
       <ul class="list">
         {#each shown as t (t.id)}
           {@const st = status(t)}
+          {@const health = agentHealth(t, releases)}
+          {@const brand = t.client ? brandOf(t.client) : null}
+          {@const role = t.release_role || (t.owner === me.id && isLead ? 'planner' : 'operators')}
           <li class="tok" class:dead={st.key === 'revoked' || st.key === 'expired'}>
+            <!-- Su cara: el cliente que se conectó con él (el clientInfo de su
+                 initialize), o una llave si todavía no se conecta nadie. -->
+            {#if brand}
+              <ClientLogo {brand} size={32} tip={`${brand.name}${brand.version ? ' ' + brand.version : ''}`} />
+            {:else}
+              <span class="nokey" role="img" aria-label="todavía no se conecta ningún agente"><Icon of="key" size="16px" /></span>
+            {/if}
             <div class="min-w-0 flex-1">
               {#if renaming === t.id}
                 <input
@@ -235,15 +256,49 @@
               {:else}
                 <p class="tname">{t.name}</p>
               {/if}
+              <!-- El token, como se enseña una contraseña: el principio que lo
+                   reconoce y puntos por lo que el servidor ya no tiene. -->
               <p class="meta">
-                <code>{t.prefix}…</code>
+                <span class="secret-mask" aria-label="token que empieza con {t.prefix}">{t.prefix}<span class="dots" aria-hidden="true">••••••••••</span></span>
                 {#if everyone}· {t.owner === me.id ? 'tuyo' : t.ownerName}{/if}
-                · creado {ago(t.created)}
-                · {t.last_used_at ? `usado ${ago(t.last_used_at)}` : 'nunca usado'}
+              </p>
+              <!-- Debajo, cuándo: su caducidad (o revocación) y sus tiempos. -->
+              <p class="meta when">
+                <!-- Un revocado se queda una semana y lo borra un job (tokens.go). -->
+                <span class="pill {st.key}" title={st.key === 'revoked' ? 'Se borra solo a la semana de revocado' : undefined}>{st.text}</span>
+                <span>creado {ago(t.created)} · {t.last_used_at ? `usado ${ago(t.last_used_at)}` : 'nunca usado'}</span>
               </p>
             </div>
-            <!-- Un revocado se queda una semana y lo borra un job (tokens.go). -->
-            <span class="badge {st.key}" title={st.key === 'revoked' ? 'Se borra solo a la semana de revocado' : undefined}>{st.text}</span>
+            {#if health}
+              <!-- Lo que el servidor vio: prueba que el texto llegó, no que se siguiera. -->
+              <AgentsMdBadge read={t.release_read} at={t.release_read_at} {role}
+                want={(role === 'planner' ? releases?.planner : releases?.operators) ?? ''} />
+              {#if health.install === 'old'}
+                <!-- Informativo, en gris: la sección del CLAUDE.md la actualiza
+                     el agente solo al leer agents_md; esto mide la cabecera de
+                     su configuración, que sólo cambia al volver a pegar el prompt. -->
+                <Tooltip openDelay={120} closeDelay={60} positioning={{ placement: 'top' }}>
+                  <Tooltip.Trigger>
+                    {#snippet element(attributes: Record<string, unknown>)}
+                      <span class="pill" aria-label="instalación vieja" {...attributes}>instalación vieja</span>
+                    {/snippet}
+                  </Tooltip.Trigger>
+                  <Portal>
+                    <Tooltip.Positioner>
+                      <Tooltip.Content>
+                        <span class="rel-tip">
+                          <strong>Instalación anterior</strong>
+                          <span>se instaló con <b class="ver">{short(t.connect_version)}</b></span>
+                          <span>vigente <b class="ver">{short(releases?.connect)}</b></span>
+                          <span>Su sección se actualiza sola al leer agents_md;</span>
+                          <span>la cabecera, al volver a pegar el prompt.</span>
+                        </span>
+                      </Tooltip.Content>
+                    </Tooltip.Positioner>
+                  </Portal>
+                </Tooltip>
+              {/if}
+            {/if}
             {#if st.key !== 'revoked' && t.owner === me.id}
               <!-- El prompt de conexión, con un hueco para el token: el servidor
                    no lo tiene, sólo su huella. -->
@@ -284,7 +339,7 @@
       Para agregar el servidor tú mismo. Reemplaza <code>&lt;TU_TOKEN&gt;</code> por un token tuyo; al
       generar uno nuevo, aquí arriba salen ya con él.
     </p>
-    <HarnessCommands url={mcpUrl} token="<TU_TOKEN>" />
+    <HarnessCommands url={mcpUrl} token="<TU_TOKEN>" {version} />
   </div>
 </section>
 
@@ -316,21 +371,30 @@
     border-top: 1px solid var(--line);
   }
   .tok.dead { opacity: 0.55; }
+  .nokey { display: inline-grid; flex: none; place-content: center; width: 32px; height: 32px; border-radius: 9px; border: 1px dashed var(--line); color: var(--muted); }
   .tname { margin: 0; font-size: 0.9rem; font-weight: 600; }
   .meta { margin: 0.1rem 0 0; color: var(--faint); font-size: 0.76rem; }
-  .meta code { font-size: 0.74rem; }
-  .badge {
+  .meta.when { display: flex; flex-wrap: wrap; align-items: center; gap: 0.45rem; margin-top: 0.3rem; }
+  /* El token: el prefijo y puntos, en monoespaciada y sin caja. */
+  .secret-mask { font-family: var(--font-mono, ui-monospace, SFMono-Regular, Menlo, monospace); font-size: 0.74rem; color: var(--muted); }
+  .secret-mask .dots { margin-left: 0.1em; letter-spacing: -0.12em; opacity: 0.7; }
+  /* `pill` y no `badge`: Skeleton tiene una utilidad `badge` que fuerza
+     ~0.6rem y negrita, y ganaba sobre esto. Mismas medidas que AgentsMdBadge. */
+  .pill {
     flex: none;
-    padding: 0.1rem 0.5rem;
+    display: inline-flex;
+    align-items: center;
+    padding: 0.15rem 0.55rem;
     border-radius: 999px;
     background: var(--hover);
     color: var(--muted);
-    font-size: 0.72rem;
+    font-size: 0.74rem;
+    line-height: 1.35;
     white-space: nowrap;
   }
-  .badge.soon { background: color-mix(in oklab, var(--color-warning-500) 20%, transparent); color: var(--text); }
-  .badge.expired,
-  .badge.revoked { background: color-mix(in oklab, var(--color-error-500) 14%, transparent); }
+  .pill.soon { background: color-mix(in oklab, var(--color-warning-500) 20%, transparent); color: var(--text); }
+  .pill.expired,
+  .pill.revoked { background: color-mix(in oklab, var(--color-error-500) 14%, transparent); }
   :global(.more) {
     flex: none;
     width: 28px;

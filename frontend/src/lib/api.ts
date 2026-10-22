@@ -165,7 +165,14 @@ export type Team = {
   role: 'lead' | 'member';
   implicit?: boolean;
   members?: { user: string; name: string; role: 'lead' | 'member'; global?: boolean }[];
+  /** lo que el equipo decide de cada función: 'on', 'off' o '' (hereda la del
+   *  departamento). Un servidor viejo no lo manda. */
+  features?: Partial<Record<TeamFeatureKey, TeamFeatureValue>>;
 };
+
+/** Las funciones que un equipo puede decidir por su cuenta. */
+export type TeamFeatureKey = 'sequence' | 'roadmap';
+export type TeamFeatureValue = 'on' | 'off' | '';
 
 
 /** Una burbuja como fila: lo que el planeador organiza. */
@@ -667,6 +674,14 @@ class Api {
   }
   removeTeamMember(team: string, user: string) {
     return this.call<{ members: Team['members'] }>(`/api/teams/${team}/members/${user}`, { method: 'DELETE' });
+  }
+
+  /** Lo que un equipo decide de una función; '' vuelve a heredar. */
+  setTeamFeature(team: string, key: TeamFeatureKey, value: TeamFeatureValue) {
+    return this.call<{ features: Team['features'] }>(`/api/teams/${team}/features`, {
+      method: 'POST',
+      body: JSON.stringify({ key, value }),
+    });
   }
 
   renameWorkspace(id: string, name: string) {

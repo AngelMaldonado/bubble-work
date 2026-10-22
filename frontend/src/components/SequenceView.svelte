@@ -7,7 +7,10 @@
   import type { SeqThread } from './SequencePane.svelte';
   import { teams } from '../lib/teams.svelte';
 
-  let { me, onopen, onopenboard }: { me: Person; onopen?: (slug: string, seq: number) => void; onopenboard?: (slug: string) => void } = $props();
+  // `onTeams`: en «Todos los equipos», los equipos con la secuencia encendida
+  // (lib/features.ts); los demás no se ofrecen.
+  let { me, onopen, onopenboard, onTeams }: { me: Person; onopen?: (slug: string, seq: number) => void; onopenboard?: (slug: string) => void; onTeams?: string[] } = $props();
+  const seqTeams = $derived(onTeams ? teams.sharedTeams.filter((t) => onTeams.includes(t.id)) : teams.sharedTeams);
   const isLead = $derived(me.role === 'lead');
   // svelte-ignore state_referenced_locally
   let scope = $state<'all' | 'mine'>(me.role === 'lead' ? 'all' : 'mine');
@@ -47,7 +50,7 @@
   $effect(() => { try { picked = localStorage.getItem(pickKey) ?? ''; } catch { picked = ''; } });
   function pick(id: string) { picked = id; try { localStorage.setItem(pickKey, id); } catch { /* sin almacenamiento: sólo esta visita */ } }
   const shown = $derived(teams.viewing
-    ? (teams.sharedTeams.find((t) => t.id === picked) ?? teams.sharedTeams[0] ?? null)
+    ? (seqTeams.find((t) => t.id === picked) ?? seqTeams[0] ?? null)
     : null);
   const shownRows = $derived(shown ? rowsWhere((ws) => teamOf(ws) === shown.id) : []);
   const rows = $derived<SeqThread[]>(rowsWhere(inTeam));
@@ -83,7 +86,7 @@
     <section class="panel" aria-label={`Secuencia de ${shown.name}`}>
       {#key `${mode}.${scope}.${shown.id}`}<SequenceCanvas readonly edgeToEdge modesBottom loading={!board && !error} threads={shownRows} onopen={open} {modes}
         title={`🧭 ${shown.name}`}
-        titleMenu={{ label: 'Secuencia del equipo', value: shown.id, options: teams.sharedTeams.map((t) => ({ value: t.id, label: t.name })), onselect: pick }}
+        titleMenu={{ label: 'Secuencia del equipo', value: shown.id, options: seqTeams.map((t) => ({ value: t.id, label: t.name })), onselect: pick }}
         what={mode==='tasks' ? 'hilos' : 'módulos'} />{/key}
     </section>
   {:else}

@@ -2916,6 +2916,17 @@ Guardar en Prompts ya publicaba en caliente, pero que el agente lo leyera depend
 - **Personas simuladas en el dev** (`just seed agents`, `scripts/seed_agents.py`): 13 personas `@simulado.test` con agentes que hacen los handshakes MCP reales, una por estado (al día, anterior, nunca leyó, instalación vieja, sin usar, revocado, borrada) y con 9 clientes distintos. Para que haya una release anterior, «Lead simulado» vuelve a publicar el AGENTS.md de operadores con el mismo texto y un salto de línea. Viven lo que vive el servidor de dev: `bubble simulated purge` (`cmd_simulated.go`) las borra del todo, junto con toda fila que apunte a ellas, recorriendo las relaciones hacia `users` en vez de enumerarlas. Corre sin servidor, en `just stop`, en `just dev` (antes de reemplazar la sesión) y en la ventana del servidor cuando `serve` termina solo (Ctrl-C o caída). Rechazado: limpiar por la API antes de bajar el servidor, porque no cubre un Ctrl-C ni una caída. Probado con los tres caminos en un dev desechable y con `TestPurgeSimulated`.
 - Validado localmente con `just check` (856 pruebas live, 16 de ellas nuevas; 109 de frontend; Go `release_test.go`). **Sin validar:** la revisión visual de Ajustes → Tokens, que Claude Code, Codex y Antigravity reales manden `clientInfo` y la cabecera como se espera, y si Codex usa `instructions` igual que Claude Code. Sin commit ni despliegue.
 
+## Funciones por equipo *(built, sin revisión visual)*
+
+`features` era una sola fila global, pero la secuencia y el roadmap ya son de cada equipo: un equipo que no los usaba los veía porque otro sí. Hilo: [#5 en Burbujas](https://bubble.ayetec.space/w/ws-nbu6tp/t/5).
+
+- **El valor del equipo, si lo dice; si no, el del departamento.** `team_features` (migración `1788543000`) guarda una fila por equipo con `sequence` y `roadmap` como select `on`/`off`; vacío es heredar. Ajustes → Funciones queda como el valor por defecto. Rechazado: columnas en `teams`, porque un booleano no sabe decir «hereda».
+- **Mi espacio se queda global:** es de cada persona, no de un equipo.
+- **Quién decide:** quien lidera el equipo (`LeadsTeam`), es decir el lead global en uno compartido o una fila `lead`; en uno personal, su dueño. Ni lectura ni escritura por la API de registros: viaja en `GET /api/teams` (también en `team_list` por MCP), que ya decide quién ve qué equipo, y se escribe por `POST /api/teams/{id}/features`. Decidido sin respuesta de Angel, con lo que se propuso; cambiar quién decide es una línea.
+- **Servidor:** `FeatureOn(app, team, key)`; `SequenceOn` pasa a ser por equipo en `sequence_next` y en los pasos vivos del tablero. `sequence_set` no lo mira: apagar no borra la línea.
+- **Navegador:** `lib/features.ts` resuelve las funciones del equipo actual y, en «Todos los equipos», las cuenta encendidas si algún equipo compartido las tiene. `/secuencia` y el roadmap sólo ofrecen esos equipos. Las redirecciones esperan a que carguen los equipos, para no echar a nadie de una ruta que su equipo sí tiene. Ajustes → Equipos lleva un selector Hereda (sí/no) / Encendida / Apagada por función; quien no lidera el equipo ve el estado.
+- Validado: 870 pruebas live (14 nuevas: quién decide, herencia en los dos sentidos, `sequence_next`, valores inválidos, Mi espacio fuera), 119 de frontend (5 nuevas de resolución) y una prueba de punta a punta en el dev (apagarla en TI la quita del menú; heredar la devuelve). **Sin validar:** la revisión visual de Angel.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

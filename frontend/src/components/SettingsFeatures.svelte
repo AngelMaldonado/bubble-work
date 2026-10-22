@@ -32,6 +32,11 @@
     Partes del producto que el departamento puede encender o apagar. Apagar no borra nada: al
     volver a encenderla, todo está como se dejó.
   </p>
+  <p class="set-lead">
+    La secuencia y el roadmap son de cada equipo: aquí se elige el valor por defecto, y cada
+    equipo puede encenderlas o apagarlas por su cuenta en Ajustes → Equipos. Mi espacio es de cada
+    persona y vale para todos.
+  </p>
 
   {#if error}<p class="set-err" role="alert">{error}</p>{/if}
   {#if !features.id}

@@ -1,6 +1,7 @@
 <script lang="ts">
   import Loading from './components/Loading.svelte';
   import Icon from './components/Icon.svelte';
+  import { effectiveFeatures, teamsWith } from './lib/features';
   import { api, type Board as BoardData, type Features, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { isEditable } from './lib/keys';
   import { promptsUrl, allUrl, artifactUrl, boardUrl, inventoryUrl, parse, plannerUrl, readonlyInboxUrl, roadmapUrl, sequenceUrl, settingsUrl, spaceUrl, threadUrl, wikiUrl } from './lib/routes';
@@ -66,7 +67,16 @@
   let seesInv = $state(false);
   // Qué partes del producto tiene encendidas el departamento. Apagada, la
   // secuencia no aparece en ningún sitio: ni columna, ni planeador, ni cajón.
-  let features = $state<Features>({ id: '', sequence: false });
+  // Las del departamento, como las guarda el servidor (Ajustes → Funciones las
+  // edita). Lo que se ve es `features`: matizadas por el equipo que se mira, o
+  // por los de «Todos los equipos» (lib/features.ts).
+  let globalFeatures = $state<Features>({ id: '', sequence: false });
+  const features = $derived(
+    effectiveFeatures(globalFeatures, teams.viewing ? teams.sharedTeams : teams.team ? [teams.team] : []),
+  );
+  // Hasta saber qué dice el equipo no se echa a nadie de una ruta: el global
+  // apagado y el equipo encendido es un caso válido.
+  const featuresKnown = $derived(!!features.id && !!teams.owner);
   let workspaces = $state<Workspace[]>([]);
 
   // Which workspace is on screen is a question the address answers. Landing on
@@ -98,7 +108,7 @@
   });
   // `/secuencia` con la función apagada no es una pantalla: se va a Todos.
   $effect(() => {
-    if (ready && route.kind === 'sequence' && features.id && !features.sequence) go(allUrl, true);
+    if (ready && route.kind === 'sequence' && featuresKnown && !features.sequence) go(allUrl, true);
   });
   // Mi espacio: encendido salvo que el departamento lo apague. Antes de leer las
   // funciones (o con un servidor sin la columna) cuenta como encendido, para que
@@ -109,7 +119,7 @@
   });
   // Lo mismo con el roadmap.
   $effect(() => {
-    if (ready && route.kind === 'roadmap' && features.id && !features.roadmap) go(allUrl, true);
+    if (ready && route.kind === 'roadmap' && featuresKnown && !features.roadmap) go(allUrl, true);
   });
   // The box that scrolls. The minimap needs it: the shell holds still and the
   // pane moves, so a spy listening to the window sees a page that never scrolls.
@@ -130,7 +140,7 @@
       // presence is about people, and there is nobody yet.
       presence.start();
       api.seesInventory().then((yes) => (seesInv = yes));
-      api.features().then((f) => (features = f));
+      api.features().then((f) => (globalFeatures = f));
       api.version().then((v) => (serverVersion = devLatest(v)));
       loadHeat();
       projectColors.load().catch(() => {});
@@ -795,8 +805,8 @@
   <Settings
     {me}
     tab={route.tab}
-    {features}
-    onfeatures={(f) => (features = f)}
+    features={globalFeatures}
+    onfeatures={(f) => (globalFeatures = f)}
     onback={back}
     ontab={(t) => go(settingsUrl(t), true)}
     onme={(p) => (me = p)} />
@@ -949,11 +959,13 @@
       {#key me.id}<PersonalSpace workspaces={sorted} />{/key}
     {:else if route.kind === 'roadmap' && me && features.roadmap}
       <Roadmap
+        onTeams={teams.viewing ? teamsWith(globalFeatures, teams.sharedTeams, 'roadmap') : undefined}
         onopenboard={(slug) => { backTo.set(roadmapUrl); go(boardUrl(slug)); }}
         onopen={(slug, seq) => { backTo.set(roadmapUrl); go(threadUrl(slug, seq)); }} />
     {:else if route.kind === 'sequence' && me && features.sequence}
       <SequenceView
         {me}
+        onTeams={teams.viewing ? teamsWith(globalFeatures, teams.sharedTeams, 'sequence') : undefined}
         onopenboard={(slug) => { backTo.set(sequenceUrl); go(boardUrl(slug)); }}
         onopen={(slug, seq) => {
           backTo.set(sequenceUrl);

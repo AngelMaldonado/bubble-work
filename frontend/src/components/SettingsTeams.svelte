@@ -7,14 +7,16 @@
   // todo equipo que no sea personal. Un equipo personal es el contexto privado
   // de una persona: sólo lo ve ella. A otra persona se la invita a un PROYECTO
   // del equipo, no al equipo.
-  import { api, type Person, type Team } from '../lib/api';
+  import { api, type Features, type Person, type Team, type TeamFeatureKey, type TeamFeatureValue } from '../lib/api';
+  import { TEAM_FEATURES, teamFeatureOn } from '../lib/features';
   import { teams } from '../lib/teams.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
   import Loading from './Loading.svelte';
   import Icon from './Icon.svelte';
   import PersonTile from './PersonTile.svelte';
 
-  let { me }: { me: Person } = $props();
+  // `features`: las del departamento, para decir qué hereda un equipo.
+  let { me, features }: { me: Person; features: Features } = $props();
   const isAdmin = $derived(me.role === 'lead');
 
   let people = $state<Person[]>([]);
@@ -71,6 +73,20 @@
       await api.createTeam(name);
       newName = '';
     });
+  }
+
+  // Funciones por equipo: hereda (lo del departamento), encendida o apagada.
+  // `inherit` y no '' en el selector: un FilterPick toma '' por «sin elegir».
+  const yesNo = (on: boolean) => (on ? 'sí' : 'no');
+  const featureItems = (on: boolean) => [
+    { value: 'inherit', label: `Hereda (${yesNo(on)})` },
+    { value: 'on', label: 'Encendida' },
+    { value: 'off', label: 'Apagada' },
+  ];
+  function setFeature(t: Team, key: TeamFeatureKey, v: string) {
+    const value = (v === 'inherit' ? '' : v) as TeamFeatureValue;
+    if ((t.features?.[key] ?? '') === value) return;
+    run(`feat:${t.id}`, () => api.setTeamFeature(t.id, key, value));
   }
 
   function askDelete(t: Team) {
@@ -138,6 +154,28 @@
         {/if}
       </header>
 
+      <!-- Qué partes del producto tiene este equipo. Sin decidir, las del
+           departamento (Ajustes → Funciones). -->
+      <div class="feats">
+        {#each TEAM_FEATURES as f (f.key)}
+          {@const own = t.features?.[f.key] ?? ''}
+          {@const on = teamFeatureOn(features, t, f.key)}
+          <div class="feat">
+            <span class="feat-name">{f.label}</span>
+            {#if lead}
+              <span class="feat-pick">
+                <FilterPick items={featureItems(!!features[f.key])} value={own || 'inherit'} allowEmpty={false}
+                  label={`${f.label} en ${t.name}`} onchange={(v) => v && setFeature(t, f.key, v)} />
+              </span>
+            {:else}
+              <span class="feat-state" class:on title={own ? 'lo decidió el equipo' : 'como el departamento'}>
+                {on ? 'encendida' : 'apagada'}{own ? '' : ' · departamento'}
+              </span>
+            {/if}
+          </div>
+        {/each}
+      </div>
+
       {#if t.personal}
         <p class="faint text-sm">Sólo tú. Para trabajar con alguien aquí, invítalo a un proyecto del equipo.</p>
       {:else}
@@ -203,4 +241,10 @@
   .role-pick { width: 9rem; flex: 0 1 9rem; }
   .role-fixed { padding: 0.2rem 0.6rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.8rem; font-weight: 700; }
   .grow { flex: 1; min-width: 0; }
+  .feats { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
+  .feat { display: flex; align-items: center; gap: 0.5rem; }
+  .feat-name { font-size: 0.85rem; font-weight: 600; }
+  .feat-pick { width: 11rem; flex: 0 1 11rem; }
+  .feat-state { padding: 0.15rem 0.55rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.78rem; }
+  .feat-state.on { background: color-mix(in oklab, var(--color-success-500) 16%, transparent); color: var(--text); }
 </style>

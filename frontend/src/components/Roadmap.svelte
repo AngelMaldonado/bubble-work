@@ -42,7 +42,9 @@
   import Loading from './Loading.svelte';
   import Glyphs from './Glyphs.svelte';
 
-  let { onopen, onopenboard }: { onopen?: (slug: string, seq: number) => void; onopenboard?: (slug: string) => void } = $props();
+  // `onTeams`: en «Todos los equipos», los equipos con el roadmap encendido
+  // (lib/features.ts); los proyectos de los demás no entran.
+  let { onopen, onopenboard, onTeams }: { onopen?: (slug: string, seq: number) => void; onopenboard?: (slug: string) => void; onTeams?: string[] } = $props();
 
   // ---- datos -------------------------------------------------------------------
   let board = $state<Board | null>(null);
@@ -118,6 +120,7 @@
     const T = teams.current;
     return new Map((board?.workspaces ?? [])
       .filter((w) => !T || teams.inScope(w))
+      .filter((w) => !onTeams || !teams.viewing || !w.team || onTeams.includes(w.team))
       .map((w) => [w.id, w]));
   });
 
@@ -200,6 +203,7 @@
     const to = isoDay(addDays(laneStart(hi + 1), -1));
     return dates
       .filter((e) => !T || !e.team || teams.inView(e.team))
+      .filter((e) => !onTeams || !teams.viewing || !e.team || onTeams.includes(e.team))
       // En «Año» lo que se repite cada día o cada semana taparía el trabajo.
       .filter((e) => unit !== 'quarter' || !['daily', 'weekly', 'biweekly'].includes(e.repeat ?? ''))
       .flatMap((e) => occurrences(e.start, e.repeat ?? '', from, to).map((day) => ({

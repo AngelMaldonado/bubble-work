@@ -32,6 +32,9 @@ type TeamView struct {
 	Role     string       `json:"role"`               // lead | member: el tuyo
 	Implicit bool         `json:"implicit,omitempty"` // lead por ser lead global
 	Members  []TeamMember `json:"members,omitempty"`
+	// Lo que el equipo decide de cada función: "on", "off" o "" (hereda la
+	// del departamento). features.go
+	Features map[string]string `json:"features"`
 }
 
 // TeamMember es una fila de un equipo. `global` dice que es lead global: lo es
@@ -137,6 +140,7 @@ func TeamsOf(app core.App, auth *core.Record) ([]TeamView, error) {
 		if v.Role == "" {
 			continue
 		}
+		v.Features = TeamFeatures(app, t.Id)
 		out = append(out, v)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return !out[i].Personal && out[j].Personal })
@@ -466,6 +470,25 @@ func registerTeams(app core.App) {
 				return e.BadRequestError(err.Error(), err)
 			}
 			return e.NoContent(http.StatusNoContent)
+		}).Bind(person)
+
+		// Lo que un equipo decide de sus funciones (features.go). Lo decide un
+		// lead del equipo; `value` vacío vuelve a heredar la del departamento.
+		se.Router.POST("/api/teams/{id}/features", func(e *core.RequestEvent) error {
+			var body struct {
+				Key   string `json:"key"`
+				Value string `json:"value"`
+			}
+			if err := e.BindBody(&body); err != nil {
+				return e.BadRequestError("no se pudo leer", err)
+			}
+			f, err := SetTeamFeature(e.App, e.Auth, e.Request.PathValue("id"), body.Key, body.Value)
+			if fe, ok := err.(*featureError); ok {
+				return e.Error(fe.status, fe.msg, nil)
+			} else if err != nil {
+				return e.BadRequestError(err.Error(), err)
+			}
+			return e.JSON(http.StatusOK, map[string]any{"features": f})
 		}).Bind(person)
 
 		// Quién está en un equipo. Lo administra un lead del equipo; en uno

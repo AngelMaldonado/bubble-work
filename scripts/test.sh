@@ -2648,6 +2648,37 @@ chk ">>> y sequence_next de su equipo lo trae" \
 ARG="{\"team\":\"$TI\"}"
 chk "...pero no la línea de TI" \
   "$(mcptext "$GI" sequence_next "$ARG" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any(t["id"]=="'"$GT"'" for s in (d.get("now"),d.get("then")) if s for t in s["threads"]))')" False
+# Funciones por equipo (features.go): lo que diga el equipo; si no dice nada,
+# el departamento. Aquí la secuencia global está encendida.
+feat(){ curl -s -X POST "$API/api/teams/$2/features" -H "Authorization: $1" -H "$JS" -d "$3"; }
+featc(){ code -X POST "$API/api/teams/$2/features" -H "Authorization: $1" -H "$JS" -d "$3"; }
+seqon(){ mcptext "$1" sequence_next "{\"team\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("enabled", True))'; }
+chk ">>> un equipo nace heredando las funciones del departamento" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;t=[x for x in json.load(sys.stdin)["teams"] if x["id"]=="'"$GP"'"][0];print(sorted(t["features"].items()))')" \
+  "[('roadmap', ''), ('sequence', '')]"
+chk ">>> un member no decide las funciones de su equipo" "$(featc "$A" "$TI" '{"key":"sequence","value":"off"}')" 403
+chk "...ni el lead global las de un equipo personal ajeno" "$(featc "$C" "$GP" '{"key":"sequence","value":"off"}')" 403
+chk ">>> Mi espacio no es de un equipo" "$(featc "$GI" "$GP" '{"key":"space","value":"off"}')" 400
+chk ">>> un valor raro se rechaza" "$(featc "$GI" "$GP" '{"key":"sequence","value":"maybe"}')" 400
+chk ">>> gina apaga la secuencia de su equipo" \
+  "$(feat "$GI" "$GP" '{"key":"sequence","value":"off"}' | j "['features']['sequence']")" off
+chk "...y sequence_next de su equipo dice que está apagada" "$(seqon "$GI" "$GP")" False
+chk "...sin tocar la de TI, que hereda la del departamento" "$(seqon "$GI" "$TI")" True
+chk "...y GET /api/teams lo cuenta" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;print([x for x in json.load(sys.stdin)["teams"] if x["id"]=="'"$GP"'"][0]["features"]["sequence"])')" off
+chk ">>> vacío vuelve a heredar" \
+  "$(feat "$GI" "$GP" '{"key":"sequence","value":""}' | j "['features']['sequence']")$(seqon "$GI" "$GP")" True
+# Al revés: el departamento la apaga y un equipo la quiere.
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":false}' >/dev/null
+feat "$GI" "$GP" '{"key":"sequence","value":"on"}' >/dev/null
+chk ">>> con el departamento apagado, un equipo la enciende para sí" "$(seqon "$GI" "$GP")" True
+chk "...y los demás siguen apagados" "$(seqon "$GI" "$TI")" False
+chk "...y su línea sigue ahí, como se dejó" \
+  "$(mcptext "$GI" sequence_next "{\"team\":\"$GP\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["now"]["threads"][0]["id"]=="'"$GT"'")')" True
+feat "$GI" "$GP" '{"key":"sequence","value":""}' >/dev/null
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":true}' >/dev/null
+chk ">>> nadie escribe team_features por la API de registros" \
+  "$(pcode team_features "$GI" "{\"team\":\"$GP\",\"roadmap\":\"on\"}")" 403
 chk ">>> la cola de un equipo sólo trae sus proyectos" \
   "$(curl -s "$API/api/queue?kind=threads&state=open&team=$TI" -H "Authorization: $GI" | python3 -c 'import sys,json;print(all(c["workspace"]!="'"$GWS"'" for c in json.load(sys.stdin)["items"]))')" True
 

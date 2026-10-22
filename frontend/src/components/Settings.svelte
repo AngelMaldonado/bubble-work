@@ -164,7 +164,7 @@
         {#if current === 'flotabilidad'}<SettingsBuoyancy canEdit />
         {:else if current === 'usuarios'}<SettingsPeople {me} />
         {:else if current === 'funciones'}<SettingsFeatures {features} {onfeatures} />
-        {:else if current === 'equipos'}<SettingsTeams {me} />
+        {:else if current === 'equipos'}<SettingsTeams {me} {features} />
         {:else if current === 'canales'}<SettingsChannels />
         {:else if current === 'mi-usuario'}<SettingsMe {me} {onme} />
         {:else}<SettingsTokens {me} />{/if}

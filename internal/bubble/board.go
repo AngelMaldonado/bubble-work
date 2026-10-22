@@ -263,7 +263,7 @@ type BoardWorkspace struct {
 func liveSteps(app core.App, team string) map[int]int {
 	// Apagada, ningún hilo está en ningún paso: los datos se quedan, la línea
 	// no se enseña.
-	if !SequenceOn(app) {
+	if !SequenceOn(app, team) {
 		return map[int]int{}
 	}
 	var seqs []int

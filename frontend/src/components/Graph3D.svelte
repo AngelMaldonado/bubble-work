@@ -443,6 +443,6 @@
   .count { padding: 0 0.45rem; border-radius: 999px; background: var(--hover); font-size: 0.75rem; }
   .empty { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 0.7rem; color: var(--muted); text-align: center; pointer-events: none; }
   .legend3d { position: absolute; left: 1rem; right: 1rem; bottom: calc(1rem + 56px + 0.5rem); text-align: right; color: var(--faint); font-size: 0.68rem; pointer-events: none; }
-  @media (max-width: 1150px) { .legend3d { bottom: calc(4.75rem + 42px + 0.6rem); } }
+  @media (max-width: 1320px) { .legend3d { bottom: calc(4.75rem + 42px + 0.6rem); } }
   @media (max-width: 650px) { .gizmo { top: 8rem; } .topbar { display: flex; flex-direction: column; align-items: center; } .topbar > .ctrl { align-self: flex-start; } .pane-name { font-size: 1.15rem; } }
 </style>

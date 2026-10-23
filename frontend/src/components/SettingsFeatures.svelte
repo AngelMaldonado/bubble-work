@@ -89,6 +89,22 @@
         en lo primero que le toca. Sólo lectura. Encendido aparece como «Roadmap» en la columna.
       </p>
     </div>
+    <div class="feature">
+      <Switch
+        checked={!!features.fury}
+        disabled={saving || !features.id}
+        onCheckedChange={(e: { checked: boolean }) => set({ fury: e.checked })}>
+        <Switch.Control><Switch.Thumb /></Switch.Control>
+        <Switch.Label><Icon of="furious" tint /> Furia de IA</Switch.Label>
+        <Switch.HiddenInput />
+      </Switch>
+      <p class="help">
+        La IA se enoja cuando algo importante se rompe: prioridad alta vencida, burbuja inflada,
+        olvidada o sin dueño. Encendida, los agentes la ven por MCP con sus razones. Las reglas están
+        en Ajustes → Furia, donde se pueden calibrar con datos reales antes de encenderla. Es del
+        departamento: vale para todos los equipos.
+      </p>
+    </div>
   </div>
 </section>
 

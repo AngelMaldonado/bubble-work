@@ -67,7 +67,7 @@
     if (!canvas) { camera = fitCamera(points, size.width, size.height); return; }
     // En el lienzo, arriba flota el título y abajo la leyenda y el HUD: se
     // encuadra en la franja libre entre ellos, no en el alto entero.
-    const top = size.width < 650 ? 130 : 80, bottom = size.width < 1150 ? 170 : 115;
+    const top = size.width < 650 ? 130 : 80, bottom = size.width < 1320 ? 170 : 115;
     const c = fitCamera(points, size.width, Math.max(120, size.height - top - bottom));
     camera = { ...c, y: c.y - (top - bottom) / 2 / c.scale };
   }
@@ -453,7 +453,7 @@
   /* La leyenda, justo encima de la franja del HUD (cerebro, controles, lupa). */
   /* Sobre el cerebro, que con su insignia es lo más alto de la franja. */
   .graph.canvas .graph-legend { left: 1rem; right: 1rem; bottom: calc(1rem + 56px + 0.5rem); }
-  @media (max-width: 1150px) { .graph.canvas .graph-legend { bottom: calc(4.75rem + 42px + 0.6rem); } }
+  @media (max-width: 1320px) { .graph.canvas .graph-legend { bottom: calc(4.75rem + 42px + 0.6rem); } }
   @media (max-width: 650px) {
     .graph:not(.canvas) { height: 34rem; }
     .pane-name { font-size: 1.15rem; }

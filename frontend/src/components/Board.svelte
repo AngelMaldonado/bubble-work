@@ -609,8 +609,8 @@
   /* La fila de las esquinas: `bottom: 1rem` y 42 px de alto, como .float-btn y
      .corner-dock; los grupos quedan centrados en ella. */
   .board-hud { position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%); min-height: 42px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.5rem; width: max-content; max-width: calc(100% - 2rem); z-index: var(--z-chrome); }
-  /* Sin lugar al centro entre las esquinas: sube sobre ellas (igual que la secuencia). */
-  @media (max-width: 1150px) { .board-hud { bottom: 4.75rem; } }
+  /* Sin lugar al centro entre las esquinas: sube sobre ellas (igual que la secuencia). 1320 px: con el cerebro, la cabeza de la furia y el pin, las esquinas ya no dejan sitio a 1280. */
+  @media (max-width: 1320px) { .board-hud { bottom: 4.75rem; } }
   .seg { display: flex; flex-wrap: wrap; max-width: 100%; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-solid); }
   .seg button { padding: 0.3rem 0.7rem; border-radius: 7px; font-size: 0.85rem; }
   .seg button.on { background: var(--hover); font-weight: 700; }

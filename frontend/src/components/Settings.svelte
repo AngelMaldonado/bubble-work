@@ -22,6 +22,7 @@
   import SettingsMe from './SettingsMe.svelte';
   import SettingsTokens from './SettingsTokens.svelte';
   import SettingsTeams from './SettingsTeams.svelte';
+  import SettingsFury from './SettingsFury.svelte';
   import { teams } from '../lib/teams.svelte';
 
   let {
@@ -60,6 +61,8 @@
         ]
       : []),
     { id: 'equipos', label: 'Equipos', face: '👥' },
+    // Todos la leen: es por qué algo está furioso. La edita el lead global.
+    { id: 'furia', label: 'Furia', face: '😡' },
     ...(isLead || leadsATeam ? [{ id: 'canales', label: 'Canales', face: '💬' }] : []),
     { id: 'mi-usuario', label: 'Mi usuario', face: '' },
     // La dirección sigue siendo `tokens` (la enlaza «Conectar tu IA»); lo que se
@@ -165,6 +168,7 @@
         {:else if current === 'usuarios'}<SettingsPeople {me} />
         {:else if current === 'funciones'}<SettingsFeatures {features} {onfeatures} />
         {:else if current === 'equipos'}<SettingsTeams {me} {features} />
+        {:else if current === 'furia'}<SettingsFury {me} />
         {:else if current === 'canales'}<SettingsChannels />
         {:else if current === 'mi-usuario'}<SettingsMe {me} {onme} />
         {:else}<SettingsTokens {me} />{/if}

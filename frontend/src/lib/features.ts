@@ -3,9 +3,9 @@
 // si no, el del departamento. Mi espacio no es de un equipo: siempre global.
 import type { Features, Team, TeamFeatureKey } from './api';
 
-export const TEAM_FEATURES: { key: TeamFeatureKey; label: string }[] = [
-  { key: 'sequence', label: 'Secuencia' },
-  { key: 'roadmap', label: 'Roadmap' },
+export const TEAM_FEATURES: { key: TeamFeatureKey; label: string; icon: string }[] = [
+  { key: 'sequence', label: 'Secuencia', icon: 'compass' },
+  { key: 'roadmap', label: 'Roadmap', icon: 'map' },
 ];
 
 /** ¿Encendida para este equipo? Sin equipo, la del departamento. */

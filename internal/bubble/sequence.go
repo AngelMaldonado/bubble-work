@@ -100,16 +100,22 @@ func Next(app core.App, auth *core.Record, team string) (map[string]any, error) 
 	}
 	sort.Ints(steps)
 
+	furies := newFuryCache(app)
 	row := func(r *core.Record) map[string]any {
 		slug := ""
 		if ws, err := app.FindRecordById("workspaces", r.GetString("workspace")); err == nil {
 			slug = ws.GetString("slug")
 		}
-		return map[string]any{
+		out := map[string]any{
 			"id": r.Id, "seq": r.GetInt("seq"), "name": r.GetString("name"),
 			"workspace": slug, "bubble": r.GetString("bubble"),
 			"priority": r.GetString("priority"), "assignees": r.GetStringSlice("assignees"),
 		}
+		// La furia de IA, si está encendida y alguna regla disparó.
+		if f := furies.thread(r.GetString("workspace"), r.Id); f != nil {
+			out["fury"] = f
+		}
+		return out
 	}
 	step := func(i int) *NextStep {
 		if i >= len(steps) {

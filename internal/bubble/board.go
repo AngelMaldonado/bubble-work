@@ -11,6 +11,7 @@ import (
 	"github.com/pocketbase/pocketbase/core"
 	"github.com/pocketbase/pocketbase/tools/types"
 
+	"github.com/AngelMaldonado/bubble-work/internal/fury"
 	"github.com/AngelMaldonado/bubble-work/internal/heat"
 )
 
@@ -117,6 +118,9 @@ type ThreadHeat struct {
 	// Cuándo vence ESTA pieza. Independiente del plazo de su burbuja: aquélla
 	// es el compromiso, ésta es cómo se reparte entre las piezas.
 	Due string `json:"due_date,omitempty"`
+	// La furia de IA (fury.go): sólo con la función encendida y si alguna regla
+	// disparó. No cambia el orden: el orden es el del calor.
+	Fury *fury.Verdict `json:"fury,omitempty"`
 }
 
 // day is a stored date as the ten characters a calendar reads. Empty stays
@@ -158,6 +162,8 @@ type BubbleHeat struct {
 	// and how much of it is spent is this.
 	WarmAt string      `json:"warm_at,omitempty"`
 	Heat   heat.Result `json:"heat"`
+	// La furia de IA: la suya y la de sus hilos abiertos, la más grave.
+	Fury *fury.Verdict `json:"fury,omitempty"`
 }
 
 // Board is the whole answer, including the calibration it was computed against —
@@ -286,8 +292,15 @@ func stepOf(steps map[int]int, sequence int, done bool) int {
 	return steps[sequence]
 }
 
-// BoardFor computes both axes for a workspace, storing nothing.
+// BoardFor computes both axes for a workspace, storing nothing. Con la furia de
+// IA encendida, también la furia (con las reglas guardadas).
 func BoardFor(app core.App, ws *core.Record) (Board, error) {
+	return boardFor(app, ws, activeFuryRules(app))
+}
+
+// boardFor: `rules` nil es sin furia. La vista previa de Ajustes → Furia pasa
+// las reglas que se están editando, aunque la función esté apagada.
+func boardFor(app core.App, ws *core.Record, rules *fury.Rules) (Board, error) {
 	tun, err := tuningOf(app)
 	if err != nil {
 		return Board{}, fmt.Errorf("no calibration: %w", err)
@@ -389,6 +402,10 @@ func BoardFor(app core.App, ws *core.Record) (Board, error) {
 	}
 	sort.SliceStable(out, func(i, j int) bool { return floats(out[i].Heat) > floats(out[j].Heat) })
 
+	if rules != nil {
+		applyFury(app, ws, *rules, now, threads, out)
+	}
+
 	return Board{
 		Workspace: ws.Id, At: now.Format(time.RFC3339), Tuning: tun,
 		Workspaces: []BoardWorkspace{{
@@ -468,6 +485,10 @@ func stamp(t time.Time) string {
 // and TIME, so two rows compared against two different "now" are not comparable,
 // and comparison is the entire point of putting them on one board.
 func AllBoards(e *core.RequestEvent) (Board, error) {
+	return allBoards(e, activeFuryRules(e.App))
+}
+
+func allBoards(e *core.RequestEvent, rules *fury.Rules) (Board, error) {
 	list, err := reachableWorkspaces(e)
 	if err != nil {
 		return Board{}, err
@@ -482,7 +503,7 @@ func AllBoards(e *core.RequestEvent) (Board, error) {
 	teamOf := map[string]string{}
 
 	for _, ws := range list {
-		b, err := BoardFor(e.App, ws)
+		b, err := boardFor(e.App, ws, rules)
 		if err != nil {
 			// One workspace that cannot be computed must not blank the other
 			// nine: it is missing from the board, and the rest still answers.

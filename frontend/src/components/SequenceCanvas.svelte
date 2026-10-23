@@ -622,7 +622,7 @@
     width: max-content; max-width: calc(100% - 2rem); cursor: default;
   }
   /* Sin lugar al centro entre las esquinas de abajo: sube sobre ellas. */
-  @media (max-width: 1150px) { .wrap .read-modes.bottom { bottom: 4.75rem; } }
+  @media (max-width: 1320px) { .wrap .read-modes.bottom { bottom: 4.75rem; } }
   .head {
     position: relative;
     display: flex;

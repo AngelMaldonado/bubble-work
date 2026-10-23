@@ -10,6 +10,8 @@ import (
 
 	"github.com/pocketbase/dbx"
 	"github.com/pocketbase/pocketbase/core"
+
+	"github.com/AngelMaldonado/bubble-work/internal/fury"
 )
 
 // Lo que un agente puede hacer además de escribir documentos: el inbox de
@@ -1007,6 +1009,8 @@ type ThreadInfo struct {
 	Evidence  []Evidence     `json:"evidence"`
 	DocPath   string         `json:"doc_path"`
 	Pinned    bool           `json:"pinned"`
+	// La furia de IA, si está encendida y alguna regla disparó (fury.go).
+	Fury *fury.Verdict `json:"fury,omitempty"`
 }
 
 // StateView es un estado posible del proyecto; `group` dice qué significa
@@ -1092,6 +1096,7 @@ func ThreadGet(app core.App, auth *core.Record, id string) (ThreadInfo, error) {
 			}
 		}
 	}
+	v.Fury = ThreadFury(app, ws, th.Id)
 	return v, nil
 }
 

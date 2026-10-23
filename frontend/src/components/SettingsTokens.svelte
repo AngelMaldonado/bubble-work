@@ -12,7 +12,7 @@
   import ClientLogo from './ClientLogo.svelte';
   import AgentsMdBadge from './AgentsMdBadge.svelte';
   import { api, type AgentReleases, type AgentToken, type Person } from '../lib/api';
-  import { connectVersion, placeholderNote, setupPrompt, tokenPlaceholder } from '../lib/connect';
+  import { ANY_TOKEN, connectVersion, genericNote, placeholderNote, setupPrompt, tokenPlaceholder } from '../lib/connect';
   import { agentHealth, short } from '../lib/agentHealth';
   import { brandOf } from '../lib/agentClients';
   import HarnessCommands from './HarnessCommands.svelte';
@@ -111,6 +111,22 @@
   }
   const mcpUrl = `${location.origin}/mcp`;
 
+  // Siempre a mano, haya tokens o no: con el recién generado lo lleva dentro;
+  // sin él, un hueco y una nota que dice qué pegar.
+  let anyCopied = $state(false);
+  async function copyAny() {
+    try {
+      const text = fresh?.token
+        ? await setupPrompt(mcpUrl, fresh.token)
+        : genericNote() + (await setupPrompt(mcpUrl, ANY_TOKEN));
+      await navigator.clipboard.writeText(text);
+      anyCopied = true;
+      setTimeout(() => (anyCopied = false), 1800);
+    } catch {
+      error = 'El navegador no dejó copiar al portapapeles.';
+    }
+  }
+
   // ---- lo demás ----
   type Status = { key: 'revoked' | 'expired' | 'soon' | 'ok' | 'forever'; text: string };
   function status(t: AgentToken): Status {
@@ -166,6 +182,21 @@
   </p>
 
   {#if error}<p class="set-err" role="alert">{error}</p>{/if}
+
+  <!-- Siempre disponible: configurar el agente no debería depender de tener a
+       la vista un token recién generado. -->
+  <div class="set-card connect">
+    <Icon of="robot" tint size="2.6rem" />
+    <div class="grow">
+      <h3>Conectar tu agente</h3>
+      <p class="help">
+        Pégalo en tu asistente y se configura solo.{fresh?.token ? ' Lleva el token que acabas de generar.' : ''}
+      </p>
+    </div>
+    <button class="btn btn-sm preset-filled-primary-500" onclick={copyAny}>
+      {anyCopied ? '✓ copiado' : 'Copiar prompt de conexión'}
+    </button>
+  </div>
 
   <form class="set-card" onsubmit={create}>
     <h3>Generar un token</h3>
@@ -347,6 +378,9 @@
 
 <style>
   .grow { flex: 1; min-width: 14rem; }
+  .connect { display: flex; flex-wrap: wrap; align-items: center; gap: 0.9rem; }
+  .connect h3 { margin: 0 0 0.2rem; }
+  .connect .help { margin: 0; }
   .help { margin: 0 0 0.6rem; color: var(--faint); font-size: 0.8rem; line-height: 1.45; }
   /* El token recién generado sí se resalta (se enseña una vez): un fondo suave. */
   .fresh { padding: 1rem !important; border-radius: 12px; background: color-mix(in oklab, var(--accent) 10%, transparent) !important; }

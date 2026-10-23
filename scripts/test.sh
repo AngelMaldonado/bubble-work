@@ -1988,6 +1988,56 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
 
+# ------------------------------------------------------- furia de IA ----
+# Derivada (internal/fury): nunca se guarda, la apaga arreglar la causa. Las
+# reglas son del lead global; la función nace apagada.
+echo
+FT=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Pago urgente\"}" | j "['id']")
+tpatch "$C" "$FT" '{"priority":"P1","due_date":"2020-01-01 00:00:00.000Z"}' >/dev/null
+ftget(){ mcptext "${2:-$A}" thread_get "{\"thread\":\"$FT\"}" | python3 -c 'import sys,json;f=json.load(sys.stdin).get("fury");print("none" if not f else str(f["level"])+" "+",".join(r["rule"] for r in f["reasons"]))'; }
+frules(){ curl -s -X POST "$API/api/fury/rules" -H "Authorization: $1" -H "$JS" -d "$2"; }
+frulesc(){ code -X POST "$API/api/fury/rules" -H "Authorization: $1" -H "$JS" -d "$2"; }
+chk ">>> la furia nace apagada" "$(list features "$A" | j "['items'][0]['fury']")" False
+chk "...y apagada, un hilo P1 vencido no trae furia" "$(ftget)" none
+chk "...ni en el tablero" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any("fury" in x for x in d["threads"]+d["bubbles"]))')" False
+chk ">>> cualquiera lee las reglas" "$(curl -s "$API/api/fury/rules" -H "Authorization: $A" | j "['rules']['overdue']['level']")" 2
+chk ">>> un member no las escribe" "$(frulesc "$A" '{"reset":true}')" 403
+chk "...ni nadie por la API de registros" "$(pcode fury_rules "$C" '{"rules":{}}')" 403
+RULES=$(curl -s "$API/api/fury/rules" -H "Authorization: $C" | python3 -c 'import sys,json;r=json.load(sys.stdin)["rules"];r["overdue"]["late_level"]=5;print(json.dumps({"rules":r}))')
+chk ">>> un nivel fuera de 0–3 se rechaza" "$(frulesc "$C" "$RULES")" 400
+chk ">>> la vista previa es del lead global" "$(code -X POST "$API/api/fury/preview" -H "Authorization: $A" -H "$JS" -d '{}')" 403
+chk "...y calcula con la función apagada, para calibrar" \
+  "$(curl -s -X POST "$API/api/fury/preview" -H "Authorization: $C" -H "$JS" -d '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(i["fury"]["level"] for i in d["items"] if i["id"]=="'"$FT"'"))')" 3
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"fury":true}' >/dev/null
+chk ">>> encendida: P1 vencida hace años y sin asignados es 🔥 3" "$(ftget)" "3 overdue,ownerless"
+mefury(){ curl -s "$API/api/fury/me" -H "Authorization: $1" | python3 -c 'import sys,json;d=json.load(sys.stdin);its=[i["id"] for i in d["items"]];print(d["on"],d["level"]["level"],"'"$FT"'" in its, (its or [""])[0]=="'"$FT"'")'; }
+chk ">>> sin asignar, no es de alice: no está en lo suyo" "$(mefury "$A" | cut -d" " -f1,3)" "True False"
+chk "...con su nombre, su color y que parpadea" \
+  "$(mcptext "$A" thread_get "{\"thread\":\"$FT\"}" | python3 -c 'import sys,json;f=json.load(sys.stdin)["fury"];print(f["name"],f["color"],f["blink"])')" "Desatada red True"
+FB=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Cobros\"}" | j "['id']")
+tpatch "$A" "$FT" "{\"bubble\":\"$FB\"}" >/dev/null
+chk ">>> la burbuja toma la furia de su hilo abierto, y dice de cuál viene" \
+  "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json;b=[x for x in json.load(sys.stdin)["bubbles"] if x["id"]=="'"$FB"'"][0]["fury"];print(b["level"],b["reasons"][0]["thread_name"])')" "3 Pago urgente"
+tpatch "$C" "$FT" '{"sequence":1}' >/dev/null
+chk ">>> sequence_next trae la furia del hilo" \
+  "$(mcptext "$A" sequence_next '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(t["fury"]["level"] for t in d["now"]["threads"] if t["id"]=="'"$FT"'"))')" 3
+tpatch "$A" "$FT" "{\"assignees\":[\"$AID\"]}" >/dev/null
+chk ">>> asignarlo apaga «sin dueño», y queda lo vencido" "$(ftget)" "3 overdue"
+chk ">>> y ahora es de alice: su cabeza está desatada, por ese hilo primero" "$(mefury "$A")" "True 3 True True"
+chk "...y no está en lo de bob" "$(mefury "$B" | cut -d" " -f3)" "False"
+RULES=$(curl -s "$API/api/fury/rules" -H "Authorization: $C" | python3 -c 'import sys,json;r=json.load(sys.stdin)["rules"];r["overdue"]["on"]=False;print(json.dumps({"rules":r}))')
+chk ">>> el lead global apaga una regla" "$(frules "$C" "$RULES" | j "['rules']['overdue']['on']")" False
+chk "...y deja de disparar" "$(ftget)" none
+chk ">>> volver a las de serie" "$(frules "$C" '{"reset":true}' | j "['rules']['overdue']['on']")" True
+code -X POST "$API/api/threads/$FT/complete" -H "Authorization: $A" >/dev/null
+chk ">>> terminado, no hay furia" "$(ftget)" none
+chk "...y la burbuja se calma" \
+  "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json;print("fury" in [x for x in json.load(sys.stdin)["bubbles"] if x["id"]=="'"$FB"'"][0])')" False
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"fury":false}' >/dev/null
+chk ">>> apagada, la cabeza no se dibuja" "$(mefury "$A")" "False 0 False False"
+tpatch "$C" "$FT" '{"sequence":0}' >/dev/null
+
 # ------------------- las dos columnas laterales de la secuencia, paginadas ----
 #
 # Lo que está fuera de la línea y lo que ya se terminó crecen sin techo, así que

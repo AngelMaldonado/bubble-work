@@ -48,6 +48,8 @@ export type ThreadHeat = {
   /** cuándo vence ESTA pieza, un día. Independiente del plazo de su burbuja:
    *  aquél es el compromiso, éste es cómo se reparte. */
   due_date?: string;
+  /** furia de IA: sólo con la función encendida y si alguna regla disparó */
+  fury?: Fury;
 };
 
 /** Lo que pasa en una fecha y no es trabajo: una junta, un cierre, una visita.
@@ -126,6 +128,28 @@ export type BubbleHeat = {
   sequence?: number;
   due_date?: string;
   heat: Heat;
+  /** furia de IA: la suya y la de sus hilos abiertos, la más grave */
+  fury?: Fury;
+};
+
+/** Furia de IA (internal/fury): un nivel de 1 a 3 y las reglas que dispararon.
+ *  Se calcula sola; no cambia el calor ni el orden. */
+export type FuryLevel = { level: number; name: string; emoji: string; color: string; blink: boolean };
+export type FuryReason = { rule: string; level: number; text: string; thread?: string; thread_name?: string };
+export type Fury = FuryLevel & { reasons: FuryReason[] };
+
+/** El catálogo de reglas que edita el lead global. */
+export type FuryRules = {
+  inflated: { on: boolean; threads: number; words: number; active_days: number; age_days: number; level: number; double_level: number };
+  overdue: { on: boolean; level: number; late_days: number; late_level: number };
+  forgotten: { on: boolean; dormant_level: number; rip_level: number };
+  ownerless: { on: boolean; level: number };
+};
+export type FuryPreview = {
+  counts: { thread: number; bubble: number };
+  /** cuántas hay en cada nivel, del 0 al 3 */
+  levels: number[];
+  items: { kind: 'thread' | 'bubble'; id: string; name: string; workspace: string; seq?: number; fury: Fury }[];
 };
 
 export type Board = {
@@ -277,7 +301,7 @@ export type Person = {
 };
 
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
-export type Features = { id: string; sequence: boolean; roadmap?: boolean; /** Mi espacio; sin la columna (servidor viejo) cuenta como encendido */ space?: boolean; updated?: string };
+export type Features = { id: string; sequence: boolean; roadmap?: boolean; /** furia de IA */ fury?: boolean; /** Mi espacio; sin la columna (servidor viejo) cuenta como encendido */ space?: boolean; updated?: string };
 
 /** Lo que una persona eligió y tiene que seguirla entre dispositivos.
  *
@@ -1010,6 +1034,30 @@ class Api {
   /** Contra qué se compara lo que leyó cada agente. */
   agentReleases() {
     return this.call<AgentReleases>('/api/agents/release');
+  }
+
+  // ---- furia de IA ----
+
+  furyRules() {
+    return this.call<{ on: boolean; rules: FuryRules; defaults: FuryRules; levels: FuryLevel[] }>('/api/fury/rules');
+  }
+
+  /** Sólo el lead global. `reset` vuelve a las de serie. */
+  saveFuryRules(rules: FuryRules | null, reset = false) {
+    return this.call<{ on: boolean; rules: FuryRules }>('/api/fury/rules', {
+      method: 'POST',
+      body: JSON.stringify(reset ? { reset: true } : { rules }),
+    });
+  }
+
+  /** Mi furia: lo asignado a mí y las burbujas de las que respondo. */
+  myFury() {
+    return this.call<{ on: boolean; level: FuryLevel; items: FuryPreview['items'] }>('/api/fury/me');
+  }
+
+  /** Qué dispararía ahora con estas reglas, aunque la función esté apagada. */
+  furyPreview(rules: FuryRules) {
+    return this.call<FuryPreview>('/api/fury/preview', { method: 'POST', body: JSON.stringify({ rules }) });
   }
 
   // ---- gestión de personas (lead global) ----

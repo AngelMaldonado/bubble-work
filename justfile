@@ -71,7 +71,8 @@ migrate *ARGS:
 person +ARGS:
     scripts/person.sh {{ARGS}}
 
-# Example data in the DEV server, through its API. `just seed tags | docs | agents`
+# Example data in the DEV server, through its API. `just seed` runs them all;
+# `just seed tags | docs | fury | agents | artifacts` runs one.
 # (`agents`: simulated people, purged when the dev goes down)
 seed *ARGS:
     scripts/seed.sh {{ARGS}}

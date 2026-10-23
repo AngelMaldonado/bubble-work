@@ -19,6 +19,8 @@
   import PromptsView from './components/PromptsView.svelte';
   import Repos from './components/Repos.svelte';
   import ArtifactOrb from './components/ArtifactOrb.svelte';
+  import FuryOrb from './components/FuryOrb.svelte';
+  import { lastOpenBubble } from './lib/filters.svelte';
   import ThreadPins from './components/ThreadPins.svelte';
   import ArtifactView from './components/ArtifactView.svelte';
   import PersonalSpace from './components/PersonalSpace.svelte';
@@ -285,6 +287,16 @@
   function attentionGo(to: string) {
     rememberAttentionReturn(api.me?.id ?? 'local', path, to);
     go(to);
+  }
+
+  // Lo tuyo con furia: un hilo abre el hilo; una burbuja, su tablero con su
+  // cajón abierto (como desde la secuencia).
+  function openFury(it: { kind: string; id: string; workspace: string; seq?: number }) {
+    if (it.kind === 'thread' && it.seq) attentionGo(threadUrl(it.workspace, it.seq));
+    else {
+      lastOpenBubble.set(it.id);
+      attentionGo(boardUrl(it.workspace));
+    }
   }
 
   function back() {
@@ -1007,6 +1019,7 @@
           <Repos workspace={current} canWrite={hereLead} />
         {/if}
         <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />
+        <FuryOrb onopen={openFury} />
         <ThreadPins left onopen={attentionGo} />
       </div>
     {/snippet}
@@ -1072,6 +1085,7 @@
 {#if signedIn && ready && !onShell && path !== '/theme' && path !== '/theme/mock'}
   <div class="attention-dock">
     <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />
+    <FuryOrb onopen={openFury} />
     <ThreadPins thread={route.kind === 'thread' && open ? { id: open.id, name: open.name } : undefined} onopen={attentionGo} />
   </div>
 {/if}

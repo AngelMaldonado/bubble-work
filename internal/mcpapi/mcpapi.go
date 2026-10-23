@@ -336,7 +336,8 @@ func build() (*mcp.Server, *toolbox) {
 	add(tb, "Proyectos", reads, "Tablero del proyecto", &mcp.Tool{
 		Name: "project_board",
 		Description: "Qué flota en un proyecto y por qué: sus módulos (`bubbles`) con su banda, y sus " +
-			"hilos con calor, flotabilidad y prioridad. Nada de esto se guarda: se calcula ahora.",
+			"hilos con calor, flotabilidad y prioridad. Nada de esto se guarda: se calcula ahora. Con la furia de IA " +
+			"encendida, lo que está en problemas trae `fury`: su nivel y las razones.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in projArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1119,7 +1120,8 @@ func build() (*mcp.Server, *toolbox) {
 		Description: "Qué toca ahora en la secuencia de un equipo, y cuál es el primer hilo tuyo. Cada equipo tiene UNA secuencia de ejecución, puesta por el lead " +
 			"del equipo: `now` es el primer paso con hilos abiertos (varios = van en paralelo), `then` el paso " +
 			"siguiente, y `mine` el primer hilo abierto de la secuencia que es tuyo: asignado a ti, o sin " +
-			"asignar en un módulo del que respondes. Terminar un hilo hace avanzar la secuencia sola.",
+			"asignar en un módulo del que respondes. Terminar un hilo hace avanzar la secuencia sola. Un hilo en " +
+			"problemas trae `fury` (furia de IA): su nivel y las razones.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nextArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1304,7 +1306,8 @@ func build() (*mcp.Server, *toolbox) {
 		Name: "thread_get",
 		Description: "La ficha de un hilo, todo lo que no es su documento: proyecto, módulo, estado (y los " +
 			"estados posibles), asignados, etiquetas, fecha, prioridad, lugar en la secuencia, relaciones, " +
-			"evidencia y si lo tienes fijado. Su documento se lee con `document_read`.",
+			"evidencia y si lo tienes fijado; y `fury` si la furia de IA dice que está en problemas. Su documento " +
+			"se lee con `document_read`.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in threadArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {

@@ -38,7 +38,7 @@
 </script>
 
 {#if name && !broken && danger}
-  <span class="icon tinted danger" style:--icon-size={size}
+  <span class="icon tinted danger" data-icon={name} style:--icon-size={size}
     role={label ? 'img' : undefined} aria-label={label || undefined} aria-hidden={label ? undefined : 'true'}>
     <svg class="filter-def" width="0" height="0" aria-hidden="true" focusable="false">
       <defs>
@@ -53,17 +53,17 @@
       style:filter={`url(#${filterId})`} onerror={() => (broken = true)} />
   </span>
 {:else if name && !broken && tint}
-  <span class="icon tinted" style:--icon-size={size}
+  <span class="icon tinted" data-icon={name} style:--icon-size={size}
     role={label ? 'img' : undefined} aria-label={label || undefined} aria-hidden={label ? undefined : 'true'}>
     <img src={iconSrc(name, tintSrc)} alt="" loading="lazy" decoding="async"
       onerror={() => (tintSrc === 'tint' ? (tintSrc = 'color') : (broken = true))} />
   </span>
 {:else if name && !broken && clay}
-  <span class="icon tinted" style:--icon-size={size} aria-hidden={label ? undefined : 'true'} aria-label={label || undefined}>
+  <span class="icon tinted" data-icon={name} style:--icon-size={size} aria-hidden={label ? undefined : 'true'} aria-label={label || undefined}>
     <img src={iconSrc(name, 'clay')} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
   </span>
 {:else if name && !broken}
-  <span class="icon" class:lit style:--icon-size={size}
+  <span class="icon" class:lit data-icon={name} style:--icon-size={size}
     role={label ? 'img' : undefined} aria-label={label || undefined} aria-hidden={label ? undefined : 'true'}>
     <img class="still" src={iconSrc(name, 'clay')} alt="" loading="lazy" decoding="async" onerror={() => (broken = true)} />
     <img class="glow" src={iconSrc(name, 'color')} alt="" loading="lazy" decoding="async" />

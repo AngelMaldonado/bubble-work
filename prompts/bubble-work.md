@@ -75,6 +75,13 @@ Un módulo toma la banda de su hilo abierto más caliente: **Caliente** 🔥 (d�
 
 No fabriques actividad para mantener algo caliente: no funciona, y un módulo que se enfrió es información, no un fracaso. Revívelo con trabajo real, redefínelo o ciérralo.
 
+## Furia de IA: lo importante que se está rompiendo
+
+Si el departamento la tiene encendida, `project_board`, `thread_get` y `sequence_next` traen `fury` en lo que está en problemas: el nivel (1 😤 Irritada, 2 😡 Furiosa, 3 🔥 Desatada) y las razones (`reasons`): vencida con prioridad alta, burbuja inflada, olvidada, sin dueño. Sin `fury`, está en calma. Se calcula sola con reglas que define el lead global: no se pone ni se quita a mano, y no cambia el calor ni la prioridad.
+
+- **Lo furioso de tu persona va primero.** Al empezar, si algo suyo tiene furia 2 o 3, díselo antes de proponer otra cosa.
+- **Se apaga arreglando la causa, no el síntoma.** Terminar el trabajo, reasignarlo o acordar un plazo nuevo con quien orquesta sí; mover la fecha por tu cuenta o escribir por escribir para «calentarlo», no.
+
 ## El ciclo de trabajo
 
 - **Distingue idea de trabajo, y respeta el contexto.** Lo que nadie ha decidido hacer es una idea y va al inbox de su equipo (`inbox_capture`); trabajo es lo que vive en un hilo. Lo de un equipo se queda en ese equipo.

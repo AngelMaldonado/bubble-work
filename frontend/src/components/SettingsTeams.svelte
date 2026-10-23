@@ -76,15 +76,12 @@
   }
 
   // Funciones por equipo: hereda (lo del departamento), encendida o apagada.
-  // `inherit` y no '' en el selector: un FilterPick toma '' por «sin elegir».
-  const yesNo = (on: boolean) => (on ? 'sí' : 'no');
-  const featureItems = (on: boolean) => [
-    { value: 'inherit', label: `Hereda (${yesNo(on)})` },
-    { value: 'on', label: 'Encendida' },
-    { value: 'off', label: 'Apagada' },
+  const CHOICES: { value: TeamFeatureValue; label: string }[] = [
+    { value: '', label: 'Hereda' },
+    { value: 'on', label: 'Sí' },
+    { value: 'off', label: 'No' },
   ];
-  function setFeature(t: Team, key: TeamFeatureKey, v: string) {
-    const value = (v === 'inherit' ? '' : v) as TeamFeatureValue;
+  function setFeature(t: Team, key: TeamFeatureKey, value: TeamFeatureValue) {
     if ((t.features?.[key] ?? '') === value) return;
     run(`feat:${t.id}`, () => api.setTeamFeature(t.id, key, value));
   }
@@ -160,18 +157,24 @@
         {#each TEAM_FEATURES as f (f.key)}
           {@const own = t.features?.[f.key] ?? ''}
           {@const on = teamFeatureOn(features, t, f.key)}
-          <div class="feat">
-            <span class="feat-name">{f.label}</span>
-            {#if lead}
-              <span class="feat-pick">
-                <FilterPick items={featureItems(!!features[f.key])} value={own || 'inherit'} allowEmpty={false}
-                  label={`${f.label} en ${t.name}`} onchange={(v) => v && setFeature(t, f.key, v)} />
+          <!-- Una tarjeta por función: el ícono a color si está encendida, en
+               barro si no; abajo, quién lo decide. -->
+          <div class="feat" class:on>
+            <Icon of={f.icon} tint={on} clay={!on} size="2.4rem" />
+            <div class="feat-body">
+              <b class="feat-name">{f.label}</b>
+              <span class="feat-state">
+                {on ? 'Encendida' : 'Apagada'}{own ? ' por el equipo' : ', heredada'}
               </span>
-            {:else}
-              <span class="feat-state" class:on title={own ? 'lo decidió el equipo' : 'como el departamento'}>
-                {on ? 'encendida' : 'apagada'}{own ? '' : ' · departamento'}
-              </span>
-            {/if}
+              {#if lead}
+                <span class="seg" role="radiogroup" aria-label={`${f.label} en ${t.name}`}>
+                  {#each CHOICES as c (c.value)}
+                    <button type="button" role="radio" aria-checked={own === c.value} class:sel={own === c.value}
+                      disabled={!!busy} onclick={() => setFeature(t, f.key, c.value)}>{c.label}</button>
+                  {/each}
+                </span>
+              {/if}
+            </div>
           </div>
         {/each}
       </div>
@@ -241,10 +244,14 @@
   .role-pick { width: 9rem; flex: 0 1 9rem; }
   .role-fixed { padding: 0.2rem 0.6rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.8rem; font-weight: 700; }
   .grow { flex: 1; min-width: 0; }
-  .feats { display: flex; flex-wrap: wrap; gap: 0.5rem 1.25rem; }
-  .feat { display: flex; align-items: center; gap: 0.5rem; }
-  .feat-name { font-size: 0.85rem; font-weight: 600; }
-  .feat-pick { width: 11rem; flex: 0 1 11rem; }
-  .feat-state { padding: 0.15rem 0.55rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.78rem; }
-  .feat-state.on { background: color-mix(in oklab, var(--color-success-500) 16%, transparent); color: var(--text); }
+  .feats { display: grid; grid-template-columns: repeat(auto-fill, minmax(15rem, 1fr)); gap: 0.6rem; }
+  .feat { display: flex; align-items: flex-start; gap: 0.7rem; padding: 0.7rem 0.8rem; border-radius: 12px; border: 1px solid var(--line); background: var(--hover); }
+  .feat.on { background: color-mix(in oklab, var(--color-success-500) 9%, transparent); }
+  .feat-body { display: grid; gap: 0.2rem; min-width: 0; }
+  .feat-name { font-size: 0.92rem; }
+  .feat-state { color: var(--muted); font-size: 0.76rem; }
+  .seg { display: inline-flex; margin-top: 0.25rem; padding: 2px; border-radius: 999px; background: var(--line); justify-self: start; }
+  .seg button { padding: 0.15rem 0.7rem; border-radius: 999px; color: var(--muted); font-size: 0.78rem; }
+  .seg button.sel { background: var(--surface, #fff); color: var(--text); font-weight: 700; box-shadow: 0 1px 2px rgb(0 0 0 / 0.12); }
+  .seg button:not(.sel):hover { color: var(--text); }
 </style>

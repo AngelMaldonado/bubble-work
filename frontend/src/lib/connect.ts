@@ -90,6 +90,13 @@ export function harnessCommands(url: string, token: string, version = ''): Harne
 export function tokenPlaceholder(prefix: string) {
   return `<TU_TOKEN ${prefix}…>`;
 }
+/** El prompt sin un token concreto: lo que se copia desde la tarjeta fija de
+ *  Ajustes → Agente, que está siempre aunque no haya ningún token. */
+export const ANY_TOKEN = '<TU_TOKEN>';
+export function genericNote() {
+  return `Antes de seguir: este prompt no trae el token. Reemplaza ${ANY_TOKEN} por un token de Bubble Work tuyo (empieza con bw_; se genera en Ajustes → Agente y se enseña una sola vez). Si no tienes uno, pídeme que genere uno nuevo y espera a que te lo dé.\n\n`;
+}
+
 export function placeholderNote(name: string, prefix: string) {
   return `Antes de seguir: este prompt no trae el token, porque Bubble Work no lo vuelve a enseñar. Reemplaza ${tokenPlaceholder(prefix)} por el token «${name}» que guardaste al generarlo (empieza con ${prefix}). Si no lo tienes, pídeme que genere uno nuevo.\n\n`;
 }

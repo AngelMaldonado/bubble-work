@@ -1163,7 +1163,7 @@
     width: max-content; max-width: calc(100% - 2rem);
   }
   /* Sin lugar al centro entre las esquinas de abajo: sube sobre ellas. */
-  @media (max-width: 1150px) { .rm-filters { bottom: 4.75rem; } }
+  @media (max-width: 1320px) { .rm-filters { bottom: 4.75rem; } }
   /* Lo que el badge recibió del camino: el mes con su año, y la semana. */
   .ctx { display: flex; align-items: baseline; gap: 0.45rem; padding-left: 0.6rem; border-left: 1px solid var(--line); }
   .ctx-month { font-size: 1.2rem; color: var(--text); }

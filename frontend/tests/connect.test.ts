@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { harnessCommands, placeholderNote, tokenPlaceholder } from '../src/lib/connect';
+import { ANY_TOKEN, genericNote, harnessCommands, placeholderNote, tokenPlaceholder } from '../src/lib/connect';
 
 const url = 'https://bubble.example/mcp';
 const tok = 'bw_abc';
@@ -49,4 +49,10 @@ test('con versión, la cabecera X-Bubble-Connect va en cada harness', () => {
 
 test('sin versión (servidor viejo) los comandos quedan como antes', () => {
   for (const h of harnessCommands(url, tok)) expect(h.code + h.how).not.toContain('X-Bubble-Connect');
+});
+
+test('la nota genérica dice qué pegar en el hueco', () => {
+  expect(ANY_TOKEN).toBe('<TU_TOKEN>');
+  expect(genericNote()).toContain('Reemplaza <TU_TOKEN>');
+  expect(genericNote()).toContain('bw_');
 });

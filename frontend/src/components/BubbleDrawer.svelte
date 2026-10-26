@@ -17,6 +17,7 @@
   import { ago } from '../lib/when';
   import { edgeFade } from '../lib/fade.svelte';
   import type { Lifecycle } from '../lib/api';
+  import { matchingPeople, named } from '../lib/people';
   import { limited } from '../lib/limits.svelte';
   import Prose from './Prose.svelte';
   import PriorityBadge from './PriorityBadge.svelte';
@@ -132,7 +133,10 @@
   const fade = edgeFade();
 
   let fresh = $state('');
-  const nameOf = (id: string) => people.find((p) => p.id === id)?.name ?? 'Persona no disponible';
+  const nameOf = (id: string) => {
+    const person = people.find((p) => p.id === id);
+    return person ? named({ display_name: person.name }) : 'Persona no disponible';
+  };
 
   // Skeleton's Combobox, multiple. Not a native `<select multiple>`, which on a
   // Mac is a scrolling box you ⌘-click into and on every platform is a control
@@ -140,9 +144,7 @@
   // you type; who is already on it is drawn as chips underneath, because the
   // input shows what you are SEARCHING and the chips show what is true.
   let hunting = $state('');
-  const shortlist = $derived(
-    people.filter((p) => p.name.toLowerCase().includes(hunting.trim().toLowerCase())),
-  );
+  const shortlist = $derived(matchingPeople(people, hunting));
   // «¿De qué trata?»: el brief del planeador, leído aquí mismo.
   //
   // El brief es lo que el planeador escribe —por qué, qué incluye, lo que se

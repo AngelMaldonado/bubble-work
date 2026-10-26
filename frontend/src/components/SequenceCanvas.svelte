@@ -20,7 +20,9 @@
   import type { SeqThread } from './SequencePane.svelte';
   import Glyphs from './Glyphs.svelte';
   import Icon from './Icon.svelte';
-  import { Navigation } from '@skeletonlabs/skeleton-svelte';
+  import { Navigation, Menu, Portal } from '@skeletonlabs/skeleton-svelte';
+  import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
+  import CheckIcon from '@lucide/svelte/icons/check';
   import Loading from './Loading.svelte';
   import { api } from '../lib/api';
   import { sequenceLayers, connectSequence, sequenceChanges } from '../lib/sequencePlan';
@@ -40,6 +42,7 @@
     what = 'módulos',
     completeLabel = '🏆 Cerrar',
     modes,
+    modesBottom = false,
     readonly = false,
     loading = false,
     edgeToEdge = false,
@@ -47,6 +50,7 @@
     entriesOn = false,
     onentry,
     onentrydrop,
+    titleMenu,
   }: {
     threads?: SeqThread[];
     queue?: SeqThread[];
@@ -60,6 +64,8 @@
     what?: string;
     completeLabel?: string;
     modes?: Snippet;
+    /** los filtros de sólo lectura van en una píldora abajo al centro, no en la esquina */
+    modesBottom?: boolean;
     readonly?: boolean;
     loading?: boolean;
     edgeToEdge?: boolean;
@@ -73,6 +79,9 @@
      *  el id del hilo nuevo (o nada si se canceló). El lienzo la deja donde
      *  se soltó, igual que algo arrastrado desde la cola. */
     onentrydrop?: (id: string) => Promise<string | null | undefined> | string | null | undefined;
+    /** El título se vuelve un menú: elegir qué secuencia se ve (en «Todos los
+     *  equipos», el equipo). `title` sigue siendo lo que se lee en la insignia. */
+    titleMenu?: { label: string; options: { value: string; label: string }[]; value: string; onselect: (value: string) => void };
   } = $props();
 
   const W = 230; // ancho de un nodo
@@ -198,6 +207,15 @@
     view = { x: r.width / 2 - W / 2 + 120, y: 112, z: 1 };
   });
 
+  // Una secuencia vacía se abre con su mensaje al centro.
+  let emptyCentered = false;
+  $effect(() => {
+    if (loading || nodes.length || !canvas) { if (nodes.length) emptyCentered = false; return; }
+    if (emptyCentered) return;
+    emptyCentered = true;
+    centerOrigin();
+  });
+
   function toWorld(cx: number, cy: number) {
     const r = canvas!.getBoundingClientRect();
     return { x: (cx - r.left - view.x) / view.z, y: (cy - r.top - view.y) / view.z };
@@ -222,8 +240,16 @@
     const z = Math.min(1.8, Math.max(0.35, view.z * f));
     view = { x: px - ((px - view.x) * z) / view.z, y: py - ((py - view.y) * z) / view.z, z };
   }
+  // Sin pasos, el mensaje vive en el origen del lienzo (como en Mi espacio):
+  // encuadrar es centrarlo.
+  function centerOrigin() {
+    if (!canvas) return;
+    const r = canvas.getBoundingClientRect();
+    view = { x: r.width / 2, y: r.height / 2, z: 1 };
+  }
   function fit() {
-    if (!canvas || !nodes.length) return;
+    if (!canvas) return;
+    if (!nodes.length) { centerOrigin(); return; }
     const ps = nodes.map(at);
     const x0 = Math.min(...ps.map((p) => p.x)), x1 = Math.max(...ps.map((p) => p.x + W));
     const y0 = Math.min(...ps.map((p) => p.y - 44)), y1 = Math.max(...ps.map((p) => p.y + H + 36));
@@ -447,12 +473,48 @@
     }}
     ondragleave={() => (dropping = false)}
     ondrop={drop}>
-    <header class="head">
-      <span class="pane-name display"><Glyphs text={title} tint /></span>
-      <span class="count" title="pasos en la secuencia">{layers.length}</span>
-      {#if saving}<Loading compact label="Guardando secuencia" />{/if}
-      {#if saveError}<span class="sync" role="alert">{saveError}</span>{/if}
-    </header>
+    <!-- Arriba: los controles en el borde izquierdo y el badge al centro (la
+         tercera columna va vacía y sin eventos). -->
+    <div class="topbar">
+      <div class="ctrl">
+        <button onclick={() => zoomBy(1 / 1.2)} title="Alejar">−</button>
+        <span>{Math.round(view.z * 100)}%</span>
+        <button onclick={() => zoomBy(1.2)} title="Acercar">+</button>
+        <button onclick={fit} title="Ver todo">⤢</button>
+      </div>
+      <header class="head">
+        {#if titleMenu}
+          <Menu positioning={{ placement: 'bottom' }} onSelect={(e: { value: string }) => titleMenu.onselect(e.value)}>
+            <Menu.Trigger>
+              {#snippet element(attributes: Record<string, unknown>)}
+                <button {...attributes} class="title-pick" aria-label={`${titleMenu.label}: ${titleMenu.options.find((o) => o.value === titleMenu.value)?.label ?? ''}`}>
+                  <span class="pane-name display"><Glyphs text={title} tint /></span>
+                  <ChevronDownIcon class="size-4 chev" aria-hidden="true" />
+                </button>
+              {/snippet}
+            </Menu.Trigger>
+            <Portal>
+              <Menu.Positioner>
+                <Menu.Content class="shell-menu team-menu">
+                  {#each titleMenu.options as o (o.value)}
+                    <Menu.Item value={o.value}>
+                      <span class="face"><Icon of="people" tint /></span>
+                      <Menu.ItemText>{o.label}</Menu.ItemText>
+                      {#if o.value === titleMenu.value}<CheckIcon class="size-4 check" aria-label="actual" />{/if}
+                    </Menu.Item>
+                  {/each}
+                </Menu.Content>
+              </Menu.Positioner>
+            </Portal>
+          </Menu>
+        {:else}
+          <span class="pane-name display"><Glyphs text={title} tint /></span>
+        {/if}
+        <span class="count" title="pasos en la secuencia">{layers.length}</span>
+        {#if saving}<Loading compact label="Guardando secuencia" />{/if}
+        {#if saveError}<span class="sync" role="alert">{saveError}</span>{/if}
+      </header>
+    </div>
 
     <div class="world" style:transform="translate({view.x}px, {view.y}px) scale({view.z})">
       {#each parallel as group (group.step)}
@@ -522,24 +584,19 @@
             onpointerdown={(e) => startLink(e, t.id)}>+</button>{/if}
         </div>
       {/each}
+      {#if !loading && !nodes.length}
+        <!-- En el origen del lienzo, no pegado a la pantalla: se mueve con él,
+             como en Mi espacio. -->
+        <div class="origin">
+          <Icon of="compass" size="3.5rem" tint />
+          <p>{readonly ? 'Todavía no hay pasos de esta secuencia en tu alcance.' : `Arrastra ${what} desde la caja para armar la secuencia. El primero que sueltes es el paso 1.`}</p>
+        </div>
+      {/if}
     </div>
 
-    {#if loading}<div class="loading-layer"><Loading /></div>
-    {:else if !nodes.length}
-      <div class="empty">
-        <Icon of="compass" size="3.5rem" tint />
-        <p>{readonly ? 'Todavía no hay pasos de esta secuencia en tu alcance.' : `Arrastra ${what} desde la caja para armar la secuencia. El primero que sueltes es el paso 1.`}</p>
-      </div>
-    {/if}
+    {#if loading}<div class="loading-layer"><Loading /></div>{/if}
 
-    <div class="ctrl">
-      <button onclick={() => zoomBy(1 / 1.2)} title="Alejar">−</button>
-      <span>{Math.round(view.z * 100)}%</span>
-      <button onclick={() => zoomBy(1.2)} title="Acercar">+</button>
-      <button onclick={fit} title="Ver todo">⤢</button>
-    </div>
-
-    {#if readonly && modes}<div class="read-modes">{@render modes()}</div>{/if}
+    {#if readonly && modes}<div class="read-modes" class:bottom={modesBottom}>{@render modes()}</div>{/if}
   </div>
   </div>
 </div>
@@ -549,27 +606,47 @@
   .loading-layer { position: absolute; inset: 0; pointer-events: none; }
   @media (max-width: 1000px) { .read-modes { top: 4.75rem; max-width: min(18rem, calc(100% - 2rem)); } }
   .wrap { display: flex; flex-direction: column; height: 100%; min-height: 0; }
+  .topbar {
+    position: absolute; top: 1rem; left: 1rem; right: 1rem; z-index: 4;
+    display: grid; grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr); align-items: center; gap: 0.6rem;
+    pointer-events: none;
+  }
+  .topbar > * { pointer-events: auto; }
+  .topbar > .ctrl { grid-column: 1; justify-self: start; }
+  .topbar > .head { grid-column: 2; max-width: none; }
+  /* Los filtros de sólo lectura, abajo al centro, planos en el HUD: cada grupo
+     lleva su propio borde, sin otra píldora alrededor. */
+  .wrap .read-modes.bottom {
+    left: 50%; top: auto; bottom: 1rem; transform: translateX(-50%);
+    display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.5rem;
+    width: max-content; max-width: calc(100% - 2rem); cursor: default;
+  }
+  /* Sin lugar al centro entre las esquinas de abajo: sube sobre ellas. */
+  @media (max-width: 1320px) { .wrap .read-modes.bottom { bottom: 4.75rem; } }
   .head {
-    position: absolute;
-    top: 1rem;
-    left: 50%;
-    transform: translateX(-50%);
-    z-index: 4;
+    position: relative;
     display: flex;
     align-items: center;
     gap: 0.5rem;
     min-height: 42px;
+    max-width: calc(100% - 2rem);
+    flex-wrap: wrap;
+    justify-content: center;
     padding: 0.5rem 0.9rem;
     border: 1px solid var(--line);
-    border-radius: 999px;
+    border-radius: 26px;
     background: var(--surface-solid);
     box-shadow: 0 4px 16px rgb(0 0 0 / 0.16);
     cursor: default;
   }
   .pane-name { font-size: 1.5rem; white-space: nowrap; }
+  .title-pick { display: inline-flex; align-items: center; gap: 0.35rem; padding: 0 0.2rem 0 0; border-radius: 12px; }
+  .title-pick:hover { color: var(--accent); }
+  .title-pick:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+  .title-pick :global(.chev) { color: var(--muted); }
   .count { padding: 0 0.45rem; border-radius: 999px; background: var(--hover); font-size: 0.75rem; }
   .sync { font-size: 0.76rem; color: var(--muted); }
-  @media (max-width: 650px) { .head { left: auto; right: 1rem; transform: none; } }
+
   .plus:disabled { opacity: 0.5; cursor: wait; }
 
   /* El lienzo: puntos que se mueven y escalan con la vista, así se lee
@@ -585,6 +662,8 @@
     background-position: var(--gx) var(--gy);
     cursor: grab;
     touch-action: none;
+    /* Un gesto de trackpad que llega al borde no rebota el pane entero. */
+    overscroll-behavior: contain;
     user-select: none;
     -webkit-user-select: none;
   }
@@ -710,24 +789,10 @@
   }
   .plus:hover { transform: scale(1.18); background: var(--accent); color: white; }
 
-  .empty {
-    position: absolute;
-    inset: 0;
-    display: grid;
-    place-content: center;
-    justify-items: center;
-    gap: 0.7rem;
-    color: var(--muted);
-    text-align: center;
-    pointer-events: none;
-  }
-  .empty p { max-width: 22rem; }
+  .origin { position: absolute; left: 0; top: 0; width: 22rem; transform: translate(-50%, -50%); display: grid; justify-items: center;
+    gap: 0.7rem; color: var(--muted); text-align: center; pointer-events: none; }
 
   .ctrl {
-    position: absolute;
-    top: 1rem;
-    right: 1rem;
-    z-index: 4;
     display: flex;
     align-items: center;
     gap: 0.2rem;
@@ -738,8 +803,6 @@
     font-size: 0.78rem;
     box-shadow: 0 4px 14px rgb(0 0 0 / 0.15);
   }
-  /* Presence owns the first top-right row, regardless of avatar count. */
-  .edge-to-edge .ctrl { top: 4rem; }
   .ctrl button { width: 26px; height: 26px; border: 0; border-radius: 999px; background: none; color: var(--text); cursor: pointer; }
   .ctrl button:hover { background: var(--hover); }
   .ctrl span { min-width: 2.8rem; text-align: center; color: var(--muted); }
@@ -770,10 +833,14 @@
   .new { flex: none; padding: 0.45rem; border-radius: 8px; }
   .new:hover { background: var(--hover); }
   @media (max-width: 650px) {
-    .ctrl { top: auto; bottom: 6rem; }
+    /* En un teléfono no cabe la fila: cada pieza vuelve a su esquina. */
+    .topbar { display: contents; }
+    .head { position: absolute; z-index: 4; top: 1rem; right: 1rem; max-width: calc(100% - 2rem); }
+    .ctrl { position: absolute; z-index: 4; bottom: 6rem; right: 1rem; }
     .edge-to-edge .head { top: 4rem; }
     .edge-to-edge .read-modes { top: 8rem; }
-    .edge-to-edge .ctrl { top: auto; bottom: 10.5rem; }
+    .edge-to-edge .ctrl { bottom: 13rem; }
+    .wrap .read-modes.bottom { bottom: 4.75rem; }
   }
   @media (prefers-reduced-motion: reduce) { .node, .wrap :global(.toolbox) { transition: none; } }
   .find { font-size: 0.82rem; }

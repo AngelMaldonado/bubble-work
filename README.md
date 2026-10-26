@@ -96,6 +96,36 @@ also administers people, tokens and prompts) leads every shared team. A
 another global lead; working with someone there means inviting them to a
 *workspace*, which shows them that workspace and nothing else of the team.
 
+A global lead can also read **All teams**: a *view*, not a team, that puts the
+shared teams side by side (the board together; one team's sequence at a time,
+chosen from its title) and leaves every personal team out, including their own. It is never
+where work is created or planned — creating asks for a team, and the planner
+asks you to enter one — and it never becomes the default team the server and
+agents write to.
+
+### 2.0.1 Tags — what the work is about
+
+A thread's **tags** say what it is about (`payments`, `customer/acme`…). They
+live in the frontmatter of its own document, written by the person and their
+AI, who know their area — there is no catalogue to maintain:
+
+```markdown
+---
+tags: [payments, customer/acme]
+---
+```
+
+The server reads them (case-insensitive, without `#`, `/` for hierarchy) and
+keeps an index; nothing else is authoritative. Changing only the tags is
+classification, not production: it earns no heat and does not count as a
+pulse. Tags grant no access and change no dates, owners or priority.
+
+The board shows the same work two ways: **Flotation** (the default — heat as
+height) and **Blobs** (a spatial map where each blob is a tag), each for
+**Bubbles** or **Threads**. A thread sits in the blob of its first tag; a
+bubble, in the first tag most common among its threads. Sharing a tag never
+draws a line between two pieces of work; only a declared relation does.
+
 ### 2.1 Workspace — the boundary
 
 The outermost container. It can be **abstract** (a project, a domain) or
@@ -510,6 +540,12 @@ says `dev`, because `v1.0.0-12-gabc1234` is not a version anybody released.
 
 v0 — a different program that mirrored Plane — is archived at the tag
 `v0-plane-as-record`.
+
+## Proposed model evolution — not built
+
+A confirmed definition is being designed in [Burbujas, thread #3](https://bubble.ayetec.space/w/ws-nbu6tp/t/3): a capture would be a durable thread from birth, even without a project, and become executable only by explicit activation. Claiming, commitments and contextual reminders would add a third derived signal — **fury**, separate from heat and priority — without making urgency look like evidence. Shared-team inbox visibility would expand deliberately; personal spaces and restricted projects would remain protected.
+
+This is **not the running model described above**, except for two parts already built: the All teams view (§2.0) and the board's Blobs layout over frontmatter tags (§2.0.1), which shows no fury. The rest — captures as threads, activation, commitments, fury, notices — still needs review; no model migration or feature rollout is implied by this document. With `just dev` running, the fixture-only prototype is available at **http://localhost:5173/theme/model**, without signing in or accessing real work, and is where fury can be seen. This entry is development-only and excluded from production builds; `/todos` remains the actual board. See [`PLAN.md`](./PLAN.md) for status and the durable design link.
 
 ## Documentation
 

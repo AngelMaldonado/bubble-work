@@ -1,0 +1,58 @@
+import { expect, test } from 'bun:test';
+import { ANY_TOKEN, genericNote, harnessCommands, placeholderNote, tokenPlaceholder } from '../src/lib/connect';
+
+const url = 'https://bubble.example/mcp';
+const tok = 'bw_abc';
+
+test('los tres harness llevan la URL y el token', () => {
+  const hs = harnessCommands(url, tok);
+  expect(hs.map((h) => h.id)).toEqual(['claude', 'codex', 'antigravity']);
+  for (const h of hs) {
+    expect(h.code).toContain(url);
+    expect(h.code).toContain(tok);
+  }
+});
+
+test('Claude Code: comando http con la cabecera', () => {
+  const c = harnessCommands(url, tok)[0].code;
+  expect(c).toContain('claude mcp add --scope user --transport http bubble-work https://bubble.example/mcp');
+  expect(c).toContain('--header "Authorization: Bearer bw_abc"');
+});
+
+test('Codex: el token por variable de entorno', () => {
+  const c = harnessCommands(url, tok)[1].code;
+  expect(c).toContain('export BUBBLE_WORK_TOKEN="bw_abc"');
+  expect(c).toContain('codex mcp add bubble-work --url https://bubble.example/mcp --bearer-token-env-var BUBBLE_WORK_TOKEN');
+});
+
+test('Antigravity: JSON válido con serverUrl y headers', () => {
+  const j = JSON.parse(harnessCommands(url, tok)[2].code);
+  expect(j.mcpServers['bubble-work']).toEqual({ serverUrl: url, headers: { Authorization: 'Bearer bw_abc' } });
+});
+
+test('el hueco del token dice cuál pegar', () => {
+  expect(tokenPlaceholder('bw_WzQ6PU')).toBe('<TU_TOKEN bw_WzQ6PU…>');
+  expect(placeholderNote('Local', 'bw_WzQ6PU')).toContain('«Local»');
+});
+
+test('con versión, la cabecera X-Bubble-Connect va en cada harness', () => {
+  const [claude, codex, anti] = harnessCommands(url, tok, 'a3f1c2d4e5f60718');
+  expect(claude.code).toContain('--header "X-Bubble-Connect: a3f1c2d4e5f60718"');
+  // Codex no la acepta en `mcp add`: va a su config.toml, explicado.
+  expect(codex.code).not.toContain('X-Bubble-Connect');
+  expect(codex.how).toContain('http_headers = { "X-Bubble-Connect" = "a3f1c2d4e5f60718" }');
+  expect(JSON.parse(anti.code).mcpServers['bubble-work'].headers).toEqual({
+    Authorization: 'Bearer bw_abc',
+    'X-Bubble-Connect': 'a3f1c2d4e5f60718',
+  });
+});
+
+test('sin versión (servidor viejo) los comandos quedan como antes', () => {
+  for (const h of harnessCommands(url, tok)) expect(h.code + h.how).not.toContain('X-Bubble-Connect');
+});
+
+test('la nota genérica dice qué pegar en el hueco', () => {
+  expect(ANY_TOKEN).toBe('<TU_TOKEN>');
+  expect(genericNote()).toContain('Reemplaza <TU_TOKEN>');
+  expect(genericNote()).toContain('bw_');
+});

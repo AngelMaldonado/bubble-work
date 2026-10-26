@@ -16,6 +16,8 @@ export const ICONS = [
   'eyes', 'pencil', 'cabinet', 'sun', 'moon', 'theme', 'robot', 'gear', 'door',
   'paperclip', 'map', 'tools', 'document', 'key', 'warning', 'question', 'arrow',
   'target', 'numbers', 'image', 'link', 'brain', 'prompt',
+  // La furia de IA: la cabeza del robot con cuatro ánimos (internal/fury).
+  'zen', 'irritated', 'furious', 'unleashed',
 ] as const;
 export type IconName = (typeof ICONS)[number];
 
@@ -28,7 +30,14 @@ const byEmoji: Record<string, IconName> = {
   '📎': 'paperclip', '🗺': 'map', '🛠': 'tools', '📄': 'document', '🔑': 'key',
   '⚠': 'warning', '❓': 'question', '➡': 'arrow', '🎯': 'target', '🔢': 'numbers',
   '🖼': 'image', '🔗': 'link', '🧠': 'brain', '📜': 'prompt',
+  // 🔥 sigue siendo el calor: «Desatada» se pide por nombre (furyIcon).
+  '😌': 'zen', '😤': 'irritated', '😡': 'furious',
 };
+
+/** El ícono de un nivel de furia, del 0 al 3. Por nombre y no por emoji: el 🔥
+ *  de «Desatada» es el mismo que el de la banda caliente del calor. */
+export const furyIcon = (level: number): IconName =>
+  (['zen', 'irritated', 'furious', 'unleashed'] as const)[Math.max(0, Math.min(3, level))];
 
 /** El ícono de un emoji o de un nombre; null si no hay ninguno (se dibuja el texto). */
 export function iconFor(of: string): IconName | null {

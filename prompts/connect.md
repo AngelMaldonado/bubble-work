@@ -5,8 +5,9 @@ Hazlo SÓLO PARA TI — el asistente con el que estoy hablando ahora. No configu
 Protocolo: HTTP (streamable http)
 URL: {{url}}
 Autenticación: envía la cabecera  Authorization: Bearer {{token}}
+Versión de esta instalación: envía también la cabecera  X-Bubble-Connect: {{version}}
 
-Averigua cuál es el archivo de configuración que tú mismo lees y sigue tu propio esquema para un servidor HTTP con cabeceras personalizadas, en vez de adivinar la ruta.
+Averigua cuál es el archivo de configuración que tú mismo lees y sigue tu propio esquema para un servidor HTTP con cabeceras personalizadas, en vez de adivinar la ruta. La segunda cabecera no es secreta: le dice a Bubble Work con qué versión de este prompt te instalaste, para que se vea en Ajustes → Tokens si te toca actualizar. Si tu cliente sólo admite una cabecera, prioriza la de autenticación y dímelo.
 
 Luego confirma que funcionó listando las tools. Deberías ver, entre otras, `agents_md`, `sequence_next`, `project_list`, `document_read`, `document_edit` y `thread_create`. Si falla, dime el error exacto en vez de reintentar a ciegas.
 
@@ -17,6 +18,8 @@ Después añade esta sección a tus instrucciones de este proyecto, el archivo q
 ```markdown
 ## Bubble Work
 
+Versión de esta sección: `bubble-work connect {{version}}`.
+
 El trabajo de este proyecto se planea y se anota en Bubble Work, por MCP. El proyecto es `<SLUG>`.
 
 **Al empezar cada sesión, antes de cualquier otra cosa:** si la forma de trabajar del departamento no está ya en tu contexto, llama a `agents_md` y síguela. Es la guía de Bubble Work y la forma de trabajar del departamento; se lee en vivo y manda sobre lo que recuerdes y sobre esta sección.
@@ -24,6 +27,6 @@ El trabajo de este proyecto se planea y se anota en Bubble Work, por MCP. El pro
 **Antes de crear, busca.** Lo normal es que ya exista un hilo a medias para lo que te piden: trabaja en ese. Lo que encuentres, decidas o dejes a medias va en el documento de SU hilo.
 ```
 
-Esa sección es breve a propósito: sin ella, cada conversación vuelve a inventar dónde se anota el trabajo y abre un hilo nuevo al lado del que ya estaba a medias. Si ya estaba instalada, volver a pegar este prompt la actualiza.
+Esa sección es breve a propósito: sin ella, cada conversación vuelve a inventar dónde se anota el trabajo y abre un hilo nuevo al lado del que ya estaba a medias. La línea `bubble-work connect` es su versión: cuando cambie, el servidor te lo dice al conectarte y `agents_md` trae la nueva. Si ya estaba instalada, volver a pegar este prompt la actualiza.
 
 Ese token es la llave de este agente y actúa en mi nombre: quien lo tenga trabaja como yo, y lo que escribas queda firmado con mi nombre. Ponlo en el archivo de configuración, no me lo repitas y no lo escribas en ningún otro lado. Si se filtra, lo revoco desde Ajustes → Tokens.

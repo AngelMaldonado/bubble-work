@@ -22,8 +22,86 @@ import (
 // regla no sabe expresar: una regla contesta «¿puedes tocar esta fila?», nunca
 // «¿cuántos leads globales quedarían?».
 
+// deletedPersonKeep: cuánto se guardan los datos personales de una persona
+// borrada. Dentro de ese plazo, restaurarla la deja como estaba; después, el
+// job los purga y queda sólo la cuenta, como firma de lo que escribió.
+const deletedPersonKeep = 30 * 24 * time.Hour
+
+// personalData: lo que es DE la persona y no del trabajo — se va con la purga.
+// Lo que escribió (hilos, comentarios, eventos, artefactos, versiones) se
+// queda: es la historia del departamento, y lleva su nombre.
+var personalData = []struct{ collection, field string }{
+	{"agent_tokens", "owner"},
+	{"prefs", "user"},
+	{"presence", "user"},
+	{"personal_notes", "owner"},
+	{"personal_assets", "owner"},
+	{"inventory_access", "user"},
+	{"memberships", "user"},
+	{"team_members", "user"},
+}
+
+// sweepDeletedPeople purga a quien lleva más de `deletedPersonKeep` borrada y
+// no se ha purgado desde que la borraron. Devuelve a cuántas.
+func sweepDeletedPeople(app core.App, now time.Time) int {
+	cutoff := now.Add(-deletedPersonKeep).UTC().Format("2006-01-02 15:04:05.000Z")
+	rows, err := app.FindRecordsByFilter("users",
+		"deleted_at != '' && deleted_at < {:c} && (purged_at = '' || purged_at < deleted_at)", "", 0, 0,
+		dbx.Params{"c": cutoff})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, u := range rows {
+		if err := purgePerson(app, u, now); err != nil {
+			app.Logger().Error("no se pudo purgar a una persona borrada", "user", u.Id, "error", err)
+			continue
+		}
+		n++
+	}
+	return n
+}
+
+// purgePerson borra sus datos personales, en una transacción: o todo o nada.
+// La cuenta se queda (nombre y correo), así lo que escribió sigue firmado.
+func purgePerson(app core.App, u *core.Record, now time.Time) error {
+	return app.RunInTransaction(func(tx core.App) error {
+		for _, d := range personalData {
+			rows, err := tx.FindRecordsByFilter(d.collection, d.field+" = {:u}", "", 0, 0, dbx.Params{"u": u.Id})
+			if err != nil {
+				continue // la colección no existe en esta instancia
+			}
+			for _, r := range rows {
+				if err := tx.Delete(r); err != nil {
+					return err
+				}
+			}
+		}
+		// Su equipo personal se va con ella, salvo que tenga proyectos: esos
+		// son trabajo, y borrarlos sería borrar historia.
+		teams, _ := tx.FindRecordsByFilter("teams", "personal = true && owner = {:u}", "", 0, 0, dbx.Params{"u": u.Id})
+		for _, t := range teams {
+			if ws, _ := tx.FindRecordsByFilter("workspaces", "team = {:t}", "", 1, 0, dbx.Params{"t": t.Id}); len(ws) > 0 {
+				continue
+			}
+			if err := tx.Delete(t); err != nil {
+				return err
+			}
+		}
+		stamp, _ := types.ParseDateTime(now)
+		u.Set("avatar", nil)
+		u.Set("purged_at", stamp)
+		return tx.Save(u)
+	})
+}
+
 func registerPeople(app core.App) {
 	app.OnRecordUpdateRequest("users").BindFunc(keepAGlobalLead)
+	app.Cron().MustAdd("bubblePeoplePurge", "41 3 * * *", func() {
+		if n := sweepDeletedPeople(app, time.Now()); n > 0 {
+			app.Logger().Info("deleted people purged", "count", n)
+		}
+	})
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		se.Router.POST("/api/people", createPerson).Bind(apis.RequireAuth("users"))
@@ -127,6 +205,7 @@ func personJSON(r *core.Record) map[string]any {
 		"display_name": r.GetString("display_name"),
 		"role":         r.GetString("role"),
 		"deleted_at":   r.GetString("deleted_at"),
+		"purged_at":    r.GetString("purged_at"),
 	}
 }
 

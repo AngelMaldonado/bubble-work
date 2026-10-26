@@ -202,8 +202,29 @@ func (m *Manager) status(team, kind string) Status {
 		st.Kind, st.Enabled = kind, true
 		return st
 	}
-	return Status{Kind: kind, State: "disabled"}
+	// Apagado no hay plugin a quien preguntar; lo que se sabe de antes (el
+	// número vinculado, el grupo) está en su configuración, y se dice.
+	st := Status{Kind: kind, State: "disabled"}
+	if r, err := m.app.FindFirstRecordByFilter("channels", "team = {:t} && kind = {:k}",
+		map[string]any{"t": team, "k": kind}); err == nil {
+		cfg := map[string]any{}
+		_ = r.UnmarshalJSONField("config", &cfg)
+		extra := map[string]any{}
+		for _, k := range publicConfig {
+			if v, ok := cfg[k]; ok && v != nil && v != "" {
+				extra[k] = v
+			}
+		}
+		if len(extra) > 0 {
+			st.Extra = extra
+		}
+	}
+	return st
 }
+
+// publicConfig: lo de la configuración de un canal que se puede enseñar a
+// quien lo administra aunque esté apagado. Nunca credenciales.
+var publicConfig = []string{"account", "push_name", "group_id", "group_name"}
 
 func (m *Manager) list(e *core.RequestEvent) error {
 	team, err := teamLead(e)

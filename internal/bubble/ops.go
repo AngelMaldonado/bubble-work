@@ -248,8 +248,14 @@ func Apply(app core.App, auth *core.Record, t *tree.Tree,
 			actor = auth.Id
 		}
 		if threadID != "" {
-			record(app, ws.Id, "thread", threadID, EvDocumentChanged, actor,
+			// Sólo cambiaron los tags del frontmatter: clasificar, no producir.
+			kind := EvDocumentChanged
+			if md.OnlyTagsChanged(cur, next) {
+				kind = EvDocumentClassified
+			}
+			record(app, ws.Id, "thread", threadID, kind, actor,
 				map[string]any{"path": path, "done": md.CountDone(next)})
+			indexThread(app, t, repo, threadID, path, next)
 		} else {
 			record(app, ws.Id, "workspace", ws.Id, EvDocChanged, actor,
 				map[string]any{"path": path})
@@ -292,10 +298,8 @@ func CreateThread(app core.App, auth *core.Record, ws *core.Record,
 	if bubbleID != "" {
 		r.Set("bubble", bubbleID)
 	}
-	var next int
-	if err := app.DB().NewQuery(
-		"SELECT COALESCE(MAX(seq), 0) + 1 FROM threads WHERE workspace = {:ws}").
-		Bind(dbx.Params{"ws": ws.Id}).Row(&next); err != nil {
+	next, err := nextThreadNumber(app, ws.Id)
+	if err != nil {
 		return nil, err
 	}
 	r.Set("seq", next)
@@ -852,7 +856,11 @@ func RemovePath(app core.App, auth *core.Record, t *tree.Tree, ws *core.Record, 
 	if err != nil || (area == tree.AreaThread && path.Dir(doc) == tree.DirThreads) {
 		return fmt.Errorf("a thread's own document goes when the thread does")
 	}
-	return t.Remove(repo, doc, actorLabel(auth), "delete: "+doc)
+	if err := t.Remove(repo, doc, actorLabel(auth), "delete: "+doc); err != nil {
+		return err
+	}
+	indexOwner(app, t, ws, repo, doc)
+	return nil
 }
 
 // CreateWorkspace founds one, with everything founding means.

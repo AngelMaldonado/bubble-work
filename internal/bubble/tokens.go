@@ -57,7 +57,36 @@ func expiryIn(from time.Time, days int) types.DateTime {
 // sesión válida siga ganando y esto sólo mire lo que no era una.
 const tokenAuthPriority = apis.DefaultLoadAuthTokenMiddlewarePriority + 1
 
+// revokedTokenKeep: cuánto se queda a la vista un token revocado. Una semana
+// dice «se revocó, y cuándo» a quien lo busque; después ya no abre nada ni
+// dice nada nuevo, y la lista es de los que sirven.
+const revokedTokenKeep = 7 * 24 * time.Hour
+
+// sweepRevokedTokens borra los tokens revocados hace más de `revokedTokenKeep`.
+// Sólo los revocados: uno caducado se puede extender, así que se queda.
+func sweepRevokedTokens(app core.App, now time.Time) int {
+	cutoff := now.Add(-revokedTokenKeep).UTC()
+	rows, err := app.FindRecordsByFilter("agent_tokens", "revoked_at != '' && revoked_at < {:c}", "", 0, 0,
+		dbx.Params{"c": cutoff.Format("2006-01-02 15:04:05.000Z")})
+	if err != nil {
+		return 0
+	}
+	n := 0
+	for _, r := range rows {
+		if err := app.Delete(r); err == nil {
+			n++
+		}
+	}
+	return n
+}
+
 func registerTokens(app core.App) {
+	app.Cron().MustAdd("bubbleTokensPurge", "23 * * * *", func() {
+		if n := sweepRevokedTokens(app, time.Now()); n > 0 {
+			app.Logger().Info("revoked tokens purged", "count", n)
+		}
+	})
+
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		se.Router.Bind(&hook.Handler[*core.RequestEvent]{
 			Id:       "bubbleAgentToken",
@@ -87,7 +116,7 @@ func agentTokenAuth(e *core.RequestEvent) error {
 	if !strings.HasPrefix(raw, tokenPrefix) {
 		return e.Next()
 	}
-	owner, err := resolveAgentToken(e.App, raw)
+	owner, tok, err := resolveAgentToken(e.App, raw)
 	if err != nil {
 		// Sin quien pida: `RequireAuth` contesta el 401, igual que con una
 		// sesión caducada. No se dice por qué — un token revocado y uno
@@ -95,28 +124,32 @@ func agentTokenAuth(e *core.RequestEvent) error {
 		return e.Next()
 	}
 	e.Auth = owner
+	// Qué token es, para que el MCP anote lo que ve de este agente (cliente,
+	// release leída), y con qué versión del prompt de conexión se instaló.
+	e.Set(AgentTokenKey, tok.Id)
+	noteConnectHeader(e.App, tok, e.Request.Header.Get(ConnectHeader))
 	return e.Next()
 }
 
-// resolveAgentToken devuelve la persona de un token válido.
-func resolveAgentToken(app core.App, plain string) (*core.Record, error) {
+// resolveAgentToken devuelve la persona de un token válido, y el token.
+func resolveAgentToken(app core.App, plain string) (*core.Record, *core.Record, error) {
 	tok, err := app.FindFirstRecordByData("agent_tokens", "hash", hashToken(plain))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	now := time.Now()
 	if !tok.GetDateTime("revoked_at").IsZero() {
-		return nil, errTokenUnusable
+		return nil, nil, errTokenUnusable
 	}
 	if exp := tok.GetDateTime("expires_at"); !exp.IsZero() && exp.Time().Before(now) {
-		return nil, errTokenUnusable
+		return nil, nil, errTokenUnusable
 	}
 	owner, err := app.FindRecordById("users", tok.GetString("owner"))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	if !owner.GetDateTime("deleted_at").IsZero() {
-		return nil, errTokenUnusable
+		return nil, nil, errTokenUnusable
 	}
 	// Una escritura por minuto como mucho, y directa: un agente hace decenas de
 	// llamadas seguidas, y guardar el registro en cada una dispararía hooks y
@@ -126,7 +159,7 @@ func resolveAgentToken(app core.App, plain string) (*core.Record, error) {
 		_, _ = app.DB().NewQuery("UPDATE agent_tokens SET last_used_at = {:t} WHERE id = {:id}").
 			Bind(dbx.Params{"t": stamp.String(), "id": tok.Id}).Execute()
 	}
-	return owner, nil
+	return owner, tok, nil
 }
 
 var errTokenUnusable = &tokenError{"token revocado, caducado o de una persona borrada"}
@@ -146,6 +179,12 @@ func tokenJSON(r *core.Record) map[string]any {
 		"last_used_at": r.GetString("last_used_at"),
 		"revoked_at":   r.GetString("revoked_at"),
 		"created":      r.GetString("created"),
+		// lo que el servidor ve que tiene este agente (release.go)
+		"client":          r.GetString("client"),
+		"connect_version": r.GetString("connect_version"),
+		"release_read":    r.GetString("release_read"),
+		"release_role":    r.GetString("release_role"),
+		"release_read_at": r.GetString("release_read_at"),
 	}
 }
 

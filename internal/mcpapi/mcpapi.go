@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -33,6 +34,8 @@ type caller struct {
 	tree *tree.Tree
 	// where this agent reached the server; what its links and scripts use
 	base string
+	// the agent token it came in with; empty for a browser session
+	token string
 }
 
 type ctxKey struct{}
@@ -59,23 +62,24 @@ func Register(app core.App, t *tree.Tree) {
 	// The first build runs before the database is open: it only registers the
 	// built-in descriptions as the originals (with no app, Prompt returns them).
 	// The first request builds again, now reading the edits.
-	srv := build()
+	srv, tb := build()
 	promptApp = app
 	var (
 		mu    sync.Mutex
 		built = int64(-1)
 	)
-	current := func() *mcp.Server {
+	current := func() (*mcp.Server, *toolbox) {
 		mu.Lock()
 		defer mu.Unlock()
 		if g := bubble.PromptsGen(); g != built {
-			srv, built = build(), g
+			srv, tb = build()
+			built = g
 		}
-		return srv
+		return srv, tb
 	}
 
 	handler := mcp.NewStreamableHTTPHandler(
-		func(*http.Request) *mcp.Server { return current() },
+		func(*http.Request) *mcp.Server { s, _ := current(); return s },
 		&mcp.StreamableHTTPOptions{
 			// Stateless: PocketBase may run behind anything, and a session held in
 			// one process is a session the next request may not find.
@@ -90,14 +94,21 @@ func Register(app core.App, t *tree.Tree) {
 
 	app.OnServe().BindFunc(func(se *core.ServeEvent) error {
 		mount := func(e *core.RequestEvent) error {
+			tok, _ := e.Get(bubble.AgentTokenKey).(string)
 			ctx := context.WithValue(e.Request.Context(), ctxKey{},
-				&caller{app: e.App, auth: e.Auth, tree: t, base: bubble.BaseURL(e.App, e.Request)})
+				&caller{app: e.App, auth: e.Auth, tree: t, base: bubble.BaseURL(e.App, e.Request), token: tok})
 			handler.ServeHTTP(e.Response, e.Request.WithContext(ctx))
 			return nil
 		}
 		for _, m := range []string{"GET", "POST", "DELETE"} {
 			se.Router.Route(m, "/mcp", mount).Bind(apis.RequireAuth())
 		}
+		// Las releases vigentes, para comparar en Ajustes → Tokens lo que leyó
+		// cada agente. Son huellas: no dicen nada del contenido.
+		se.Router.GET("/api/agents/release", func(e *core.RequestEvent) error {
+			_, tb := current()
+			return e.JSON(http.StatusOK, releases(e.App, e.Auth, tb.entries))
+		}).Bind(apis.RequireAuth("users"))
 		return se.Next()
 	})
 }
@@ -132,7 +143,7 @@ type toolEntry struct {
 
 // toolGroups es el orden de las categorías en la tabla.
 var toolGroups = []string{"Guía", "Equipos", "Personas y cambios", "Proyectos", "Módulos (burbujas)", "Hilos",
-	"Documentos", "Comentarios", "Inbox (ideas)", "Artefactos temporales", "Plan y secuencia",
+	"Documentos", "Adjuntos", "Comentarios", "Inbox (ideas)", "Artefactos temporales", "Plan y secuencia",
 	"Mi espacio", "Pines", "Infraestructura"}
 
 // toolbox junta lo que se registra en un servidor.
@@ -200,12 +211,15 @@ func catalog(entries []toolEntry) string {
 	return b.String()
 }
 
-func build() *mcp.Server {
+func build() (*mcp.Server, *toolbox) {
 	s := mcp.NewServer(&mcp.Implementation{
 		Name:    "bubble-work",
 		Version: "3",
 	}, nil)
 	tb := &toolbox{s: s}
+	// `instructions` por quien se conecta (release.go): el cargador que llega en
+	// cada sesión sin depender de que el modelo se acuerde de `agents_md`.
+	s.AddReceivingMiddleware(instructionsMiddleware(tb))
 
 	// La guía es también un PROMPT MCP, de los mismos bytes: no todos los
 	// clientes listan prompts, pero los que sí la encuentran ahí.
@@ -235,29 +249,29 @@ func build() *mcp.Server {
 			"Trae las entidades, el ciclo de trabajo, cómo se escribe, todas las tools por categoría y, al " +
 			"final, lo que mantiene el lead global, que manda. Al lead le llega la de quien planea; a los demás, " +
 			"la de quien opera; `role` lee la otra. Se lee en vivo: manda sobre lo que recuerdes.",
-	}, func(ctx context.Context, _ *mcp.CallToolRequest, in agentsArg) (*mcp.CallToolResult, any, error) {
+	}, func(ctx context.Context, req *mcp.CallToolRequest, in agentsArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
 			return nil, nil, err
 		}
-		doc, err := bubble.ReadAgents(c.app, c.auth, in.Role)
+		// Un solo documento: la guía (editable en Prompts), la tabla de tools
+		// (generada del registro), cómo se escribe markdown, la sección vigente
+		// del prompt de conexión, y al final la forma de trabajar del
+		// departamento, que manda si contradice lo anterior. La cabecera dice su
+		// release (release.go).
+		r, err := releaseFor(c.app, c.auth, in.Role, tb.entries)
 		if err != nil {
 			return nil, nil, err
 		}
-		// Un solo documento: la guía (editable en Prompts), la tabla de tools
-		// (generada del registro), cómo se escribe markdown, y al final la forma
-		// de trabajar del departamento, que manda si contradice lo anterior.
-		head := fmt.Sprintf("AGENTS.md (%s) · todavía no hay ninguna versión", doc.Role)
-		dept := "El lead todavía no ha escrito la forma de trabajar de este rol. Sigue la guía y el `README.md` de cada proyecto."
-		if doc.Version != "" {
-			head = fmt.Sprintf("AGENTS.md (%s) · versión %s · %s · por %s", doc.Role, doc.Version, doc.Created, doc.Author)
-			dept = doc.Content
+		// Lo que se le entregó a este agente, sólo si es la de SU rol: el lead
+		// que lee la de operadores no la tiene por eso.
+		if in.Role == "" || in.Role == bubble.AgentsRole(c.auth) {
+			bubble.NoteAgentRelease(c.app, c.token, r.doc.Role, r.id)
 		}
-		return text(head + "\n\n" +
-			bubble.SystemPrompt(c.app, "agents_guide") + "\n\n" +
-			catalog(tb.entries) + "\n---\n\n" +
-			bubble.SystemPrompt(c.app, "markdown") + "\n\n---\n\n" +
-			"# Forma de trabajar del departamento (" + doc.Role + ")\n\n" + dept + "\n"), nil, nil
+		if req != nil {
+			bubble.NoteAgentClient(c.app, c.token, clientOf(req.Session))
+		}
+		return text(agentsHead(r) + "\n\n" + r.body), nil, nil
 	})
 
 	// ---- Proyectos -------------------------------------------------------------
@@ -322,7 +336,8 @@ func build() *mcp.Server {
 	add(tb, "Proyectos", reads, "Tablero del proyecto", &mcp.Tool{
 		Name: "project_board",
 		Description: "Qué flota en un proyecto y por qué: sus módulos (`bubbles`) con su banda, y sus " +
-			"hilos con calor, flotabilidad y prioridad. Nada de esto se guarda: se calcula ahora.",
+			"hilos con calor, flotabilidad y prioridad. Nada de esto se guarda: se calcula ahora. Con la furia de IA " +
+			"encendida, lo que está en problemas trae `fury`: su nivel y las razones.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in projArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -611,6 +626,111 @@ func build() *mcp.Server {
 			return nil, nil, err
 		}
 		return jsonOut(map[string]any{"id": rec.Id, "url": rec.GetString("url")}), nil, nil
+	})
+
+	// ---- Adjuntos --------------------------------------------------------------
+
+	type attachListArg struct {
+		Where string `json:"where" jsonschema:"project, idea, space (tu Mi espacio) o inventory"`
+		ID    string `json:"id,omitempty" jsonschema:"el proyecto (id o slug) o la idea; space e inventory no lo piden"`
+	}
+	add(tb, "Adjuntos", reads, "Listar adjuntos", &mcp.Tool{
+		Name: "attachment_list",
+		Description: "Los adjuntos de un lugar: `assets/` de un proyecto, los archivos de una idea del inbox, " +
+			"los de tu Mi espacio o las imágenes del inventario. Cada uno trae su `ref`, que es lo que " +
+			"`attachment_read` recibe.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in attachListArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, err := bubble.ListAttachments(c.app, c.auth, c.tree, in.Where, in.ID)
+		if err != nil {
+			return nil, nil, err
+		}
+		return jsonOut(out), nil, nil
+	})
+
+	type attachReadArg struct {
+		Project   string `json:"project,omitempty" jsonschema:"con path: el proyecto (id o slug)"`
+		Path      string `json:"path,omitempty" jsonschema:"con project: assets/…, como lo cita el documento"`
+		Idea      string `json:"idea,omitempty" jsonschema:"con file: la idea del inbox"`
+		File      string `json:"file,omitempty" jsonschema:"con idea: el nombre que da inbox_read"`
+		Space     string `json:"space,omitempty" jsonschema:"un archivo de tu Mi espacio (attachment_list where=space)"`
+		Inventory string `json:"inventory,omitempty" jsonschema:"una cosa o un grupo del inventario con imagen"`
+	}
+	add(tb, "Adjuntos", reads, "Ver adjunto", &mcp.Tool{
+		Name: "attachment_read",
+		Description: "Te deja VER un adjunto: una imagen llega como imagen (reducida a 2000 px de lado si es " +
+			"más grande), un texto (txt, csv, json, svg) como texto. Siempre trae además un comando de " +
+			"descarga de un solo uso (10 minutos): si tu harness no te muestra la imagen, o es un PDF, " +
+			"descárgalo y ábrelo con tu herramienta de archivos. Di cuál: project+path, idea+file, space o inventory.",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in attachReadArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		ref := bubble.AttachRef{Project: in.Project, Path: in.Path, Idea: in.Idea, File: in.File, Space: in.Space, Inv: in.Inventory}
+		url, a, err := bubble.DownloadLink(c.app, c.auth, c.tree, c.base, ref)
+		if err != nil {
+			return nil, nil, err
+		}
+		local := "/tmp/" + a.Name
+		head := fmt.Sprintf("%s · %s · %s · %d bytes\nDescarga (un solo uso, 10 min): curl -fsSL -o %q %q\n",
+			a.Where, a.Name, a.MIME, len(a.Bytes), local, url)
+		res := &mcp.CallToolResult{}
+		switch {
+		case bubble.IsText(a):
+			body := string(a.Bytes)
+			const capText = 100 << 10
+			if len(body) > capText {
+				body = body[:capText] + "\n…(cortado: descárgalo para leerlo entero)"
+			}
+			res.Content = []mcp.Content{&mcp.TextContent{Text: head + "\n" + body}}
+		default:
+			if img, mt, ok := bubble.ForModel(a); ok {
+				note := "Va la imagen abajo"
+				if len(img) != len(a.Bytes) {
+					note += " (reducida para el modelo; la descarga es la original)"
+				}
+				res.Content = []mcp.Content{
+					&mcp.TextContent{Text: head + note + ". Si no la ves, descárgala y ábrela."},
+					&mcp.ImageContent{Data: img, MIMEType: mt},
+				}
+			} else {
+				res.Content = []mcp.Content{&mcp.TextContent{Text: head + "No se manda en línea (" + a.MIME +
+					"): descárgalo y ábrelo con tu herramienta de archivos."}}
+			}
+		}
+		return res, nil, nil
+	})
+
+	type attachUploadArg struct {
+		Project string `json:"project,omitempty" jsonschema:"subir a assets/ de este proyecto (id o slug), para citarlo en un hilo o en la wiki"`
+		Idea    string `json:"idea,omitempty" jsonschema:"subir a los archivos de esta idea del inbox (sólo imágenes)"`
+		Space   bool   `json:"space,omitempty" jsonschema:"subir a tu Mi espacio"`
+		Note    string `json:"note,omitempty" jsonschema:"con space: pegarlo a esta nota de Mi espacio"`
+		Name    string `json:"name,omitempty" jsonschema:"el nombre con el que se guarda; vacío = el del archivo"`
+	}
+	add(tb, "Adjuntos", adds, "Subir adjunto", &mcp.Tool{
+		Name: "attachment_upload",
+		Description: "Da un comando para SUBIR un archivo tuyo con curl, sin pasarlo por la conversación: " +
+			"a assets/ de un proyecto, a una idea del inbox o a tu Mi espacio. El enlace vale una vez y 10 " +
+			"minutos. Subir a un proyecto no calienta nada: cítalo después en el documento del hilo con " +
+			"document_edit (la respuesta del curl trae el markdown para citarlo).",
+	}, func(ctx context.Context, _ *mcp.CallToolRequest, in attachUploadArg) (*mcp.CallToolResult, any, error) {
+		c, err := from(ctx)
+		if err != nil {
+			return nil, nil, err
+		}
+		url, err := bubble.UploadLink(c.app, c.auth, c.base, bubble.UploadTarget{
+			Project: in.Project, Idea: in.Idea, Space: in.Space, Note: in.Note, Name: in.Name})
+		if err != nil {
+			return nil, nil, err
+		}
+		return text(fmt.Sprintf("Sube el archivo con (un solo uso, 10 min; cambia RUTA por la ruta local):\n"+
+			"curl -fsS -F \"file=@RUTA\" %q\n\nResponde con un JSON: dónde quedó y, en un proyecto, el markdown "+
+			"para citarlo (`markdown`).", url)), nil, nil
 	})
 
 	// ---- Documentos ------------------------------------------------------------
@@ -1000,7 +1120,8 @@ func build() *mcp.Server {
 		Description: "Qué toca ahora en la secuencia de un equipo, y cuál es el primer hilo tuyo. Cada equipo tiene UNA secuencia de ejecución, puesta por el lead " +
 			"del equipo: `now` es el primer paso con hilos abiertos (varios = van en paralelo), `then` el paso " +
 			"siguiente, y `mine` el primer hilo abierto de la secuencia que es tuyo: asignado a ti, o sin " +
-			"asignar en un módulo del que respondes. Terminar un hilo hace avanzar la secuencia sola.",
+			"asignar en un módulo del que respondes. Terminar un hilo hace avanzar la secuencia sola. Un hilo en " +
+			"problemas trae `fury` (furia de IA): su nivel y las razones.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in nextArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1185,7 +1306,8 @@ func build() *mcp.Server {
 		Name: "thread_get",
 		Description: "La ficha de un hilo, todo lo que no es su documento: proyecto, módulo, estado (y los " +
 			"estados posibles), asignados, etiquetas, fecha, prioridad, lugar en la secuencia, relaciones, " +
-			"evidencia y si lo tienes fijado. Su documento se lee con `document_read`.",
+			"evidencia y si lo tienes fijado; y `fury` si la furia de IA dice que está en problemas. Su documento " +
+			"se lee con `document_read`.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in threadArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1269,7 +1391,7 @@ func build() *mcp.Server {
 	add(tb, "Inbox (ideas)", reads, "Leer idea", &mcp.Tool{
 		Name: "inbox_read",
 		Description: "Una idea completa: su texto, su cuerpo (el mensaje entero, si vino por WhatsApp) y sus " +
-			"archivos. Sigue siendo una idea: leerla no la vuelve trabajo.",
+			"archivos (míralos con attachment_read, idea+file). Sigue siendo una idea: leerla no la vuelve trabajo.",
 	}, func(ctx context.Context, _ *mcp.CallToolRequest, in ideaArg) (*mcp.CallToolResult, any, error) {
 		c, err := from(ctx)
 		if err != nil {
@@ -1772,7 +1894,7 @@ func build() *mcp.Server {
 		}
 		return jsonOut(map[string]any{"item": in.Item, "deleted": true}), nil, nil
 	})
-	return s
+	return s, tb
 }
 
 // locate resolves either addressing form to one document. Both are accepted
@@ -1830,6 +1952,11 @@ func docText(d bubble.Doc, from, lines int) string {
 	if d.Done > 0 {
 		head += " · " + strconv.Itoa(d.Done) + " hechas"
 	}
+	// Lo que cita: sin esto, un agente lee «![](assets/x.png)» y no sabe que
+	// puede mirarlo.
+	if cited := citedAssets(d.Content); len(cited) > 0 {
+		head += " · adjuntos: " + strings.Join(cited, ", ") + " (míralos con attachment_read)"
+	}
 	if total == 0 {
 		// Un documento vacío EXISTE: se escribe con el hash del vacío. Devolver
 		// la cabecera sola parecería un error de lectura.
@@ -1853,6 +1980,25 @@ func docText(d bubble.Doc, from, lines int) string {
 	}
 	head += ")\n\n"
 	return head + body + "\n"
+}
+
+// assetRef encuentra lo que un documento cita de assets/.
+var assetRef = regexp.MustCompile(`assets/[^\s)"'<>\]]+`)
+
+// citedAssets: los adjuntos que cita un documento, sin repetir, hasta 12.
+func citedAssets(content string) []string {
+	seen := map[string]bool{}
+	out := []string{}
+	for _, m := range assetRef.FindAllString(content, -1) {
+		if !seen[m] && tree.IsAttachment(m) {
+			seen[m] = true
+			out = append(out, m)
+			if len(out) == 12 {
+				break
+			}
+		}
+	}
+	return out
 }
 
 // wide es cuánto se manda de un documento que nadie acotó.

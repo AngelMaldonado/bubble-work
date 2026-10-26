@@ -1,5 +1,7 @@
 <script lang="ts">
   import Loading from './Loading.svelte';
+  import FilterPick from './FilterPick.svelte';
+  const ROLES = [{ value: 'member', label: 'miembro' }, { value: 'lead', label: 'lead' }];
   // Who is in this workspace, and how somebody else gets in.
   //
   // Belonging was a row nobody could write from the product: the rules have
@@ -240,17 +242,12 @@
                 <!-- El rol se cambia aquí mismo. `lead` en un workspace es quien
                      invita y quien configura; no es el lead global, que es un
                      campo de la persona y vive en otra parte. -->
-                <select
-                  value={m.role}
-                  disabled={m.role === 'lead' && leads === 1}
-                  title={m.role === 'lead' && leads === 1 ? 'es el último lead' : ''}
-                  onchange={(e) =>
-                    write(() =>
-                      api.setRole(m.id, (e.currentTarget as HTMLSelectElement).value as 'lead' | 'member'),
-                    )}>
-                  <option value="member">miembro</option>
-                  <option value="lead">lead</option>
-                </select>
+                {#if m.role === 'lead' && leads === 1}
+                  <span class="role-fixed" title="es el último lead">lead</span>
+                {:else}
+                  <span class="role-pick"><FilterPick portal={false} items={ROLES} value={m.role} allowEmpty={false} label={`rol de ${m.name}`}
+                    onchange={(r) => r && r !== m.role && write(() => api.setRole(m.id, r as 'lead' | 'member'))} /></span>
+                {/if}
                 <button
                   class="x"
                   aria-label="sacar a {m.name}"
@@ -369,15 +366,6 @@
     color: var(--text);
     font-size: 0.85rem;
   }
-  .row select {
-    padding: 0.15rem 0.35rem;
-    border: 1px solid var(--line);
-    border-radius: 7px;
-    background: var(--surface);
-    color: var(--muted);
-    font-size: 0.76rem;
-  }
-  .row select:disabled { opacity: 0.5; }
   .x { width: 24px; color: var(--faint); font-size: 1rem; line-height: 1; }
   .x:hover:not(:disabled) { color: var(--text); }
   .x:disabled { opacity: 0.3; }
@@ -423,4 +411,6 @@
     color: var(--text);
     font-size: 0.82rem;
   }
+  .role-pick { width: 8.5rem; flex: none; }
+  .role-fixed { padding: 0.15rem 0.55rem; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 0.78rem; font-weight: 700; }
 </style>

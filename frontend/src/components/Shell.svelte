@@ -28,6 +28,7 @@
   import { edgeFade } from '../lib/fade.svelte';
   import type { Snippet } from 'svelte';
   import { limited } from '../lib/limits.svelte';
+  import { ALL_TEAMS } from '../lib/teams.svelte';
 
   export type ShellItem = {
     id: string;
@@ -58,6 +59,9 @@
      *  proyectos de abajo son sus partes, así que se lee como el primero de
      *  ellos y no como un lugar aparte. */
     top?: boolean;
+    /** No disponible aquí, y por qué (p. ej. el planeador desde «Todos los
+     *  equipos»): se ve deshabilitada, con el motivo, en vez de desaparecer. */
+    off?: string;
   };
 
   let {
@@ -81,6 +85,9 @@
     oncreate,
     teamList = [],
     team = '',
+    allTeams = false,
+    viewingAll = false,
+    createIn = [],
     onteam,
     onmove,
     children,
@@ -111,11 +118,20 @@
     onsignout?: () => void;
     onrename?: (id: string, name: string) => void;
     ondelete?: (id: string) => void;
-    oncreate?: () => Promise<string | void> | string | void;
+    /** `team` llega cuando se eligió en «Nuevo proyecto en…» (ver `createIn`) */
+    oncreate?: (team?: string) => Promise<string | void> | string | void;
     /** los equipos de quien mira; con más de uno aparece el selector */
     teamList?: ShellTeam[];
     /** el equipo en el que se está trabajando */
     team?: string;
+    /** ofrecer «Todos los equipos» en el selector (sólo lead global) */
+    allTeams?: boolean;
+    /** se está mirando «Todos los equipos» */
+    viewingAll?: boolean;
+    /** con algo aquí, crear pide equipo: «Nuevo proyecto en …», uno por equipo.
+     *  Es para «Todos los equipos», que es una vista y no un destino. */
+    createIn?: ShellTeam[];
+    /** el id de un equipo, o `ALL_TEAMS` */
     onteam?: (id: string) => void;
     /** mover un proyecto a otro equipo (lo ofrece sólo a un lead global) */
     onmove?: (id: string, team: string) => void;
@@ -172,8 +188,8 @@
     if (editing && draft.trim()) onrename?.(editing, draft.trim());
     editing = null;
   }
-  async function create() {
-    const id = await oncreate?.();
+  async function create(team?: string) {
+    const id = await oncreate?.(team);
     if (typeof id === 'string' && id) startRename(id, '');
   }
 </script>
@@ -276,11 +292,12 @@
               {#snippet element(attributes: Record<string, unknown>)}
                 <button {...attributes} class="pin-row team-trigger" data-scope="navigation" data-part="trigger"
                   data-layout={shutByWidth ? 'rail' : 'sidebar'}
-                  aria-label={`Equipo en el que trabajas: ${teamNow?.name ?? ''}`} title={`Equipo: ${teamNow?.name ?? ''}`}>
-                  <Icon of={teamNow?.personal ? 'key' : 'people'} size="26px" tint />
+                  aria-label={viewingAll ? 'Vista: Todos los equipos' : `Equipo en el que trabajas: ${teamNow?.name ?? ''}`}
+                  title={viewingAll ? 'Todos los equipos' : `Equipo: ${teamNow?.name ?? ''}`}>
+                  <Icon of={viewingAll ? 'board' : teamNow?.personal ? 'key' : 'people'} size="26px" tint />
                   <span class="team-text" data-scope="navigation" data-part="trigger-text" data-layout={shutByWidth ? 'rail' : 'sidebar'}>
-                    {#if !shutByWidth}<small>Equipo</small>{/if}
-                    <b>{teamNow?.name ?? ''}</b>
+                    {#if !shutByWidth}<small>{viewingAll ? 'Vista' : 'Equipo'}</small>{/if}
+                    <b>{viewingAll ? 'Todos los equipos' : (teamNow?.name ?? '')}</b>
                   </span>
                   {#if !shutByWidth}<ChevronsUpDownIcon class="size-4 chev" />{/if}
                 </button>
@@ -290,12 +307,23 @@
           <Portal>
             <Menu.Positioner>
               <Menu.Content class="shell-menu team-menu">
+                <!-- Una vista, no un equipo: arriba y separada. Junta los
+                     compartidos; lo personal no entra. -->
+                {#if allTeams}
+                  <Menu.Item value={ALL_TEAMS}>
+                    <span class="face"><Icon of="board" tint /></span>
+                    <Menu.ItemText>Todos los equipos</Menu.ItemText>
+                    <span class="tag">vista</span>
+                    {#if viewingAll}<CheckIcon class="size-4 check" aria-label="actual" />{/if}
+                  </Menu.Item>
+                  <Menu.Separator />
+                {/if}
                 {#each teamList as t (t.id)}
                   <Menu.Item value={t.id}>
                     <span class="face"><Icon of={t.personal ? 'key' : 'people'} tint /></span>
                     <Menu.ItemText>{t.name}</Menu.ItemText>
                     {#if t.personal}<span class="tag">privado</span>{/if}
-                    {#if t.id === team}<CheckIcon class="size-4 check" aria-label="actual" />{/if}
+                    {#if t.id === team && !viewingAll}<CheckIcon class="size-4 check" aria-label="actual" />{/if}
                   </Menu.Item>
                 {/each}
               </Menu.Content>
@@ -405,6 +433,7 @@
               positioning={{ placement: shutByWidth ? 'right-end' : 'top-start' }}
               onSelect={(e: { value: string }) => {
                 if (e.value === 'create') create();
+                else if (e.value.startsWith('create:')) create(e.value.slice('create:'.length));
                 else if (e.value === 'signout') onsignout?.();
                 else onpin?.(e.value);
               }}>
@@ -433,16 +462,26 @@
               <Portal>
                 <Menu.Positioner>
                   <Menu.Content class="shell-menu">
-                    {#if oncreate}
+                    {#if oncreate && createIn.length}
+                      <!-- Sin equipo en la vista, crear pide uno: un proyecto
+                           nace en un equipo y no en «Todos». -->
+                      {#each createIn as t (t.id)}
+                        <Menu.Item value={`create:${t.id}`}>
+                          <PlusIcon class="size-4" />
+                          <Menu.ItemText>{newLabel} en {t.name}</Menu.ItemText>
+                        </Menu.Item>
+                      {/each}
+                    {:else if oncreate}
                       <Menu.Item value="create">
                         <PlusIcon class="size-4" />
                         <Menu.ItemText>{newLabel}</Menu.ItemText>
                       </Menu.Item>
                     {/if}
                     {#each foot as p (p.id)}
-                      <Menu.Item value={p.id}>
+                      <Menu.Item value={p.id} disabled={!!p.off}>
                         <span class="face"><Icon of={p.face} tint /></span>
                         <Menu.ItemText>{p.name}</Menu.ItemText>
+                        {#if p.off}<span class="off-why">{p.off}</span>{/if}
                       </Menu.Item>
                     {/each}
                     {#if onsignout}
@@ -547,6 +586,8 @@
   :global(.shell-menu) { min-width: 13rem; }
   :global(.shell-menu [data-part='item']) { display: flex; align-items: center; gap: 0.55rem; justify-content: flex-start; }
   :global(.shell-menu .face) { width: 1rem; text-align: center; }
+  :global(.shell-menu [data-part='item'][data-disabled]) { opacity: 0.45; cursor: not-allowed; }
+  :global(.shell-menu .off-why) { margin-left: auto; padding-left: 0.8rem; color: var(--muted); font-size: 0.72rem; }
 
   /* `margin-top: auto` is what pins it in both layouts. */
   .shell :global(.shell-nav [data-part='footer']) {

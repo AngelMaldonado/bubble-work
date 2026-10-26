@@ -15,6 +15,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+echo "==> simulated fury gateway"
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_fury_receiver.py || exit 1
+
 echo "==> go test"
 go test -race ./... || exit 1
 
@@ -907,7 +910,7 @@ chk ">>> tools/list expone la superficie" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 n=sorted(t["name"] for t in json.load(sys.stdin)["result"]["tools"])
 print(",".join(n))')" \
-  "agents_md,artifact_append,artifact_create,artifact_delete,artifact_handoff,artifact_list,artifact_pin,artifact_read,artifact_wait,bubble_close,bubble_create,bubble_reopen,bubble_update,change_list,checkbox_toggle,comment_create,comment_list,document_delete,document_edit,document_list,document_read,document_replace,document_search,evidence_add,inbox_capture,inbox_delete,inbox_list,inbox_read,inbox_triage,inbox_update,inventory_group_create,inventory_group_delete,inventory_group_update,inventory_item_create,inventory_item_delete,inventory_item_update,inventory_list,objective_create,objective_list,objective_update,people_list,pin_add,pin_list,pin_remove,project_board,project_create,project_list,repo_link,repo_list,repo_unlink,sequence_next,sequence_set,space_note_arrange,space_note_create,space_note_delete,space_note_list,space_note_update,team_list,thread_complete,thread_create,thread_get,thread_history,thread_relate,thread_unrelate,thread_update"
+  "agents_md,artifact_append,artifact_create,artifact_delete,artifact_handoff,artifact_list,artifact_pin,artifact_read,artifact_wait,attachment_list,attachment_read,attachment_upload,bubble_close,bubble_create,bubble_reopen,bubble_update,change_list,checkbox_toggle,comment_create,comment_list,document_delete,document_edit,document_list,document_read,document_replace,document_search,evidence_add,inbox_capture,inbox_delete,inbox_list,inbox_read,inbox_triage,inbox_update,inventory_group_create,inventory_group_delete,inventory_group_update,inventory_item_create,inventory_item_delete,inventory_item_update,inventory_list,objective_create,objective_list,objective_update,people_list,pin_add,pin_list,pin_remove,project_board,project_create,project_list,repo_link,repo_list,repo_unlink,sequence_next,sequence_set,space_note_arrange,space_note_create,space_note_delete,space_note_list,space_note_update,team_list,thread_complete,thread_create,thread_get,thread_history,thread_relate,thread_unrelate,thread_update"
 chk ">>> cada tool dice si sólo lee (anotaciones MCP)" \
   "$(mcp "$A" "tools/list" "{}" | python3 -c 'import sys,json
 t={x["name"]:x.get("annotations",{}) for x in json.load(sys.stdin)["result"]["tools"]}
@@ -921,12 +924,25 @@ chk ">>> ...y trae la sección que un agente se instala, con el hueco del proyec
   "$(curl -s "$API/api/connect" | grep -c '<SLUG>')" 2
 chk ">>> ...y la sección obliga a leer agents_md" \
   "$(curl -s "$API/api/connect" | grep -c 'llama a `agents_md` y síguela')" 1
+# La sección lleva su versión, que pone el servidor; la misma va en una
+# cabecera para los comandos por harness.
+CONNV=$(curl -s -D - -o /dev/null "$API/api/connect" | tr -d '\r' | sed -nE 's/^[Xx]-[Bb]ubble-[Cc]onnect-[Vv]ersion: (.*)$/\1/p')
+chk ">>> el prompt de conexión dice su versión en una cabecera" "${#CONNV}" 16
+chk "...y la marca en la sección que se instala" \
+  "$(curl -s "$API/api/connect" | grep -c "^Versión de esta sección: \`bubble-work connect $CONNV\`.$")" 1
+chk "...y pide mandarla en X-Bubble-Connect" \
+  "$(curl -s "$API/api/connect" | grep -c "X-Bubble-Connect: $CONNV")" 1
+chk "...sin dejar el hueco de la versión" \
+  "$(curl -s "$API/api/connect" | grep -c '{{version}}')" 0
 chk ">>> house_rules ya no existe: era una segunda copia" \
   "$(curl -s "$API/api/house-rules" | grep -c '<SLUG>')" 0
 
 # ---- AGENTS.md del departamento: lo escribe el lead, lo lee cada agente ----
 chk ">>> sin versiones, agents_md lo dice en vez de fallar" \
-  "$(mcptext "$A" agents_md '{}' | head -1)" "AGENTS.md (operators) · todavía no hay ninguna versión"
+  "$(mcptext "$A" agents_md '{}' | head -1 | sed -E 's/release [0-9a-f]{16}/release R/')" \
+  "AGENTS.md (operators) · release R · el departamento todavía no ha escrito ninguna versión"
+chk "...y trae la sección vigente, para reemplazar una vieja" \
+  "$(mcptext "$A" agents_md '{}' | grep -c "^Versión de esta sección: \`bubble-work connect $CONNV\`.$")" 1
 ARG="{\"role\":\"operators\",\"content\":\"x\",\"author\":\"$AID\"}"
 chk ">>> un member NO crea una versión" \
   "$(pcode agents_md "$A" "$ARG")" 400
@@ -954,7 +970,7 @@ chk ">>> agents_md trae la guía de Bubble" \
 chk ">>> ...las entidades, con wiki, artefactos y pines" \
   "$(mcptext "$A" agents_md '{}' | grep -cE '^- \*\*(Proyecto|Módulo|Hilo|Artefactos temporales|Pines)\*\*')" 5
 chk ">>> ...y la tabla de tools, generada del registro" \
-  "$(mcptext "$A" agents_md '{}' | grep -cE '^\| `[a-z_]+` \|')" 65
+  "$(mcptext "$A" agents_md '{}' | grep -cE '^\| `[a-z_]+` \|')" 68
 chk ">>> ...por categoría" \
   "$(mcptext "$A" agents_md '{}' | grep -c '^### Módulos (burbujas)$')" 1
 chk ">>> ...y el protocolo de interrogatorio NO: llega al crear el artefacto" \
@@ -1346,7 +1362,42 @@ chk ">>> sólo un lead del equipo ordena la secuencia" \
 ARG="{\"thread\":\"$T2\",\"sequence\":30}"
 chk "...el lead sí" "$(mcptext "$C" sequence_set "$ARG" | j "['sequence']")" 30
 mcptext "$C" sequence_set "{\"thread\":\"$T2\",\"sequence\":0}" >/dev/null
+T2SEQ=$(curl -s "$API/api/collections/threads/records/$T2" -H "Authorization: $SU" | j "['seq']")
 curl -s -X DELETE "$API/api/collections/threads/records/$T2" -H "Authorization: $A" >/dev/null
+
+# E1, contador por proyecto: con MAX(seq)+1, borrar el último hilo regalaba su
+# número (y su URL /w/alpha/t/N) al siguiente.
+NUM1=$(mcptext "$A" thread_create '{"project":"alpha","name":"Después del borrado"}')
+chk ">>> borrar el último hilo no libera su número (MCP)" "$(echo "$NUM1" | j "['seq']")" "$((T2SEQ + 1))"
+NUMID=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Otro después\"}")
+chk "...ni por REST, que usa el mismo contador" "$(echo "$NUMID" | j "['seq']")" "$((T2SEQ + 2))"
+curl -s -X DELETE "$API/api/collections/threads/records/$(echo "$NUMID" | j "['id']")" -H "Authorization: $A" >/dev/null
+NUM3=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Tercero\"}")
+chk "...y tampoco tras borrar el creado por REST" "$(echo "$NUM3" | j "['seq']")" "$((T2SEQ + 3))"
+rm -f /tmp/bubble-par-*.json
+# Sólo estos curl: un `wait` sin pids esperaría también al servidor de pruebas.
+PAR=""
+for i in 1 2 3 4 5 6 7 8; do
+  curl -s -o "/tmp/bubble-par-$i.json" -X POST "$API/api/collections/threads/records" -H "Authorization: $A" -H "$JS" \
+    -d "{\"workspace\":\"$ALPHA\",\"name\":\"Paralelo $i\"}" &
+  PAR="$PAR $!"
+done
+# shellcheck disable=SC2086
+wait $PAR
+chk ">>> ocho altas a la vez: ocho hilos, ocho números distintos y seguidos" \
+  "$(python3 -c 'import json,glob
+r=[json.load(open(f)) for f in glob.glob("/tmp/bubble-par-*.json")]
+s=sorted(x.get("seq",0) for x in r)
+print(len(r), len(set(s)), s[-1]-s[0] if s else -1, all(x.get("id") for x in r))')" "8 8 7 True"
+for f in /tmp/bubble-par-*.json; do
+  curl -s -X DELETE "$API/api/collections/threads/records/$(j "['id']" < "$f")" -H "Authorization: $A" >/dev/null
+done
+rm -f /tmp/bubble-par-*.json
+for x in "$NUM1" "$NUM3"; do
+  curl -s -X DELETE "$API/api/collections/threads/records/$(echo "$x" | j "['id']")" -H "Authorization: $A" >/dev/null
+done
+chk ">>> el contador es interno: no hay colección que leer" \
+  "$(code "$API/api/collections/thread_counters/records" -H "Authorization: $SU")" 404
 
 # A esta altura bob es el lead de alpha y alice, miembro (las pruebas de
 # membresía de arriba los intercambiaron).
@@ -1662,6 +1713,57 @@ chk "y quedó commiteada como todo lo demás" \
   "$(cd "$R/alpha" && git log --oneline -- assets/mi-diagrama.png | wc -l | tr -d ' ')" 1
 rm -f "$PNG" "$BIG"
 
+# ------------------------------------------------- adjuntos para el agente ----
+echo
+# Una imagen de verdad (decodificable) y un texto.
+APNG=/tmp/bubble-attach-$$.png
+python3 -c 'import zlib,struct,sys
+def ch(t,d): return struct.pack(">I",len(d))+t+d+struct.pack(">I",zlib.crc32(t+d)&0xffffffff)
+raw=b"".join(b"\x00"+b"\xff\x00\x00"*4 for _ in range(4))
+sys.stdout.buffer.write(b"\x89PNG\r\n\x1a\n"+ch(b"IHDR",struct.pack(">IIBBBBB",4,4,8,2,0,0,0))+ch(b"IDAT",zlib.compress(raw))+ch(b"IEND",b""))' > "$APNG"
+ATXT=/tmp/bubble-attach-$$.csv; printf 'a,b\n1,2\n' > "$ATXT"
+akey(){ python3 -c 'import sys,re;m=re.search(r"/api/attachments/([A-Za-z0-9]+)",sys.stdin.read());print(m.group(1) if m else "")'; }
+ctype(){ python3 -c 'import sys,json;d=json.load(sys.stdin);r=d.get("result",{});print(",".join(c["type"] for c in r.get("content",[]))+("!" if r.get("isError") else ""))'; }
+ARG='{"project":"beta","name":"captura.png"}'
+UPKEY=$(mcptext "$B" attachment_upload "$ARG" | akey)
+chk ">>> el agente pide dónde subir, y le dan un enlace" "$([ -n "$UPKEY" ] && echo si || echo no)" si
+UPOUT=$(curl -s -F "file=@$APNG" "$API/api/attachments/$UPKEY")
+chk "...sube con curl y aterriza en assets/" "$(echo "$UPOUT" | j "['path']")" "assets/captura.png"
+chk "...con el markdown para citarlo" "$(echo "$UPOUT" | j "['markdown']")" "![captura.png](assets/captura.png)"
+chk "...y el enlace no vale dos veces" "$(code -F "file=@$APNG" "$API/api/attachments/$UPKEY")" 404
+ARG='{"project":"beta","path":"assets/captura.png"}'
+chk ">>> el agente VE la imagen: texto con la descarga e imagen" "$(mcptool "$B" attachment_read "$ARG" | ctype)" "text,image"
+DLKEY=$(mcptext "$B" attachment_read "$ARG" | akey)
+curl -s -o "$APNG.dl" "$API/api/attachments/$DLKEY"
+chk "...la descarga trae los mismos bytes" "$(cmp -s "$APNG" "$APNG.dl" && echo si || echo no)" si
+chk "...una sola vez" "$(code "$API/api/attachments/$DLKEY")" 404
+chk ">>> quien no ve el proyecto no ve su adjunto" "$(mcptool "$A" attachment_read "$ARG" | ctype)" "text!"
+ARG='{"project":"beta"}'
+TXKEY=$(mcptext "$B" attachment_upload "$ARG" | akey)
+curl -s -F "file=@$ATXT;filename=datos.csv" "$API/api/attachments/$TXKEY" >/dev/null
+ARG='{"project":"beta","path":"assets/datos.csv"}'
+chk ">>> un csv llega como texto" "$(mcptext "$B" attachment_read "$ARG" | grep -c '^1,2$')" 1
+ARG='{"where":"project","id":"beta"}'
+chk "...y la lista del proyecto tiene los dos" "$(mcptext "$B" attachment_list "$ARG" | python3 -c 'import sys,json;print(len(json.load(sys.stdin)))')" 2
+ARG="{\"idea\":\"$IDEAID\"}"
+IKEY=$(mcptext "$B" attachment_upload "$ARG" | akey)
+IFILE=$(curl -s -F "file=@$APNG" "$API/api/attachments/$IKEY" | j "['file']")
+chk ">>> se sube una imagen a una idea del inbox" "$([ -n "$IFILE" ] && echo si || echo no)" si
+ARG="{\"idea\":\"$IDEAID\",\"file\":\"$IFILE\"}"
+chk "...y el agente la ve" "$(mcptool "$B" attachment_read "$ARG" | ctype)" "text,image"
+ARG='{"space":true}'
+SKEY=$(mcptext "$A" attachment_upload "$ARG" | akey)
+SPID=$(curl -s -F "file=@$APNG;filename=boceto.png" "$API/api/attachments/$SKEY" | j "['space']")
+ARG="{\"space\":\"$SPID\"}"
+chk ">>> Mi espacio: su dueña sube y ve su archivo" "$(mcptool "$A" attachment_read "$ARG" | ctype)" "text,image"
+chk "...y nadie más, ni el lead global" "$(mcptool "$C" attachment_read "$ARG" | ctype)" "text!"
+ARG='{"where":"inventory"}'
+chk ">>> el inventario: alice, que lo tiene asignado, lo lista" \
+  "$(mcptool "$A" attachment_list "$ARG" | python3 -c 'import sys,json;print("no" if json.load(sys.stdin)["result"].get("isError") else "si")')" si
+chk "...y bob, que no, no" \
+  "$(mcptool "$B" attachment_list "$ARG" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin)["result"].get("isError") else "no")')" si
+rm -f "$APNG" "$APNG.dl" "$ATXT"
+
 # ------------------------------------------------- tokens de agente ----
 echo
 tpost(){ curl -s -X POST "$API/api/tokens$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
@@ -1673,6 +1775,47 @@ chk ">>> alice genera un token de agente, y se le enseña una vez" "${TOK:0:3}" 
 chk "...sin caducidad si se pide así" "$(echo "$NEWTOK" | j "['expires_at']")" ""
 chk ">>> con él, un agente entra al MCP como alice" \
   "$(mcptext "Bearer $TOK" project_list '{}' | grep -c '"alpha"')" 1
+
+# Releases: qué tiene cada agente. El `initialize` trae `instructions` con la
+# release vigente; el servidor anota su cliente, con qué versión del prompt se
+# instaló y qué release de agents_md se le entregó.
+tokrec(){ curl -s "$API/api/collections/agent_tokens/records/$TOKID" -H "Authorization: $A" | j "['$1']"; }
+INIT=$(curl -s -X POST "$API/mcp" -H "Authorization: Bearer $TOK" -H "X-Bubble-Connect: $CONNV" -H "$JS" \
+  -H 'Accept: application/json, text/event-stream' \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"claude-code","version":"2.1.2"}}}' \
+  | sed -nE 's/^data: (.*)$/\1/p' | tail -1)
+INS=$(echo "$INIT" | python3 -c 'import sys,json;print(json.load(sys.stdin)["result"].get("instructions",""))')
+REL=$(echo "$INS" | head -1 | sed -nE 's/.*release ([0-9a-f]{16}).*/\1/p')
+chk ">>> el initialize trae instructions con la release vigente" "${#REL}" 16
+chk "...que caben en lo que entrega Claude Code" \
+  "$(echo "$INIT" | python3 -c 'import sys,json;s=json.load(sys.stdin)["result"]["instructions"];print(len(s.encode("utf-16-le"))//2<=2048)')" True
+chk "...y mandan a agents_md y a la sección vigente" \
+  "$(echo "$INS" | grep -c -e '`agents_md`' -e "bubble-work connect $CONNV")" 2
+chk "...la misma release que dice /api/agents/release" \
+  "$(curl -s "$API/api/agents/release" -H "Authorization: $A" | j "['operators']")" "$REL"
+chk ">>> el servidor anota el cliente del agente" "$(tokrec client)" "claude-code 2.1.2"
+chk "...y con qué versión del prompt se instaló" "$(tokrec connect_version)" "$CONNV"
+chk "...y todavía no leyó agents_md" "$(tokrec release_read)" ""
+chk ">>> agents_md dice la misma release en su cabecera" \
+  "$(mcptext "Bearer $TOK" agents_md '{}' | head -1 | grep -c "release $REL")" 1
+chk "...y queda anotado que se le entregó" "$(tokrec release_read)/$(tokrec release_role)" "$REL/operators"
+chk "...con su hora" "$([ -n "$(tokrec release_read_at)" ] && echo si || echo no)" si
+chk ">>> una cabecera de versión basura se ignora" \
+  "$(curl -s -o /dev/null -X POST "$API/mcp" -H "Authorization: Bearer $TOK" -H 'X-Bubble-Connect: <b>x</b>' -H "$JS" \
+     -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'; tokrec connect_version)" "$CONNV"
+chk ">>> la sesión del navegador no anota nada en ningún token" \
+  "$(mcptext "$A" agents_md '{}' >/dev/null; tokrec release_read)" "$REL"
+# El lead publica otra forma de trabajar: la release cambia, y el agente que
+# leyó la anterior queda atrás hasta su siguiente lectura.
+post agents_md "$C" "{\"role\":\"operators\",\"content\":\"# WoW v3\",\"author\":\"$CID\"}" >/dev/null
+REL2=$(curl -s "$API/api/agents/release" -H "Authorization: $A" | j "['operators']")
+chk ">>> publicar el AGENTS.md cambia la release" "$([ "$REL2" != "$REL" ] && [ ${#REL2} = 16 ] && echo si || echo no)" si
+chk "...y el agente sigue con la anterior" "$(tokrec release_read)" "$REL"
+chk "...hasta que vuelve a leer" \
+  "$(mcptext "Bearer $TOK" agents_md '{}' >/dev/null; tokrec release_read)" "$REL2"
+chk ">>> la release es la del contenido: leerla otra vez no la cambia" \
+  "$(curl -s "$API/api/agents/release" -H "Authorization: $A" | j "['operators']")" "$REL2"
+chk ">>> las releases son de quien tiene sesión" "$(code "$API/api/agents/release")" 401
 chk ">>> la huella no sale nunca por la API" \
   "$(list agent_tokens "$A" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("si" if d["totalItems"]==1 and "hash" not in d["items"][0] else "no")')" si
 chk ">>> bob no ve el token de alice" "$(list agent_tokens "$B" | j "['totalItems']")" 0
@@ -1696,6 +1839,18 @@ chk "...y revocado ya no entra al MCP" "$(code -X POST "$API/mcp" -H "Authorizat
 chk "...ni se extiende: se genera otro" "$(tcode "$A" "/$TOKID/extend" '{"days":30}')" 400
 chk ">>> un token inventado tampoco entra" "$(code -X POST "$API/mcp" -H "Authorization: Bearer bw_inventado" -H "$JS" \
   -H 'Accept: application/json, text/event-stream' -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}')" 401
+# La limpieza: un revocado se queda a la vista una semana y luego se borra. El
+# job se corre a mano (superuser); `revoked_at` se adelanta para no esperar.
+runjob(){ code -X POST "$API/api/crons/$1" -H "Authorization: $SU"; }
+chk ">>> la limpieza de tokens revocados es un job" "$(runjob bubbleTokensPurge)" 204
+sleep 1
+chk "...y deja un token recién revocado" "$(code "$API/api/collections/agent_tokens/records/$TOKID" -H "Authorization: $C")" 200
+ARG='{"revoked_at":"2020-01-01 00:00:00.000Z"}'
+code -X PATCH "$API/api/collections/agent_tokens/records/$TOKID" -H "Authorization: $SU" -H "$JS" -d "$ARG" >/dev/null
+LIVETOK=$(tpost "$A" "" '{"name":"sigue vivo","days":0}' | j "['id']")
+runjob bubbleTokensPurge >/dev/null; sleep 1
+chk ">>> uno revocado hace más de una semana se borra" "$(code "$API/api/collections/agent_tokens/records/$TOKID" -H "Authorization: $C")" 404
+chk "...y uno vigente no se toca" "$(code "$API/api/collections/agent_tokens/records/$LIVETOK" -H "Authorization: $A")" 200
 
 # ------------------------------------------ personas: alta y borrado lógico ----
 echo
@@ -1740,6 +1895,32 @@ chk "...pero no el de otra" \
   "$(code -X PATCH "$API/api/collections/users/records/$BID" -H "Authorization: $A" -F "avatar=@/tmp/bubble-avatar.png;type=image/png")" 404
 rm -f /tmp/bubble-avatar.png
 
+# La purga: a los 30 días de borrada, una persona pierde sus datos personales y
+# se queda su cuenta, como firma. El job se corre a mano; `deleted_at` se
+# adelanta (superuser) para no esperar.
+PGID=$(ppost "$C" "" '{"email":"purga@bubble.test","name":"Purga","password":"passwordpass","role":"member"}' | j "['id']")
+PG=$(login purga@bubble.test)
+tpost "$PG" "" '{"name":"agente de purga","days":0}' >/dev/null
+ARG="{\"user\":\"$PGID\",\"value\":{\"week_start\":0}}"
+post prefs "$PG" "$ARG" >/dev/null
+sucount(){ curl -s "$API/api/collections/$1/records?filter=$(python3 -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.argv[1]))' "$2")" -H "Authorization: $SU" | j "['totalItems']"; }
+chk "purga tiene token, preferencias y equipo" \
+  "$(sucount agent_tokens "owner='$PGID'")$(sucount prefs "user='$PGID'")$(sucount team_members "user='$PGID'")" 111
+ppost "$C" "/$PGID/delete" '{}' >/dev/null
+chk ">>> la purga de personas borradas es un job" "$(code -X POST "$API/api/crons/bubblePeoplePurge" -H "Authorization: $SU")" 204
+sleep 1
+chk "...y no toca a quien se borró hace poco" "$(sucount agent_tokens "owner='$PGID'")" 1
+ARG='{"deleted_at":"2020-01-01 00:00:00.000Z"}'
+code -X PATCH "$API/api/collections/users/records/$PGID" -H "Authorization: $SU" -H "$JS" -d "$ARG" >/dev/null
+code -X POST "$API/api/crons/bubblePeoplePurge" -H "Authorization: $SU" >/dev/null; sleep 1
+chk ">>> a los 30 días se van sus datos personales" \
+  "$(sucount agent_tokens "owner='$PGID'")$(sucount prefs "user='$PGID'")$(sucount team_members "user='$PGID'")" 000
+chk "...y se queda su cuenta, con su nombre, como firma" \
+  "$(curl -s "$API/api/collections/users/records/$PGID" -H "Authorization: $SU" | j "['display_name']")" Purga
+chk "...marcada como purgada" \
+  "$(curl -s "$API/api/collections/users/records/$PGID" -H "Authorization: $SU" | python3 -c 'import sys,json;print("si" if json.load(sys.stdin)["purged_at"] else "no")')" si
+chk ">>> a quien sigue activo no lo toca" "$(sucount agent_tokens "owner='$AID' && revoked_at=''")" 1
+
 # ------------------------------- prioridad del hilo y secuencia de ejecución ----
 echo
 # Sin burbuja: la de alpha se borró más arriba, y lo que se prueba aquí es el hilo.
@@ -1754,6 +1935,16 @@ chk ">>> un member no la enciende" \
   "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $A" -H "$JS" -d '{"sequence":true}')" 404
 chk ">>> el lead global sí" \
   "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":true}')" 200
+chk ">>> Mi espacio nace encendido" "$(list features "$A" | j "['items'][0]['space']")" True
+chk ">>> un member no lo apaga" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $A" -H "$JS" -d '{"space":false}')" 404
+chk ">>> el lead global sí, y vuelve a encenderlo" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"space":false}')$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"space":true}')" 200200
+chk ">>> el roadmap nace apagado" "$(list features "$A" | j "['items'][0]['roadmap']")" False
+chk ">>> un member no lo enciende" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $A" -H "$JS" -d '{"roadmap":true}')" 404
+chk ">>> el lead global sí, y apagarlo no borra nada" \
+  "$(code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"roadmap":true}')" 200
 chk ">>> un member no pone la prioridad de un hilo" "$(tpatch "$A" "$SQ1" '{"priority":"P1"}')" 404
 chk ">>> ni lo mete en la secuencia" "$(tpatch "$A" "$SQ1" '{"sequence":10}')" 404
 chk "...pero sigue pudiendo renombrarlo" "$(tpatch "$A" "$SQ1" '{"name":"Paso uno"}')" 200
@@ -1799,6 +1990,90 @@ chk ">>> el board dice en qué paso vivo va cada hilo: el que quedó es ahora el
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ3'))")" 1
 chk "...y uno terminado ya no tiene paso" \
   "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c "import sys,json;d=json.load(sys.stdin);print(next(t.get('step',0) for t in d['threads'] if t['id']=='$SQ1'))")" 0
+
+# ------------------------------------------------------- furia de IA ----
+# Derivada (internal/fury): nunca se guarda, la apaga arreglar la causa. Las
+# reglas son del lead global; la función nace apagada.
+echo
+FT=$(post threads "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Pago urgente\"}" | j "['id']")
+tpatch "$C" "$FT" '{"priority":"P1","due_date":"2020-01-01 00:00:00.000Z"}' >/dev/null
+ftget(){ mcptext "${2:-$A}" thread_get "{\"thread\":\"$FT\"}" | python3 -c 'import sys,json;f=json.load(sys.stdin).get("fury");print("none" if not f else str(f["level"])+" "+",".join(r["rule"] for r in f["reasons"]))'; }
+frules(){ curl -s -X POST "$API/api/fury/rules" -H "Authorization: $1" -H "$JS" -d "$2"; }
+frulesc(){ code -X POST "$API/api/fury/rules" -H "Authorization: $1" -H "$JS" -d "$2"; }
+chk ">>> la furia nace apagada" "$(list features "$A" | j "['items'][0]['fury']")" False
+chk "...y apagada, un hilo P1 vencido no trae furia" "$(ftget)" none
+chk "...ni en el tablero" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $A" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any("fury" in x for x in d["threads"]+d["bubbles"]))')" False
+chk ">>> cualquiera lee las reglas" "$(curl -s "$API/api/fury/rules" -H "Authorization: $A" | j "['rules']['overdue']['level']")" 2
+chk ">>> un member no las escribe" "$(frulesc "$A" '{"reset":true}')" 403
+chk "...ni nadie por la API de registros" "$(pcode fury_rules "$C" '{"rules":{}}')" 403
+RULES=$(curl -s "$API/api/fury/rules" -H "Authorization: $C" | python3 -c 'import sys,json;r=json.load(sys.stdin)["rules"];r["overdue"]["late_level"]=5;print(json.dumps({"rules":r}))')
+chk ">>> un nivel fuera de 0–3 se rechaza" "$(frulesc "$C" "$RULES")" 400
+chk ">>> la vista previa es del lead global" "$(code -X POST "$API/api/fury/preview" -H "Authorization: $A" -H "$JS" -d '{}')" 403
+chk "...y calcula con la función apagada, para calibrar" \
+  "$(curl -s -X POST "$API/api/fury/preview" -H "Authorization: $C" -H "$JS" -d '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(i["fury"]["level"] for i in d["items"] if i["id"]=="'"$FT"'"))')" 3
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"fury":true}' >/dev/null
+chk ">>> encendida: P1 vencida hace años y sin asignados es 🔥 3" "$(ftget)" "3 overdue,ownerless"
+mefury(){ curl -s "$API/api/fury/me" -H "Authorization: $1" | python3 -c 'import sys,json;d=json.load(sys.stdin);its=[i["id"] for i in d["items"]];print(d["on"],d["level"]["level"],"'"$FT"'" in its, (its or [""])[0]=="'"$FT"'")'; }
+chk ">>> sin asignar, no es de alice: no está en lo suyo" "$(mefury "$A" | cut -d" " -f1,3)" "True False"
+chk "...con su nombre, su color y que parpadea" \
+  "$(mcptext "$A" thread_get "{\"thread\":\"$FT\"}" | python3 -c 'import sys,json;f=json.load(sys.stdin)["fury"];print(f["name"],f["color"],f["blink"])')" "Desatada red True"
+FB=$(post bubbles "$A" "{\"workspace\":\"$ALPHA\",\"name\":\"Cobros\"}" | j "['id']")
+tpatch "$A" "$FT" "{\"bubble\":\"$FB\"}" >/dev/null
+chk ">>> la burbuja toma la furia de su hilo abierto, y dice de cuál viene" \
+  "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json;b=[x for x in json.load(sys.stdin)["bubbles"] if x["id"]=="'"$FB"'"][0]["fury"];print(b["level"],b["reasons"][0]["thread_name"])')" "3 Pago urgente"
+tpatch "$C" "$FT" '{"sequence":1}' >/dev/null
+chk ">>> sequence_next trae la furia del hilo" \
+  "$(mcptext "$A" sequence_next '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(next(t["fury"]["level"] for t in d["now"]["threads"] if t["id"]=="'"$FT"'"))')" 3
+tpatch "$A" "$FT" "{\"assignees\":[\"$AID\"]}" >/dev/null
+chk ">>> asignarlo apaga «sin dueño», y queda lo vencido" "$(ftget)" "3 overdue"
+chk ">>> y ahora es de alice: su cabeza está desatada, por ese hilo primero" "$(mefury "$A")" "True 3 True True"
+chk "...y no está en lo de bob" "$(mefury "$B" | cut -d" " -f3)" "False"
+
+# El webhook de los semáforos: avisa, firmado, a un receptor de verdad.
+HOOKPORT=$((PORT + 7)); HOOKLOG=$(mktemp)
+hookc(){ code -X POST "$API/api/fury/hook$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+chk ">>> el webhook es del lead global" "$(code "$API/api/fury/hook" -H "Authorization: $A")" 403
+chk "...ni un member lo configura" "$(hookc "$A" "" '{"url":"http://127.0.0.1:1/x"}')" 403
+HOOK=$(curl -s -X POST "$API/api/fury/hook" -H "Authorization: $C" -H "$JS" -d "{\"url\":\"http://127.0.0.1:$HOOKPORT/fury\"}")
+SECRET=$(echo "$HOOK" | j "['secret']")
+chk ">>> al configurarlo, el secreto sale una vez" "${SECRET:0:4}" "bfs_"
+chk "...y no vuelve a salir" "$(curl -s "$API/api/fury/hook" -H "Authorization: $C" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("secret" in d, d["has_secret"])')" "False True"
+BUBBLE_FURY_SECRET="$SECRET" python3 scripts/fury_receiver.py "$HOOKPORT" --log "$HOOKLOG" >/dev/null 2>&1 &
+HOOKPID=$!; sleep 0.6
+hooklast(){ python3 -c 'import sys,json
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+m=[r for r in rows if r["body"].get("email")==sys.argv[2]]
+r=m[-1] if m else {}
+print(r.get("valid"), r.get("event"), r.get("body",{}).get("level"), r.get("body",{}).get("color"), r.get("body",{}).get("blink"))' "$HOOKLOG" "$1"; }
+chk ">>> un latido avisa a todos, firmado" \
+  "$(curl -s -X POST "$API/api/fury/hook/test" -H "Authorization: $C" -H "$JS" -d '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["sent"]>=3, d["failed"])')" "True 0"
+chk "...y la luz de alice es roja y parpadea (su hilo está desatado)" "$(hooklast alice@bubble.test)" "True fury.changed 3 red True"
+chk "...y la de bob, verde" "$(hooklast bob@bubble.test)" "True fury.changed 0 green False"
+chk ">>> el segundo latido sin cambios es un latido" \
+  "$(curl -s -X POST "$API/api/fury/hook/test" -H "Authorization: $C" -H "$JS" -d '{}' >/dev/null; hooklast alice@bubble.test)" "True fury.heartbeat 3 red True"
+RULES=$(curl -s "$API/api/fury/rules" -H "Authorization: $C" | python3 -c 'import sys,json;r=json.load(sys.stdin)["rules"];r["overdue"]["on"]=False;print(json.dumps({"rules":r}))')
+chk ">>> el lead global apaga una regla" "$(frules "$C" "$RULES" | j "['rules']['overdue']['on']")" False
+chk "...y deja de disparar" "$(ftget)" none
+chk ">>> volver a las de serie" "$(frules "$C" '{"reset":true}' | j "['rules']['overdue']['on']")" True
+code -X POST "$API/api/threads/$FT/complete" -H "Authorization: $A" >/dev/null
+chk ">>> terminado, no hay furia" "$(ftget)" none
+sleep 3
+# Le queda «Portal», una burbuja P2 dormida de la que responde: de roja que
+# parpadea a amarilla, sin esperar al latido.
+chk ">>> terminar el hilo baja la luz de alice al momento" "$(hooklast alice@bubble.test)" "True fury.changed 1 yellow False"
+OLD=$(wc -l < "$HOOKLOG")
+curl -s -X POST "$API/api/fury/hook" -H "Authorization: $C" -H "$JS" -d '{"rotate":true}' >/dev/null
+curl -s -X POST "$API/api/fury/hook/test" -H "Authorization: $C" -H "$JS" -d '{}' >/dev/null
+chk ">>> con el secreto rotado, el receptor viejo rechaza la firma" "$(hooklast alice@bubble.test | cut -d" " -f1)" False
+chk "...y Bubble lo cuenta como fallo" "$(curl -s "$API/api/fury/hook" -H "Authorization: $C" | j "['last_status']" | grep -c 'fallaron')" 1
+kill "$HOOKPID" 2>/dev/null; rm -f "$HOOKLOG"
+curl -s -X POST "$API/api/fury/hook" -H "Authorization: $C" -H "$JS" -d '{"url":""}' >/dev/null
+chk "...y la burbuja se calma" \
+  "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json;print("fury" in [x for x in json.load(sys.stdin)["bubbles"] if x["id"]=="'"$FB"'"][0])')" False
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"fury":false}' >/dev/null
+chk ">>> apagada, la cabeza no se dibuja" "$(mefury "$A")" "False 0 False False"
+tpatch "$C" "$FT" '{"sequence":0}' >/dev/null
 
 # ------------------- las dos columnas laterales de la secuencia, paginadas ----
 #
@@ -2084,6 +2359,19 @@ chk "...sin cambiar la caja personal del lead" \
 chk ">>> un miembro no puede pedir los artefactos del inbox departamental" \
   "$(code "$API/api/artifacts?scope=inbox" -H "Authorization: $B")" 403
 chk "...caduca a los 30 días si nadie lo fija" "$(echo "$LIST" | j "['artifacts'][0]['expires_at']" | grep -c .)" 1
+TUNID=$(curl -s "$API/api/collections/tuning/records" -H "Authorization: $C" | j "['items'][0]['id']")
+artdays(){ curl -s "$API/api/artifacts" -H "Authorization: $A" | python3 -c 'import sys,json,datetime as d
+a=json.load(sys.stdin)["artifacts"][0]; e=d.datetime.fromisoformat(a["expires_at"].replace("Z","+00:00"))
+print(round((e-d.datetime.now(d.timezone.utc)).total_seconds()/86400))'; }
+chk "...hoy en ~30 días" "$(artdays)" 30
+ARG='{"artifact_days":7}'
+chk ">>> la duración es configurable: el lead global la baja a 7 días" \
+  "$(code -X PATCH "$API/api/collections/tuning/records/$TUNID" -H "Authorization: $C" -H "$JS" -d "$ARG")" 200
+chk "...y el artefacto caduca en ~7" "$(artdays)" 7
+chk "...un member no la cambia" \
+  "$(code -X PATCH "$API/api/collections/tuning/records/$TUNID" -H "Authorization: $B" -H "$JS" -d "$ARG")" 404
+ARG='{"artifact_days":30}'
+code -X PATCH "$API/api/collections/tuning/records/$TUNID" -H "Authorization: $C" -H "$JS" -d "$ARG" >/dev/null
 chk ">>> fijarlo le quita la caducidad" \
   "$(curl -s -X POST "$API/api/artifacts/$GID/pin" -H "Authorization: $A" -H "$JS" -d '{"pinned":true}' | j "['expires_at']")" ""
 chk ">>> bob no lo fija" "$(code -X POST "$API/api/artifacts/$GID/pin" -H "Authorization: $B" -H "$JS" -d '{"pinned":true}')" 404
@@ -2299,6 +2587,15 @@ chk ">>> la guía editada es la que sirve agents_md" \
 chk ">>> ...y la tabla de tools sigue: se genera, no se edita" \
   "$(mcptext "$A" agents_md '{}' | grep -c '^## Tools por categoría')" 1
 curl -s -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"agents_guide","reset":true}' >/dev/null
+# Las instructions llegan en cada sesión y Claude Code las corta a 2 048
+# caracteres sin avisar: lo que no cabe, no se guarda.
+LONGINS=$(python3 -c 'import json;print(json.dumps({"key":"instructions","content":"x"*2100}))')
+chk ">>> unas instructions de más de 2 048 caracteres se rechazan" \
+  "$(code -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d "$LONGINS")" 400
+curl -s -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"instructions","content":"EDITADAS release {{release}} ({{role}})"}' >/dev/null
+chk "...y unas que caben llegan en el siguiente initialize, rellenadas" \
+  "$(mcp "$A" initialize '{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"t","version":"1"}}' | j "['result']['instructions']" | sed -E 's/[0-9a-f]{16}/R/')" "EDITADAS release R (operators)"
+curl -s -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"instructions","reset":true}' >/dev/null
 chk ">>> un prompt vacío se rechaza: hay que restaurar" \
   "$(code -X POST "$API/api/prompt" -H "Authorization: $C" -H "$JS" -d '{"key":"grill","content":"  "}')" 400
 chk ">>> el AGENTS.md se guarda por la misma puerta" \
@@ -2368,6 +2665,18 @@ chk "...ni sus hilos" "$(code "$API/api/collections/threads/records/$GT" -H "Aut
 chk "...ni el documento" "$(code "$API/api/threads/$GT/document" -H "Authorization: $C")" 404
 chk "...ni en el tablero de todos" \
   "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any(w["id"]=="'"$GWS"'" for w in json.load(sys.stdin)["workspaces"]))')" False
+# «Todos los equipos»: la vista del lead global junta los compartidos y deja
+# fuera lo personal, también lo suyo. Sin scope, su tablero sigue igual.
+chk ">>> gina ve su proyecto personal en su tablero de todos" \
+  "$(curl -s "$API/api/board" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any(w["id"]=="'"$GWS"'" for w in json.load(sys.stdin)["workspaces"]))')" True
+chk "...pero no en Todos los equipos: ni el proyecto, ni sus hilos" \
+  "$(curl -s "$API/api/board?scope=shared" -H "Authorization: $GI" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any(w["id"]=="'"$GWS"'" for w in d["workspaces"]), any(t["workspace"]=="'"$GWS"'" for t in d["threads"]), any(b["workspace"]=="'"$GWS"'" for b in d["bubbles"]))')" "False False False"
+chk "...y sí TI, con lo de carol" \
+  "$(curl -s "$API/api/board?scope=shared" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any(w["id"]=="'"$ALPHA"'" for w in json.load(sys.stdin)["workspaces"]))')" True
+chk "...sin un solo proyecto de un equipo personal" \
+  "$(curl -s "$API/api/board?scope=shared" -H "Authorization: $GI" | python3 -c 'import sys,json;print(sum(1 for w in json.load(sys.stdin)["workspaces"] if w.get("team")=="'"$GP"'"))')" 0
+chk ">>> Todos los equipos no es de un member" "$(code "$API/api/board?scope=shared" -H "Authorization: $A")" 403
+chk ">>> un scope desconocido se rechaza" "$(code "$API/api/board?scope=todo" -H "Authorization: $GI")" 400
 ARG="{\"thread\":\"$GT\"}"
 chk "...ni por MCP" "$(mcptext "$C" thread_get "$ARG" | grep -c 'not found')" 1
 chk "...ni en lo que cambió" \
@@ -2426,6 +2735,37 @@ chk ">>> y sequence_next de su equipo lo trae" \
 ARG="{\"team\":\"$TI\"}"
 chk "...pero no la línea de TI" \
   "$(mcptext "$GI" sequence_next "$ARG" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(any(t["id"]=="'"$GT"'" for s in (d.get("now"),d.get("then")) if s for t in s["threads"]))')" False
+# Funciones por equipo (features.go): lo que diga el equipo; si no dice nada,
+# el departamento. Aquí la secuencia global está encendida.
+feat(){ curl -s -X POST "$API/api/teams/$2/features" -H "Authorization: $1" -H "$JS" -d "$3"; }
+featc(){ code -X POST "$API/api/teams/$2/features" -H "Authorization: $1" -H "$JS" -d "$3"; }
+seqon(){ mcptext "$1" sequence_next "{\"team\":\"$2\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin).get("enabled", True))'; }
+chk ">>> un equipo nace heredando las funciones del departamento" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;t=[x for x in json.load(sys.stdin)["teams"] if x["id"]=="'"$GP"'"][0];print(sorted(t["features"].items()))')" \
+  "[('roadmap', ''), ('sequence', '')]"
+chk ">>> un member no decide las funciones de su equipo" "$(featc "$A" "$TI" '{"key":"sequence","value":"off"}')" 403
+chk "...ni el lead global las de un equipo personal ajeno" "$(featc "$C" "$GP" '{"key":"sequence","value":"off"}')" 403
+chk ">>> Mi espacio no es de un equipo" "$(featc "$GI" "$GP" '{"key":"space","value":"off"}')" 400
+chk ">>> un valor raro se rechaza" "$(featc "$GI" "$GP" '{"key":"sequence","value":"maybe"}')" 400
+chk ">>> gina apaga la secuencia de su equipo" \
+  "$(feat "$GI" "$GP" '{"key":"sequence","value":"off"}' | j "['features']['sequence']")" off
+chk "...y sequence_next de su equipo dice que está apagada" "$(seqon "$GI" "$GP")" False
+chk "...sin tocar la de TI, que hereda la del departamento" "$(seqon "$GI" "$TI")" True
+chk "...y GET /api/teams lo cuenta" \
+  "$(curl -s "$API/api/teams" -H "Authorization: $GI" | python3 -c 'import sys,json;print([x for x in json.load(sys.stdin)["teams"] if x["id"]=="'"$GP"'"][0]["features"]["sequence"])')" off
+chk ">>> vacío vuelve a heredar" \
+  "$(feat "$GI" "$GP" '{"key":"sequence","value":""}' | j "['features']['sequence']")$(seqon "$GI" "$GP")" True
+# Al revés: el departamento la apaga y un equipo la quiere.
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":false}' >/dev/null
+feat "$GI" "$GP" '{"key":"sequence","value":"on"}' >/dev/null
+chk ">>> con el departamento apagado, un equipo la enciende para sí" "$(seqon "$GI" "$GP")" True
+chk "...y los demás siguen apagados" "$(seqon "$GI" "$TI")" False
+chk "...y su línea sigue ahí, como se dejó" \
+  "$(mcptext "$GI" sequence_next "{\"team\":\"$GP\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["now"]["threads"][0]["id"]=="'"$GT"'")')" True
+feat "$GI" "$GP" '{"key":"sequence","value":""}' >/dev/null
+code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"sequence":true}' >/dev/null
+chk ">>> nadie escribe team_features por la API de registros" \
+  "$(pcode team_features "$GI" "{\"team\":\"$GP\",\"roadmap\":\"on\"}")" 403
 chk ">>> la cola de un equipo sólo trae sus proyectos" \
   "$(curl -s "$API/api/queue?kind=threads&state=open&team=$TI" -H "Authorization: $GI" | python3 -c 'import sys,json;print(all(c["workspace"]!="'"$GWS"'" for c in json.load(sys.stdin)["items"]))')" True
 
@@ -2492,6 +2832,19 @@ ARG="{\"name\":\"Almacén\",\"team\":\"Operaciones\"}"
 OWS=$(mcptext "$A" project_create "$ARG" | j "['id']")
 chk "...y alice crea un proyecto ahí, por nombre del equipo" \
   "$(curl -s "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" | j "['team']")" "$OPS"
+# E1: el equipo de un hilo lo deriva el servidor del de su proyecto.
+ARG="{\"workspace\":\"$OWS\",\"name\":\"Inventario\",\"team\":\"$GP\"}"
+OTH=$(post threads "$A" "$ARG" | j "['id']")
+chk ">>> un hilo es del equipo de su proyecto, aunque el cliente diga otro" \
+  "$(curl -s "$API/api/collections/threads/records/$OTH" -H "Authorization: $SU" | j "['team']")" "$OPS"
+ARG="{\"project\":\"$OWS\",\"name\":\"Conteo\"}"
+OTM=$(mcptext "$A" thread_create "$ARG" | j "['id']")
+chk "...también el creado por MCP" \
+  "$(curl -s "$API/api/collections/threads/records/$OTM" -H "Authorization: $SU" | j "['team']")" "$OPS"
+ARG="{\"team\":\"$GP\"}"
+curl -s -o /dev/null -X PATCH "$API/api/collections/threads/records/$OTH" -H "Authorization: $A" -H "$JS" -d "$ARG"
+chk "...y no se cambia a mano" \
+  "$(curl -s "$API/api/collections/threads/records/$OTH" -H "Authorization: $SU" | j "['team']")" "$OPS"
 ARG="{\"team\":\"$TI\"}"
 chk ">>> alice no mueve el proyecto a TI: no es lead global" \
   "$(code -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $A" -H "$JS" -d "$ARG")" 403
@@ -2501,11 +2854,88 @@ chk ">>> carol no lo mueve al equipo personal de gina" \
 ARG="{\"team\":\"$TI\"}"
 chk ">>> carol sí lo mueve a TI: lidera los dos" \
   "$(curl -s -X PATCH "$API/api/collections/workspaces/records/$OWS" -H "Authorization: $C" -H "$JS" -d "$ARG" | j "['team']")" "$TI"
+chk "...y sus hilos se van con él" \
+  "$(sucount threads "workspace = '$OWS' && team = '$TI'")/$(sucount threads "workspace = '$OWS' && team != '$TI'")" "2/0"
+chk ">>> ningún hilo con proyecto está sin equipo" "$(sucount threads "workspace != '' && team = ''")" 0
 chk ">>> un equipo con proyectos no se borra" \
   "$(code -X DELETE "$API/api/teams/$GP" -H "Authorization: $GI")" 400
 chk ">>> uno vacío sí" "$(code -X DELETE "$API/api/teams/$OPS" -H "Authorization: $C")" 204
 chk ">>> team_list: los equipos y el papel en cada uno" \
   "$(mcptext "$GI" team_list '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(sorted((t["name"],t["role"],t["personal"]) for t in d["teams"]))')" "[('Personal · Gina', 'lead', True), ('TI', 'lead', False)]"
+
+# ------------------------------------------------ sin contextos ----
+# Se quitaron (20 oct): la vista de blobs agrupa por los tags del frontmatter.
+echo
+chk ">>> ya no hay colección de contextos" "$(code "$API/api/collections/contexts/records" -H "Authorization: $SU")" 404
+chk "...ni campo context en el tablero" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any("context" in b for b in json.load(sys.stdin)["bubbles"]))')" False
+
+# ------------------------------------------------ tags del frontmatter ----
+# La fuente es el documento del hilo; `threads.tags` es un índice que escribe
+# el servidor. Cambiar sólo los tags clasifica: no calienta ni da pulso.
+TG=$(mcptext "$C" thread_create '{"project":"alpha","name":"Con tags"}' | j "['id']")
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [Pagos, \"#cliente/ACME\", pagos]\n---\n# Plan\n\n- [ ] cobrar\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> los tags salen del frontmatter, normalizados y sin repetir" \
+  "$(mcptext "$C" thread_get "{\"thread\":\"$TG\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tags"])')" "['pagos', 'cliente/acme']"
+chk "...y el tablero los trae" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;print([t.get("tags") for t in json.load(sys.stdin)["threads"] if t["id"]=="'"$TG"'"][0])')" "['pagos', 'cliente/acme']"
+chk "...el frontmatter no se dibuja" \
+  "$(curl -s "$API/api/threads/$TG/document" -H "Authorization: $C" | python3 -c 'import sys,json;h=json.load(sys.stdin)["html"];print("tags:" in h, "cobrar" in h)')" "False True"
+EVW() { curl -s "$API/api/collections/thread_evidence/records/$TG" -H "Authorization: $SU" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["warm_count"], d["last_warm_at"], d["last_any_at"])'; }
+BEFORE=$(EVW)
+sleep 1
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [infra]\n---\n# Plan\n\n- [ ] cobrar\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> cambiar sólo los tags se registra como clasificación" \
+  "$(EV "target='$TG'%20%26%26%20kind='document-classified'" "$SU" | j "['totalItems']")" 1
+chk "...no calienta ni cuenta como pulso" "$(EVW)" "$BEFORE"
+chk "...y el índice sigue al documento" \
+  "$(mcptext "$C" thread_get "{\"thread\":\"$TG\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tags"])')" "['infra']"
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [infra]\n---\n# Plan\n\n- [x] cobrar\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> cambiar el cuerpo sí es evidencia, como siempre" \
+  "$(EV "target='$TG'%20%26%26%20kind='document-changed'" "$SU" | j "['totalItems']")" 2
+chk ">>> un cliente no escribe el índice" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$TG" -H "Authorization: $C" -H "$JS" -d '{"tags":["falso"]}')/$(mcptext "$C" thread_get "{\"thread\":\"$TG\"}" | python3 -c 'import sys,json;print(json.load(sys.stdin)["tags"])')" "200/['infra']"
+# Lo escrito: palabras del Markdown (sin frontmatter) y archivos (páginas más
+# imágenes citadas, sin repetir). Índice del servidor, como los tags.
+WF() { curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;t=[t for t in json.load(sys.stdin)["threads"] if t["id"]=="'"$TG"'"][0];print(t.get("words",0), t.get("files",0))'; }
+H=$(hashof "$(mcptext "$C" document_read "{\"thread\":\"$TG\"}")")
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"thread":sys.argv[1],"base":sys.argv[2],"content":"---\ntags: [infra]\n---\n# Plan\n\nuno dos tres\n\n![foto](assets/foto.png)\n"}))' "$TG" "$H")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk ">>> lo escrito se mide: palabras sin frontmatter e imágenes citadas" "$(WF)" "6 1"
+TGDIR=$(curl -s "$API/api/collections/threads/records/$TG" -H "Authorization: $SU" | j "['doc_path']" | sed 's/\.md$//')
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"project":"alpha","path":sys.argv[1]+"/notas.md","base":sys.argv[2],"content":"cuatro cinco ![otra](assets/foto.png) ![b](assets/b.png)\n"}))' "$TGDIR" "$E0")
+mcptext "$C" document_replace "$ARG" >/dev/null
+chk "...una página suma su texto, ella misma y lo que cita, sin repetir" "$(WF)" "10 3"
+ARG=$(python3 -c 'import json,sys;print(json.dumps({"project":"alpha","path":sys.argv[1]+"/notas.md"}))' "$TGDIR")
+mcptext "$C" document_delete "$ARG" >/dev/null
+chk "...y borrarla lo resta" "$(WF)" "6 1"
+chk ">>> un cliente no escribe lo escrito" \
+  "$(code -X PATCH "$API/api/collections/threads/records/$TG" -H "Authorization: $C" -H "$JS" -d '{"doc_words":999,"doc_files":9}')/$(WF)" "200/6 1"
+curl -s -X DELETE "$API/api/collections/threads/records/$TG" -H "Authorization: $C" >/dev/null
+
+# Las aristas del grafo: relaciones declaradas, con los dos extremos visibles y
+# del mismo equipo.
+LA=$(mcptext "$C" thread_create '{"project":"alpha","name":"Antes"}' | j "['id']")
+LB=$(mcptext "$C" thread_create '{"project":"alpha","name":"Después"}' | j "['id']")
+ARG="{\"thread\":\"$LB\",\"related\":\"$LA\",\"type\":\"blocked_by\"}"
+mcptext "$C" thread_relate "$ARG" >/dev/null
+chk ">>> el tablero trae la dependencia, de lo que va antes a lo que espera" \
+  "$(curl -s "$API/api/workspaces/$ALPHA/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(any((l["from"]=="'"$LA"'" and l["to"]=="'"$LB"'" and l["kind"]=="dependency") for l in json.load(sys.stdin)["links"]))')" True
+chk "...y el de todos también" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print(sum(1 for l in json.load(sys.stdin)["links"] if l["from"]=="'"$LA"'" and l["to"]=="'"$LB"'"))')" 1
+post thread_relations "$GI" "{\"thread\":\"$GT\",\"type\":\"relates_to\",\"related\":\"$LA\"}" >/dev/null
+chk ">>> una relación entre equipos no es arista, ni para quien ve los dos" \
+  "$(curl -s "$API/api/board" -H "Authorization: $GI" | python3 -c 'import sys,json;print(any("'"$GT"'" in (l["from"],l["to"]) for l in json.load(sys.stdin)["links"]))')" False
+chk "...y quien no ve un extremo no recibe su id" \
+  "$(curl -s "$API/api/board" -H "Authorization: $C" | python3 -c 'import sys,json;print("'"$GT"'" in json.dumps(json.load(sys.stdin)["links"]))')" False
+chk ">>> en el tablero de lectura de un member, sólo aristas entre lo suyo" \
+  "$(curl -s "$API/api/planner/read" -H "Authorization: $B" | python3 -c 'import sys,json;b=json.load(sys.stdin)["board"];ids={t["id"] for t in b["threads"]};print(all(l["from"] in ids and l["to"] in ids for l in b["links"]))')" True
 
 chk ">>> el superuser SÍ ve el board (se salta las reglas en todos lados o en ninguno)" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$API/api/workspaces/$ALPHA/board" -H "Authorization: $SU")" 200

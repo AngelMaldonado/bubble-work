@@ -33,12 +33,11 @@ func registerSequence(app core.App) {
 	})
 }
 
-// SequenceOn dice si el departamento tiene encendida la secuencia de ejecución
-// (`features.sequence`). Sin la fila —una base a medio migrar— está apagada.
-func SequenceOn(app core.App) bool {
-	f, err := app.FindFirstRecordByFilter("features", "id != ''")
-	return err == nil && f.GetBool("sequence")
-}
+// SequenceOn dice si un equipo tiene encendida la secuencia de ejecución: lo
+// que decida el equipo (`team_features`) o, si no dice nada, el departamento
+// (`features.sequence`). Sin la fila global —una base a medio migrar— está
+// apagada.
+func SequenceOn(app core.App, team string) bool { return FeatureOn(app, team, "sequence") }
 
 // NextStep es un paso de la secuencia: los hilos que lo comparten.
 type NextStep struct {
@@ -69,10 +68,10 @@ func Next(app core.App, auth *core.Record, team string) (map[string]any, error) 
 			}
 		}
 	}
-	if !SequenceOn(app) {
+	if !SequenceOn(app, teamID) {
 		return map[string]any{
 			"enabled": false,
-			"note":    "La secuencia de ejecución está apagada en este departamento: el lead global la enciende en Ajustes → Funciones.",
+			"note":    "La secuencia de ejecución está apagada en este equipo: un lead del equipo la enciende en Ajustes → Equipos (o el lead global, para todos, en Ajustes → Funciones).",
 		}, nil
 	}
 	rows, err := app.FindRecordsByFilter("threads", "sequence > 0", "sequence,seq", 0, 0, dbx.Params{})
@@ -101,16 +100,22 @@ func Next(app core.App, auth *core.Record, team string) (map[string]any, error) 
 	}
 	sort.Ints(steps)
 
+	furies := newFuryCache(app)
 	row := func(r *core.Record) map[string]any {
 		slug := ""
 		if ws, err := app.FindRecordById("workspaces", r.GetString("workspace")); err == nil {
 			slug = ws.GetString("slug")
 		}
-		return map[string]any{
+		out := map[string]any{
 			"id": r.Id, "seq": r.GetInt("seq"), "name": r.GetString("name"),
 			"workspace": slug, "bubble": r.GetString("bubble"),
 			"priority": r.GetString("priority"), "assignees": r.GetStringSlice("assignees"),
 		}
+		// La furia de IA, si está encendida y alguna regla disparó.
+		if f := furies.thread(r.GetString("workspace"), r.Id); f != nil {
+			out["fury"] = f
+		}
+		return out
 	}
 	step := func(i int) *NextStep {
 		if i >= len(steps) {

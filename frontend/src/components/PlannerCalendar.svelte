@@ -31,6 +31,7 @@
   import Icon from './Icon.svelte';
   import FilterPick from './FilterPick.svelte';
   import { shiftCalendarDate } from '../lib/calendarDate';
+  import { weekStart } from '../lib/weekStart.svelte';
 
   let {
     events = [],
@@ -88,7 +89,8 @@
     // Our own header is outside the calendar, so its toolbar is empty rather
     // than hidden: an empty toolbar takes no space and needs no override.
     headerToolbar: { start: '', center: '', end: '' },
-    firstDay: 1 as const, // the week starts on Monday here
+    // El día en que empieza la semana: el que eligió quien mira (lunes si no).
+    firstDay: weekStart.day as 0 | 1 | 2 | 3 | 4 | 5 | 6,
     locale: 'es',
     height: '100%',
     // Dragging an event is rescheduling it, which is the whole reason a
@@ -131,6 +133,12 @@
     if (text === last) return;
     last = text;
     options.events = next;
+  });
+
+  // …y si lo cambia con el calendario abierto, se rearma.
+  $effect(() => {
+    const d = weekStart.day;
+    if (options.firstDay !== d) options.firstDay = d as 0 | 1 | 2 | 3 | 4 | 5 | 6;
   });
 
   const year = $derived(options.date.getFullYear());

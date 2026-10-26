@@ -47,10 +47,10 @@
       ]);
       // La agenda del equipo elegido.
       const T = teams.current;
-      places = ws.filter((w) => !T || !w.team || w.team === T || !teams.mine(w.team));
+      places = ws.filter((w) => !T || teams.inScope(w));
       const inT = new Set(places.map((w) => w.id));
       bubbles = bs.filter((b) => inT.has(b.workspace));
-      dates = ce.filter((e) => !T || !e.team || e.team === T);
+      dates = ce.filter((e) => !T || !e.team || teams.inView(e.team));
       error = '';
     } catch (e) {
       error = (e as Error).message;

@@ -349,8 +349,39 @@ func (w *WhatsApp) unlink(ctx context.Context) error {
 	}
 	cli.Disconnect()
 	w.newClient(container.NewDevice())
+	w.forgetAccount()
 	w.set("unlinked", "Cuenta desvinculada.")
 	return nil
+}
+
+// rememberAccount guarda en la configuración del canal qué número está
+// vinculado: así se ve también con el canal apagado, cuando no hay cliente
+// que preguntar.
+func (w *WhatsApp) rememberAccount() {
+	w.mu.Lock()
+	cli := w.client
+	w.mu.Unlock()
+	if cli == nil || cli.Store == nil || cli.Store.ID == nil {
+		return
+	}
+	cfg := w.store.Config()
+	account, name := "+"+cli.Store.ID.User, cli.Store.PushName
+	if cfg["account"] == account && cfg["push_name"] == name {
+		return
+	}
+	cfg["account"], cfg["push_name"] = account, name
+	_ = w.store.SaveConfig(cfg)
+}
+
+// forgetAccount: ya no hay número vinculado.
+func (w *WhatsApp) forgetAccount() {
+	cfg := w.store.Config()
+	if cfg["account"] == nil && cfg["push_name"] == nil {
+		return
+	}
+	delete(cfg, "account")
+	delete(cfg, "push_name")
+	_ = w.store.SaveConfig(cfg)
 }
 
 // handle recibe los eventos de whatsmeow.
@@ -358,6 +389,7 @@ func (w *WhatsApp) handle(evt any) {
 	switch v := evt.(type) {
 	case *events.Connected:
 		w.set("connected", "")
+		w.rememberAccount()
 	case *events.Disconnected:
 		w.mu.Lock()
 		if w.state == "connected" {
@@ -365,6 +397,7 @@ func (w *WhatsApp) handle(evt any) {
 		}
 		w.mu.Unlock()
 	case *events.LoggedOut:
+		w.forgetAccount()
 		w.set("unlinked", "WhatsApp cerró la sesión de este dispositivo. Vuelve a vincular.")
 	case *events.StreamReplaced:
 		w.set("error", "Otra instancia abrió esta misma sesión.")

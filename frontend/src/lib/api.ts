@@ -145,6 +145,7 @@ export type FuryRules = {
   forgotten: { on: boolean; dormant_level: number; rip_level: number };
   ownerless: { on: boolean; level: number };
 };
+export type FuryHook = { url: string; has_secret: boolean; last_status: string; last_at: string; last_sent: number };
 export type FuryPreview = {
   counts: { thread: number; bubble: number };
   /** cuántas hay en cada nivel, del 0 al 3 */
@@ -1053,6 +1054,18 @@ class Api {
   /** Mi furia: lo asignado a mí y las burbujas de las que respondo. */
   myFury() {
     return this.call<{ on: boolean; level: FuryLevel; items: FuryPreview['items'] }>('/api/fury/me');
+  }
+
+  /** El webhook de los semáforos (lead global). `secret` sólo llega al
+   *  configurarlo la primera vez o al rotarlo. */
+  furyHook() {
+    return this.call<FuryHook>('/api/fury/hook');
+  }
+  saveFuryHook(body: { url?: string; rotate?: boolean }) {
+    return this.call<FuryHook & { secret?: string }>('/api/fury/hook', { method: 'POST', body: JSON.stringify(body) });
+  }
+  testFuryHook() {
+    return this.call<FuryHook & { sent: number; failed: number; status: string }>('/api/fury/hook/test', { method: 'POST', body: '{}' });
   }
 
   /** Qué dispararía ahora con estas reglas, aunque la función esté apagada. */

@@ -86,6 +86,7 @@ Si el departamento la tiene encendida, `project_board`, `thread_get` y `sequence
 
 - **Distingue idea de trabajo, y respeta el contexto.** Lo que nadie ha decidido hacer es una idea y va al inbox de su equipo (`inbox_capture`); trabajo es lo que vive en un hilo. Lo de un equipo se queda en ese equipo.
 - **Busca antes de crear.** Un hilo existente gana a uno nuevo. Crear uno al lado del que estaba a medias es cómo se pierde el contexto y cómo el tablero acaba mostrando el doble de trabajo del que hay.
+- **Pocos módulos y pocos hilos (KISS).** La persona espera ver poco que mantener. Antes de abrir un módulo, mira si el trabajo cabe en uno que ya existe; antes de abrir un hilo, si es un paso más (una casilla) de uno abierto. Parte el trabajo en hilos sólo cuando de verdad son unidades distintas: otra persona, otro entregable, o algo que se termina por separado.
 - **Escribir el documento ES el trabajo.** No es un informe que se redacta al final: es dónde vive por qué existe esto, qué es cierto cuando esté hecho, el siguiente paso concreto y las casillas `- [ ]` de los pasos. Anótalo mientras avanzas.
 - **Marca casillas** (`checkbox_toggle`) cuando un paso se cumple de verdad; es la evidencia más pequeña que puede dar un hilo.
 - **Agrega evidencia** (`evidence_add`) por cada commit, PR o entregable que cierre un paso.

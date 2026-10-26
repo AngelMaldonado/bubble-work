@@ -1,0 +1,8 @@
+# BuildKit recibe sólo el receptor, no .env, bases de datos ni el repositorio.
+**
+!scripts/
+!scripts/fury_receiver.py
+!deploy/
+!deploy/fury-lab/
+!deploy/fury-lab/Dockerfile
+!deploy/fury-lab/Dockerfile.dockerignore

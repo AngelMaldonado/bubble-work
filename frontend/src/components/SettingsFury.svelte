@@ -10,7 +10,8 @@
   import Loading from './Loading.svelte';
   import Icon from './Icon.svelte';
   import { furyIcon, iconSrc } from '../lib/icons';
-  import { api, type FuryLevel, type FuryPreview, type FuryRules, type Person } from '../lib/api';
+  import { api, type FuryHook, type FuryLevel, type FuryPreview, type FuryRules, type Person } from '../lib/api';
+  import { ago } from '../lib/when';
 
   let { me }: { me: Person } = $props();
   const canEdit = $derived(me.role === 'lead');
@@ -76,6 +77,34 @@
     } finally {
       saving = false;
     }
+  }
+
+  // ---- semáforos: el webhook (sólo el lead global) ----
+  let hook = $state<FuryHook | null>(null);
+  let hookUrl = $state('');
+  let secret = $state('');
+  let hookBusy = $state('');
+  let hookMsg = $state('');
+  let secretCopied = $state(false);
+  async function loadHook() {
+    if (!canEdit) return;
+    try { hook = await api.furyHook(); hookUrl = hook.url; } catch (e) { hookMsg = (e as Error).message; }
+  }
+  loadHook();
+  async function hookDo(what: string, p: () => Promise<FuryHook & { secret?: string; status?: string }>) {
+    hookBusy = what; hookMsg = '';
+    try {
+      const r = await p();
+      hook = r; hookUrl = r.url;
+      if (r.secret) secret = r.secret;
+      // El resultado lo dice «Último envío»; aquí sólo los errores.
+      if (r.status && (r as { failed?: number }).failed) hookMsg = r.status;
+    } catch (e) { hookMsg = (e as Error).message; }
+    finally { hookBusy = ''; }
+  }
+  async function copySecret() {
+    try { await navigator.clipboard.writeText(secret); secretCopied = true; setTimeout(() => (secretCopied = false), 1800); }
+    catch { hookMsg = 'El navegador no dejó copiar al portapapeles.'; }
   }
 
   const lv = (n: number) => levels[n] ?? { level: n, name: '', emoji: '', color: '', blink: false };
@@ -217,6 +246,50 @@
           </ul>
         {/if}
       </div>
+
+      <!-- Los semáforos de la oficina: Bubble avisa a una URL, firmado. -->
+      <div class="set-card hook">
+        <h3 class="m-0">Semáforos</h3>
+        <p class="help">
+          Bubble avisa a esta URL de la luz de cada persona —la furia de sus hilos y sus burbujas—
+          cuando cambia y en un latido cada 5 minutos. Cada aviso va firmado
+          (<code>X-Bubble-Signature</code>, HMAC-SHA256 del cuerpo). El receptor reparte a cada
+          escritorio, y el semáforo se apaga si deja de oír latidos. Para probar sin hardware:
+          <code>BUBBLE_FURY_SECRET=… just fury listen</code>.
+        </p>
+        <form class="set-row" onsubmit={(e) => { e.preventDefault(); hookDo('save', () => api.saveFuryHook({ url: hookUrl.trim() })); }}>
+          <input class="input grow" type="url" placeholder="https://receptor.oficina.local/fury" bind:value={hookUrl}
+            autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" aria-label="URL del receptor" />
+          <button class="btn btn-sm preset-filled-primary-500" disabled={!!hookBusy || hookUrl.trim() === (hook?.url ?? '')}>
+            {#if hookBusy === 'save'}<Loading compact label="Guardando" />{:else}Guardar{/if}
+          </button>
+        </form>
+        {#if secret}
+          <!-- La única vez que el secreto sale del servidor. -->
+          <div class="secret-box" role="status">
+            <span class="help">Secreto para verificar las firmas. Cópialo ahora: no se vuelve a enseñar.</span>
+            <code class="secret">{secret}</code>
+            <div class="set-row">
+              <button class="btn btn-sm preset-filled-primary-500" onclick={copySecret}>{secretCopied ? '✓ copiado' : 'Copiar secreto'}</button>
+              <button class="btn btn-sm preset-tonal-surface ml-auto" onclick={() => (secret = '')}>Ya lo guardé</button>
+            </div>
+          </div>
+        {/if}
+        {#if hook?.url}
+          <div class="set-row">
+            <button class="btn btn-sm preset-tonal-surface" disabled={!!hookBusy} onclick={() => hookDo('test', () => api.testFuryHook())}>
+              {#if hookBusy === 'test'}<Loading compact label="Enviando" />{:else}Enviar latido ahora{/if}
+            </button>
+            <button class="btn btn-sm preset-tonal-surface" disabled={!!hookBusy} onclick={() => hookDo('rotate', () => api.saveFuryHook({ rotate: true }))}>
+              Generar otro secreto
+            </button>
+            {#if hook.last_at}
+              <span class="faint text-sm ml-auto">Último envío {ago(hook.last_at)}: {hook.last_status}</span>
+            {/if}
+          </div>
+        {/if}
+        {#if hookMsg}<p class="help">{hookMsg}</p>{/if}
+      </div>
     {/if}
   {/if}
 </section>
@@ -250,5 +323,9 @@
   .items li { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.45rem 0; border-top: 1px solid var(--line); font-size: 0.85rem; }
   .what { display: grid; min-width: 0; }
   .why { color: var(--muted); font-size: 0.78rem; }
+  .hook { display: grid; gap: 0.6rem; }
+  .hook .grow { flex: 1; min-width: 14rem; }
+  .secret-box { display: grid; gap: 0.4rem; padding: 0.75rem; border-radius: 10px; background: color-mix(in oklab, var(--accent) 10%, transparent); }
+  .secret { display: block; padding: 0.45rem 0.65rem; border-radius: 8px; background: var(--hover); font-size: 0.8rem; overflow-x: auto; white-space: nowrap; user-select: all; }
   .set-note { margin: 0; padding: 0.5rem 0.75rem; border-radius: 8px; background: var(--hover); font-size: 0.85rem; }
 </style>

@@ -15,6 +15,9 @@
 set -uo pipefail
 cd "$(dirname "$0")/.."
 
+echo "==> simulated fury gateway"
+PYTHONDONTWRITEBYTECODE=1 python3 scripts/test_fury_receiver.py || exit 1
+
 echo "==> go test"
 go test -race ./... || exit 1
 
@@ -2026,12 +2029,46 @@ tpatch "$A" "$FT" "{\"assignees\":[\"$AID\"]}" >/dev/null
 chk ">>> asignarlo apaga «sin dueño», y queda lo vencido" "$(ftget)" "3 overdue"
 chk ">>> y ahora es de alice: su cabeza está desatada, por ese hilo primero" "$(mefury "$A")" "True 3 True True"
 chk "...y no está en lo de bob" "$(mefury "$B" | cut -d" " -f3)" "False"
+
+# El webhook de los semáforos: avisa, firmado, a un receptor de verdad.
+HOOKPORT=$((PORT + 7)); HOOKLOG=$(mktemp)
+hookc(){ code -X POST "$API/api/fury/hook$2" -H "Authorization: $1" -H "$JS" -d "$3"; }
+chk ">>> el webhook es del lead global" "$(code "$API/api/fury/hook" -H "Authorization: $A")" 403
+chk "...ni un member lo configura" "$(hookc "$A" "" '{"url":"http://127.0.0.1:1/x"}')" 403
+HOOK=$(curl -s -X POST "$API/api/fury/hook" -H "Authorization: $C" -H "$JS" -d "{\"url\":\"http://127.0.0.1:$HOOKPORT/fury\"}")
+SECRET=$(echo "$HOOK" | j "['secret']")
+chk ">>> al configurarlo, el secreto sale una vez" "${SECRET:0:4}" "bfs_"
+chk "...y no vuelve a salir" "$(curl -s "$API/api/fury/hook" -H "Authorization: $C" | python3 -c 'import sys,json;d=json.load(sys.stdin);print("secret" in d, d["has_secret"])')" "False True"
+BUBBLE_FURY_SECRET="$SECRET" python3 scripts/fury_receiver.py "$HOOKPORT" --log "$HOOKLOG" >/dev/null 2>&1 &
+HOOKPID=$!; sleep 0.6
+hooklast(){ python3 -c 'import sys,json
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+m=[r for r in rows if r["body"].get("email")==sys.argv[2]]
+r=m[-1] if m else {}
+print(r.get("valid"), r.get("event"), r.get("body",{}).get("level"), r.get("body",{}).get("color"), r.get("body",{}).get("blink"))' "$HOOKLOG" "$1"; }
+chk ">>> un latido avisa a todos, firmado" \
+  "$(curl -s -X POST "$API/api/fury/hook/test" -H "Authorization: $C" -H "$JS" -d '{}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["sent"]>=3, d["failed"])')" "True 0"
+chk "...y la luz de alice es roja y parpadea (su hilo está desatado)" "$(hooklast alice@bubble.test)" "True fury.changed 3 red True"
+chk "...y la de bob, verde" "$(hooklast bob@bubble.test)" "True fury.changed 0 green False"
+chk ">>> el segundo latido sin cambios es un latido" \
+  "$(curl -s -X POST "$API/api/fury/hook/test" -H "Authorization: $C" -H "$JS" -d '{}' >/dev/null; hooklast alice@bubble.test)" "True fury.heartbeat 3 red True"
 RULES=$(curl -s "$API/api/fury/rules" -H "Authorization: $C" | python3 -c 'import sys,json;r=json.load(sys.stdin)["rules"];r["overdue"]["on"]=False;print(json.dumps({"rules":r}))')
 chk ">>> el lead global apaga una regla" "$(frules "$C" "$RULES" | j "['rules']['overdue']['on']")" False
 chk "...y deja de disparar" "$(ftget)" none
 chk ">>> volver a las de serie" "$(frules "$C" '{"reset":true}' | j "['rules']['overdue']['on']")" True
 code -X POST "$API/api/threads/$FT/complete" -H "Authorization: $A" >/dev/null
 chk ">>> terminado, no hay furia" "$(ftget)" none
+sleep 3
+# Le queda «Portal», una burbuja P2 dormida de la que responde: de roja que
+# parpadea a amarilla, sin esperar al latido.
+chk ">>> terminar el hilo baja la luz de alice al momento" "$(hooklast alice@bubble.test)" "True fury.changed 1 yellow False"
+OLD=$(wc -l < "$HOOKLOG")
+curl -s -X POST "$API/api/fury/hook" -H "Authorization: $C" -H "$JS" -d '{"rotate":true}' >/dev/null
+curl -s -X POST "$API/api/fury/hook/test" -H "Authorization: $C" -H "$JS" -d '{}' >/dev/null
+chk ">>> con el secreto rotado, el receptor viejo rechaza la firma" "$(hooklast alice@bubble.test | cut -d" " -f1)" False
+chk "...y Bubble lo cuenta como fallo" "$(curl -s "$API/api/fury/hook" -H "Authorization: $C" | j "['last_status']" | grep -c 'fallaron')" 1
+kill "$HOOKPID" 2>/dev/null; rm -f "$HOOKLOG"
+curl -s -X POST "$API/api/fury/hook" -H "Authorization: $C" -H "$JS" -d '{"url":""}' >/dev/null
 chk "...y la burbuja se calma" \
   "$(mcptext "$A" project_board '{"project":"alpha"}' | python3 -c 'import sys,json;print("fury" in [x for x in json.load(sys.stdin)["bubbles"] if x["id"]=="'"$FB"'"][0])')" False
 code -X PATCH "$API/api/collections/features/records/$FEAT" -H "Authorization: $C" -H "$JS" -d '{"fury":false}' >/dev/null

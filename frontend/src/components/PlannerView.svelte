@@ -1,4 +1,5 @@
 <script lang="ts">
+  import TeamPick from './TeamPick.svelte';
   import { teams } from '../lib/teams.svelte';
   import Icon from './Icon.svelte';
   // The planner — the strategic layer, in one screen.
@@ -344,15 +345,7 @@
     <!-- El planeador es de UN equipo. Aquí no hay barra lateral, así que el
          equipo se dice —y se cambia— en la barra de arriba. -->
     {#if teams.list.length > 1}
-      <label class="team">
-        <span class="sr-only">Equipo</span>
-        <select class="select" value={teams.current} aria-label="Equipo del planeador"
-          onchange={(e) => teams.set((e.currentTarget as HTMLSelectElement).value)}>
-          {#each teams.list as t (t.id)}
-            <option value={t.id}>{t.personal ? '🔒 ' : ''}{t.name}</option>
-          {/each}
-        </select>
-      </label>
+      <span class="team"><TeamPick teams={teams.list} value={teams.current} label="Equipo del planeador" onchange={(id) => teams.set(id)} /></span>
     {/if}
   </div>
 
@@ -775,5 +768,4 @@
   tbody th { text-align: right; }
   td { padding: 0.25rem; }
   .team { margin-left: auto; flex: none; }
-  .team .select { padding-block: 0.2rem; font-size: 0.82rem; font-weight: 600; max-width: 14rem; }
 </style>

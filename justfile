@@ -71,6 +71,17 @@ migrate *ARGS:
 person +ARGS:
     scripts/person.sh {{ARGS}}
 
+# Example data in the DEV server, through its API. `just seed` runs them all;
+# `just seed tags | docs | fury | agents | artifacts` runs one.
+# (`agents`: simulated people, purged when the dev goes down)
+seed *ARGS:
+    scripts/seed.sh {{ARGS}}
+
+# Webhook without hardware: `BUBBLE_FURY_SECRET=bfs_… just fury listen [port]`.
+# Or DEV → HTTPS/Traefik on reko-3: `just fury lab up|relay|test|state|logs|status|stop`.
+fury +ARGS:
+    scripts/fury.sh {{ARGS}}
+
 # Create or update a superuser. `just superuser upsert you@example.com <password>`
 superuser *ARGS:
     scripts/build.sh

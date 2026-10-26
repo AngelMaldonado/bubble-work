@@ -32,6 +32,11 @@
     Partes del producto que el departamento puede encender o apagar. Apagar no borra nada: al
     volver a encenderla, todo está como se dejó.
   </p>
+  <p class="set-lead">
+    La secuencia y el roadmap son de cada equipo: aquí se elige el valor por defecto, y cada
+    equipo puede encenderlas o apagarlas por su cuenta en Ajustes → Equipos. Mi espacio es de cada
+    persona y vale para todos.
+  </p>
 
   {#if error}<p class="set-err" role="alert">{error}</p>{/if}
   {#if !features.id}
@@ -39,6 +44,20 @@
   {/if}
 
   <div class="set-card">
+    <div class="feature">
+      <Switch
+        checked={features.space !== false}
+        disabled={saving || !features.id}
+        onCheckedChange={(e: { checked: boolean }) => set({ space: e.checked })}>
+        <Switch.Control><Switch.Thumb /></Switch.Control>
+        <Switch.Label><Icon of="pin" tint /> Mi espacio</Switch.Label>
+        <Switch.HiddenInput />
+      </Switch>
+      <p class="help">
+        Un lienzo personal de post-its: notas, imágenes y enlaces a proyectos, sólo para quien las
+        escribe. Encendido aparece como «Mi espacio» en la columna. Apagarlo no borra ninguna nota.
+      </p>
+    </div>
     <div class="feature">
       <Switch
         checked={features.sequence}
@@ -55,10 +74,42 @@
         del MCP.
       </p>
     </div>
+    <div class="feature">
+      <Switch
+        checked={!!features.roadmap}
+        disabled={saving || !features.id}
+        onCheckedChange={(e: { checked: boolean }) => set({ roadmap: e.checked })}>
+        <Switch.Control><Switch.Thumb /></Switch.Control>
+        <Switch.Label><Icon of="map" tint /> Roadmap</Switch.Label>
+        <Switch.HiddenInput />
+      </Switch>
+      <p class="help">
+        El calendario como un camino que serpentea: hacia arriba el pasado, hacia abajo el futuro.
+        Los módulos e hilos con fecha son casillas con su banda, y cada persona es una pieza parada
+        en lo primero que le toca. Sólo lectura. Encendido aparece como «Roadmap» en la columna.
+      </p>
+    </div>
+    <div class="feature">
+      <Switch
+        checked={!!features.fury}
+        disabled={saving || !features.id}
+        onCheckedChange={(e: { checked: boolean }) => set({ fury: e.checked })}>
+        <Switch.Control><Switch.Thumb /></Switch.Control>
+        <Switch.Label><Icon of="furious" tint /> Furia de IA</Switch.Label>
+        <Switch.HiddenInput />
+      </Switch>
+      <p class="help">
+        La IA se enoja cuando algo importante se rompe: prioridad alta vencida, burbuja inflada,
+        olvidada o sin dueño. Encendida, los agentes la ven por MCP con sus razones. Las reglas están
+        en Ajustes → Furia, donde se pueden calibrar con datos reales antes de encenderla. Es del
+        departamento: vale para todos los equipos.
+      </p>
+    </div>
   </div>
 </section>
 
 <style>
   .feature { display: flex; flex-direction: column; gap: 0.4rem; }
+  .feature + .feature { margin-top: 1rem; padding-top: 1rem; border-top: 1px solid var(--line); }
   .help { margin: 0; color: var(--faint); font-size: 0.8rem; line-height: 1.45; }
 </style>

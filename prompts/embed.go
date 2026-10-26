@@ -57,6 +57,15 @@ var Grill string
 //go:embed markdown.md
 var Markdown string
 
+// Instructions es el campo `instructions` del `initialize` (y del `discover`)
+// de MCP: lo que el cliente pone en el contexto del agente en cada sesión, sin
+// que el modelo tenga que acordarse de nada. Claude Code lo corta a 2 048
+// caracteres sin avisar, así que es un cargador: dice la release vigente y
+// manda a `agents_md`. Lleva `{{release}}`, `{{role}}` y `{{connect}}`.
+//
+//go:embed instructions.md
+var Instructions string
+
 // EphemeralMarkdown es el protocolo del `.md` efímero; llega en la respuesta de
 // `artifact_create(kind: markdown)`.
 //

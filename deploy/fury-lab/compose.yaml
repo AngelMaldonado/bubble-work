@@ -1,0 +1,45 @@
+# Receptor SIMULADO, no el Bubble de producción ni hardware real.
+# just fury lab up | relay (opcional en Mac) | test | state | logs | status | stop
+# .env lo genera el comando; nunca se versiona. Sin bind mounts remotos.
+name: bubble-fury-lab
+services:
+  gateway:
+    image: bubble-fury-gateway:lab
+    build:
+      context: ../..
+      dockerfile: deploy/fury-lab/Dockerfile
+    env_file: .env
+    environment:
+      BUBBLE_FURY_HOST: 0.0.0.0
+      BUBBLE_FURY_HEADLESS: '1'
+      PYTHONUNBUFFERED: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+    networks: [proxy]
+    restart: unless-stopped
+    init: true
+    read_only: true
+    user: '65534:65534'
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    mem_limit: 64m
+    cpus: 0.5
+    logging:
+      driver: json-file
+      options: {max-size: 5m, max-file: '2'}
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8787/health', timeout=2)"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
+    labels:
+      traefik.enable: 'true'
+      traefik.docker.network: proxy
+      traefik.http.routers.bubble-fury-lab.rule: Host(`fury-gateway.cubytest.space`)
+      traefik.http.routers.bubble-fury-lab.entrypoints: websecure
+      traefik.http.routers.bubble-fury-lab.tls: 'true'
+      traefik.http.routers.bubble-fury-lab.service: bubble-fury-lab
+      traefik.http.services.bubble-fury-lab.loadbalancer.server.port: '8787'
+networks:
+  proxy:
+    external: true

@@ -20,6 +20,8 @@ func Register(app core.App, t *tree.Tree) {
 	// El equipo primero: el proyecto se valida y se completa antes de
 	// fundarlo.
 	registerTeams(app)
+	registerThreadTeam(app)
+	registerThreadTags(app, t)
 	app.OnRecordCreateRequest("workspaces").BindFunc(foundingMembership)
 
 	app.OnRecordCreateRequest("users").BindFunc(nameable)
@@ -45,6 +47,7 @@ func Register(app core.App, t *tree.Tree) {
 	registerReadPlanner(app)
 	registerPresence(app)
 	registerAssets(app, t)
+	registerAttachments(app, t)
 	registerLimits(app)
 	registerTokens(app)
 	registerPeople(app)
@@ -52,6 +55,8 @@ func Register(app core.App, t *tree.Tree) {
 	registerQueue(app)
 	registerArtifacts(app)
 	registerPrompts(app)
+	registerFury(app)
+	registerFuryHook(app)
 }
 
 // getenv is here rather than inline so the one place that reads the environment is
@@ -208,17 +213,19 @@ func foundingStates(app core.App, workspace string) error {
 // and left no row. One field on one record needs no transaction of its own; the
 // save has one already.
 //
-// The race that leaves is two creates reading the same MAX. The unique index on
-// (workspace, seq) refuses the second rather than letting two threads quietly share
-// a number, which is the right failure: loud, and retryable.
+// El número sale de `nextThreadNumber`: un contador por proyecto que no
+// reutiliza el de un hilo borrado y no deja a dos altas leer el mismo. Antes era
+// MAX(seq)+1, que hacía ambas cosas. El índice único (workspace, seq) sigue de
+// red. Sin proyecto no se numera aquí: la validación del registro lo rechaza
+// con su propio mensaje.
 func assignSeq(e *core.RecordRequestEvent) error {
-	var next int
-	err := e.App.DB().
-		NewQuery("SELECT COALESCE(MAX(seq), 0) + 1 FROM threads WHERE workspace = {:ws}").
-		Bind(map[string]any{"ws": e.Record.GetString("workspace")}).
-		Row(&next)
+	ws := e.Record.GetString("workspace")
+	if ws == "" {
+		return e.Next()
+	}
+	next, err := nextThreadNumber(e.App, ws)
 	if err != nil {
-		return fmt.Errorf("next seq: %w", err)
+		return err
 	}
 	e.Record.Set("seq", next)
 	return e.Next()

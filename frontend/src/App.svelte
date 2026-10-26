@@ -1,9 +1,10 @@
 <script lang="ts">
   import Loading from './components/Loading.svelte';
   import Icon from './components/Icon.svelte';
+  import { effectiveFeatures, teamsWith } from './lib/features';
   import { api, type Board as BoardData, type Features, type Person, type ThreadHeat, type Version, type Workspace } from './lib/api';
   import { isEditable } from './lib/keys';
-  import { promptsUrl, allUrl, artifactUrl, boardUrl, inventoryUrl, parse, plannerUrl, readonlyInboxUrl, sequenceUrl, settingsUrl, spaceUrl, threadUrl, wikiUrl } from './lib/routes';
+  import { promptsUrl, allUrl, artifactUrl, boardUrl, inventoryUrl, parse, plannerUrl, readonlyInboxUrl, roadmapUrl, sequenceUrl, settingsUrl, spaceUrl, threadUrl, wikiUrl } from './lib/routes';
   import SignIn from './components/SignIn.svelte';
   import Confirm, { type Doom } from './components/Confirm.svelte';
   import Board from './components/Board.svelte';
@@ -11,21 +12,27 @@
   import Wiki from './components/Wiki.svelte';
   import Planner from './components/Planner.svelte';
   import ReadPlanner from './components/ReadPlanner.svelte';
+  import Roadmap from './components/Roadmap.svelte';
   import { rememberAttentionReturn, takeAttentionReturn } from './lib/attentionReturn';
   import { workspaceBuoyancy } from './lib/workspaceBuoyancy';
   import Inventory from './components/Inventory.svelte';
   import PromptsView from './components/PromptsView.svelte';
   import Repos from './components/Repos.svelte';
   import ArtifactOrb from './components/ArtifactOrb.svelte';
+  import FuryOrb from './components/FuryOrb.svelte';
+  import { lastOpenBubble } from './lib/filters.svelte';
   import ThreadPins from './components/ThreadPins.svelte';
   import ArtifactView from './components/ArtifactView.svelte';
   import PersonalSpace from './components/PersonalSpace.svelte';
   import { projectColors } from './lib/projectColors.svelte';
+  import { weekStart } from './lib/weekStart.svelte';
   import Omnibar, { type Command, type Hit } from './components/Omnibar.svelte';
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
-  import { teams } from './lib/teams.svelte';
+  import Onboarding from './components/Onboarding.svelte';
+  import { onboarding } from './lib/onboarding.svelte';
+  import { teams, ALL_TEAMS } from './lib/teams.svelte';
   import People from './components/People.svelte';
   import Presence from './components/Presence.svelte';
   import { presence } from './lib/presence.svelte';
@@ -64,7 +71,16 @@
   let seesInv = $state(false);
   // Qué partes del producto tiene encendidas el departamento. Apagada, la
   // secuencia no aparece en ningún sitio: ni columna, ni planeador, ni cajón.
-  let features = $state<Features>({ id: '', sequence: false });
+  // Las del departamento, como las guarda el servidor (Ajustes → Funciones las
+  // edita). Lo que se ve es `features`: matizadas por el equipo que se mira, o
+  // por los de «Todos los equipos» (lib/features.ts).
+  let globalFeatures = $state<Features>({ id: '', sequence: false });
+  const features = $derived(
+    effectiveFeatures(globalFeatures, teams.viewing ? teams.sharedTeams : teams.team ? [teams.team] : []),
+  );
+  // Hasta saber qué dice el equipo no se echa a nadie de una ruta: el global
+  // apagado y el equipo encendido es un caso válido.
+  const featuresKnown = $derived(!!features.id && !!teams.owner);
   let workspaces = $state<Workspace[]>([]);
 
   // Which workspace is on screen is a question the address answers. Landing on
@@ -77,7 +93,7 @@
   const isAll = $derived(route.kind === 'all');
   const readPlanning = $derived(route.kind === 'sequence' || (route.kind === 'planner' && (me?.role !== 'lead' || !!route.inboxOnly)));
   /** las pantallas que dibuja el shell, y por eso tienen esquina */
-  const onShell = $derived(route.kind === 'board' || route.kind === 'all' || route.kind === 'sequence' || route.kind === 'space');
+  const onShell = $derived(route.kind === 'board' || route.kind === 'all' || route.kind === 'sequence' || route.kind === 'roadmap' || route.kind === 'space');
   const current = $derived(
     isAll
       ? null
@@ -96,7 +112,18 @@
   });
   // `/secuencia` con la función apagada no es una pantalla: se va a Todos.
   $effect(() => {
-    if (ready && route.kind === 'sequence' && features.id && !features.sequence) go(allUrl, true);
+    if (ready && route.kind === 'sequence' && featuresKnown && !features.sequence) go(allUrl, true);
+  });
+  // Mi espacio: encendido salvo que el departamento lo apague. Antes de leer las
+  // funciones (o con un servidor sin la columna) cuenta como encendido, para que
+  // la entrada no parpadee.
+  const spaceOn = $derived(features.space !== false);
+  $effect(() => {
+    if (ready && route.kind === 'space' && features.id && !spaceOn) go(allUrl, true);
+  });
+  // Lo mismo con el roadmap.
+  $effect(() => {
+    if (ready && route.kind === 'roadmap' && featuresKnown && !features.roadmap) go(allUrl, true);
   });
   // The box that scrolls. The minimap needs it: the shell holds still and the
   // pane moves, so a spy listening to the window sees a page that never scrolls.
@@ -117,10 +144,12 @@
       // presence is about people, and there is nobody yet.
       presence.start();
       api.seesInventory().then((yes) => (seesInv = yes));
-      api.features().then((f) => (features = f));
+      api.features().then((f) => (globalFeatures = f));
       api.version().then((v) => (serverVersion = devLatest(v)));
       loadHeat();
       projectColors.load().catch(() => {});
+      weekStart.load().catch(() => {});
+      onboarding.check();
     }
     ready = true;
   }
@@ -142,6 +171,8 @@
     const ws = current;
     const browsing = readPlanning;
     const aggregate = isAll;
+    // «Todos los equipos» lo recorta el servidor: lo personal no viaja.
+    const shared = teams.viewing;
     if (!ws && !aggregate && !browsing) return;
     loadingBoard = true;
     try {
@@ -149,8 +180,8 @@
       // desde aquí serían N respuestas calculadas en N instantes, y el calor es
       // función del tiempo: dos burbujas medidas contra dos «ahora» no se
       // pueden comparar, que es lo único que esta pantalla hace.
-      const got = browsing ? (await api.readPlanner()).board : aggregate ? await api.allBoard() : await api.board(ws!.id);
-      if (turn !== boardGeneration || owner !== api.me?.id || browsing !== readPlanning || aggregate !== isAll || ws?.id !== current?.id) return;
+      const got = browsing ? (await api.readPlanner()).board : aggregate ? await api.allBoard(shared ? 'shared' : '') : await api.board(ws!.id);
+      if (turn !== boardGeneration || owner !== api.me?.id || browsing !== readPlanning || aggregate !== isAll || shared !== teams.viewing || ws?.id !== current?.id) return;
       board = got;
       loadHeat();
       error = '';
@@ -165,6 +196,7 @@
     current?.id;
     isAll;
     readPlanning;
+    teams.viewing;
     board = null;
     loadBoard();
   });
@@ -260,6 +292,16 @@
     go(to);
   }
 
+  // Lo tuyo con furia: un hilo abre el hilo; una burbuja, su tablero con su
+  // cajón abierto (como desde la secuencia).
+  function openFury(it: { kind: string; id: string; workspace: string; seq?: number }) {
+    if (it.kind === 'thread' && it.seq) attentionGo(threadUrl(it.workspace, it.seq));
+    else {
+      lastOpenBubble.set(it.id);
+      attentionGo(boardUrl(it.workspace));
+    }
+  }
+
   function back() {
     const to = takeAttentionReturn(api.me?.id ?? 'local', path) || (route.kind === 'thread' ? backTo.take() : '');
     if (to) {
@@ -279,11 +321,17 @@
   // Founding one takes a name AND a slug: the slug is its address on disk — the
   // git repository's directory — so it is derived once here and never follows a
   // rename. A name changes on a Tuesday; a repository must not move with it.
-  async function createWorkspace() {
+  async function createWorkspace(team?: string) {
+    // En «Todos los equipos» el equipo lo dice quien crea («Nuevo proyecto en
+    // …»); el actual de las preferencias está escondido y no se adivina.
+    if (!team && teams.viewing) {
+      error = 'Elige en qué equipo nace el proyecto.';
+      return;
+    }
     const name = 'Proyecto nuevo';
     const slug = 'ws-' + Math.random().toString(36).slice(2, 8);
     try {
-      const made = await api.createWorkspace(name, slug, teams.current);
+      const made = await api.createWorkspace(name, slug, team || teams.current);
       workspaces = [...workspaces, made];
       // Go to it. Which workspace is on screen is the address's answer now, so
       // a new one is somewhere you navigate rather than a variable you set.
@@ -578,6 +626,9 @@
     ...(features.sequence
       ? [{ id: 'sequence', icon: '🧭', title: 'Secuencia', hint: 'qué va ahora y qué sigue', run: () => go(sequenceUrl) }]
       : []),
+    ...(features.roadmap
+      ? [{ id: 'roadmap', icon: '🗺', title: 'Roadmap', hint: 'el calendario como un camino: quién va dónde', run: () => go(roadmapUrl) }]
+      : []),
     { id: 'settings', icon: '⚙', title: 'Ajustes', hint: isLead ? 'flotabilidad · usuarios · mi usuario · tokens' : 'mi usuario · tokens', run: () => go(settingsUrl()) },
     { id: 'signout', icon: '🚪', title: 'Salir de la sesión', run: signOut },
   ]);
@@ -651,7 +702,7 @@
   // dejar rastro: dejaba de funcionar y no había error que mirar. `isEditable`
   // es lo que sigue devolviendo la tecla a quien de verdad la necesita.
   function hotkeys(e: KeyboardEvent) {
-    if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+    if ((e.metaKey || e.ctrlKey) && e.key?.toLowerCase() === 'k') {
       if (isEditable(e.target)) return;
       e.preventDefault();
       omni = true;
@@ -717,6 +768,25 @@
     <button class="btn btn-sm preset-tonal-surface" onclick={() => go('/')}>← volver</button>
   </div>
   <ThemePage />
+{:else if route.kind === 'planner' && isLead && !route.inboxOnly && teams.viewing}
+  <!-- El planeador es de UN equipo: sus objetivos, su calendario, su inbox y
+       su secuencia, y todo lo que se escribe ahí va a ese equipo. Desde
+       «Todos los equipos» escribiría en uno que nadie eligió, así que se pide. -->
+  <div class="mx-auto max-w-md p-6 sm:pt-16">
+    <button class="btn btn-sm preset-tonal-surface mb-4" onclick={back}>← volver</button>
+    <div class="card glass p-4">
+      <h1 class="display mb-2 text-xl">El planeador es de un equipo</h1>
+      <p class="muted mb-4 text-sm">
+        Estás en <b>Todos los equipos</b>, que es una vista para leer. Para planear, entra a uno:
+        lo que escribas ahí queda en ese equipo.
+      </p>
+      <div class="flex flex-wrap gap-2">
+        {#each teams.sharedTeams as t (t.id)}
+          <button class="btn btn-sm preset-tonal-primary" onclick={() => teams.set(t.id)}>Entrar a {t.name}</button>
+        {/each}
+      </div>
+    </div>
+  </div>
 {:else if route.kind === 'planner' && isLead && !route.inboxOnly}
   <!-- The strategic layer gets a screen, not a tab inside the operative one —
        and no workspace: the plan is the department's, not this project's. -->
@@ -750,8 +820,8 @@
   <Settings
     {me}
     tab={route.tab}
-    {features}
-    onfeatures={(f) => (features = f)}
+    features={globalFeatures}
+    onfeatures={(f) => (globalFeatures = f)}
     onback={back}
     ontab={(t) => go(settingsUrl(t), true)}
     onme={(p) => (me = p)} />
@@ -821,9 +891,12 @@
       // que se ejecuta. Cada quien la ve con su alcance.
       // Tu lienzo personal: arriba, con lo que se mira a diario, y antes de la
       // secuencia del departamento porque es lo tuyo.
-      { id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true },
+      ...(spaceOn ? [{ id: 'space', name: 'Mi espacio', face: '📌', href: spaceUrl, top: true }] : []),
       ...(features.sequence ? [{ id: 'sequence', name: 'Secuencia', face: '🧭', href: sequenceUrl, top: true }] : []),
-      { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl },
+      ...(features.roadmap ? [{ id: 'roadmap', name: 'Roadmap', face: '🗺', href: roadmapUrl, top: true }] : []),
+      // El planeador escribe en UN equipo: desde «Todos los equipos» no hay
+      // cuál, así que se ve pero no se elige.
+      { id: 'planner', name: 'Planeador', face: '🗓', href: plannerUrl, off: teams.viewing ? 'entra a un equipo' : undefined },
       ...(seesInv ? [{ id: 'inventory', name: 'Inventario', face: '🗄', href: inventoryUrl }] : []),
       // La forma de trabajar que leen los agentes: el lead edita la de cada rol.
       // Quien opera ve sólo el suyo, para leerlo.
@@ -838,6 +911,8 @@
       ? 'planner'
       : route.kind === 'sequence'
         ? 'sequence'
+        : route.kind === 'roadmap'
+        ? 'roadmap'
         : route.kind === 'inventory'
         ? 'inventory'
         : route.kind === 'prompts'
@@ -851,6 +926,8 @@
           ? allUrl
           : id === 'sequence'
             ? sequenceUrl
+          : id === 'roadmap'
+            ? roadmapUrl
           : id === 'space'
             ? spaceUrl
             : id === 'inventory'
@@ -864,7 +941,7 @@
                 : plannerUrl,
       )}
     onsignout={signOut}
-    current={route.kind === 'sequence' || route.kind === 'space' ? '' : (current?.id ?? '')}
+    current={route.kind === 'sequence' || route.kind === 'roadmap' || route.kind === 'space' ? '' : (current?.id ?? '')}
     label="Proyectos"
     newLabel="Nuevo proyecto"
     version={updating || versionLabel}
@@ -881,13 +958,29 @@
     oncreate={createWorkspace}
     teamList={teams.list}
     team={teams.current}
-    onteam={(id) => { teams.set(id); if (current && !teams.inScope(current)) go(allUrl); }}
+    allTeams={teams.canAll}
+    viewingAll={teams.viewing}
+    createIn={teams.viewing ? teams.sharedTeams : []}
+    onteam={(id) => {
+      if (id === ALL_TEAMS) teams.showAll(true);
+      else teams.set(id);
+      // Sólo una pantalla de UN proyecto se queda sin piso al cambiar de equipo.
+      // Roadmap, Secuencia y Mi espacio siguen al equipo: se quedan donde están
+      // (`current` cae a `workspaces[0]` también ahí, y no cuenta).
+      if (current && 'slug' in route && route.slug && !teams.inScope(current)) go(allUrl);
+    }}
     onmove={me?.role === 'lead' ? moveWorkspace : undefined}>
-    {#if route.kind === 'space' && me}
+    {#if route.kind === 'space' && me && spaceOn}
       {#key me.id}<PersonalSpace workspaces={sorted} />{/key}
+    {:else if route.kind === 'roadmap' && me && features.roadmap}
+      <Roadmap
+        onTeams={teams.viewing ? teamsWith(globalFeatures, teams.sharedTeams, 'roadmap') : undefined}
+        onopenboard={(slug) => { backTo.set(roadmapUrl); go(boardUrl(slug)); }}
+        onopen={(slug, seq) => { backTo.set(roadmapUrl); go(threadUrl(slug, seq)); }} />
     {:else if route.kind === 'sequence' && me && features.sequence}
       <SequenceView
         {me}
+        onTeams={teams.viewing ? teamsWith(globalFeatures, teams.sharedTeams, 'sequence') : undefined}
         onopenboard={(slug) => { backTo.set(sequenceUrl); go(boardUrl(slug)); }}
         onopen={(slug, seq) => {
           backTo.set(sequenceUrl);
@@ -925,10 +1018,11 @@
          enseñar. -->
     {#snippet corner()}
       <div class="corner-dock">
-        {#if current && route.kind !== 'sequence' && route.kind !== 'space'}
+        {#if current && route.kind !== 'sequence' && route.kind !== 'roadmap' && route.kind !== 'space'}
           <Repos workspace={current} canWrite={hereLead} />
         {/if}
         <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />
+        <FuryOrb onopen={openFury} />
         <ThreadPins left onopen={attentionGo} />
       </div>
     {/snippet}
@@ -994,6 +1088,7 @@
 {#if signedIn && ready && !onShell && path !== '/theme' && path !== '/theme/mock'}
   <div class="attention-dock">
     <ArtifactOrb docked onopen={(id) => attentionGo(artifactUrl(id))} onmore={() => attentionGo(readonlyInboxUrl)} ondeleted={artifactDeleted} />
+    <FuryOrb onopen={openFury} />
     <ThreadPins thread={route.kind === 'thread' && open ? { id: open.id, name: open.name } : undefined} onopen={attentionGo} />
   </div>
 {/if}
@@ -1128,6 +1223,16 @@
 <!-- Outside the branches on purpose: ⌘K has to answer on the board, inside a
      thread and inside the wiki, and a field that only exists on one screen is a
      field people stop reaching for. -->
+<!-- La bienvenida, una vez, a quien llega nuevo. Fuera de las ramas: se pide
+     también desde Ajustes, que no vive en el Shell. -->
+{#if signedIn && ready && onboarding.open}
+  <Onboarding
+    lead={me?.role === 'lead' || teams.list.some((t) => t.role === 'lead')}
+    role={me?.role === 'lead' ? 'global' : teams.list.some((t) => t.role === 'lead') ? 'team' : 'member'}
+    fury={!!globalFeatures.fury}
+    onconnect={() => go(settingsUrl('tokens'))} />
+{/if}
+
 {#if signedIn && current}
   <Omnibar bind:open={omni} {items} {found} {commands} {searching} onquery={query} onpick={pick} />
 {/if}

@@ -26,6 +26,13 @@ Al final de este documento está la **forma de trabajar del departamento**, la q
   - el del hilo, en `threads/`, más la carpeta junto a él para lo que el hilo necesite aparte (una investigación, un diseño, un log);
   - la **wiki**, en `docs/`: guías, referencias y notas que duran más que un hilo. Anida libremente. Escribir ahí se registra pero no calienta nada;
   - el `README.md` del proyecto: su portada y sus convenciones.
+- **Tags**: de qué trata un hilo, en el frontmatter de SU documento, al principio del archivo:
+  ```
+  ---
+  tags: [pagos, cliente/acme]
+  ---
+  ```
+  Los escribes tú con la persona: ella conoce su área. Antes de inventar uno, mira los que ya usa el equipo (`project_board` y `thread_get` traen los de cada hilo) y reutiliza el mismo nombre; se comparan sin `#` y sin mayúsculas, y `/` hace jerarquías. El primero importa: la vista de blobs del tablero agrupa cada hilo por su primer tag, y cada módulo por el que más se repite entre sus hilos. Cambiar sólo los tags no calienta nada (se registra como clasificación); no dan permisos ni cambian fechas, asignados o prioridad. El frontmatter no se dibuja al leer el documento.
 - **Evidencia**: un enlace externo pegado a un hilo (commit, PR, entregable publicado). Es la prueba de que la realidad cambió fuera de esta herramienta.
 - **Comentario**: lo que se dice sobre un hilo. Es pulso, no evidencia (ver «Calor»).
 - **Objetivo**: para qué es el trabajo. Es de un EQUIPO, no de un proyecto: los módulos de cualquiera de sus proyectos cuelgan de él (nunca de un objetivo de otro equipo). Los definen y los leen los leads del equipo.
@@ -68,10 +75,18 @@ Un módulo toma la banda de su hilo abierto más caliente: **Caliente** 🔥 (d�
 
 No fabriques actividad para mantener algo caliente: no funciona, y un módulo que se enfrió es información, no un fracaso. Revívelo con trabajo real, redefínelo o ciérralo.
 
+## Furia de IA: lo importante que se está rompiendo
+
+Si el departamento la tiene encendida, `project_board`, `thread_get` y `sequence_next` traen `fury` en lo que está en problemas: el nivel (1 😤 Irritada, 2 😡 Furiosa, 3 🔥 Desatada) y las razones (`reasons`): vencida con prioridad alta, burbuja inflada, olvidada, sin dueño. Sin `fury`, está en calma. Se calcula sola con reglas que define el lead global: no se pone ni se quita a mano, y no cambia el calor ni la prioridad.
+
+- **Lo furioso de tu persona va primero.** Al empezar, si algo suyo tiene furia 2 o 3, díselo antes de proponer otra cosa.
+- **Se apaga arreglando la causa, no el síntoma.** Terminar el trabajo, reasignarlo o acordar un plazo nuevo con quien orquesta sí; mover la fecha por tu cuenta o escribir por escribir para «calentarlo», no.
+
 ## El ciclo de trabajo
 
 - **Distingue idea de trabajo, y respeta el contexto.** Lo que nadie ha decidido hacer es una idea y va al inbox de su equipo (`inbox_capture`); trabajo es lo que vive en un hilo. Lo de un equipo se queda en ese equipo.
 - **Busca antes de crear.** Un hilo existente gana a uno nuevo. Crear uno al lado del que estaba a medias es cómo se pierde el contexto y cómo el tablero acaba mostrando el doble de trabajo del que hay.
+- **Pocos módulos y pocos hilos (KISS).** La persona espera ver poco que mantener. Antes de abrir un módulo, mira si el trabajo cabe en uno que ya existe; antes de abrir un hilo, si es un paso más (una casilla) de uno abierto. Parte el trabajo en hilos sólo cuando de verdad son unidades distintas: otra persona, otro entregable, o algo que se termina por separado.
 - **Escribir el documento ES el trabajo.** No es un informe que se redacta al final: es dónde vive por qué existe esto, qué es cierto cuando esté hecho, el siguiente paso concreto y las casillas `- [ ]` de los pasos. Anótalo mientras avanzas.
 - **Marca casillas** (`checkbox_toggle`) cuando un paso se cumple de verdad; es la evidencia más pequeña que puede dar un hilo.
 - **Agrega evidencia** (`evidence_add`) por cada commit, PR o entregable que cierre un paso.

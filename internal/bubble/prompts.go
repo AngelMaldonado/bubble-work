@@ -59,6 +59,8 @@ func init() {
 		// historia y nadie las lee.
 		{Key: "agents_guide", Title: "Guía para agentes", Group: "sistema", def: func() string { return prompts.Guide },
 			Hint: "Primera parte de cada respuesta de `agents_md`: entidades, ciclo de trabajo y cómo se escribe. La tabla de tools se genera sola. Promete cosas sobre la API: cámbiala con cuidado."},
+		{Key: "instructions", Title: "Instrucciones del servidor MCP", Group: "sistema", def: func() string { return prompts.Instructions },
+			Hint: "Lo que el cliente pone en el contexto del agente en CADA sesión, sin que el modelo tenga que acordarse (campo `instructions` del `initialize`). Máximo 2 048 caracteres ya rellenado: Claude Code corta lo demás. Lleva `{{release}}`, `{{role}}` y `{{connect}}`."},
 		{Key: "markdown", Title: "Escritura de markdown", Group: "sistema", def: func() string { return prompts.Markdown },
 			Hint: "Va en cada respuesta de `agents_md`: idioma, forma sugerida, qué se renderiza."},
 		{Key: "grill", Title: "Protocolo de interrogatorio", Group: "sistema", def: func() string { return prompts.Grill },
@@ -66,7 +68,7 @@ func init() {
 		{Key: "ephemeral_markdown", Title: "Documentos Markdown efímeros", Group: "sistema", def: func() string { return prompts.EphemeralMarkdown },
 			Hint: "Llega en la respuesta de `artifact_create(kind: markdown)`: publicación por el agente, lectura temporal en Bubble."},
 		{Key: "connect", Title: "Prompt de conexión", Group: "sistema", def: func() string { return prompts.Connect },
-			Hint: "Lo que una persona copia para conectar su IA. Lleva `{{url}}` y `{{token}}`, y la sección que el agente se instala en su CLAUDE.md / AGENTS.md."},
+			Hint: "Lo que una persona copia para conectar su IA. Lleva `{{url}}`, `{{token}}` y `{{version}}`, y la sección que el agente se instala en su CLAUDE.md / AGENTS.md (el bloque ```markdown). Cambiar esa sección envejece las instalaciones; cambiar el resto, no."},
 	} {
 		promptDefs[d.Key] = d
 	}
@@ -194,8 +196,8 @@ func registerPrompts(app core.App) {
 			promptMu.RUnlock()
 			// Agentes, then the system documents in a fixed order, then the tools
 			// by name.
-			rank := map[string]int{"agents/planner": 0, "agents/operators": 1, "agents_guide": 2,
-				"markdown": 3, "grill": 4, "ephemeral_markdown": 5, "connect": 6}
+			rank := map[string]int{"agents/planner": 0, "agents/operators": 1, "instructions": 2, "agents_guide": 3,
+				"markdown": 4, "grill": 5, "ephemeral_markdown": 6, "connect": 7}
 			sort.Slice(defs, func(i, j int) bool {
 				ri, iok := rank[defs[i].Key]
 				rj, jok := rank[defs[j].Key]
@@ -269,6 +271,11 @@ func registerPrompts(app core.App) {
 				orig := d.def()
 				if !body.Reset && strings.TrimSpace(body.Content) == "" {
 					return e.BadRequestError("an empty prompt tells the agent nothing; restore the original instead", nil)
+				}
+				if d.Key == "instructions" && !body.Reset {
+					if err := validateInstructions(body.Content); err != nil {
+						return e.BadRequestError(err.Error(), err)
+					}
 				}
 				r := core.NewRecord(col)
 				r.Set("key", d.Key)

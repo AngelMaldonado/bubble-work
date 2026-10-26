@@ -12,6 +12,7 @@
   // «¿cuándo se renueva ESTE dominio?» son dos preguntas distintas, y una lista
   // plana de cuarenta filas no contesta bien ninguna.
   import { DatePicker, Dialog, Portal, parseDate } from '@skeletonlabs/skeleton-svelte';
+  import { weekStart } from '../lib/weekStart.svelte';
   import { api, type InvGroup, type InvItem } from '../lib/api';
   import { guess, lit } from '../lib/art';
   import { logos } from '../lib/logos.svelte';
@@ -511,7 +512,7 @@
                 onValueChange={(e: { value: { year: number; month: number; day: number }[] }) =>
                   (thing = { ...thing, renews_at: isoDay(e.value?.[0]) })}
                 locale="es-MX"
-                startOfWeek={1}>
+                startOfWeek={weekStart.day}>
                 <!-- Sin etiqueta encima: el resto de esta hoja pregunta desde
                      dentro del campo, y una etiqueta suelta desalineaba la fila. -->
                 <DatePicker.Control class="input dp-control">

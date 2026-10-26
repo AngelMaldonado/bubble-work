@@ -45,4 +45,13 @@ addEventListener(
   { capture: false },
 );
 
-mount(App, { target: document.getElementById('app')! });
+// Revisión con fixtures, sin montar App ni conectar su sesión con la API.
+// Vite elimina esta rama y el import del prototipo del bundle de producción.
+if (import.meta.env.DEV && location.pathname.replace(/\/+$/, '') === '/theme/model') {
+  document.title = 'Prototipo del modelo · Bubble Work';
+  void import('./prototypes/ModelEvolution.svelte').then(({ default: Prototype }) => {
+    mount(Prototype, { target: document.getElementById('app')!, props: { viewer: 'review' } });
+  });
+} else {
+  mount(App, { target: document.getElementById('app')! });
+}

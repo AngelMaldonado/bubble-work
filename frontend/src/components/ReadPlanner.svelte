@@ -38,11 +38,11 @@
       // Un equipo a la vez: lo de otro contexto no se mezcla. Sin equipos (una
       // base vieja), todo.
       const T = teams.current;
-      const wsIn = new Set(data.board.workspaces.filter((w) => !T || !w.team || w.team === T || !teams.mine(w.team)).map((w) => w.id));
+      const wsIn = new Set(data.board.workspaces.filter((w) => !T || teams.inScope(w)).map((w) => w.id));
       board = { ...data.board, workspaces: data.board.workspaces.filter((w) => wsIn.has(w.id)),
         bubbles: data.board.bubbles.filter((b) => wsIn.has(b.workspace)), threads: data.board.threads.filter((t) => wsIn.has(t.workspace)) };
-      calendar = dates.filter((d) => !T || !d.team || d.team === T); failure = '';
-      inbox = data.inbox.filter((n) => !T || !n.team || n.team === T).map((n) => ({ id: n.id, text: n.note, body: n.body,
+      calendar = dates.filter((d) => !T || !d.team || teams.inView(d.team)); failure = '';
+      inbox = data.inbox.filter((n) => !T || !n.team || teams.inView(n.team)).map((n) => ({ id: n.id, text: n.note, body: n.body,
         from: n.source_from || (n.captured_by === owner ? 'tú' : 'equipo'), when: n.created,
         artifacts: data.artifacts.filter((a) => a.inbox_item === n.id).map((a) => ({ id:a.id,title:a.title,pinned:a.pinned,expires_at:a.expires_at })),
       }));
@@ -52,8 +52,8 @@
   function changed() { clearTimeout(timer); timer = setTimeout(load, 180); }
   const offs = ['bubbles','threads','inbox_items','artifacts','artifact_entries','calendar_events','memberships'].map((c) => live.watch(c,changed));
   load();
-  let shownTeam = teams.current;
-  $effect(() => { if (teams.current !== shownTeam) { shownTeam = teams.current; load(); } });
+  let shownTeam = `${teams.current}.${teams.viewing}`;
+  $effect(() => { const now = `${teams.current}.${teams.viewing}`; if (now !== shownTeam) { shownTeam = now; load(); } });
   onDestroy(() => { stopped = true; generation++; clearTimeout(timer); offs.forEach((off) => off()); });
 
   function address(workspace: string) { return board?.workspaces.find((w) => w.id === workspace)?.slug ?? ''; }

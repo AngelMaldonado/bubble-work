@@ -14,6 +14,7 @@
   // El valor va y viene como `2026-12-24`. Vacío es «sin fecha», que es una
   // respuesta y no un hueco.
   import { DatePicker, parseDate } from '@skeletonlabs/skeleton-svelte';
+  import { weekStart } from '../lib/weekStart.svelte';
 
   let {
     value = '',
@@ -58,7 +59,7 @@
   onValueChange={(e: { value: { year: number; month: number; day: number }[] }) =>
     onchange?.(isoDate(e.value?.[0]))}
   locale="es-MX"
-  startOfWeek={1}>
+  startOfWeek={weekStart.day}>
   {#if label}<DatePicker.Label class="cap">{label}</DatePicker.Label>{/if}
   <DatePicker.Control class="dp-control input">
     <DatePicker.Input {placeholder} aria-label={label || 'Fecha'} autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other" />

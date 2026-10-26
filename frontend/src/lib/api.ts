@@ -5,6 +5,8 @@
 // express — the board, documents, the tree, search, assets. Both are the same
 // origin (vite proxies in development), so nothing here deals with CORS.
 
+import { named } from './people';
+
 export type Lifecycle = 'hot' | 'dormant' | 'rip' | 'closed';
 
 export type Heat = {
@@ -30,6 +32,12 @@ export type ThreadHeat = {
   assignees?: string[];
   /** when anything last happened to it, RFC3339 — the row says it in words */
   at?: string;
+  /** los tags del frontmatter de su documento, en el orden escrito */
+  tags?: string[];
+  /** palabras de su Markdown (documento y páginas, sin frontmatter) */
+  words?: number;
+  /** páginas de su carpeta e imágenes que cita */
+  files?: number;
   /** su PROPIA prioridad (P1…P4), separada de la de su burbuja */
   priority?: string;
   /** su paso en la secuencia del departamento; 0 o ausente, fuera de ella */
@@ -40,6 +48,8 @@ export type ThreadHeat = {
   /** cuándo vence ESTA pieza, un día. Independiente del plazo de su burbuja:
    *  aquél es el compromiso, éste es cómo se reparte. */
   due_date?: string;
+  /** furia de IA: sólo con la función encendida y si alguna regla disparó */
+  fury?: Fury;
 };
 
 /** Lo que pasa en una fecha y no es trabajo: una junta, un cierre, una visita.
@@ -118,6 +128,29 @@ export type BubbleHeat = {
   sequence?: number;
   due_date?: string;
   heat: Heat;
+  /** furia de IA: la suya y la de sus hilos abiertos, la más grave */
+  fury?: Fury;
+};
+
+/** Furia de IA (internal/fury): un nivel de 1 a 3 y las reglas que dispararon.
+ *  Se calcula sola; no cambia el calor ni el orden. */
+export type FuryLevel = { level: number; name: string; emoji: string; color: string; blink: boolean };
+export type FuryReason = { rule: string; level: number; text: string; thread?: string; thread_name?: string };
+export type Fury = FuryLevel & { reasons: FuryReason[] };
+
+/** El catálogo de reglas que edita el lead global. */
+export type FuryRules = {
+  inflated: { on: boolean; threads: number; words: number; active_days: number; age_days: number; level: number; double_level: number };
+  overdue: { on: boolean; level: number; late_days: number; late_level: number };
+  forgotten: { on: boolean; dormant_level: number; rip_level: number };
+  ownerless: { on: boolean; level: number };
+};
+export type FuryHook = { url: string; has_secret: boolean; last_status: string; last_at: string; last_sent: number };
+export type FuryPreview = {
+  counts: { thread: number; bubble: number };
+  /** cuántas hay en cada nivel, del 0 al 3 */
+  levels: number[];
+  items: { kind: 'thread' | 'bubble'; id: string; name: string; workspace: string; seq?: number; fury: Fury }[];
 };
 
 export type Board = {
@@ -131,11 +164,18 @@ export type Board = {
   workspaces: BoardWorkspace[];
   bubbles: BubbleHeat[];
   threads: ThreadHeat[];
+  /** relaciones declaradas entre hilos de este board y del mismo equipo: las
+   *  aristas de la vista Blobs. Un servidor viejo no las manda. */
+  links?: BoardLink[];
 };
+
+/** Una relación entre dos hilos. `dependency` va de lo que se hace antes a lo
+ *  que espera; `related` no tiene sentido. */
+export type BoardLink = { from: string; to: string; kind: 'dependency' | 'related' };
 
 /** Lo justo de un workspace para etiquetar una fila y para construir la
  *  dirección que la abre. */
-export type BoardWorkspace = { id: string; slug: string; name: string; team?: string };
+export type BoardWorkspace = { id: string; slug: string; name: string; team?: string; team_name?: string };
 
 export type Workspace = { id: string; name: string; slug: string; team?: string };
 
@@ -150,7 +190,14 @@ export type Team = {
   role: 'lead' | 'member';
   implicit?: boolean;
   members?: { user: string; name: string; role: 'lead' | 'member'; global?: boolean }[];
+  /** lo que el equipo decide de cada función: 'on', 'off' o '' (hereda la del
+   *  departamento). Un servidor viejo no lo manda. */
+  features?: Partial<Record<TeamFeatureKey, TeamFeatureValue>>;
 };
+
+/** Las funciones que un equipo puede decidir por su cuenta. */
+export type TeamFeatureKey = 'sequence' | 'roadmap';
+export type TeamFeatureValue = 'on' | 'off' | '';
 
 
 /** Una burbuja como fila: lo que el planeador organiza. */
@@ -255,7 +302,7 @@ export type Person = {
 };
 
 /** Qué partes del producto tiene encendidas el departamento. Una fila. */
-export type Features = { id: string; sequence: boolean; updated?: string };
+export type Features = { id: string; sequence: boolean; roadmap?: boolean; /** furia de IA */ fury?: boolean; /** Mi espacio; sin la columna (servidor viejo) cuenta como encendido */ space?: boolean; updated?: string };
 
 /** Lo que una persona eligió y tiene que seguirla entre dispositivos.
  *
@@ -274,6 +321,11 @@ export type Prefs = {
   /** qué forma tiene el tablero: la línea de ejecución o el kanban. Sólo
    *  significa algo con la función de secuencia encendida. */
   view?: 'sequence' | 'pool';
+  /** el día en que empieza la semana (`Date.getDay()`: 0 domingo … 6 sábado);
+   *  sin él, el lunes */
+  week_start?: number;
+  /** cuándo vio (o saltó) la bienvenida; sin él, se le abre al entrar */
+  onboarded_at?: string;
 };
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */
@@ -297,6 +349,9 @@ export type Tuning = {
   decay_cycles: number;
   grace_cycles: number;
   ownerless_is_rip: boolean;
+  /** a cuántos días de su último movimiento se borra un artefacto temporal
+   *  no fijado; sin valor (o 0), 30 */
+  artifact_days?: number;
   updated?: string;
 };
 
@@ -412,17 +467,6 @@ export class ApiError extends Error {
   }
 }
 
-/** Cómo se nombra a una persona: su nombre, o su correo, o `fallback`. Una
- *  persona borrada lo dice: lo que escribió se queda con su firma, y leerla sin
- *  saber que ya no está es preguntarle algo a quien no va a contestar. */
-function named(
-  u: { display_name?: string; email?: string; deleted_at?: string } | undefined,
-  fallback: string,
-) {
-  const name = u?.display_name || u?.email || fallback;
-  return u?.deleted_at ? `${name} (eliminado)` : name;
-}
-
 /** Un token de agente, tal como lo enseña el servidor: nunca la huella. */
 export type AgentToken = {
   id: string;
@@ -435,10 +479,24 @@ export type AgentToken = {
   created: string;
   /** sólo en la respuesta de crear: la única vez que sale */
   token?: string;
+  // Lo que el servidor ve que tiene este agente. Vacío si nunca lo vio, o si
+  // el servidor es anterior a esto.
+  /** `clientInfo` de su último initialize: «claude-code 2.1.2» */
+  client?: string;
+  /** la cabecera X-Bubble-Connect: con qué sección se instaló */
+  connect_version?: string;
+  /** la última release de agents_md que se le entregó, de qué rol y cuándo */
+  release_read?: string;
+  release_role?: string;
+  release_read_at?: string;
 };
 
+/** Las releases vigentes: la de `agents_md` por rol y la de la sección que
+ *  instala el prompt de conexión. Huellas del texto. */
+export type AgentReleases = { operators?: string; planner?: string; connect?: string };
+
 /** Una persona vista desde la gestión de usuarios. */
-export type PersonAdmin = Person & { deleted_at?: string };
+export type PersonAdmin = Person & { deleted_at?: string; /** cuándo el job purgó sus datos personales */ purged_at?: string };
 
 /** La URL del avatar de una persona, o vacío. `thumb` pide una de las
  *  miniaturas que declara la migración (`64x64`, `160x160`). */
@@ -643,6 +701,14 @@ class Api {
   }
   removeTeamMember(team: string, user: string) {
     return this.call<{ members: Team['members'] }>(`/api/teams/${team}/members/${user}`, { method: 'DELETE' });
+  }
+
+  /** Lo que un equipo decide de una función; '' vuelve a heredar. */
+  setTeamFeature(team: string, key: TeamFeatureKey, value: TeamFeatureValue) {
+    return this.call<{ features: Team['features'] }>(`/api/teams/${team}/features`, {
+      method: 'POST',
+      body: JSON.stringify({ key, value }),
+    });
   }
 
   renameWorkspace(id: string, name: string) {
@@ -966,6 +1032,47 @@ class Api {
 
   revokeToken(id: string) {
     return this.call<AgentToken>(`/api/tokens/${id}/revoke`, { method: 'POST', body: '{}' });
+  }
+
+  /** Contra qué se compara lo que leyó cada agente. */
+  agentReleases() {
+    return this.call<AgentReleases>('/api/agents/release');
+  }
+
+  // ---- furia de IA ----
+
+  furyRules() {
+    return this.call<{ on: boolean; rules: FuryRules; defaults: FuryRules; levels: FuryLevel[] }>('/api/fury/rules');
+  }
+
+  /** Sólo el lead global. `reset` vuelve a las de serie. */
+  saveFuryRules(rules: FuryRules | null, reset = false) {
+    return this.call<{ on: boolean; rules: FuryRules }>('/api/fury/rules', {
+      method: 'POST',
+      body: JSON.stringify(reset ? { reset: true } : { rules }),
+    });
+  }
+
+  /** Mi furia: lo asignado a mí y las burbujas de las que respondo. */
+  myFury() {
+    return this.call<{ on: boolean; level: FuryLevel; items: FuryPreview['items'] }>('/api/fury/me');
+  }
+
+  /** El webhook de los semáforos (lead global). `secret` sólo llega al
+   *  configurarlo la primera vez o al rotarlo. */
+  furyHook() {
+    return this.call<FuryHook>('/api/fury/hook');
+  }
+  saveFuryHook(body: { url?: string; rotate?: boolean }) {
+    return this.call<FuryHook & { secret?: string }>('/api/fury/hook', { method: 'POST', body: JSON.stringify(body) });
+  }
+  testFuryHook() {
+    return this.call<FuryHook & { sent: number; failed: number; status: string }>('/api/fury/hook/test', { method: 'POST', body: '{}' });
+  }
+
+  /** Qué dispararía ahora con estas reglas, aunque la función esté apagada. */
+  furyPreview(rules: FuryRules) {
+    return this.call<FuryPreview>('/api/fury/preview', { method: 'POST', body: JSON.stringify({ rules }) });
   }
 
   // ---- gestión de personas (lead global) ----
@@ -1336,9 +1443,12 @@ class Api {
    *  Lo agrega el servidor y no este cliente. Pedir un board por workspace
    *  serían N respuestas calculadas en N instantes distintos —el calor es
    *  función del tiempo— y comparar dos burbujas medidas contra dos «ahora» es
-   *  exactamente lo que esta pantalla existe para no hacer. */
-  allBoard() {
-    return this.call<Board>('/api/board');
+   *  exactamente lo que esta pantalla existe para no hacer.
+   *
+   *  `shared` es «Todos los equipos» (sólo lead global): el servidor deja fuera
+   *  todo proyecto de un equipo personal, también el tuyo. */
+  allBoard(scope: '' | 'shared' = '') {
+    return this.call<Board>(scope ? `/api/board?scope=${scope}` : '/api/board');
   }
 
   /** Qué se movió, por archivo. Lo calcula git, que ya tiene la respuesta:

@@ -13,6 +13,7 @@
   import { Menu, Portal, Tooltip } from '@skeletonlabs/skeleton-svelte';
   import { priorityMeaning } from '../lib/priority';
   import type { Lifecycle } from '../lib/api';
+  import { measureClip } from '../lib/clip';
 
   let {
     name,
@@ -94,7 +95,15 @@
   // provokes is swallowed instead of shown.
   let priming = false;
 
-  // Prime the anchor point once, at mount.
+  // El menú y los tooltips se montan al primer acercamiento (hover o foco), no
+  // al montar la burbuja: con 410 hilos en Flotabilidad, montarlos todos
+  // —máquinas de Zag, portales y posicionadores— y cebar cada menú costaba
+  // varios segundos de posicionamiento (medido). Una burbuja que nadie toca no
+  // necesita nada de eso.
+  let primed = $state(false);
+  const prime = () => { primed = true; };
+
+  // Prime the anchor point once, on first approach (see `primed`).
   //
   // Zag repositions a context menu from a watcher over the anchor point, and a
   // watcher cannot see the change that establishes the value it is watching:
@@ -106,10 +115,14 @@
   // fails identically without this, and @zag-js/menu 1.43.3 does not fix it.
   $effect(() => {
     const el = orbEl;
-    if (!el) return;
-    priming = true;
-    el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 0, clientY: 0 }));
-    priming = false;
+    if (!el || !primed) return;
+    // Un cuadro después: el posicionador del menú ya está montado.
+    const raf = requestAnimationFrame(() => {
+      priming = true;
+      el.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, clientX: 0, clientY: 0 }));
+      priming = false;
+    });
+    return () => cancelAnimationFrame(raf);
   });
 
   // ¿El nombre cabía?
@@ -120,9 +133,11 @@
   // que el navegador tuvo que esconder— y se vuelve a medir cuando el texto
   // cambia, que es lo que el argumento del attach está diciendo.
   let clipped = $state(false);
+  // En lote (lib/clip): leer el recorte de cada burbuja por separado obligaba a
+  // recalcular la página una vez por burbuja.
   function measure(_key: string) {
     return (el: HTMLElement) => {
-      clipped = el.scrollHeight - el.clientHeight > 1;
+      measureClip(el, (c) => (clipped = c));
     };
   }
 </script>
@@ -133,6 +148,9 @@
      `element`), porque el de Skeleton es un <button> y ya estamos dentro del
      botón de la esfera. -->
 {#snippet tip(cls: string, text: string, hint: string)}
+  {#if !primed}
+    <span class={cls}>{text}</span>
+  {:else}
   <Tooltip positioning={{ placement: 'top' }} openDelay={150} closeDelay={60}>
     <Tooltip.Trigger>
       {#snippet element(attributes: Record<string, unknown>)}
@@ -145,6 +163,7 @@
       </Tooltip.Positioner>
     </Portal>
   </Tooltip>
+  {/if}
 {/snippet}
 
 <!-- Right-click opens the actions. Zag's ContextTrigger, not a hand-rolled
@@ -162,7 +181,9 @@
     if (priming) return;
     menuOpen = e.open;
   }}>
-<div class="wrap lvl-{lifecycle}" class:held={menuOpen} style="--d: {delay}">
+<!-- Sin rol: no es un control, sólo avisa del acercamiento (ver `primed`). -->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<div class="wrap lvl-{lifecycle}" class:held={menuOpen} style="--d: {delay}" onpointerenter={prime} onfocusin={prime}>
   <Menu.ContextTrigger>
   {#snippet element(attributes: Record<string, unknown>)}
   <!-- Zag's own handler runs, and then the event stops here.
@@ -242,6 +263,7 @@
     {/if}
   </span>
 </div>
+  {#if primed}
   <Portal>
     <Menu.Positioner>
     <Menu.Content>
@@ -255,6 +277,7 @@
     </Menu.Content>
     </Menu.Positioner>
   </Portal>
+  {/if}
 </Menu>
 
 <style>

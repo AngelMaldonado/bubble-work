@@ -9,6 +9,14 @@
   // were comparing against.
   import { api, avatarUrl, type Board, type BubbleHeat, type ThreadHeat, type Workspace } from '../lib/api';
   import { Dialog, Portal } from '@skeletonlabs/skeleton-svelte';
+  import BlobGraph from './BlobGraph.svelte';
+  import Graph3D from './Graph3D.svelte';
+  import EncodingPanel from './EncodingPanel.svelte';
+  import EncodingLegend from './EncodingLegend.svelte';
+  import { encode, readEncoding, COLOR_LABELS, DEFAULT_ENCODING, type Encoding } from '../lib/encoding';
+  import { boardGraph, visibleNodes } from '../lib/boardGraph';
+  import { groupsFor, projectLinks, type GraphNode, type MapKind } from '../lib/graph';
+  import { live } from '../lib/live.svelte';
   import BubbleBoard, { type BoardBubble } from './BubbleBoard.svelte';
   import BubbleDrawer from './BubbleDrawer.svelte';
   import Confirm, { type Doom } from './Confirm.svelte';
@@ -16,6 +24,8 @@
   import Crumbs from './Crumbs.svelte';
   import { ago, cycleLeft } from '../lib/when';
   import { lastOpenBubble } from '../lib/filters.svelte';
+  import { named } from '../lib/people';
+  import { teams } from '../lib/teams.svelte';
   import { limited } from '../lib/limits.svelte';
 
   let {
@@ -55,10 +65,86 @@
   /** Todos: más de un proyecto en la misma pantalla. Es lo que decide si esto es
    *  un board donde se trabaja o un mirador donde se compara. */
   const all = $derived(!workspace);
-  const projectOf = (id: string) =>
-    (board?.workspaces ?? []).find((w) => w.id === id)?.name ?? '';
+  // En «Todos los equipos» dos equipos pueden tener un «Soporte»: el
+  // proyecto se nombra con su equipo delante.
+  const projectOf = (id: string) => {
+    const w = (board?.workspaces ?? []).find((x) => x.id === id);
+    if (!w) return '';
+    return teams.viewing && w.team_name ? `${w.team_name} · ${w.name}` : w.name;
+  };
 
   const threadsOf = (bubble: string) => (board?.threads ?? []).filter((t) => t.bubble === bubble);
+  const boardTitle = $derived(workspace?.name ?? (teams.viewing ? 'Todos los equipos' : 'Todos los proyectos'));
+
+  // ---- nivel y disposición ----------------------------------------------------
+  //
+  // Dos ejes independientes (§10 del diseño): QUÉ es cada punto —Burbujas o
+  // Hilos— y CÓMO se acomoda —Flotabilidad, por evidencia, o Blobs, por los
+  // tags de sus documentos—, en la barra de abajo. Se recuerdan por persona en
+  // este navegador. Flotabilidad es la de siempre y la de partida.
+  type Layout = 'flotation' | 'blobs' | '3d';
+  const viewKey = () => `bubble.board.view.${api.me?.id ?? 'local'}`;
+  function readView(): { level: MapKind; layout: Layout; closed: boolean } {
+    try {
+      const v = JSON.parse(localStorage.getItem(viewKey()) ?? '{}');
+      // «contexts» era el nombre anterior de la misma disposición.
+      return { level: v.level === 'threads' ? 'threads' : 'bubbles',
+        layout: v.layout === 'blobs' || v.layout === 'contexts' ? 'blobs' : v.layout === '3d' ? '3d' : 'flotation', closed: v.closed === true };
+    } catch {
+      return { level: 'bubbles', layout: 'flotation', closed: false };
+    }
+  }
+  const savedView = readView();
+  let level = $state<MapKind>(savedView.level);
+  let layout = $state<Layout>(savedView.layout);
+  /** las cerradas sólo si se piden: no dominan el inicio */
+  let showClosed = $state(savedView.closed);
+  $effect(() => {
+    const v = JSON.stringify({ level, layout, closed: showClosed });
+    try { localStorage.setItem(viewKey(), v); } catch { /* sin almacenamiento, dura la pestaña */ }
+  });
+
+  // Los blobs salen de los tags que trae el tablero: no hay nada más que leer.
+  const graph = $derived(board ? boardGraph(board, projectOf, { me: api.me?.id ?? '', teamName: (t) => teams.name(t) }) : null);
+  // La disposición se calcula sobre TODO el nivel, cerradas incluidas: mostrar u
+  // ocultar cerradas no mueve a nadie de su sitio.
+  const universe = $derived(graph ? visibleNodes(graph, level, true) : []);
+  const levelNodes = $derived(graph ? visibleNodes(graph, level, showClosed) : []);
+
+  // Qué dicen el tamaño y el color, y qué se resalta (lib/encoding). De cada
+  // persona, en este navegador, y lo mismo en Blobs y en 3D.
+  const encKey = () => `bubble.board.encoding.${api.me?.id ?? 'local'}`;
+  let encoding = $state<Encoding>((() => { try { return readEncoding(JSON.parse(localStorage.getItem(encKey()) ?? 'null')); } catch { return { ...DEFAULT_ENCODING }; } })());
+  $effect(() => { const v = JSON.stringify(encoding); try { localStorage.setItem(encKey(), v); } catch { /* dura la pestaña */ } });
+  let encOpen = $state(false);
+  const levelLinks = $derived(graph ? projectLinks(level, levelNodes, graph.threads, graph.relations) : []);
+  const encoded = $derived(encode(levelNodes, levelLinks, encoding));
+  const filtering = $derived(encoding.presets.length > 0 || encoding.text.trim() !== '');
+  // «Ocultar» quita del dibujo lo que no pasa; la disposición sigue calculada
+  // sobre todo el universo, así que nada se reacomoda.
+  const shownNodes = $derived(encoding.mode === 'hide' && filtering ? levelNodes.filter((n) => encoded.looks.get(n.id)?.match) : levelNodes);
+  const links = $derived(graph ? projectLinks(level, shownNodes, graph.threads, graph.relations) : []);
+  const graphGroups = $derived(graph ? groupsFor(universe, graph.groups) : []);
+
+  function changeLevel(next: string) {
+    if (next !== 'bubbles' && next !== 'threads') return;
+    if (next === level) return;
+    level = next;
+    // Un punto de otro nivel es otra entidad: no arrastra un cajón abierto.
+    drawer = false;
+    open = null;
+  }
+
+  function openNode(n: GraphNode) {
+    if (n.kind === 'bubbles') {
+      open = board?.bubbles.find((b) => b.id === n.id) ?? null;
+      naming = false;
+      drawer = true;
+      return;
+    }
+    const t = board?.threads.find((x) => x.id === n.id);
+    if (t) onOpen(t);
+  }
 
   // Who works here. Read once per workspace, for the one field on this screen
   // that needs a person: who is accountable for a bubble.
@@ -70,7 +156,13 @@
     const id = workspace?.id;
     roster = [];
     let active = true;
-    const reading = id ? api.roster(id) : api.people().then((ps) => ps.map((p) => ({id:p.id,name:p.display_name || p.email,avatar:avatarUrl(p,'64x64')})));
+    const reading = id
+      ? api.roster(id)
+      : api.people().then((ps) => ps.map((p) => ({
+          id: p.id,
+          name: named(p),
+          avatar: avatarUrl(p, '64x64'),
+        })));
     reading.then((r) => { if (active) roster=r; }).catch(() => { if (active) error='No se pudieron cargar los nombres de los encargados.'; });
     return () => { active=false; };
   });
@@ -106,15 +198,25 @@
     })),
   );
 
-  // A thread with no bubble does NOT appear here. The board is bubbles — the
-  // unit of attention — and a bubble is what floats or sinks; loose threads
-  // under a "Sin burbuja" heading turned it into a list of everything, which is
-  // the thing the board exists instead of. They are not lost: the planner shows
-  // every thread by objective, and ⌘K finds any of them by name.
+  // Flotabilidad en el nivel Hilos: el mismo tablero de orbes, uno por hilo,
+  // con su burbuja dicha debajo. Aquí sí van los sueltos: es el nivel que los
+  // pide, y su origen dice «sin burbuja».
+  const threadOrbs = $derived<BoardBubble[]>(
+    (board?.threads ?? []).map((t) => ({
+      id: t.id,
+      name: t.name,
+      life: t.heat.lifecycle,
+      priority: t.priority ?? '',
+      owner: all ? '' : nameOf((t.assignees ?? [])[0] ?? ''),
+      people: all ? [] : (t.assignees ?? []).map(nameOf).filter(Boolean),
+      project: [all ? projectOf(t.workspace) : '', t.bubble ? (board?.bubbles.find((b) => b.id === t.bubble)?.name ?? '') : 'sin burbuja']
+        .filter(Boolean).join(' · '),
+    })),
+  );
 
-  // The minimap reads the same list the board draws, so the two cannot disagree
-  // about what is on the page.
-  const mapItems = $derived<MapItem[]>(orbs.map((b) => ({ id: b.id, name: b.name, life: b.life })));
+  const visibleOrbs = $derived((level === 'bubbles' ? orbs : threadOrbs).filter((n) => showClosed || n.life !== 'closed'));
+  // El minimapa lee lo que dibuja Flotabilidad. En Blobs se navega con la cámara.
+  const mapItems = $derived<MapItem[]>(visibleOrbs.map((b) => ({ id: b.id, name: b.name, life: b.life })));
 
   let open = $state<BubbleHeat | null>(null);
 
@@ -153,6 +255,9 @@
   // a panel showing the snapshot would keep displaying what you just changed.
   const shown = $derived(board?.bubbles.find((b) => b.id === open?.id) ?? open);
   let drawer = $state(false);
+  // La barra del HUD se monta en la columna del pane (ver el marcado).
+  let hudAnchor = $state<HTMLElement>();
+  const hudTarget = $derived((hudAnchor?.closest('.pane')?.parentElement as HTMLElement | null | undefined) ?? undefined);
   let deleteRoles = $state<Record<string, boolean>>({});
   const mayDelete = (ws: string) => api.me?.role === 'lead' || !!deleteRoles[ws];
   $effect(() => {
@@ -282,7 +387,7 @@
 </script>
 
 
-<Minimap items={mapItems} {scroller} />
+{#if layout === 'flotation'}<Minimap items={mapItems} {scroller} />{/if}
 
 {#if error}
   <p class="card glass m-6 p-4 text-sm text-error-500">{error}</p>
@@ -291,16 +396,71 @@
 {#if !board}
   <Loading />
 {:else}
-  <BubbleBoard
-    title={workspace?.name ?? 'Todos los proyectos'}
-    bubbles={orbs}
-    onnew={all ? undefined : onnew}
-    onaction={act}
-    onopen={(b) => {
-      open = board?.bubbles.find((x) => x.id === b.id) ?? null;
-      naming = false;
-      drawer = true;
-    }} />
+  <div class="model-board" class:canvas-mode={layout !== 'flotation'}>
+    {#key level}
+      {#if layout === 'flotation'}
+        <BubbleBoard title={boardTitle} bubbles={visibleOrbs}
+          onnew={all ? undefined : onnew}
+          onaction={level === 'bubbles' ? act : undefined}
+          onopen={(b) => {
+            const node = universe.find((n) => n.id === b.id);
+            if (node) openNode(node);
+          }} />
+      {:else if layout === '3d'}
+        <div class="blob-board">
+          <Graph3D nodes={shownNodes} {universe} groups={graphGroups} {links} kind={level} title={boardTitle}
+            looks={encoded.looks}
+            empty={`No hay ${level === 'bubbles' ? 'burbujas' : 'hilos'} en este alcance.`}
+            resetKey={`${level}/${workspace?.id ?? 'all'}/${teams.current}/${teams.viewing}`}
+            onopen={openNode} />
+          <EncodingLegend legend={encoded.legend} colorLabel={COLOR_LABELS[encoding.color]} {filtering} />
+        </div>
+      {:else}
+        <!-- Un lienzo que llena el pane, como la secuencia: el título flota arriba. -->
+        <div class="blob-board">
+          <BlobGraph nodes={shownNodes} {universe} groups={graphGroups} {links}
+            kind={level} fury={false} canvas title={boardTitle} looks={encoded.looks}
+            empty={`No hay ${level === 'bubbles' ? 'burbujas' : 'hilos'} en este alcance.`}
+            resetKey={`${level}/${workspace?.id ?? 'all'}/${teams.current}/${teams.viewing}`}
+            onopen={openNode} />
+          <EncodingLegend legend={encoded.legend} colorLabel={COLOR_LABELS[encoding.color]} {filtering} />
+        </div>
+      {/if}
+    {/key}
+  </div>
+
+  <!-- Los controles del tablero, abajo al centro y con la forma de los de la
+       secuencia: qué se ve, cómo se acomoda y si entran las cerradas. Van en la
+       franja del HUD, a la altura de las esquinas: montados en la columna del
+       pane (como el cerebro), no dentro de él, para que no se muevan con el
+       scroll ni los desvanezca la máscara del borde del pane. -->
+  <span class="hud-anchor" aria-hidden="true" bind:this={hudAnchor}></span>
+  {#snippet hud()}
+  <div class="board-hud">
+    <div class="seg" role="group" aria-label="Qué mostrar en el tablero">
+      <button class:on={level === 'bubbles'} aria-pressed={level === 'bubbles'} onclick={() => changeLevel('bubbles')}>Burbujas</button>
+      <button class:on={level === 'threads'} aria-pressed={level === 'threads'} onclick={() => changeLevel('threads')}>Hilos</button>
+    </div>
+    <div class="seg" role="group" aria-label="Disposición del tablero">
+      <button class:on={layout === 'blobs'} aria-pressed={layout === 'blobs'} onclick={() => (layout = 'blobs')}>Blobs</button>
+      <button class:on={layout === '3d'} aria-pressed={layout === '3d'} onclick={() => (layout = '3d')}>3D</button>
+      <button class:on={layout === 'flotation'} aria-pressed={layout === 'flotation'} onclick={() => (layout = 'flotation')}>Flotabilidad</button>
+    </div>
+    <div class="seg">
+      <button class:on={showClosed} aria-pressed={showClosed} onclick={() => (showClosed = !showClosed)}>Incluir cerradas</button>
+    </div>
+    {#if layout !== 'flotation'}
+      <div class="seg">
+        <button class:on={encOpen || filtering || !encoding.size.includes('uniform') || encoding.color !== 'state'} aria-expanded={encOpen}
+          onclick={() => (encOpen = !encOpen)}>Tamaño y color{filtering ? ` · ${encoded.legend.filtered}` : ''}</button>
+      </div>
+    {/if}
+    {#if encOpen && layout !== 'flotation'}
+      <div class="enc-pop"><EncodingPanel bind:value={encoding} {level} onclose={() => (encOpen = false)} /></div>
+    {/if}
+  </div>
+  {/snippet}
+  {#if hudTarget}<Portal target={hudTarget}>{@render hud()}</Portal>{:else}{@render hud()}{/if}
 
   <BubbleDrawer
     bind:open={drawer}
@@ -438,3 +598,21 @@
     </Portal>
   </Dialog>
 {/if}
+
+<style>
+  .model-board { padding-bottom: 4.5rem; }
+  /* En Blobs no hay página que desplazar: el lienzo es el pane entero. */
+  .model-board.canvas-mode { height: 100%; padding-bottom: 0; }
+  .blob-board { position: relative; height: 100%; }
+  .enc-pop { position: absolute; bottom: calc(100% + 0.6rem); left: 50%; transform: translateX(-50%); }
+  .hud-anchor { display: none; }
+  /* La fila de las esquinas: `bottom: 1rem` y 42 px de alto, como .float-btn y
+     .corner-dock; los grupos quedan centrados en ella. */
+  .board-hud { position: absolute; left: 50%; bottom: 1rem; transform: translateX(-50%); min-height: 42px; display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.5rem; width: max-content; max-width: calc(100% - 2rem); z-index: var(--z-chrome); }
+  /* Sin lugar al centro entre las esquinas: sube sobre ellas (igual que la secuencia). 1320 px: con el cerebro, la cabeza de la furia y el pin, las esquinas ya no dejan sitio a 1280. */
+  @media (max-width: 1320px) { .board-hud { bottom: 4.75rem; } }
+  .seg { display: flex; flex-wrap: wrap; max-width: 100%; padding: 3px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-solid); }
+  .seg button { padding: 0.3rem 0.7rem; border-radius: 7px; font-size: 0.85rem; }
+  .seg button.on { background: var(--hover); font-weight: 700; }
+  .seg button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+</style>

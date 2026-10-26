@@ -59,6 +59,8 @@ func main() {
 	}
 
 	app.RootCmd.AddCommand(personCommand(app))
+	// Las personas de `just seed agents`, y su limpieza al bajar el dev.
+	app.RootCmd.AddCommand(simulatedCommand(app))
 
 	// El arranque que puede deshacer una actualización. `serve` sigue estando y
 	// sigue sirviendo: `boot` es quien lo lanza y lo vigila, y en desarrollo

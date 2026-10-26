@@ -664,6 +664,35 @@ textarea[aria-invalid='true'] {
   .icon img { transition: opacity 0.16s ease; }
   :is(button, a, [role='button']):hover > .icon img { transform: none; }
 }
+/* Desatada: las llamas ocupan el recuadro y dejan la cabeza más chica y más
+   abajo que las otras tres. Se agranda al dibujarla (las llamas salen del
+   recuadro) para que las cuatro cabezas midan lo mismo sin contar el fuego.
+   Medido superponiéndola a Furiosa: con 1.24 la carcasa y la pantalla
+   coinciden de oreja a oreja (con 1.18, sacado de la altura, quedaba chica);
+   el -10.8 % la sube a la misma altura. */
+.icon[data-icon='unleashed'], img.fury-unleashed { transform: translateY(-10.8%) scale(1.24); }
+
+/* «Desatada»: fondo de fuego que sube y baja (FuryLevelPick, FuryOrb). Un
+   degradado rojo → naranja → amarillo tres veces más alto que la caja, que va de
+   un extremo al otro y vuelve con suavizado, así que no salta entre ciclos.
+   `border-box` y sin repetir: medido desde el interior, el borde transparente
+   mostraba una repetición del otro extremo, un filo rojo en el pico. Las llamas
+   son FuryFlames, detrás del contenido. */
+.fury-fire {
+  position: relative;
+  isolation: isolate;
+  border-color: transparent !important;
+  background: linear-gradient(0deg, #b91c1c, #ef4444 30%, #f97316 55%, #facc15 80%, #fde047) 0 100% / 100% 300% no-repeat border-box !important;
+  color: #fff !important;
+  text-shadow: 0 1px 2px rgb(120 20 0 / 0.55);
+  animation: fury-fire 1.8s ease-in-out infinite alternate;
+}
+.fury-fire > :not(.flames) { position: relative; z-index: 1; }
+@keyframes fury-fire { from { background-position: 0 100%; } to { background-position: 0 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .fury-fire { animation: none; background-position: 0 60%; }
+}
+
 /* Siempre a color (variante natural): bajo el cursor sólo crece un poco. */
 .icon.tinted img { opacity: 1; }
 :is(button, a, [role='button']):hover .icon.tinted img { transform: scale(1.08); }

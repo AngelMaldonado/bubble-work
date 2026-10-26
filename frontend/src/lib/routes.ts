@@ -31,6 +31,7 @@ export type Route =
   | { kind: 'planner'; inboxOnly?: boolean }
   | { kind: 'inventory' }
   | { kind: 'sequence' }
+  | { kind: 'roadmap' }
   | { kind: 'prompts'; key: string }
   | { kind: 'settings'; tab: string }
   | { kind: 'artifact'; id: string }
@@ -46,6 +47,7 @@ export function parse(pathname: string): Route {
   if (p === '/planeador/inbox') return { kind: 'planner', inboxOnly: true };
   if (p === '/inventario') return { kind: 'inventory' };
   if (p === '/secuencia') return { kind: 'sequence' };
+  if (p === '/roadmap') return { kind: 'roadmap' };
   if (p === '/mi-espacio') return { kind: 'space' };
   // Un artefacto efímero por su id: no tiene número ni nombre estable, y es el
   // enlace que el agente le da a la persona para contestar.
@@ -86,6 +88,8 @@ export const plannerUrl = '/planeador';
 export const readonlyInboxUrl = '/planeador/inbox';
 export const inventoryUrl = '/inventario';
 export const sequenceUrl = '/secuencia';
+/** El calendario como un camino: el pasado arriba, el futuro abajo. */
+export const roadmapUrl = '/roadmap';
 export const spaceUrl = '/mi-espacio';
 export const artifactUrl = (id: string) => `/artefacto/${id}`;
 export const promptsUrl = (key = '') => (key ? `/prompts/${key}` : '/prompts');

@@ -2959,5 +2959,75 @@ chk "...sin dejar de autenticar como superuser" \
   "$(curl -s -X POST "$API/api/collections/_superusers/auth-with-password" -H "$JS" \
      -d '{"identity":"root@bubble.test","password":"rootrootroot"}' | j "['record']['email']")" "root@bubble.test"
 
+# ------------------- integraciones y webhooks (cuby.work) --------------------
+#
+# Otro sistema deja trabajo aquí con un token de agente normal, de forma
+# idempotente, y se entera por un webhook firmado de cuándo terminó.
+ITOK=$(curl -s -X POST "$API/api/tokens" -H "Authorization: $C" -H "$JS" -d '{"name":"cuby.work","days":0}' | j "['token']")
+IA="Bearer $ITOK"
+iidea(){ curl -s -X POST "$API/api/integrations/ideas" -H "Authorization: $1" -H "$JS" -d "$2"; }
+iwork(){ curl -s -X POST "$API/api/integrations/work" -H "Authorization: $1" -H "$JS" -d "$2"; }
+chk ">>> una integración entra con el token de agente de su cuenta" \
+  "$(code -X POST "$API/api/integrations/ideas" -H "Authorization: $IA" -H "$JS" -d '{"source":"cuby","ref":"task:1","note":"Probar la impresora USB","from":"Ana (almacén)"}')" 201
+chk "...repetirla no crea otra: la misma idea" \
+  "$(iidea "$IA" '{"source":"cuby","ref":"task:1","note":"Probar la impresora USB del almacén","from":"Ana (almacén)"}' | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["created"],d["idea"]["source"],d["idea"]["from"])')" "False cuby Ana (almacén)"
+chk "...y queda firmada por la cuenta de la integración" \
+  "$(list inbox_items "$C" | python3 -c 'import sys,json;r=[i for i in json.load(sys.stdin)["items"] if i["source_ref"]=="task:1"];print(len(r), r[0]["captured_by"]=="'"$CID"'")')" "1 True"
+chk ">>> el token de agente NO abre el resto de la API REST" \
+  "$(code "$API/api/workspaces/$ALPHA/board" -H "Authorization: $IA")" 401
+chk ">>> una fuente con nombre raro se rechaza" \
+  "$(code -X POST "$API/api/integrations/ideas" -H "Authorization: $IA" -H "$JS" -d '{"source":"Cuby Work!","ref":"x","note":"n"}')" 400
+WORK='{"source":"cuby","ref":"task:1","idea":"task:1","project":{"ref":"area:almacen","name":"Almacén (cuby)","slug":"cuby-almacen"},"bubble":{"ref":"spec:7","name":"Impresión en almacén","outcome":"Las etiquetas salen solas"},"thread":{"name":"Probar la impresora USB","body":"# Probar la impresora USB\n\n- [x] Conectarla\n- [ ] Imprimir una etiqueta\n","assignees":["alice@bubble.test","nadie@bubble.test"]}}'
+W1=$(iwork "$IA" "$WORK")
+ITH=$(echo "$W1" | j "['thread']['id']")
+chk ">>> una tarea formal asegura proyecto, burbuja e hilo" \
+  "$(echo "$W1" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["project"]["created"],d["project"]["slug"],d["bubble"]["created"],d["thread"]["created"],"/w/cuby-almacen/t/" in d["thread"]["url"])')" "True cuby-almacen True True True"
+chk "...dice qué correos no son de nadie aquí" "$(echo "$W1" | j "['unknown'][0]")" "nadie@bubble.test"
+chk "...la idea queda apuntando a su hilo" \
+  "$(list inbox_items "$C" | python3 -c 'import sys,json;print([i["thread"] for i in json.load(sys.stdin)["items"] if i["source_ref"]=="task:1"][0]=="'"$ITH"'")')" True
+chk "...el documento inicial está escrito" \
+  "$(mcptext "$A" document_read "{\"thread\":\"$ITH\"}" | grep -c 'Imprimir una etiqueta')" 1
+chk "...y alice, asignada, ve el hilo" "$(code "$API/api/threads/$ITH/document" -H "Authorization: $A")" 200
+chk ">>> repetirla no duplica nada" \
+  "$(iwork "$IA" "$WORK" | python3 -c 'import sys,json;d=json.load(sys.stdin);print(d["project"]["created"],d["bubble"]["created"],d["thread"]["created"],d["thread"]["id"]=="'"$ITH"'")')" "False False False True"
+chk "...y un member que no ve ese proyecto no escribe en él" \
+  "$(code -X POST "$API/api/integrations/work" -H "Authorization: $B" -H "$JS" -d '{"source":"cuby","ref":"task:9","project":{"ref":"area:almacen"},"thread":{"name":"x"}}')" 404
+
+HOOK2PORT=$((PORT + 9)); HOOK2LOG=$(mktemp)
+chk ">>> los webhooks son del lead global" "$(code "$API/api/webhooks" -H "Authorization: $A")" 403
+WH=$(curl -s -X POST "$API/api/webhooks" -H "Authorization: $C" -H "$JS" \
+  -d "{\"name\":\"cuby.work\",\"url\":\"http://127.0.0.1:$HOOK2PORT/bubble\",\"events\":[\"thread.completed\"],\"skip_actor\":\"carol@bubble.test\"}")
+WHID=$(echo "$WH" | j "['id']"); WHSECRET=$(echo "$WH" | j "['secret']")
+chk ">>> al crearlo, el secreto sale una vez" "${WHSECRET:0:4}" "bfs_"
+chk "...y no vuelve a salir" "$(curl -s "$API/api/webhooks" -H "Authorization: $C" | python3 -c 'import sys,json;w=json.load(sys.stdin)["webhooks"][0];print("secret" in w, w["has_secret"], w["skip_actor"])')" "False True carol@bubble.test"
+chk ">>> un evento que no existe se rechaza" \
+  "$(code -X POST "$API/api/webhooks/$WHID" -H "Authorization: $C" -H "$JS" -d '{"events":["thread.exploded"]}')" 400
+BUBBLE_WEBHOOK_SECRET="$WHSECRET" python3 scripts/webhook_receiver.py "$HOOK2PORT" --log "$HOOK2LOG" >/dev/null 2>&1 &
+HOOK2PID=$!; sleep 0.6
+chk ">>> el ping llega firmado" "$(curl -s -X POST "$API/api/webhooks/$WHID/test" -H "Authorization: $C" -H "$JS" -d '{}' | j "['ok']")" True
+code -X POST "$API/api/threads/$ITH/complete" -H "Authorization: $A" >/dev/null
+sleep 4
+hook2(){ python3 -c 'import sys,json
+rows=[json.loads(l) for l in open(sys.argv[1]) if l.strip()]
+m=[r for r in rows if r["event"]=="thread.completed" and r["body"].get("thread",{}).get("id")==sys.argv[2]]
+if not m: print("nada"); sys.exit()
+r=m[-1]; b=r["body"]; t=b["thread"]
+print(r["valid"], len(m), t["refs"][0]["source"]+":"+t["refs"][0]["ref"], t["checks"]["done"], t["checks"]["total"], b["actor"]["email"], "Probar la impresora" in t["summary"])' "$HOOK2LOG" "$1"; }
+chk ">>> completar el hilo avisa, firmado, con su ref de cuby" "$(hook2 "$ITH")" "True 1 cuby:task:1 1 2 alice@bubble.test True"
+W2=$(iwork "$IA" '{"source":"cuby","ref":"task:2","project":{"ref":"area:almacen"},"thread":{"name":"Otra cosa"}}')
+ITH2=$(echo "$W2" | j "['thread']['id']")
+code -X POST "$API/api/threads/$ITH2/complete" -H "Authorization: $C" >/dev/null
+sleep 3
+chk ">>> lo que completa la cuenta de la integración no se le devuelve" "$(hook2 "$ITH2")" "nada"
+kill "$HOOK2PID" 2>/dev/null
+W3=$(iwork "$IA" '{"source":"cuby","ref":"task:3","project":{"ref":"area:almacen"},"thread":{"name":"Una más","assignees":["alice@bubble.test"]}}')
+ITH3=$(echo "$W3" | j "['thread']['id']")
+code -X POST "$API/api/threads/$ITH3/complete" -H "Authorization: $A" >/dev/null
+sleep 3
+chk ">>> con el receptor caído, el aviso queda pendiente para reintentar" \
+  "$(curl -s "$API/api/webhooks" -H "Authorization: $C" | python3 -c 'import sys,json;w=json.load(sys.stdin)["webhooks"][0];print(w["pending"], "sin respuesta" in w["last_status"])')" "1 True"
+rm -f "$HOOK2LOG"
+chk ">>> borrar el webhook se lleva su cola" "$(code -X DELETE "$API/api/webhooks/$WHID" -H "Authorization: $C")" 204
+
 echo; echo "  $pass pasaron, $fail fallaron"
 [ "$fail" = "0" ]

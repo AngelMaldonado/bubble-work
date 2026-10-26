@@ -8,6 +8,7 @@
   import FilterPick from './FilterPick.svelte';
   import { weekStart } from '../lib/weekStart.svelte';
   import { WEEKDAYS } from '../lib/week';
+  import { onboarding } from '../lib/onboarding.svelte';
 
   let { me, onme }: { me: Person; onme?: (p: Person) => void } = $props();
 
@@ -209,6 +210,16 @@
         otro día, la semana 1 es la que tiene el 1 de enero.
       </p>
       {#if weekErr}<p class="set-err" role="alert">{weekErr}</p>{/if}
+    </div>
+  </div>
+
+  <div class="set-card">
+    <h3>Bienvenida</h3>
+    <div class="fields">
+      <p class="help">Las pantallas que se le muestran a quien entra por primera vez: qué es una idea, un hilo y el calor.</p>
+      <div class="set-row">
+        <button class="btn btn-sm preset-tonal-surface" onclick={() => onboarding.replay()}>Ver la bienvenida otra vez</button>
+      </div>
     </div>
   </div>
 

@@ -324,6 +324,8 @@ export type Prefs = {
   /** el día en que empieza la semana (`Date.getDay()`: 0 domingo … 6 sábado);
    *  sin él, el lunes */
   week_start?: number;
+  /** cuándo vio (o saltó) la bienvenida; sin él, se le abre al entrar */
+  onboarded_at?: string;
 };
 
 /** De quién es un AGENTS.md: de quien planea (el lead) o de quien opera. */

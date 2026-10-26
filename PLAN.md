@@ -2972,6 +2972,17 @@ Los semáforos de los escritorios de la oficina (hilo #6). Bubble **avisa** a un
 - Validado: latido de 15 personas; hilo temporal de una persona simulada que produce `fury.changed` nivel 3 y vuelve a 0 al completarse (hilo eliminado después); firma mala → 401; `/state` sin token → 401. Go y 904 pruebas live pasan, más 9 pruebas nuevas del receptor integradas en `just test` (sin Docker ni red remota).
 - Para revisar: `just fury lab state`, `just fury lab test`, `just fury lab logs`. **Desmontar:** `just fury lab stop`, que desconecta sólo el webhook del dev que apunte al lab, elimina el contenedor/router y cierra el puente si no está adjunto. El Bubble de producción no se configuró ni desplegó. Falta el gateway y los semáforos físicos.
 
+## Bienvenida para personas nuevas *(built, sin tema oscuro revisado)*
+
+Un wizard a pantalla completa (`Onboarding.svelte`) la primera vez que alguien entra, pensado para gente no técnica: sin «commit», «wiki», «inbox», «token» ni «MCP».
+
+- **Quién la ve:** quien no tiene `onboarded_at` en sus preferencias (`prefs.value`, sin columna nueva). La migración `1788546000_onboarded` marca a toda persona que existe al aplicarse, así que sólo la ve quien se crea después. Se lee con `strict`: si las preferencias no cargan, no se abre. Rechazado: una columna en `users` (es una preferencia de su dueña) y abrírsela a todos al salir (le explica a quien ya sabe).
+- **Qué cuenta, en orden:** equipos (de ejemplo: TI, Diseño, RH) y quién ve y decide (un organigrama de PAPELES —lead global, lead de equipo, miembro, invitado— con «tú» marcado, no de quién le reporta a quién: un equipo es dónde se ve el trabajo), proyecto, burbuja, hilo, cómo se desinfla una burbuja, que el objetivo es terminar lo importante (prioridad y fecha), la furia (sólo si está encendida), dónde se sueltan las ideas; para un lead (global o de equipo), prioridad y orden, y el triage del Planeador.
+- **La IA es la puerta:** el último paso, «Configura tu IA», crea solo un token «Mi asistente» (90 días) al llegar y la aplicación se abre al copiar el prompt de conexión. Saltar y Esc llevan a ese paso. Si no hubo token o portapapeles, se deja entrar igual (con el prompt a la vista para copiarlo a mano): un fallo nuestro no encierra a nadie. Vista otra vez desde Ajustes → Mi usuario no bloquea y crea el token sólo si se pide, para no acumularlos.
+- **Forma:** íconos 3D que entran en barro y se encienden a su color, escenas ampliadas con `zoom`, y las burbujas de la puerta (extraídas de `SignIn` a `RisingBubbles.svelte`, que usan las dos). Sin dependencias nuevas; con «reducir movimiento», quieta.
+- **Límite conocido:** el prompt configura asistentes que se configuran solos por MCP (Claude Code, Codex, Antigravity). La app de ChatGPT o la de Claude no lo pueden usar; quien las use entra sin IA conectada. Recargar a la mitad del primer recorrido crea otro token.
+- Validado: prueba de la migración (quien existía queda marcado y conserva sus preferencias; quien llega después, no), 904 pruebas live, y recorridos de punta a punta en el dev con un navegador headless a 1 440 y 390 px (lead 12 pasos, miembro 10; se abre sola una vez; Saltar y Esc no cierran antes de copiar; copiar crea un token y desbloquea; la repetición no crea tokens). **Sin validar:** el tema oscuro.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`

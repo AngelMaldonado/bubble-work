@@ -30,6 +30,8 @@
   import { bandFace } from './lib/bands';
   import { theme } from './lib/theme.svelte';
   import NewWorkspace from './components/NewWorkspace.svelte';
+  import Onboarding from './components/Onboarding.svelte';
+  import { onboarding } from './lib/onboarding.svelte';
   import { teams, ALL_TEAMS } from './lib/teams.svelte';
   import People from './components/People.svelte';
   import Presence from './components/Presence.svelte';
@@ -147,6 +149,7 @@
       loadHeat();
       projectColors.load().catch(() => {});
       weekStart.load().catch(() => {});
+      onboarding.check();
     }
     ready = true;
   }
@@ -1220,6 +1223,16 @@
 <!-- Outside the branches on purpose: ⌘K has to answer on the board, inside a
      thread and inside the wiki, and a field that only exists on one screen is a
      field people stop reaching for. -->
+<!-- La bienvenida, una vez, a quien llega nuevo. Fuera de las ramas: se pide
+     también desde Ajustes, que no vive en el Shell. -->
+{#if signedIn && ready && onboarding.open}
+  <Onboarding
+    lead={me?.role === 'lead' || teams.list.some((t) => t.role === 'lead')}
+    role={me?.role === 'lead' ? 'global' : teams.list.some((t) => t.role === 'lead') ? 'team' : 'member'}
+    fury={!!globalFeatures.fury}
+    onconnect={() => go(settingsUrl('tokens'))} />
+{/if}
+
 {#if signedIn && current}
   <Omnibar bind:open={omni} {items} {found} {commands} {searching} onquery={query} onpick={pick} />
 {/if}

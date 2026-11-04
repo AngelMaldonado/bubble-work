@@ -34,6 +34,7 @@
     onclick,
     key,
     scrollKey,
+    restore = true,
     ontodo,
   }: {
     /** rendered HTML from the server. Ignored when `children` is given. */
@@ -58,6 +59,9 @@
      */
     key?: unknown;
     scrollKey?: string;
+    /** Imponer al montar la posición que se recordaba. Falso cuando quien la
+     *  monta ya sabe a dónde ir: al volver del markdown, al mismo sitio. */
+    restore?: boolean;
     ontodo?: (index: number, done: boolean) => void | Promise<void>;
   } = $props();
 
@@ -95,7 +99,7 @@
         await renderMermaid(node);
         await renderExcalidraw(node);
         if (!active) return;
-        release = rememberMarkdownScroll(node, identity);
+        release = rememberMarkdownScroll(node, identity, { restore });
         onheadings?.(extractHeadings(node));
         onrendered?.();
       })();

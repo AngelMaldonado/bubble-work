@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { connectSequence, sequenceChanges, sequenceLayers } from '../src/lib/sequencePlan';
+import { connectSequence, insertStep, sequenceChanges, sequenceLayers } from '../src/lib/sequencePlan';
 const row = (id: string, sequence = 0, done = false) => ({ id, sequence, done });
 
 test('el primer nodo inicia el paso 1', () => {
@@ -26,6 +26,22 @@ test('no permite conectar un nodo consigo mismo ni muta el original', () => {
 });
 test('un origen nuevo se incorpora al final', () => {
   expect(connectSequence([['a']], 'b', 'c')).toEqual([['a'], ['b'], ['c']]);
+});
+test('una tarea suelta enlazada con una de la línea entra justo antes, sin moverla', () => {
+  expect(connectSequence([['a'], ['b']], 'x', 'a')).toEqual([['x'], ['a'], ['b']]);
+  expect(connectSequence([['a'], ['b', 'c'], ['d']], 'x', 'c')).toEqual([['a'], ['x'], ['b', 'c'], ['d']]);
+});
+test('insertar en un hueco crea un paso entre dos', () => {
+  expect(insertStep([['a'], ['b']], 'x', 1)).toEqual([['a'], ['x'], ['b']]);
+  expect(insertStep([['a'], ['b']], 'x', 0)).toEqual([['x'], ['a'], ['b']]);
+  expect(insertStep([['a'], ['b']], 'x', 2)).toEqual([['a'], ['b'], ['x']]);
+});
+test('insertar algo que ya estaba lo saca de su paso, y el paso vacío desaparece', () => {
+  expect(insertStep([['a'], ['b'], ['c']], 'c', 1)).toEqual([['a'], ['c'], ['b']]);
+  expect(insertStep([['a'], ['b', 'c'], ['d']], 'c', 2)).toEqual([['a'], ['b'], ['c'], ['d']]);
+  const rows = [['a'], ['b']];
+  insertStep(rows, 'a', 2);
+  expect(rows).toEqual([['a'], ['b']]);
 });
 test('sacar un nodo compacta huecos sin cambiar los pasos terminados', () => {
   expect(sequenceChanges([row('a', 10), row('b', 20), row('c', 30), row('d', 40, true)], [['a'], [], ['c']]))

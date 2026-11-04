@@ -104,11 +104,13 @@ func registerTokens(app core.App) {
 
 // agentTokenAuth pone al dueño de un token de agente como quien pide.
 //
-// Sólo en /mcp: el token es la puerta de un agente, y el agente habla MCP. Que
-// abriera también toda la API REST sería darle más de lo que se pidió al
-// generarlo.
+// Sólo en /mcp y en /api/integrations: el token es la puerta de un agente, y el
+// agente habla MCP; una integración (cuby.work) es una máquina que deja trabajo
+// y no tiene sesión de navegador, y entra con el mismo token. Que abriera toda la
+// API REST sería darle más de lo que se pidió al generarlo.
 func agentTokenAuth(e *core.RequestEvent) error {
-	if e.Auth != nil || !strings.HasPrefix(e.Request.URL.Path, "/mcp") {
+	path := e.Request.URL.Path
+	if e.Auth != nil || !(strings.HasPrefix(path, "/mcp") || strings.HasPrefix(path, "/api/integrations/")) {
 		return e.Next()
 	}
 	raw := strings.TrimSpace(e.Request.Header.Get("Authorization"))

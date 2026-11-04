@@ -1,5 +1,23 @@
 import { expect, test } from 'bun:test';
-import { parallelFrames } from '../src/lib/sequenceLayout';
+import { parallelFrames, sequenceLinks } from '../src/lib/sequenceLayout';
+
+const node = (id: string, x: number, y: number) => ({ id, x, y });
+test('entre dos pasos de una tarea, una flecha directa que corta a la de la punta', () => {
+  const { links, gaps } = sequenceLinks([[node('a', 0, 0)], [node('b', 0, 200)]], (p) => p, 200, 100);
+  expect(links).toEqual([{ key: 'a>b', from: { x: 100, y: 114 }, to: { x: 100, y: 194 }, arrow: true, cut: 'b' }]);
+  expect(gaps).toEqual([{ at: 1, x: 100, y: 154 }]);
+});
+test('entre pasos con varias tareas, m+n tramos por un nudo y no m×n flechas', () => {
+  const rows = [[node('a', 0, 0), node('b', 300, 0), node('c', 600, 0)], [node('d', 0, 300), node('e', 600, 300)]];
+  const { links, gaps } = sequenceLinks(rows, (p) => p, 200, 100);
+  expect(links.length).toBe(5);
+  expect(links.filter((l) => l.cut).map((l) => l.cut)).toEqual(['d', 'e']);
+  expect(links.filter((l) => !l.arrow).length).toBe(3);
+  expect(gaps).toEqual([{ at: 1, x: 400, y: 193 }]); // entre los dos marcos
+});
+test('un solo paso no tiene flechas ni huecos', () => {
+  expect(sequenceLinks([[node('a', 0, 0)]], (p) => p, 200, 100)).toEqual({ links: [], gaps: [] });
+});
 
 test('un paso de un solo nodo no lleva región de paralelo', () => {
   expect(parallelFrames([[{ x: 0, y: 0 }]], (p) => p, 230, 112)).toEqual([]);

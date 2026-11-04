@@ -726,7 +726,9 @@ write returned and a field that only one of them sends disappears on reload.
 
 Saving is explicit and cheap: ⌘S, `:w`, Escape, blur, or switching to
 "renderizado". Those were wired to an empty function for a while, which is worse
-than having no shortcut — it looked like it saved.
+than having no shortcut — it looked like it saved. Since 4 nov 2026 it also saves
+by itself and says so (see «Secuencia que se corrige, autoguardado y notas que no
+se tapan»).
 
 **4c — the keyboard.** *(built)* ⌘K from any screen opens the omnibar, and one
 field answers three questions in the order of how sure the answer is:
@@ -2983,6 +2985,18 @@ Un wizard a pantalla completa (`Onboarding.svelte`) la primera vez que alguien e
 - **Límite conocido:** el prompt configura asistentes que se configuran solos por MCP (Claude Code, Codex, Antigravity). La app de ChatGPT o la de Claude no lo pueden usar; quien las use entra sin IA conectada. Recargar a la mitad del primer recorrido crea otro token.
 - Validado: prueba de la migración (quien existía queda marcado y conserva sus preferencias; quien llega después, no), 904 pruebas live, y recorridos de punta a punta en el dev con un navegador headless a 1 440 y 390 px (lead 12 pasos, miembro 10; se abre sola una vez; Saltar y Esc no cierran antes de copiar; copiar crea un token y desbloquea; la repetición no crea tokens). **Sin validar:** el tema oscuro.
 
+## Integraciones: cuby.work deja trabajo y se entera de cuándo terminó *(built, sin cuby.work real)*
+
+cuby.work es la puerta de las tareas (WhatsApp, su agente, su backend) y Bubble es donde se trabajan. Se unen de forma determinística: cuby deja propuestas y tareas aquí, y Bubble le avisa por webhook cuándo terminó el hilo de una. Su agente no carga herramientas de Bubble. Diseño completo en el artefacto «Bubble Work y cuby.work: integración por webhooks».
+
+- **Quién escribe:** una PERSONA, la cuenta de la integración («cuby.work»), con su token de agente de siempre. Lo que crea queda firmado con ella y con sus mismas reglas; quien pidió el trabajo allá viaja como `from`, igual que el remitente de un WhatsApp. El token de agente abre `/mcp` y ahora también `/api/integrations/` (una máquina sin sesión de navegador), y nada más de la API REST. Rechazado: un token de servicio que escriba a nombre de cada persona (aquí lo que se escribe queda firmado con el nombre de quien lo escribió) y credenciales nuevas para integraciones.
+- **`POST /api/integrations/ideas`** `{source, ref, team, note, body, from}`: una idea en el inbox del equipo con `source` = el sistema y `source_ref` = la cosa allá (los mismos campos que usa el canal de WhatsApp). Repetirla actualiza la misma.
+- **`POST /api/integrations/work`** `{source, ref, team, project{ref,name,slug}, bubble{ref,name,outcome}, thread{name,body,assignees,due}, idea}`: asegura proyecto, burbuja e hilo (el documento inicial sólo al crearlo), asigna por correo (asignar es invitar, como en la aplicación; los correos que no son de nadie vuelven en `unknown`) y marca la idea como trabajo. Idempotente por `external_refs` (fuente, clase, ref → id aquí; migración `1788547000`): una tabla aparte y no columnas en `threads` y `bubbles`, porque el modelo no aprende nada de una integración y una segunda no pide otra columna. El mapeo tarea ↔ hilo también lo guarda cuby: es quien orquesta.
+- **Webhooks** (`webhooks`, `webhook_deliveries`): destinos que configura el lead global en Ajustes → Integraciones, con su secreto (se enseña una vez) y los eventos que escuchan; el primero, `thread.completed`. La fuente es la tabla `events`: un webhook no inventa otra cuenta de lo que pasó. Cada aviso es una fila por evento y destino que se reintenta (1, 2, 4… minutos, hasta 6 h, 12 intentos) hasta un 2xx; el id del evento es la llave de idempotencia del receptor. Firmado como el de los semáforos (`X-Bubble-Signature`). `skip_actor`: lo que hace la cuenta de la integración no se le devuelve. A diferencia de los semáforos sí reintenta, porque aquí no hay latido que corrija un aviso perdido.
+- **El aviso de `thread.completed`** trae el hilo (id, número, nombre, URL, proyecto, burbuja), sus refs de afuera, las casillas marcadas y totales, el principio del documento sin frontmatter y quién lo completó: lo que cuby necesita para proponer el término de la tarea sin volver a preguntar.
+- **Terminado no es término:** del lado de cuby, el webhook no cierra la tarea; su IA propone el término y la persona lo firma con su «sí».
+- Validado: 925 pruebas live (21 nuevas: token de agente en integraciones y no en el resto de REST, idempotencia de ideas y de trabajo, correos desconocidos, triaje, quién configura webhooks, secreto una vez, ping firmado, `thread.completed` firmado con su ref, `skip_actor`, pendiente para reintento con el receptor caído, borrar se lleva la cola); la pantalla de Ajustes → Integraciones recorrida en el dev. **Falta:** el lado de cuby.work, y probarlo de punta a punta con él.
+
 ## Versioning and release
 
 **A version is a binary, and a tag is what names it.** `scripts/build.sh`
@@ -3282,6 +3296,64 @@ La base de la evolución (diseño técnico §2–§3). Se construye por tramos; 
 - **El hilo dice de qué equipo es** *(built)*. `threads.team`, que **deriva el servidor** en `OnRecordValidate` (cubre REST, MCP y `app.Save`): con proyecto es el equipo del proyecto, y lo que mande el cliente se pisa. Mover un proyecto de equipo actualiza sus hilos en la misma transacción que el proyecto (`OnRecordUpdate` envuelto en `RunInTransaction`, porque el CRUD de PocketBase no la abre). Ninguna regla ni permiso lee aún este campo; el acceso sigue colgando del proyecto. Rechazado: deducir el equipo de una ruta, o dejar que el cliente lo elija.
 - **Validación:** `just check` en verde, 843 live (sin reutilizar número tras borrar, por REST y MCP; 8 altas simultáneas con 8 números distintos y seguidos; contador sin API; equipo derivado aunque el cliente mande otro, por REST y MCP, que no se cambia a mano y que acompaña al mover el proyecto). `migrations/thread_team_test.go` revierte las dos migraciones sobre una app real, crea hilos como antes y comprueba el relleno de `team` y el contador; se comprobó que la prueba falla con el relleno roto.
 - **Siguiente tramo:** el hilo de equipo, sin proyecto. `workspace` opcional; numeración con `scope_kind = team`; documento en `repos/team-<id>/` resuelto por un sujeto de documento del servidor; lo ven los miembros del equipo (en un equipo personal, sólo su dueño). Por defecto un hilo sin proyecto sigue siendo invisible: `ThreadFor` falla cerrado y cada superficie se abre de forma explícita, con sus pruebas. Después: organizarlo en un proyecto con diario recuperable (§3), y direcciones e historia por tramos.
+
+## Secuencia que se corrige, autoguardado y notas que no se tapan *(built; tableta sin validar)*
+
+Lo que Angel reportó el 4 nov 2026, en uso real:
+
+- **Lo terminado salía en «Sin secuenciar».** `/api/queue` ya filtraba por el
+  grupo del estado (probado ahora en el live: un hilo terminado sin paso no sale
+  en la cola abierta), así que no se reprodujo en el servidor. La caja se pide
+  por páginas y se queda vieja: lo que se termina en otro lado (un agente, el
+  hilo abierto en otro dispositivo) seguía ahí. Ahora la caja se filtra contra
+  el board —lo que éste sabe terminado o en la línea no se ofrece— y el
+  planeador relee el calor cuando cambian `threads` o `bubbles` en vivo. No se
+  recarga la cola en cada evento: la vaciaría un instante cada vez.
+- **Las flechas no se podían corregir.** Sigue sin cambiar el registro (un
+  número por paso; se descartó guardar aristas, que exigía migración, cambiar
+  `sequence_next`/`sequence_set` y recalcular «Ahora» desde un grafo). Lo que
+  cambia es la edición:
+  - Entre dos pasos con varias tareas, las flechas pasan por un nudo: m+n
+    tramos en vez de m×n flechas cruzadas. Dicen lo mismo que antes.
+  - Clic en una flecha → «✂ cortar»: la tarea de la punta sale de la línea y
+    queda suelta en el lienzo, donde estaba, para reconectarla. Clic en el nudo
+    gris de en medio hace lo mismo; si de él salen varias (paso en paralelo),
+    ofrece un «✂ cortar «nombre»» por cada una.
+  - Soltar una tarea (arrastrada, desde su «+» o desde la caja) sobre el nudo
+    entre dos pasos la mete como un paso nuevo en medio.
+  - Enlazar desde una tarea suelta hacia una de la línea la pone justo ANTES de
+    ésa. Antes entraba al final y se llevaba a la otra detrás: era el «se enlaza
+    con la última que puse».
+  - Al cambiar los pasos, la tarea recolocada va a su sitio automático y las
+    acomodadas a mano se corren tantas filas como su paso. «≡» devuelve todo al
+    acomodo automático.
+- **Lo escrito en la tableta no aparecía al renderizar.** No se encontró la
+  causa leyendo el código. En vez de adivinarla, el documento se autoguarda
+  (1,2 s después de dejar de teclear, uno a la vez, con reintento) y lo dice:
+  *Sin guardar / Guardando… / ✓ Guardado / ⚠ No se guardó · reintentar*. «Guardado»
+  sólo cuando el dueño contestó que sí (`onsave` devuelve si se guardó). El eco
+  del propio guardado ya no reescribe el editor: con autoguardado, eso borraba
+  lo tecleado mientras viajaba. Prompts no se autoguarda: tiene su botón.
+- **La fecha de entrega de un hilo** ya existía (chip «sin entrega» de la
+  cabecera, desde v1.4.7). No se construyó nada.
+- **Una nota que crece tapaba a la de abajo.** Al crecer por algo que se le
+  acaba de hacer (terminar de escribir, una casilla, cambiar el tamaño), empuja
+  hacia abajo, en cascada, las que se cruzan con ella. Al cargar no mueve nada:
+  también ahí «crecen» las notas cuando llega su texto.
+- **Barra de vista fija y el mismo sitio en las dos vistas.** Renderizado /
+  markdown / cambios, el indicador y el formato quedan pegados arriba. El
+  servidor marca cada bloque de primer nivel del documento de un hilo o una
+  página con `data-line` (la línea donde empieza, contando el frontmatter); no
+  en artefactos ni respuestas, donde nadie cambia de vista. Con eso, pasar de
+  una vista a otra lleva arriba la misma línea, y el cursor vuelve donde estaba
+  si no se movió la lectura, o al principio de lo que se leía si sí.
+
+**Validación:** `just test` 927 live + Go en verde, 131 frontend; Chrome de
+escritorio en local: cortar, insertar en un hueco, enlazar antes, reordenar,
+autoguardado con el indicador y el texto en el servidor, barra fija, la misma
+línea al ir y volver, y el empuje en cascada de notas. **Hecho cuando:** Angel
+confirme en su tableta que lo escrito se guarda (y, si no, qué dice el
+indicador).
 
 ## Evolución del modelo: propuesta técnica, no construida
 

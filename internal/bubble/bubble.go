@@ -57,6 +57,8 @@ func Register(app core.App, t *tree.Tree) {
 	registerPrompts(app)
 	registerFury(app)
 	registerFuryHook(app)
+	registerIntegrations(app, t)
+	registerWebhooks(app, t)
 }
 
 // getenv is here rather than inline so the one place that reads the environment is

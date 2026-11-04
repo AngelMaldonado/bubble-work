@@ -142,7 +142,14 @@
   loadArtifacts();
   const offArtifacts = live.watch('artifacts', loadArtifacts);
   const artifactTick = setInterval(loadArtifacts, 60_000);
-  onDestroy(() => { offArtifacts(); clearInterval(artifactTick); });
+  // Lo que se termina o entra a la línea desde otro lado —un agente, otra
+  // pestaña, el hilo abierto en el teléfono— se entera aquí. Sólo el calor: la
+  // caja de «sin secuenciar» se filtra contra él, y recargar la cola paginada
+  // la vaciaría un instante a cada evento.
+  let heatTimer: ReturnType<typeof setTimeout> | undefined;
+  const offRows = ['threads', 'bubbles'].map((c) =>
+    live.watch(c, () => { clearTimeout(heatTimer); heatTimer = setTimeout(loadHeat, 400); }));
+  onDestroy(() => { offArtifacts(); offRows.forEach((off) => off()); clearTimeout(heatTimer); clearInterval(artifactTick); });
   // Priority is DERIVED, so it is read like any other server answer rather than
   // recomputed here from the same square the server used.
   let prios = $state<Record<string, string>>({});

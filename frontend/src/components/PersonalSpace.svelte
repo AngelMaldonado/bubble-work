@@ -140,7 +140,54 @@
   const els: Record<string, HTMLElement> = {};
   function placed(el: HTMLElement, id: string) {
     els[id] = el;
-    return { destroy() { if (els[id] === el) delete els[id]; } };
+    lastH[id] = el.offsetHeight;
+    // Crecer después de tocarla empuja lo de abajo (ver `pushBelow`). Mientras
+    // se escribe o se arrastra no cuenta: escribiendo la nota se ensancha y
+    // crece de forma provisional, y lo que importa es cómo queda al terminar.
+    const ro = new ResizeObserver(() => {
+      if (editing === id || gesture) return;
+      const h = el.offsetHeight, grew = h > (lastH[id] ?? h) + 1;
+      lastH[id] = h;
+      if (grew && Date.now() - (touched[id] ?? 0) < 4000) pushBelow(id);
+    });
+    ro.observe(el);
+    return { destroy() { ro.disconnect(); if (els[id] === el) delete els[id]; } };
+  }
+
+  // ---- que una nota que crece no tape a la de abajo ----
+  //
+  // Sólo cuando crece por algo que se le acaba de hacer —terminar de escribir,
+  // marcar una casilla, cambiarle el tamaño—: al cargar, una nota también
+  // «crece» cuando llega su texto, y mover notas al abrir la página sería
+  // cambiarle a alguien el tablero sin que hiciera nada.
+  const lastH: Record<string, number> = {};
+  const touched: Record<string, number> = {};
+  const touch = (id: string) => (touched[id] = Date.now());
+  const PUSH_GAP = 16;
+  /** Baja, en cascada, las notas que empiezan debajo del borde de arriba de
+   *  `id`, se cruzan con ella en horizontal y quedaron tapadas. */
+  function pushBelow(id: string) {
+    const ys = new Map<string, number>();
+    const box = (n: PersonalNote) => ({ x: n.x, y: ys.get(n.id) ?? n.y, w: widthOf(n), h: els[n.id]?.offsetHeight || n.h || 200 });
+    const queue = [id];
+    for (let guard = 0; queue.length && guard < 500; guard++) {
+      const next = queue.shift();
+      const a = notes.find((x) => x.id === next);
+      if (!a) continue;
+      const A = box(a);
+      for (const b of notes) {
+        if (b.id === a.id || b.id === id || b.id === editing) continue;
+        const B = box(b);
+        if (B.x >= A.x + A.w || A.x >= B.x + B.w) continue; // no se cruzan
+        if (B.y < A.y || B.y >= A.y + A.h + PUSH_GAP) continue; // arriba, o ya libre
+        ys.set(b.id, Math.round(A.y + A.h + PUSH_GAP));
+        queue.push(b.id);
+      }
+    }
+    for (const [nid, y] of ys) {
+      const n = notes.find((x) => x.id === nid);
+      if (n && n.y !== y) void patch(n, { y });
+    }
   }
 
   function toWorld(cx: number, cy: number) {
@@ -370,7 +417,11 @@
       const out: Partial<PersonalNote> = {};
       if (d.w && d.w !== n.w) out.w = d.w;
       if (d.h !== undefined && d.h !== n.h) out.h = d.h;
-      if (Object.keys(out).length) void patch(n, out);
+      if (Object.keys(out).length) {
+        touch(n.id);
+        void patch(n, out);
+        void tick().then(() => { lastH[n.id] = els[n.id]?.offsetHeight ?? 0; pushBelow(n.id); });
+      }
       return;
     }
     if (g.moved) {
@@ -401,6 +452,7 @@
       const dw = e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0;
       const dh = e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0;
       const w = Math.min(WMAX, Math.max(WMIN, cur.w + dw)), h = Math.min(HMAX, Math.max(HMIN, cur.h + dh));
+      touch(n.id);
       notes = notes.map((x) => (x.id === n.id ? { ...x, w, h } : x));
       clearTimeout(nudgeTimer);
       nudgeTimer = setTimeout(() => { const now = notes.find((x) => x.id === n.id); if (now) void patch(now, { w: now.w, h: now.h }); }, 400);
@@ -445,6 +497,7 @@
   async function finishEdit() {
     const id = editing, body = draft;
     if (!id) return;
+    touch(id);
     editing = ''; mdEditing = false;
     const n = notes.find((x) => x.id === id);
     if (n && body !== n.body) await patch(n, { body });
@@ -452,6 +505,7 @@
   $effect(() => { if (editing && !mdEditing) void finishEdit(); });
   function tickTodo(n: PersonalNote, index: number, done: boolean) {
     const body = toggleMarkdownTodo(n.body, index, done);
+    touch(n.id);
     if (body !== n.body) return patch(n, { body });
   }
   /** Color: un desplegable, desde su botón o con clic derecho en la nota. */

@@ -289,12 +289,12 @@
     } finally { saving = false; }
   }
 
-  async function save(markdown: string) {
-    if (!doc || saving) return;
+  async function save(markdown: string): Promise<boolean> {
+    if (!doc || saving) return false;
     // With a conflict standing, the base we hold is old and every write is
     // another 409 — including the blur-save that fires when the pointer leaves
     // the editor to press "recargar", which raced the reload it was answering.
-    if (elsewhere) return;
+    if (elsewhere) return false;
     saving = true;
     try {
       // The base is the hash we READ, not the one we hold: they differ exactly
@@ -304,6 +304,7 @@
         : await api.patchThread(thread.id, { base: doc.hash, content: markdown });
       elsewhere = false;
       error = '';
+      return true;
     } catch (e) {
       if (e instanceof ApiError && e.conflict) {
         // Not an error to apologise for. Somebody wrote first; the edit is
@@ -313,6 +314,7 @@
       } else {
         error = (e as Error).message;
       }
+      return false;
     } finally {
       saving = false;
     }

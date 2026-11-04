@@ -25,8 +25,8 @@
   import CheckIcon from '@lucide/svelte/icons/check';
   import Loading from './Loading.svelte';
   import { api } from '../lib/api';
-  import { sequenceLayers, connectSequence, sequenceChanges } from '../lib/sequencePlan';
-  import { parallelFrames } from '../lib/sequenceLayout';
+  import { sequenceLayers, connectSequence, insertStep, sequenceChanges } from '../lib/sequencePlan';
+  import { parallelFrames, sequenceLinks, type Point } from '../lib/sequenceLayout';
   import { projectColors } from '../lib/projectColors.svelte';
 
   let {
@@ -140,45 +140,96 @@
   const parallel = $derived(parallelFrames(layers, at, W, H));
   const tray = $derived.by(() => {
     const placed = new Set(nodes.map((n) => n.id));
+    // La cola llega por páginas y se pidió en algún momento; `threads` es el
+    // board de ahora. Lo que el board ya sabe terminado o en la línea no se
+    // ofrece como «sin secuenciar», aunque la página que lo trajo sea vieja.
+    const settled = new Set(threads.filter((t) => t.done || t.sequence > 0).map((t) => t.id));
     const q = find.trim().toLowerCase();
     return queue.filter(
-      (t) => !placed.has(t.id) && (!q || `${t.name} ${t.project} ${t.bubble}`.toLowerCase().includes(q)),
+      (t) => !placed.has(t.id) && !settled.has(t.id) && !t.done &&
+        (!q || `${t.name} ${t.project} ${t.bubble}`.toLowerCase().includes(q)),
     );
   });
 
-  /** Las flechas: de cada nodo de un paso a cada nodo del siguiente. */
-  const edges = $derived(
-    layers.slice(0, -1).flatMap((row, i) =>
-      row.flatMap((a) => layers[i + 1].map((b) => ({ a, b, key: `${a.id}>${b.id}` }))),
-    ),
-  );
-  function curve(a: { x: number; y: number }, b: { x: number; y: number }) {
-    const x1 = a.x + W / 2, y1 = a.y + H + 14;
-    const x2 = b.x + W / 2, y2 = b.y - 6;
-    const dy = Math.max(40, (y2 - y1) / 2);
-    return `M ${x1} ${y1} C ${x1} ${y1 + dy}, ${x2} ${y2 - dy}, ${x2} ${y2}`;
+  /** Las flechas y los huecos entre pasos: ver `sequenceLinks`. */
+  const net = $derived(sequenceLinks(layers, at, W, H));
+  function bend(a: Point, b: Point) {
+    const dy = Math.max(30, (b.y - a.y) / 2);
+    return `M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}`;
+  }
+  function curve(a: Point, b: Point) {
+    return bend({ x: a.x + W / 2, y: a.y + H + 14 }, { x: b.x + W / 2, y: b.y - 6 });
   }
 
   // ---- escribir la secuencia ----
   /** Renumera de 10 en 10 y manda sólo lo que cambió. */
   let saving = $state(false);
   let saveError = $state('');
-  async function commit(rows: string[][]) {
-    if (readonly || saving || !onreorder) return;
+  const ROW = H + 90; // de un paso al siguiente, en el acomodo automático
+  const ids = () => layers.map((r) => r.map((t) => t.id));
+
+  /** Escribe la línea nueva. `subject` es la tarea que se está colocando: va al
+   *  sitio que le toca por su paso. Las demás que alguien acomodó a mano se
+   *  corren tantas filas como se corrió su paso, para que insertar o sacar un
+   *  paso no deje flechas cruzando el lienzo ni tarjetas una encima de otra.
+   *  Devuelve si se guardó. */
+  async function commit(rows: string[][], subject?: string): Promise<boolean> {
+    if (readonly || saving || !onreorder) return false;
     const changes = sequenceChanges(threads, rows);
-    if (!changes.length) return;
+    if (!changes.length) return true;
+    const next = new Map(rows.filter((r) => r.length).flatMap((r, i) => r.map((id) => [id, i] as [string, number])));
+    if (subject) delete pos[subject];
+    for (const [id, was] of layerOf) {
+      const now = next.get(id);
+      if (id === subject || now === undefined || now === was || !pos[id]) continue;
+      pos[id] = { x: pos[id].x, y: pos[id].y + (now - was) * ROW };
+    }
     saving = true;
     saveError = '';
-    try { await onreorder(changes); }
-    catch (e) { saveError = (e as Error).message; }
+    try { await onreorder(changes); return true; }
+    catch (e) { saveError = (e as Error).message; return false; }
     finally { saving = false; }
   }
 
   /** A → B: B va en el paso justo después de A (en paralelo con lo que ya
-   *  estuviera ahí). Si A no estaba en la línea, entra al final. */
+   *  estuviera ahí). Si A no estaba en la línea, entra como paso propio justo
+   *  antes de B. */
   function connect(a: string, b: string) {
     if (a === b) return;
-    commit(connectSequence(layers.map((r) => r.map((t) => t.id)), a, b));
+    commit(connectSequence(ids(), a, b), b);
+  }
+
+  /** `id` como un paso nuevo en el hueco `gap`. */
+  function insertAt(id: string, gap: number) {
+    if (readonly || saving) return;
+    commit(insertStep(ids(), id, gap), id);
+  }
+
+  /** Cortar la flecha que llega a una tarea: sale de la secuencia y se queda
+   *  suelta en el lienzo, donde estaba, para volver a conectarla bien. Era la
+   *  pieza que faltaba: sin ella, una conexión equivocada sólo se arreglaba
+   *  sacando la tarea y arrastrándola otra vez desde la caja. */
+  //
+  // Desde la flecha, la de su punta. Desde el nudo gris de en medio, las que
+  // salen de él hacia abajo: una sola en una flecha directa, y a elegir cuando
+  // el paso de abajo va en paralelo.
+  let cut = $state<{ ids: string[]; x: number; y: number } | null>(null);
+  async function cutLink(id: string) {
+    cut = null;
+    const t = live.find((x) => x.id === id);
+    if (readonly || saving || !t) return;
+    pos[id] = at(t);
+    const ok = await commit(ids().map((r) => r.filter((x) => x !== id)));
+    // Después de guardar: mientras la fila siga en la línea, el efecto de
+    // arriba la quitaría de «sin conectar» en cuanto entrara.
+    if (ok && !stagedIds.includes(id)) stagedIds = [...stagedIds, id];
+  }
+
+  /** Volver al acomodo automático: cada paso en su fila. Lo suelto se queda
+   *  donde está. */
+  function tidy() {
+    const keep = new Set(staged.map((s) => s.id));
+    pos = Object.fromEntries(Object.entries(pos).filter(([id]) => keep.has(id)));
   }
 
   /** Sacar de la línea (vuelve a la caja), o quitar del lienzo si no estaba. */
@@ -190,7 +241,16 @@
       return;
     }
     delete pos[id];
-    commit(layers.map((r) => r.map((t) => t.id).filter((x) => x !== id)));
+    commit(ids().map((r) => r.filter((x) => x !== id)));
+  }
+
+  /** El hueco bajo el puntero, si lo hay. `elementsFromPoint` y no
+   *  `elementFromPoint`: al arrastrar una tarea, lo primero bajo el puntero es
+   *  ella misma. */
+  let hoverGap = $state(0);
+  function gapAt(cx: number, cy: number): number {
+    const el = document.elementsFromPoint(cx, cy).find((x) => x instanceof HTMLElement && x.dataset.gap);
+    return el ? Number((el as HTMLElement).dataset.gap) : 0;
   }
 
   // ---- el lienzo: mover, acercar ----
@@ -274,6 +334,20 @@
   function down(e: PointerEvent) {
     if (e.button !== 0) return;
     const el = e.target as HTMLElement;
+    if (!el.closest('.cut')) cut = null;
+    const hit = el.closest<SVGElement>('[data-cut]');
+    if (hit && !readonly) {
+      const p = toWorld(e.clientX, e.clientY);
+      cut = { ids: [hit.dataset.cut!], x: p.x, y: p.y };
+      return;
+    }
+    const knot = el.closest<HTMLElement>('[data-gap]');
+    if (knot && !readonly && !gesture) {
+      const g = net.gaps.find((x) => x.at === Number(knot.dataset.gap));
+      const ids = layers[Number(knot.dataset.gap)]?.map((t) => t.id) ?? [];
+      if (g && ids.length) cut = { ids, x: g.x, y: g.y + 22 };
+      return;
+    }
     if (el.closest('button, a, input, .toolbox, .ctrl, .head, .read-modes')) return;
     e.preventDefault();
     window.getSelection()?.removeAllRanges();
@@ -308,20 +382,27 @@
       if (!g.moved && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 4) return;
       g.moved = true;
       pos[g.id] = { x: Math.round(g.ox + dx), y: Math.round(g.oy + dy) };
+      hoverGap = gapAt(e.clientX, e.clientY);
     } else {
       pointer = toWorld(e.clientX, e.clientY);
       const under = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-node]');
       hoverTarget = under && under.dataset.node !== g.from ? under.dataset.node! : '';
+      hoverGap = hoverTarget ? 0 : gapAt(e.clientX, e.clientY);
     }
   }
   function up(e: PointerEvent) {
     const g = gesture;
     gesture = null;
+    const gap = g && g.kind !== 'pan' ? gapAt(e.clientX, e.clientY) : 0;
+    hoverGap = 0;
     if (g?.kind === 'link') {
       const under = document.elementFromPoint(e.clientX, e.clientY)?.closest<HTMLElement>('[data-node]');
       if (under?.dataset.node && under.dataset.node !== g.from) connect(g.from, under.dataset.node);
+      else if (gap) insertAt(g.from, gap);
       pointer = null;
       hoverTarget = '';
+    } else if (g?.kind === 'node' && g.moved && gap) {
+      insertAt(g.id, gap);
     } else if (g && !g.moved && Math.hypot(e.clientX - g.sx, e.clientY - g.sy) < 4) {
       // Capture retargets pointerup to the canvas, not to the card clicked.
       const id = g.kind === 'node' ? g.id : g.node;
@@ -363,6 +444,9 @@
     const id = e.dataTransfer?.getData('text/x-seq');
     const t = queue.find((q) => q.id === id);
     if (!t || nodes.some((n) => n.id === id)) return;
+    const gap = gapAt(e.clientX, e.clientY);
+    hoverGap = 0;
+    if (gap) { insertAt(t.id, gap); return; }
     const p = toWorld(e.clientX, e.clientY);
     pos[t.id] = { x: Math.round(p.x - W / 2), y: Math.round(p.y - H / 2) };
     // El primero de una línea vacía no necesita conexión: es el paso 1.
@@ -443,7 +527,7 @@
             {#if entriesOn}
               <p class="help">Clic para leer una entrada. Arrástrala al canvas para volverla tarea: eliges proyecto y módulo, y queda donde la soltaste.</p>
             {:else}
-              <p class="help">Arrastra al canvas. Mantén el <b>+</b> y suelta sobre otro nodo para ponerlo después. Dos destinos desde el mismo <b>+</b> van en paralelo.</p>
+              <p class="help">Arrastra al canvas. Mantén el <b>+</b> y suelta sobre otro nodo para ponerlo después; desde una tarea suelta, va antes de ése. Dos destinos desde el mismo <b>+</b> van en paralelo. Suelta sobre <b>+ paso</b> para meter un paso en medio. Clic en una flecha para cortarla.</p>
               {#if onnew}<button class="new" onclick={() => { find = ''; onnew?.(); }}>+ nuevo</button>{/if}
             {/if}
           </Navigation.Footer>
@@ -470,8 +554,9 @@
       if (readonly) return;
       e.preventDefault();
       dropping = true;
+      hoverGap = (e.target as HTMLElement).closest?.('[data-gap]') ? gapAt(e.clientX, e.clientY) : 0;
     }}
-    ondragleave={() => (dropping = false)}
+    ondragleave={() => ((dropping = false), (hoverGap = 0))}
     ondrop={drop}>
     <!-- Arriba: los controles en el borde izquierdo y el badge al centro (la
          tercera columna va vacía y sin eventos). -->
@@ -481,6 +566,7 @@
         <span>{Math.round(view.z * 100)}%</span>
         <button onclick={() => zoomBy(1.2)} title="Acercar">+</button>
         <button onclick={fit} title="Ver todo">⤢</button>
+        {#if !readonly}<button onclick={tidy} title="Reordenar: cada paso en su fila (lo suelto se queda donde está)">≡</button>{/if}
       </div>
       <header class="head">
         {#if titleMenu}
@@ -533,8 +619,11 @@
             <path d="M 0 0 L 10 5 L 0 10 z" fill="currentColor" />
           </marker>
         </defs>
-        {#each edges as ed (ed.key)}
-          <path d={curve(at(ed.a), at(ed.b))} marker-end="url(#seq-arrow)" />
+        {#each net.links as l (l.key)}
+          <g class="link" class:cuttable={!!l.cut && !readonly} class:picked={!!l.cut && !!cut?.ids.includes(l.cut)}>
+            <path class="line" d={bend(l.from, l.to)} marker-end={l.arrow ? 'url(#seq-arrow)' : undefined} />
+            {#if l.cut && !readonly}<path class="hit" d={bend(l.from, l.to)} data-cut={l.cut} />{/if}
+          </g>
         {/each}
         {#if gesture?.kind === 'link' && pointer}
           {@const f = nodes.find((n) => n.id === (gesture as { from: string }).from)}
@@ -543,6 +632,28 @@
           {/if}
         {/if}
       </svg>
+      <!-- Los huecos entre pasos: soltar ahí una tarea (arrastrada, desde su «+»
+           o desde la caja) la mete como un paso nuevo en medio. -->
+      {#if !readonly}
+        {#each net.gaps as g (g.at)}
+          <div class="gap" class:armed={dropping || gesture?.kind === 'link' || (gesture?.kind === 'node' && gesture.moved)}
+            class:hot={hoverGap === g.at} data-gap={g.at} style:left="{g.x}px" style:top="{g.y}px"
+            title="Clic para cortar · suelta aquí una tarea para meterla como un paso nuevo entre éstos">
+            <span>+ paso</span>
+          </div>
+        {/each}
+      {/if}
+      {#if cut}
+        <div class="cut" style:left="{cut.x}px" style:top="{cut.y}px">
+          {#each cut.ids as id (id)}
+            {@const who = nodes.find((n) => n.id === id)}
+            <button onclick={() => cutLink(id)}
+              title={`«${who?.name ?? ''}» sale de la secuencia y queda suelta en el lienzo`}>
+              ✂ {cut.ids.length > 1 ? `cortar «${who?.name ?? ''}»` : 'cortar'}
+            </button>
+          {/each}
+        </div>
+      {/if}
 
       {#each nodes as t (t.id)}
         {@const p = at(t)}
@@ -695,9 +806,45 @@
   }
   .group-label b { color: var(--accent); font-weight: 750; }
   .parallel-node:not(.now) { border-color: color-mix(in oklab, var(--accent) 36%, var(--line)); }
-  .edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; color: var(--muted); }
-  .edges > path { fill: none; stroke: currentColor; stroke-width: 1.8; opacity: 0.7; }
-  .edges > path.draft { stroke: var(--accent); color: var(--accent); stroke-dasharray: 6 5; opacity: 1; }
+  .edges { position: absolute; left: 0; top: 0; width: 1px; height: 1px; overflow: visible; color: var(--muted); pointer-events: none; }
+  /* Sólo los trazos: el triángulo del marcador sí se rellena. */
+  .edges .link path, .edges path.draft { fill: none; }
+  .edges .line { stroke: currentColor; stroke-width: 1.8; opacity: 0.7; }
+  .edges .hit { stroke: transparent; stroke-width: 16; pointer-events: stroke; cursor: pointer; }
+  .edges .cuttable:hover, .edges .picked { color: var(--accent); }
+  .edges .cuttable:hover .line, .edges .picked .line { opacity: 1; stroke-width: 2.4; }
+  .edges .picked .line { stroke-dasharray: 6 4; }
+  .edges path.draft { stroke: var(--accent); color: var(--accent); stroke-width: 1.8; stroke-dasharray: 6 5; }
+  /* El nudo entre dos pasos. Quieto es un punto; mientras se arrastra algo,
+     una píldora donde soltarlo. */
+  .gap {
+    position: absolute; z-index: 2; width: 10px; height: 10px; transform: translate(-50%, -50%);
+    display: grid; place-items: center; border-radius: 999px;
+    background: color-mix(in oklab, var(--muted) 70%, transparent);
+    transition: width 0.12s ease, height 0.12s ease, background-color 0.12s ease;
+  }
+  /* El punto es pequeño; el blanco del clic, no. */
+  .gap::before { content: ''; position: absolute; inset: -9px; border-radius: 999px; }
+  .gap:not(.armed) { cursor: pointer; }
+  .gap:not(.armed):hover { background: var(--accent); }
+  .gap span { display: none; font-size: 0.72rem; font-weight: 750; white-space: nowrap; }
+  .gap.armed {
+    width: auto; height: 30px; padding: 0 0.7rem; border: 1px dashed var(--accent);
+    background: var(--surface-solid); color: var(--accent);
+  }
+  .gap.armed span { display: inline; }
+  .gap.hot { background: var(--accent); color: white; border-style: solid; }
+  .cut {
+    position: absolute; z-index: 4; transform: translate(-50%, -50%);
+    display: flex; flex-direction: column; align-items: center; gap: 0.25rem;
+  }
+  .cut button {
+    max-width: 16rem; overflow: hidden; text-overflow: ellipsis;
+    padding: 0.2rem 0.6rem; border: 1px solid var(--accent); border-radius: 999px;
+    background: var(--surface-solid); color: var(--accent); font-size: 0.75rem; font-weight: 700;
+    white-space: nowrap; box-shadow: 0 4px 12px rgb(0 0 0 / 0.2); cursor: pointer;
+  }
+  .cut button:hover { background: var(--accent); color: white; }
 
   .node {
     position: absolute;

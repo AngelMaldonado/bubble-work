@@ -141,7 +141,7 @@ func renderDoc(content, threadID string) string {
 	if threadID != "" {
 		return md.RenderThreadHTML(content)
 	}
-	return md.RenderHTML(content)
+	return md.RenderPageHTML(content)
 }
 
 // Edit is one surgical change: quote what is there, give what replaces it.

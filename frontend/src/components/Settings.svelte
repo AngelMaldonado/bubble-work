@@ -20,6 +20,7 @@
   import SettingsBuoyancy from './SettingsBuoyancy.svelte';
   import SettingsPeople from './SettingsPeople.svelte';
   import SettingsMe from './SettingsMe.svelte';
+  import SettingsIntegrations from './SettingsIntegrations.svelte';
   import SettingsTokens from './SettingsTokens.svelte';
   import SettingsTeams from './SettingsTeams.svelte';
   import SettingsFury from './SettingsFury.svelte';
@@ -58,6 +59,7 @@
           { id: 'flotabilidad', label: 'Flotabilidad', face: '🫧' },
           { id: 'usuarios', label: 'Usuarios', face: '🚪' },
           { id: 'funciones', label: 'Funciones', face: '🛠' },
+          { id: 'integraciones', label: 'Integraciones', face: '🔗' },
         ]
       : []),
     { id: 'equipos', label: 'Equipos', face: '👥' },
@@ -167,6 +169,7 @@
         {#if current === 'flotabilidad'}<SettingsBuoyancy canEdit />
         {:else if current === 'usuarios'}<SettingsPeople {me} />
         {:else if current === 'funciones'}<SettingsFeatures {features} {onfeatures} />
+        {:else if current === 'integraciones'}<SettingsIntegrations />
         {:else if current === 'equipos'}<SettingsTeams {me} {features} />
         {:else if current === 'furia'}<SettingsFury {me} />
         {:else if current === 'canales'}<SettingsChannels />

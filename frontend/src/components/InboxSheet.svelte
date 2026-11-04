@@ -190,18 +190,25 @@
               {/each}
             </nav>
           {/if}
-          {#if !readonly}<footer>
-            {#if blocked}
-              <p class="unsaved" class:nudge={refused} role="alert">
-                Esta nota no se está guardando. {blocked}
-              </p>
+          <!-- En sólo lectura no se organiza, pero sí se descarta: el inbox de
+               solo lectura enseña lo que capturaste y lo de los equipos que
+               lideras, que es justo lo que la regla de borrado te deja tirar. -->
+          {#if !readonly || ondelete}<footer>
+            {#if !readonly}
+              {#if blocked}
+                <p class="unsaved" class:nudge={refused} role="alert">
+                  Esta nota no se está guardando. {blocked}
+                </p>
+              {/if}
+              <button class="promote" disabled={!!blocked} onclick={() => { if (!leave()) return; onpromote?.(note); open = false; }}>
+                → organizar
+              </button>
             {/if}
-            <button class="promote" disabled={!!blocked} onclick={() => { if (!leave()) return; onpromote?.(note); open = false; }}>
-              → organizar
-            </button>
-            <button class="danger" onclick={() => { ondelete?.(note.id); open = false; }}>
-              <Icon of="trash" /> descartar
-            </button>
+            {#if ondelete}
+              <button class="danger" onclick={() => { ondelete?.(note.id); open = false; }}>
+                <Icon of="trash" /> descartar
+              </button>
+            {/if}
           </footer>{/if}
         {/if}
       </Dialog.Content>

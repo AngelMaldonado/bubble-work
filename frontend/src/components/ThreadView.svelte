@@ -103,7 +103,7 @@
     onback?: () => void;
     /** hand the edited markdown back. The caller owns the write, the hash and
      *  what to do when somebody else got there first. */
-    onsave?: (markdown: string) => void;
+    onsave?: (markdown: string) => void | boolean | Promise<void | boolean>;
     /** adjuntar una imagen al workspace, desde el editor */
     onattach?: (file: File) => Promise<{ path: string } | null | void>;
     /** qué cambió en este documento — lo calcula git, del lado del servidor */

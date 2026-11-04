@@ -2,7 +2,7 @@ import { api } from './api';
 
 /** Browser-local reading position. The root is the actual reader scroller,
  * not the article (thread/wiki/Prompts reuse their scroll container). */
-function parent(node: HTMLElement): HTMLElement {
+export function scrollParent(node: HTMLElement): HTMLElement {
   for (let at = node.parentElement; at; at = at.parentElement) {
     if (/auto|scroll|overlay/.test(getComputedStyle(at).overflowY)) return at;
   }
@@ -17,8 +17,11 @@ type Owner = {
 };
 const owners = new WeakMap<HTMLElement, Owner>();
 
-export function rememberMarkdownScroll(node: HTMLElement, identity: string): () => void {
-  const element = parent(node);
+/** `restore: false` sigue guardando la posición pero no la impone al montar:
+ *  al cambiar entre markdown y renderizado, el sitio lo decide quien cambia
+ *  (ver `docPosition.ts`), no lo último que se leyó en ese modo. */
+export function rememberMarkdownScroll(node: HTMLElement, identity: string, opts: { restore?: boolean } = {}): () => void {
+  const element = scrollParent(node);
   const scroller = element === document.scrollingElement ? 'document-scroll' : (element.id || element.classList.item(0) || element.tagName.toLowerCase());
   const key = `bubble.md.scroll.${api.me?.id ?? 'local'}.${identity}.${scroller}`;
   const prior = owners.get(element);
@@ -33,7 +36,7 @@ export function rememberMarkdownScroll(node: HTMLElement, identity: string): () 
 
   let saved = 0;
   try { const value = Number(localStorage.getItem(key)); if (Number.isFinite(value) && value >= 0) saved = value; } catch { /* browser policy */ }
-  let restoring = !location.hash;
+  let restoring = !location.hash && opts.restore !== false;
   let last = restoring ? saved : element.scrollTop;
   let closed = false;
   const nodes = new Map<HTMLElement, number>();

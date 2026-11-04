@@ -17,7 +17,7 @@
   import { droppedFile, insertAttachment, pastedImage } from '../lib/attach';
   import { annotate } from '../lib/annotate';
   import { acceptUploads } from '../lib/limits.svelte';
-  import { untrack } from 'svelte';
+  import { onDestroy, untrack } from 'svelte';
   import Prose from './Prose.svelte';
   import SlashMenu from './SlashMenu.svelte';
   import ThreadToc from './ThreadToc.svelte';
@@ -26,7 +26,8 @@
   import type { MarkdownEditor } from '../lib/editor';
   import type { Heading } from '../lib/prose';
   import { toggleMarkdownTodo } from '../lib/markdownTodo';
-  import { rememberMarkdownScroll } from '../lib/markdownScroll';
+  import { rememberMarkdownScroll, scrollParent } from '../lib/markdownScroll';
+  import { blocksOf, lineAt, topOf } from '../lib/docPosition';
 
   let {
     markdown = '',
@@ -41,6 +42,7 @@
     onattach,
     ontodo,
     scrollKey,
+    autosave = true,
   }: {
     markdown?: string;
     scrollKey?: string;
@@ -48,7 +50,12 @@
     html?: string;
     editing?: boolean;
     elsewhere?: boolean;
-    onsave?: (markdown: string) => void;
+    /** Guardar. `false` (o un error) es «no se guardó»: el indicador lo dice
+     *  en vez de enseñar un ✓ que no es verdad. */
+    onsave?: (markdown: string) => void | boolean | Promise<void | boolean>;
+    /** Guardar solo mientras se escribe, con el indicador. Falso donde guardar
+     *  es un paso aparte (Prompts tiene su propio botón). */
+    autosave?: boolean;
     onreload?: () => void;
     onheadings?: (h: Heading[]) => void;
     /** Los dos lados de un diff, tal como los da el servidor. Sin esto la
@@ -93,23 +100,131 @@
   let draft = $state('');
   const slash = new SlashMenuState();
 
+  // Lo último que se mandó a guardar. Cuando el servidor lo devuelve, es el eco
+  // de este mismo editor y NO se vuelve a escribir en él: con autoguardado se
+  // sigue tecleando mientras viaja, y reescribir el documento con lo que se
+  // mandó borraba lo tecleado entre tanto.
+  let sentText: string | null = null;
   $effect(() => {
-    draft = markdown;
-    // And into the editor, if one is open. The editor is built ONCE (it reads
-    // `draft` untracked, or every keystroke would rebuild it), so without this
-    // a reload after a conflict changed the document underneath and left the
-    // old text on screen — the reload appeared to do nothing.
-    editor?.setDoc(markdown);
+    const m = markdown;
+    untrack(() => {
+      if (m === sentText) return;
+      draft = m;
+      // And into the editor, if one is open. The editor is built ONCE (it reads
+      // `draft` untracked, or every keystroke would rebuild it), so without this
+      // a reload after a conflict changed the document underneath and left the
+      // old text on screen — the reload appeared to do nothing.
+      editor?.setDoc(m);
+      if (!inflight) saveState = 'saved';
+    });
   });
 
   async function tickFromMarkdown(index: number, done: boolean) {
     await onsave?.(toggleMarkdownTodo(markdown, index, done));
   }
 
-  /** Saving is explicit and cheap to trigger: ⌘S, `:w`, and leaving the editor.
-   *  A document that only saves on a button is a document somebody loses. */
-  export function save() {
-    if (draft !== markdown) onsave?.(draft);
+  // ---- guardar ----
+  //
+  // Solo, un momento después de dejar de teclear, y además con ⌘S, `:w`, al
+  // salir del editor y al cambiar de vista. Uno a la vez: dos escrituras con la
+  // misma base son un conflicto contra uno mismo. Lo que se escribe mientras
+  // una viaja sale en la siguiente.
+  //
+  // El indicador dice lo que de verdad pasó: «Guardado» sólo cuando el dueño
+  // contestó que sí. Antes, un guardado que no llegaba —en una tableta, por
+  // ejemplo— no lo decía nadie, y el texto desaparecía al ir al renderizado.
+  const AUTOSAVE_MS = 1200;
+  const RETRY_MS = 5000;
+  let saveState = $state<'saved' | 'dirty' | 'saving' | 'failed'>('saved');
+  let inflight: Promise<void> | null = null;
+  let again = false;
+  let autoTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function schedule() {
+    if (!autosave) return;
+    clearTimeout(autoTimer);
+    autoTimer = setTimeout(() => void save(), saveState === 'failed' ? RETRY_MS : AUTOSAVE_MS);
+  }
+
+  export function save(): Promise<void> {
+    clearTimeout(autoTimer);
+    // Lo que tiene el editor, no lo último que avisó: un teclado táctil puede
+    // tener la palabra a medias todavía sin entregar.
+    if (editor) draft = editor.value();
+    if (inflight) { again = true; return inflight; }
+    if (draft === markdown) { saveState = 'saved'; return Promise.resolve(); }
+    const sent = draft;
+    sentText = sent;
+    saveState = 'saving';
+    const run = (async () => {
+      let ok = false;
+      try { ok = (await onsave?.(sent)) !== false; } catch { ok = false; }
+      inflight = null;
+      if (!ok) { saveState = 'failed'; again = false; if (draft !== markdown) schedule(); return; }
+      if (draft === sent) { saveState = 'saved'; again = false; return; }
+      saveState = 'dirty';
+      if (again) { again = false; void save(); } else schedule();
+    })();
+    inflight = run;
+    return run;
+  }
+  onDestroy(() => {
+    clearTimeout(autoTimer);
+    // Irse a otra pantalla también es dejar de escribir.
+    if (draft !== markdown && !inflight) void save();
+  });
+
+  // ---- el mismo sitio en las dos vistas ----
+  //
+  // Al pasar a renderizado se lleva la línea que estaba arriba del editor; al
+  // volver, la que está arriba de lo leído. El cursor vuelve donde estaba si
+  // no se movió la lectura; si se leyó otra parte, va al principio de lo que
+  // se estaba leyendo — es ahí donde se quiere escribir.
+  let bar = $state<HTMLElement | null>(null);
+  let readBox = $state<HTMLElement | null>(null);
+  let switched = $state(false);
+  let editorLine: number | null = null; // arriba del editor al salir de él
+  let readTarget: number | null = null; // a dónde llevar el renderizado
+  let readShown: number | null = null; // dónde quedó al llevarlo
+  let writeTarget: { line: number; caret: boolean } | null = null;
+
+  /** El borde de arriba de lo que se lee: bajo la barra, que va fija. */
+  function viewTop(of: HTMLElement): { scroller: HTMLElement; top: number } {
+    const scroller = scrollParent(of);
+    const top = scroller === document.scrollingElement ? 0 : scroller.getBoundingClientRect().top;
+    return { scroller, top: Math.max(top, bar?.getBoundingClientRect().bottom ?? top) };
+  }
+
+  function placeRead() {
+    if (readTarget === null || !readBox) return;
+    const line = readTarget;
+    readTarget = null;
+    const { scroller, top } = viewTop(readBox);
+    const y = topOf(blocksOf(readBox), line);
+    if (y === null) return;
+    scroller.scrollTop += y - top;
+    readShown = lineAt(blocksOf(readBox), viewTop(readBox).top);
+  }
+
+  function toRead() {
+    if (editor) editorLine = editor.topLine();
+    void save();
+    if (mode === 'write' && editorLine !== null) { readTarget = editorLine; switched = true; }
+    mode = 'read';
+  }
+
+  function toWrite() {
+    if (mode === 'read' && readBox) {
+      const at = lineAt(blocksOf(readBox), viewTop(readBox).top);
+      const still = at !== null && readShown !== null && Math.abs(at - readShown) < 0.5;
+      if (at !== null && !still) writeTarget = { line: Math.floor(at), caret: true };
+      else if (editorLine !== null) writeTarget = { line: editorLine, caret: false };
+      else writeTarget = null;
+    } else {
+      writeTarget = editorLine !== null ? { line: editorLine, caret: false } : null;
+    }
+    if (writeTarget) switched = true;
+    mode = 'write';
   }
 
   /** Upload, then write `![nombre](assets/x.png)` where the caret is.
@@ -208,7 +323,11 @@
           vim: useVim,
           cursor: caretAt,
           onChange: (next) => {
-            draft = next;
+            if (next !== draft) {
+              draft = next;
+              if (!inflight && saveState !== 'failed') saveState = next === markdown ? 'saved' : 'dirty';
+              if (next !== markdown) schedule();
+            }
             slash.detect(made, next);
           },
           // The menu owns these keys while it is open — that is the whole
@@ -229,8 +348,17 @@
         made = made_;
         editor = made_;
         made_.focus();
+        const target = writeTarget;
+        writeTarget = null;
+        if (target) {
+          // La página conserva el scroll de la lectura, y el editor (de alto
+          // fijo) quedaría con su borde de arriba bajo la barra fija.
+          const { scroller, top } = viewTop(el);
+          scroller.scrollTop += el.getBoundingClientRect().top - top - 8;
+          made_.revealLine(target.line, target.caret);
+        }
         const content = el.querySelector<HTMLElement>('.cm-content');
-        if (content) releaseScroll = rememberMarkdownScroll(content, identity + '.markdown');
+        if (content) releaseScroll = rememberMarkdownScroll(content, identity + '.markdown', { restore: !target });
       });
     return () => {
       live = false;
@@ -246,24 +374,33 @@
 <!-- Only the view switch lives in the document's own bar: it changes how you
      READ this page, so it belongs to the page. What you can DO to the thread or
      the page is in the HUD, where the board keeps its verbs. -->
+<!-- Fija arriba al hacer scroll: cambiar de vista, el indicador de guardado y
+     el formato se alcanzan desde cualquier parte de un documento largo. -->
+<div class="doc-bar" bind:this={bar}>
 <div class="edit-bar">
+  {#if autosave && (mode === 'write' || saveState !== 'saved')}
+    <span class="autosave" data-state={saveState} role="status" aria-live="polite">
+      {#if saveState === 'saving'}<Loading compact label="Guardando" /> Guardando…
+      {:else if saveState === 'saved'}<Icon of="check" /> Guardado
+      {:else if saveState === 'dirty'}<span class="dot" aria-hidden="true"></span> Sin guardar
+      {:else}⚠ No se guardó <button type="button" class="link" onclick={() => save()}>reintentar</button>{/if}
+    </span>
+  {/if}
   <div class="seg" role="group" aria-label="modo de vista">
     <button
       class:on={mode === 'read'}
       aria-pressed={mode === 'read'}
-      onclick={() => {
-        save();
-        mode = 'read';
-      }}>renderizado</button>
+      onclick={() => mode !== 'read' && toRead()}>renderizado</button>
     <button
       class:on={mode === 'write'}
       aria-pressed={mode === 'write'}
-      onclick={() => (mode = 'write')}>markdown</button>
+      onclick={() => mode !== 'write' && toWrite()}>markdown</button>
     {#if ondiff}
       <button
         class:on={mode === 'diff'}
         aria-pressed={mode === 'diff'}
         onclick={() => {
+          if (editor) editorLine = editor.topLine();
           save();
           mode = 'diff';
         }}>cambios</button>
@@ -307,6 +444,8 @@
       onclick={() => vimPref.toggle()}>vim</button>
   {/if}
 </div>
+{#if editing && mode === 'write'}<FormatBar {editor} />{/if}
+</div>
 
 {#if elsewhere}
   <!-- Not an error and not a refusal: the base hash says so, and reloading is a
@@ -333,7 +472,6 @@
     {/if}
   </div>
 {:else if editing}
-  <FormatBar {editor} />
   <!-- The menu is a SIBLING of the editor, in a box that positions it: the
        editor's own box clips its overflow (that is what keeps CodeMirror inside
        its rounded corner), and a menu inside it would be cut off the moment the
@@ -353,11 +491,33 @@
     <SlashMenu menu={slash} field={editorBox} onpick={(c) => slash.run(editor, draft, c)} />
   </div>
 {:else}
-  <Prose {html} {onheadings} {scrollKey} ontodo={ontodo || (onsave ? tickFromMarkdown : undefined)} />
+  <div bind:this={readBox}>
+    <Prose {html} {onheadings} {scrollKey} restore={!switched} onrendered={placeRead}
+      ontodo={ontodo || (onsave ? tickFromMarkdown : undefined)} />
+  </div>
 {/if}
 
 <style>
-  .edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; margin-bottom: 1rem; }
+  .doc-bar {
+    position: sticky;
+    top: 0;
+    z-index: 6;
+    margin-bottom: 1rem;
+    padding-block: 0.4rem;
+  }
+  .edit-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+  .doc-bar > :global(* + *) { margin-top: 0.4rem; }
+  /* El formato conserva su renglón, alineado a la derecha como la vista. */
+  .doc-bar > :global(.format-bar) { justify-content: flex-end; }
+  /* A la derecha, junto a las pestañas: el `margin-left: auto` lo empuja él y
+     las pestañas van pegadas detrás. */
+  .autosave { margin-left: auto; display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.76rem; color: var(--faint); }
+  .autosave + .seg { margin-left: 0.4rem; }
+  .autosave[data-state='saved'] { color: var(--muted); }
+  .autosave[data-state='dirty'] { color: var(--muted); }
+  .autosave[data-state='failed'] { color: var(--color-error-500); }
+  .autosave .dot { width: 0.45rem; height: 0.45rem; border-radius: 999px; background: var(--warm, var(--accent)); }
+  .autosave .link { border: 0; background: none; padding: 0; color: inherit; text-decoration: underline; cursor: pointer; }
   .seg { margin-left: auto; display: flex; border: 1px solid var(--line); border-radius: 999px; overflow: hidden; }
   .seg button { border: none; border-radius: 0; padding: 0.25rem 0.75rem; }
   .seg button.on { background: var(--hover); color: var(--text); }

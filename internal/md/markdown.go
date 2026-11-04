@@ -27,19 +27,71 @@ var gm = goldmark.New(
 )
 
 // RenderHTML converts GFM Markdown to safe HTML for the web interior view.
-func RenderHTML(markdown string) string {
+func RenderHTML(markdown string) string { return renderHTML(markdown, false) }
+
+// RenderPageHTML es RenderHTML para un documento que se edita en la web: cada
+// bloque lleva la línea donde empieza (ver markSourceLines). No va en todo lo
+// demás —una respuesta, una entrada de un artefacto— porque ahí nadie cambia
+// entre markdown y renderizado.
+func RenderPageHTML(markdown string) string { return renderHTML(markdown, true) }
+
+func renderHTML(markdown string, lines bool) string {
 	// El frontmatter es clasificación, no texto: no se dibuja.
+	skipped := frontmatterLines(markdown)
 	markdown = StripFrontmatter(markdown)
 	if strings.TrimSpace(markdown) == "" {
 		return ""
 	}
 	src := []byte(markdown)
 	doc := gm.Parser().Parse(text.NewReader(src))
+	if lines {
+		markSourceLines(src, doc, skipped)
+	}
 	var buf bytes.Buffer
 	if err := gm.Renderer().Render(&buf, src, doc); err != nil {
 		return ""
 	}
 	return addressCheckboxes(src, doc, buf.String())
+}
+
+// frontmatterLines es cuántas líneas ocupa el bloque YAML que no se dibuja: lo
+// que hay que sumar a una línea del cuerpo para que sea la del documento.
+func frontmatterLines(content string) int {
+	body := StripFrontmatter(content)
+	if !strings.HasSuffix(content, body) {
+		return 0
+	}
+	return strings.Count(content[:len(content)-len(body)], "\n")
+}
+
+// markSourceLines pone en cada bloque de primer nivel `data-line`: la línea del
+// DOCUMENTO (contando el frontmatter, desde 1) donde empieza. Es lo que deja al
+// cliente pasar de lo renderizado al markdown y de vuelta sin perder el sitio:
+// el número sale del mismo parseo que dibuja, no de comparar textos.
+//
+// Un contenedor (una lista, una cita) no tiene líneas propias; vale la de su
+// primer descendiente que sí las tiene.
+func markSourceLines(src []byte, doc ast.Node, offset int) {
+	for n := doc.FirstChild(); n != nil; n = n.NextSibling() {
+		at := firstSegment(n)
+		if at < 0 {
+			continue
+		}
+		line := bytes.Count(src[:at], []byte("\n")) + 1 + offset
+		n.SetAttributeString("data-line", []byte(strconv.Itoa(line)))
+	}
+}
+
+func firstSegment(n ast.Node) int {
+	if n.Type() == ast.TypeBlock && n.Lines().Len() > 0 {
+		return n.Lines().At(0).Start
+	}
+	for c := n.FirstChild(); c != nil; c = c.NextSibling() {
+		if at := firstSegment(c); at >= 0 {
+			return at
+		}
+	}
+	return -1
 }
 
 var checkboxHTML = regexp.MustCompile(`<input\b[^>]*type="checkbox"[^>]*>`)
@@ -99,12 +151,14 @@ const tocMin = 3
 // always-open TOC is the same space problem as an always-open image.
 func RenderThreadHTML(markdown string) string {
 	// El frontmatter es clasificación, no texto: no se dibuja.
+	skipped := frontmatterLines(markdown)
 	markdown = StripFrontmatter(markdown)
 	if strings.TrimSpace(markdown) == "" {
 		return ""
 	}
 	src := []byte(markdown)
 	doc := gm.Parser().Parse(text.NewReader(src))
+	markSourceLines(src, doc, skipped)
 
 	var body bytes.Buffer
 	if err := gm.Renderer().Render(&body, src, doc); err != nil {

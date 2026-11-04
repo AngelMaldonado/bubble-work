@@ -198,7 +198,7 @@
         {#if error}<p class="err" role="alert">{error}</p>{/if}
         {#key doc.key}
           {#if doc.editable}
-            <DocEditor {markdown} {html} scrollKey={`prompts/${doc.key}`} bind:editing onsave={(md) => (draft = md)} />
+            <DocEditor {markdown} {html} scrollKey={`prompts/${doc.key}`} bind:editing autosave={false} onsave={(md) => { draft = md; }} />
           {:else if markdown}
             <Prose {html} scrollKey={`prompts/${doc.key}`} />
           {:else}

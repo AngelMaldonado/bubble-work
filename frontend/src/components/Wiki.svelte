@@ -123,7 +123,7 @@
     } finally { ticking = false; }
   }
 
-  async function save(markdown: string) {
+  async function save(markdown: string): Promise<boolean> {
     try {
       const out = await api.patchPath(workspace.id, path, { base: hash, content: markdown });
       html = out.html;
@@ -131,11 +131,13 @@
       hash = out.hash;
       error = '';
       await loadTree(); // a page that did not exist does now
+      return true;
     } catch (e) {
       error =
         e instanceof ApiError && e.conflict
           ? 'Esta página cambió en otro lado, así que tu escritura no se guardó. Recárgala para ver lo que hay.'
           : (e as Error).message;
+      return false;
     }
   }
 

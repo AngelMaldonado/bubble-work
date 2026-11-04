@@ -452,7 +452,7 @@
   onattach={onattachnote}
   onpromote={promote}
   onsave={(patch) => note && onsavenote?.(note.id, patch)}
-  ondelete={(id) => (ondeletenote ? ondeletenote(id) : (inbox = inbox.filter((x) => x.id !== id)))} />
+  ondelete={ondeletenote ?? (readonly ? undefined : (id) => (inbox = inbox.filter((x) => x.id !== id)))} />
 {/if}
 
 <!-- ── objectives ──────────────────────────────────────────────────────── -->

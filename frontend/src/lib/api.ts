@@ -146,6 +146,14 @@ export type FuryRules = {
   ownerless: { on: boolean; level: number };
 };
 export type FuryHook = { url: string; has_secret: boolean; last_status: string; last_at: string; last_sent: number };
+/** Un destino al que Bubble avisa lo que pasa (integraciones como cuby.work). */
+export type Webhook = {
+  id: string; name: string; url: string; events: string[]; active: boolean;
+  /** el correo de la cuenta cuya actividad no se le avisa (la de la integración) */
+  skip_actor: string; has_secret: boolean;
+  last_status: string; last_at: string; pending: number; dead: number;
+};
+export type WebhookEdit = { name?: string; url?: string; events?: string[]; active?: boolean; skip_actor?: string };
 export type FuryPreview = {
   counts: { thread: number; bubble: number };
   /** cuántas hay en cada nivel, del 0 al 3 */
@@ -1068,6 +1076,24 @@ class Api {
   }
   testFuryHook() {
     return this.call<FuryHook & { sent: number; failed: number; status: string }>('/api/fury/hook/test', { method: 'POST', body: '{}' });
+  }
+
+  /** Los webhooks de las integraciones (sólo el lead global) y los eventos que hay. */
+  webhooks() {
+    return this.call<{ webhooks: Webhook[]; events: string[] }>('/api/webhooks');
+  }
+  /** Crear uno: el secreto sale en la respuesta, y es la única vez. */
+  createWebhook(body: WebhookEdit) {
+    return this.call<Webhook & { secret: string }>('/api/webhooks', { method: 'POST', body: JSON.stringify(body) });
+  }
+  saveWebhook(id: string, body: WebhookEdit & { rotate?: boolean }) {
+    return this.call<Webhook & { secret?: string }>(`/api/webhooks/${id}`, { method: 'POST', body: JSON.stringify(body) });
+  }
+  testWebhook(id: string) {
+    return this.call<Webhook & { ok: boolean }>(`/api/webhooks/${id}/test`, { method: 'POST', body: '{}' });
+  }
+  async deleteWebhook(id: string) {
+    await this.call<unknown>(`/api/webhooks/${id}`, { method: 'DELETE' });
   }
 
   /** Qué dispararía ahora con estas reglas, aunque la función esté apagada. */

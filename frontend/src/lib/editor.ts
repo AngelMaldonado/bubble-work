@@ -40,6 +40,11 @@ export interface MarkdownEditor {
   setDoc(text: string): void;
   focus(): void;
   cursor(): number;
+  /** La línea (desde 1) que está arriba del todo en la caja del editor. */
+  topLine(): number;
+  /** Lleva la línea `line` (desde 1) arriba de la caja; con `caret`, el cursor
+   *  va a su principio. Para volver del renderizado al mismo sitio. */
+  revealLine(line: number, caret: boolean): void;
   caret(): CaretPoint | null;
   /** Replace a range and place the caret at an offset inside the new text. */
   replace(from: number, to: number, text: string, caretOffset: number): void;
@@ -289,6 +294,19 @@ export async function createMarkdownEditor(opts: EditorOptions): Promise<Markdow
     },
     focus: () => view.focus(),
     cursor: () => view.state.selection.main.head,
+    topLine() {
+      const top = view.scrollDOM.getBoundingClientRect().top;
+      const block = view.lineBlockAtHeight(top - view.documentTop);
+      return view.state.doc.lineAt(block.from).number;
+    },
+    revealLine(line, caret) {
+      const doc = view.state.doc;
+      const at = doc.line(Math.max(1, Math.min(line, doc.lines))).from;
+      view.dispatch({
+        selection: caret ? { anchor: at } : undefined,
+        effects: EditorView.scrollIntoView(at, { y: 'start' }),
+      });
+    },
 
     caret() {
       const pos = view.state.selection.main.head;

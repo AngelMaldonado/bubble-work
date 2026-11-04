@@ -1,6 +1,7 @@
 <script lang="ts">
   import { teams } from '../lib/teams.svelte';
   import Loading from './Loading.svelte';
+  import Confirm, { type Doom } from './Confirm.svelte';
   import { onDestroy } from 'svelte';
   import { api, type Board, type CalendarEvent } from '../lib/api';
   import { live } from '../lib/live.svelte';
@@ -56,6 +57,23 @@
   $effect(() => { const now = `${teams.current}.${teams.viewing}`; if (now !== shownTeam) { shownTeam = now; load(); } });
   onDestroy(() => { stopped = true; generation++; clearTimeout(timer); offs.forEach((off) => off()); });
 
+  // Sólo lectura, salvo descartar: lo que este inbox enseña (lo que capturaste y
+  // lo de los equipos que lideras) es justo lo que la regla de borrado deja tirar.
+  let doom = $state<Doom>(null);
+  function deleteNote(id: string) {
+    const n = inbox.find((x) => x.id === id);
+    doom = {
+      title: '¿Borrar esta nota?',
+      body: n?.text
+        ? `«${n.text}» deja de existir: una nota no es trabajo y no queda en ningún otro lado.`
+        : 'Una nota no es trabajo y no queda en ningún otro lado.',
+      go: async () => {
+        try { await api.remove('inbox_items', id); inbox = inbox.filter((x) => x.id !== id); }
+        catch (e) { failure = String(e); }
+      },
+    };
+  }
+
   function address(workspace: string) { return board?.workspaces.find((w) => w.id === workspace)?.slug ?? ''; }
   function project(workspace: string) { return board?.workspaces.find((w) => w.id === workspace)?.name ?? ''; }
   const bubbles = $derived(board?.bubbles ?? []);
@@ -85,7 +103,7 @@
 {#if failure}<p class="failure" role="alert">{failure} <button onclick={load}>Reintentar</button></p>{/if}
 {#if !board && !failure}<Loading viewport label="Cargando planeador" />{:else}
 <PlannerView {inbox} {events} readonly {inboxOnly} title="Planeador · sólo lectura" {onback} {onsearch} {onopenartifact}
-  render={(md) => api.renderMarkdown(md)} boardPane={sequenceEnabled ? line : undefined}
+  render={(md) => api.renderMarkdown(md)} boardPane={sequenceEnabled ? line : undefined} ondeletenote={deleteNote}
   oncalrange={(from, to) => { if (from !== window.from || to !== window.to) window={from,to}; }}
   onpickevent={(id) => {
     const t = threads.find((t) => id === 't:'+t.id);
@@ -94,6 +112,7 @@
     if (b) { lastOpenBubble.set(b.id); onopenboard?.(address(b.workspace)); }
   }} />
 {/if}
+<Confirm bind:ask={doom} />
 <style>
   .mode { max-width: 230px; }
   .failure { position: fixed; top: 3rem; left: 50%; transform: translateX(-50%); z-index: var(--z-chrome); padding: 0.75rem; background: var(--surface); color: var(--color-error-500); border-radius: 10px; }

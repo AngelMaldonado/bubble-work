@@ -251,7 +251,25 @@ func TestRenderThreadHTMLShortDocHasNoTOC(t *testing.T) {
 	if strings.Contains(RenderThreadHTML(short), "doc-toc") {
 		t.Error("two headings fit in a glance; no TOC")
 	}
-	if RenderThreadHTML(short) != RenderHTML(short) {
-		t.Error("without a TOC the render must be identical to RenderHTML")
+	if RenderThreadHTML(short) != RenderPageHTML(short) {
+		t.Error("without a TOC the render must be identical to RenderPageHTML")
+	}
+}
+
+func TestRenderMarksSourceLines(t *testing.T) {
+	src := "---\ntags: [a]\n---\n# Título\n\nUn párrafo\nen dos líneas.\n\n- uno\n- dos\n\n> cita\n"
+	if strings.Contains(RenderHTML(src), "data-line") {
+		t.Fatal("RenderHTML no marca líneas: sólo los documentos que se editan")
+	}
+	out := RenderPageHTML(src)
+	for _, want := range []string{
+		`<h1 id="ttulo" data-line="4">`,
+		`<p data-line="6">Un párrafo`,
+		`<ul data-line="9">`,
+		`<blockquote data-line="12">`,
+	} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("falta %s en:\n%s", want, out)
+		}
 	}
 }

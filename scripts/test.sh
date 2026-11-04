@@ -2108,6 +2108,14 @@ P1=$(curl -s "$Q?kind=threads&state=open&perPage=1" -H "Authorization: $C" | j "
 P2=$(curl -s "$Q?kind=threads&state=open&perPage=1&page=2" -H "Authorization: $C" | j "['items'][0]['id']")
 chk ">>> ...y la segunda página no repite la primera" \
   "$([ -n "$P1" ] && [ -n "$P2" ] && [ "$P1" != "$P2" ] && echo si || echo no)" si
+QDONE=$(post threads "$C" "{\"workspace\":\"$ALPHA\",\"name\":\"Terminado sin paso\"}" | j "['id']")
+tpatch "$C" "$QDONE" "{\"state\":\"$ST_DONE\"}" >/dev/null
+chk ">>> lo terminado no sale en la cola abierta, aunque no tenga paso" \
+  "$(curl -s "$Q?kind=threads&state=open" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$QDONE"'" for i in json.load(sys.stdin)["items"]) else "no")')" no
+chk "...y sí en la de hecho" \
+  "$(curl -s "$Q?kind=threads&state=done" -H "Authorization: $C" | python3 -c 'import sys,json
+print("si" if any(i["id"]=="'"$QDONE"'" for i in json.load(sys.stdin)["items"]) else "no")')" si
 chk ">>> la cola de módulos existe igual" \
   "$(curl -s -o /dev/null -w '%{http_code}' "$Q?kind=bubbles&state=done" -H "Authorization: $C")" 200
 chk ">>> una página demasiado lejos se rechaza en vez de recorrer la tabla" \

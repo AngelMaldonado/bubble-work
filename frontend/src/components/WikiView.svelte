@@ -52,7 +52,7 @@
     onback?: () => void;
     onopen?: (id: string) => void;
     /** hand the edited markdown back; the caller owns the write and its hash */
-    onsave?: (markdown: string) => void;
+    onsave?: (markdown: string) => void | boolean | Promise<void | boolean>;
     ontodo?: (index: number, done: boolean) => void | Promise<void>;
     scrollKey?: string;
     /** adjuntar una imagen al workspace, desde el editor */

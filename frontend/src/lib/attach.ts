@@ -51,6 +51,51 @@ export function pastedImage(e: ClipboardEvent): File | null {
   return url ? fromDataUrl(url) : null;
 }
 
+/** La imagen del portapapeles, leída a petición — sin evento `paste`.
+ *
+ *  En una tablet no hay Cmd+V, y que el «Pegar» del sistema o el portapapeles
+ *  del teclado lleguen como evento `paste` con la imagen depende del navegador
+ *  y del teclado (en una Samsung, no llegaba). `clipboard.read()` lo pide
+ *  directamente: Chrome pregunta el permiso una vez; Safari y Firefox enseñan
+ *  un «Pegar» que hay que tocar. Sólo en HTTPS.
+ *
+ *  Se llama DENTRO del clic, sin un `await` antes: la activación del usuario
+ *  es lo que la deja leer.
+ *
+ *  Devuelve `null` si no hay imagen; lanza si el navegador no deja leer. */
+export async function clipboardImage(): Promise<File | null> {
+  if (!navigator.clipboard?.read) throw new Error('Este navegador no deja leer el portapapeles.');
+  for (const item of await navigator.clipboard.read()) {
+    const type = item.types.find((t) => t.startsWith('image/'));
+    if (type) {
+      const blob = await item.getType(type);
+      const ext = type.split('/')[1].replace('jpeg', 'jpg').replace(/\+.*/, '');
+      return new File([blob], `imagen.${ext}`, { type });
+    }
+    // La misma tercera forma que en `pastedImage`: una URL base64 copiada como texto.
+    if (item.types.includes('text/plain')) {
+      const text = (await (await item.getType('text/plain')).text()).trim();
+      if (/^data:image\//i.test(text)) {
+        const f = fromDataUrl(text);
+        if (f) return f;
+      }
+    }
+  }
+  return null;
+}
+
+/** ¿Tiene sentido ofrecer «pegar imagen» como botón? Donde el puntero es un
+ *  dedo y se puede leer el portapapeles. Con ratón y teclado, Cmd+V ya pega, y
+ *  un botón más sería un permiso más que pedir. */
+export function canPasteByButton(): boolean {
+  return (
+    typeof navigator !== 'undefined' &&
+    !!navigator.clipboard?.read &&
+    typeof matchMedia === 'function' &&
+    matchMedia('(pointer: coarse)').matches
+  );
+}
+
 /** Una URL `data:` convertida en un archivo de verdad, para subirlo como
  *  cualquier otro. */
 function fromDataUrl(url: string): File | null {

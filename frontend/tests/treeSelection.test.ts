@@ -1,12 +1,18 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { readTreeSelection, saveTreeSelection } from '../src/lib/treeSelection';
 import { parse, wikiUrl } from '../src/lib/routes';
-const original = globalThis.localStorage;
+// El descriptor, no el valor: restaurar `{value: original}` dejaba un
+// `localStorage` de sólo lectura (o uno `undefined` que no existía) para el
+// archivo de prueba siguiente.
+const original = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 beforeEach(() => {
  const values = new Map<string,string>();
  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:(k:string)=>values.get(k)??null,setItem:(k:string,v:string)=>values.set(k,v)}});
 });
-afterEach(() => Object.defineProperty(globalThis,'localStorage',{configurable:true,value:original}));
+afterEach(() => {
+ if (original) Object.defineProperty(globalThis,'localStorage',original);
+ else delete (globalThis as Record<string, unknown>).localStorage;
+});
 test('sin memoria elige el primer archivo, no una carpeta',()=>{
  expect(readTreeSelection('u','thread.a',['doc','page:notes.md'])).toBe('doc');
  expect(readTreeSelection('u','empty',[])).toBe('');

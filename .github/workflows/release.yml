@@ -23,13 +23,19 @@ permissions:
 
 jobs:
   release:
-    # Alojado, como el `check` (deploy/CI.md): publicar no depende de que
-    # ninguna máquina de casa esté encendida.
-    runs-on: ubuntu-latest
+    # Como el `check`: donde diga RUNS_ON, o en GitHub (deploy/CI.md). Un push a
+    # main nunca viene de un fork.
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # Antes de nada que pueda tagear: sin `gh`, el tag se empuja y el release
+      # muere a continuación.
+      - run: scripts/ci-gh.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # Go siempre: los binarios del release se compilan aquí.
       - uses: actions/setup-go@v5

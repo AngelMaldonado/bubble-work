@@ -14,9 +14,7 @@ on:
   pull_request:
     branches: [main]
 
-# Una corrida por PR; la nueva reemplaza a la que quedó vieja. En un runner
-# alojado cada trabajo es una VM limpia, así que ya no hay disco que compartir
-# con `release` ni motivo para serializarse con él.
+# Una corrida por PR; la nueva reemplaza a la que quedó vieja.
 concurrency:
   group: check-${{ github.ref }}
   cancel-in-progress: true
@@ -27,9 +25,10 @@ permissions:
 
 jobs:
   check:
-    # Alojado: el repositorio es público, así que no cuesta minutos, y no
-    # depende de que ninguna máquina de casa esté encendida (deploy/CI.md).
-    runs-on: ubuntu-latest
+    # Donde diga la variable RUNS_ON del repo (el self-hosted de reko-3); sin
+    # ella, en GitHub. Un PR desde un fork va SIEMPRE a GitHub: es código de
+    # cualquiera, y en reko-3 tendría docker privilegiado. Ver deploy/CI.md.
+    runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
         with:

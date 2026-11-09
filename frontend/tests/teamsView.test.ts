@@ -3,16 +3,22 @@
 // `prefs.team`, y entrar a un equipo sale de la vista.
 import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 
-const hadLocalStorage = 'localStorage' in globalThis;
-const prevLocalStorage = (globalThis as Record<string, unknown>).localStorage;
+// Por descriptor y no asignando: otro archivo de prueba puede haber dejado
+// `localStorage` como propiedad de sólo lectura, y una asignación falla según el
+// orden en que bun corra los archivos (en Linux no es el alfabético).
+const prevLocalStorage = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
 // El store usa runas; fuera del compilador de Svelte, `$state` es el valor.
 (globalThis as Record<string, unknown>).$state = <T>(v: T) => v;
 const store = new Map<string, string>();
-(globalThis as Record<string, unknown>).localStorage = {
-  getItem: (k: string) => store.get(k) ?? null,
-  setItem: (k: string, v: string) => void store.set(k, v),
-  removeItem: (k: string) => void store.delete(k),
-};
+Object.defineProperty(globalThis, 'localStorage', {
+  configurable: true,
+  writable: true,
+  value: {
+    getItem: (k: string) => store.get(k) ?? null,
+    setItem: (k: string, v: string) => void store.set(k, v),
+    removeItem: (k: string) => void store.delete(k),
+  },
+});
 
 type Mod = typeof import('../src/lib/teams.svelte');
 let teams: Mod['teams'];
@@ -43,9 +49,8 @@ afterAll(() => {
     if (d) Object.defineProperty(a, k, d as PropertyDescriptor);
     else delete a[k];
   }
-  const g = globalThis as Record<string, unknown>;
-  if (hadLocalStorage) g.localStorage = prevLocalStorage;
-  else delete g.localStorage;
+  if (prevLocalStorage) Object.defineProperty(globalThis, 'localStorage', prevLocalStorage);
+  else delete (globalThis as Record<string, unknown>).localStorage;
 });
 
 beforeEach(async () => {

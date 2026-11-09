@@ -1,18 +1,39 @@
 # Dónde corre el CI
 
-`check` y `release` corren en **`ubuntu-latest`**, los runners alojados de
-GitHub. El repositorio es público, así que no cuestan minutos, y publicar deja de
-depender de que una máquina de casa esté encendida.
+`check`, `release` y `backmerge` corren donde diga la **variable de repositorio
+`RUNS_ON`** (Settings → Secrets and variables → Actions → Variables), y sin ella en
+`ubuntu-latest`:
 
-Antes corrían en `reko-ci`, una VM de Linux dentro de la Mac mini de reko, para
-no pagar minutos cuando el repositorio era privado. Lo que se conserva de
-entonces es el cruce de sistemas: la máquina de quien escribe es macOS y la que
-comprueba es Linux, con bash 5 y coreutils de GNU. Esa diferencia no es teórica:
-la primera corrida en Linux encontró cinco aserciones que en macOS pasaban **sin
-llegar nunca a la regla que decían comprobar**.
+```yaml
+runs-on: ${{ (github.event.pull_request.head.repo.fork && 'ubuntu-latest') || fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
+```
 
-Lo que motivó el cambio: un PR quedó en cola indefinidamente porque la VM estaba
-apagada, y no había otro runner con su etiqueta.
+Hoy `RUNS_ON` = `["self-hosted","Linux","X64"]`: el runner self-hosted
+`bubble-work` en **reko-3**, gestionado por Runner Fleet
+(`runners.cubytest.space`). Corre como un usuario sin privilegios, con su propio
+docker (DinD) para los jobs.
+
+- **Un PR desde un fork va siempre a GitHub.** Es código de cualquiera, y en
+  reko-3 tendría un docker privilegiado en la máquina donde vive la plataforma.
+  Además, Settings → Actions → General debe pedir aprobación para contribuidores
+  externos.
+- **Si reko-3 se cae, se borra `RUNS_ON`.** El CI vuelve a GitHub sin tocar un
+  commit. Es lo que faltó la última vez: un PR quedó en cola indefinidamente
+  porque la única máquina con su etiqueta estaba apagada.
+- **Lo que el runner no trae, lo pone el workflow.** `scripts/ci-gh.sh` baja `gh`
+  si falta. Go y bun los ponen `setup-go` y `setup-bun`, y buildx lo pone
+  `setup-buildx-action`.
+
+Por qué self-hosted otra vez: el 2026-11-09 GitHub dejó de arrancar los jobs
+alojados (*account is locked due to a billing issue*), aunque el repo es público
+y el consumo era $0. La causa era un presupuesto de Actions de $0 con «stop
+usage». El runner propio quita esa dependencia.
+
+Lo que se conserva de cualquier runner Linux es el cruce de sistemas: la máquina
+de quien escribe es macOS y la que comprueba es Linux, con bash 5 y coreutils de
+GNU. Esa diferencia no es teórica: la primera corrida en Linux encontró cinco
+aserciones que en macOS pasaban **sin llegar nunca a la regla que decían
+comprobar**.
 
 ## El check es idempotente por árbol
 
@@ -45,9 +66,10 @@ git push origin --delete refs/ci/check/<árbol>
 ## Ningún puerto fijo sin decirlo
 
 `scripts/test.sh` saca de `BUBBLE_TEST_PORT` (8099 por defecto) el puerto, el
-directorio de datos, el de repos y el log. En un runner alojado cada job es una
-VM limpia y no choca con nada. Sigue importando en la máquina de quien escribe,
-donde otro proyecto puede estar usando el puerto:
+directorio de datos, el de repos y el log. El runner de reko-3 tiene su propia
+red de contenedor, pero es persistente: un servidor que un job anterior dejó vivo
+sigue ocupando el puerto. En la máquina de quien escribe, otro proyecto puede
+estar usándolo. Si algo choca, se fija otro:
 
 ```yaml
     env:

@@ -24,11 +24,16 @@ permissions:
 
 jobs:
   backmerge:
-    runs-on: ubuntu-latest
+    # Donde diga RUNS_ON, o en GitHub (deploy/CI.md).
+    runs-on: ${{ fromJSON(vars.RUNS_ON || '"ubuntu-latest"') }}
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      - run: scripts/ci-gh.sh
+        env:
+          GH_TOKEN: ${{ github.token }}
 
       # ¿Hay en main algo que wip no tiene? Sin contar merges: cada PR wip→main
       # deja un commit de merge que wip no lleva, y eso no es trabajo que falte.

@@ -1,0 +1,65 @@
+# Lo que entró en main sin pasar por wip vuelve a wip, como PR.
+#
+# Un hotfix sale de main, se mergea a main y se publica; `wip` no se entera. Si
+# nadie lo devuelve, wip sigue sin el arreglo y el siguiente PR wip→main lo
+# descubre como conflicto. Esto abre el PR main→wip en cuanto pasa — y nada más:
+# mergearlo es decisión de quien está trabajando en wip, cuando le venga bien.
+# Mover origin/wip por su cuenta sería cambiarle la rama debajo de los pies.
+name: backmerge
+
+on:
+  push:
+    branches: [main]
+
+concurrency:
+  group: backmerge
+  cancel-in-progress: false
+
+# Abrir un PR con el GITHUB_TOKEN necesita además, en el repositorio,
+# Settings → Actions → General → «Allow GitHub Actions to create and approve pull
+# requests». Sin eso, `gh pr create` falla aquí y lo dice.
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  backmerge:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ¿Hay en main algo que wip no tiene? Sin contar merges: cada PR wip→main
+      # deja un commit de merge que wip no lleva, y eso no es trabajo que falte.
+      # Lo que cuenta son los commits normales — los de un hotfix, o el squash de
+      # su PR.
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          git fetch --quiet origin wip
+          missing="$(git rev-list --no-merges --count origin/wip..origin/main)"
+          if [[ "$missing" == 0 ]]; then
+            echo "wip ya tiene todo lo de main"; exit 0
+          fi
+          echo "main lleva $missing commit(s) que wip no tiene:"
+          git log --no-merges --oneline origin/wip..origin/main
+
+          # El PR tiene main como cabeza, así que uno abierto se actualiza solo
+          # con cada push: no se abre otro.
+          open="$(gh pr list --base wip --head main --state open --json url --jq '.[0].url')"
+          if [[ -n "$open" ]]; then
+            echo "ya abierto: $open"; exit 0
+          fi
+
+          {
+            echo "Lo que entró en \`main\` sin pasar por \`wip\` (normalmente un hotfix):"
+            echo
+            git log --no-merges --format='- %s (%h)' origin/wip..origin/main
+            echo
+            echo "Mergéalo cuando te venga bien y luego \`git pull\` en wip. Si choca,"
+            echo "resuélvelo en local (\`git merge origin/main\` en wip y push): el PR se"
+            echo "cierra solo."
+          } > /tmp/body.md
+          gh pr create --base wip --head main \
+            --title "chore: main → wip" --body-file /tmp/body.md

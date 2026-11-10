@@ -26,7 +26,7 @@
   import Loading from './Loading.svelte';
   import { api } from '../lib/api';
   import { sequenceLayers, connectSequence, insertStep, sequenceChanges } from '../lib/sequencePlan';
-  import { parallelFrames, sequenceLinks, type Point } from '../lib/sequenceLayout';
+  import { linkPath, parallelFrames, sequenceLinks, type Point } from '../lib/sequenceLayout';
   import { projectColors } from '../lib/projectColors.svelte';
 
   let {
@@ -153,10 +153,7 @@
 
   /** Las flechas y los huecos entre pasos: ver `sequenceLinks`. */
   const net = $derived(sequenceLinks(layers, at, W, H));
-  function bend(a: Point, b: Point) {
-    const dy = Math.max(30, (b.y - a.y) / 2);
-    return `M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}`;
-  }
+  const bend = linkPath;
   function curve(a: Point, b: Point) {
     return bend({ x: a.x + W / 2, y: a.y + H + 14 }, { x: b.x + W / 2, y: b.y - 6 });
   }

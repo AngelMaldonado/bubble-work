@@ -30,9 +30,16 @@ export function sequenceLinks<T extends { id: string }>(
     // Un paso en paralelo va dentro de su marco (ver `parallelFrames`: 44 px
     // arriba para el rótulo, 36 abajo). El nudo va entre los marcos, no dentro
     // de uno, para no caer encima del rótulo «En paralelo».
-    const below = Math.max(...tails.map((p) => p.y)) + (up.length > 1 ? 22 : 0);
-    const above = Math.min(...heads.map((p) => p.y)) - (down.length > 1 ? 44 : 0);
-    const j = { x: all.reduce((s, p) => s + p.x, 0) / all.length, y: (below + above) / 2 };
+    const lo = Math.max(...tails.map((p) => p.y));
+    const hi = Math.min(...heads.map((p) => p.y));
+    let y = (lo + (up.length > 1 ? 22 : 0) + hi - (down.length > 1 ? 44 : 0)) / 2;
+    // Con los pasos juntos —alguien los acercó a mano, o la tarea recién
+    // conectada cayó en su sitio automático al lado de otras movidas— el aire de
+    // los marcos no cabe, y el nudo quedaba pegado a un puerto o por encima de
+    // él: los tramos hacia él daban la vuelta. Entonces, a medio camino de lo que
+    // sí hay.
+    if (!(y > lo && y < hi)) y = (lo + hi) / 2;
+    const j = { x: all.reduce((s, p) => s + p.x, 0) / all.length, y };
     gaps.push({ at: i + 1, x: j.x, y: j.y });
     if (up.length === 1 && down.length === 1) {
       links.push({ key: `${up[0].id}>${down[0].id}`, from: tails[0], to: heads[0], arrow: true, cut: down[0].id });
@@ -43,6 +50,23 @@ export function sequenceLinks<T extends { id: string }>(
   }
   return { links, gaps };
 }
+/** El trazo de un tramo: sale hacia abajo de `a` y entra hacia abajo en `b`.
+ *
+ *  Cada punto de control se separa la mitad del desnivel, y no más: con un
+ *  mínimo fijo (eran 30 px), dos puntos a menos de 60 px de altura cruzaban sus
+ *  controles y la curva hacía un bucle — la flecha «descontrolada» junto al nudo
+ *  cuando los pasos quedan juntos. Las tangentes siguen verticales, así que la
+ *  punta entra de frente aunque el tramo sea corto.
+ *
+ *  Hacia arriba (sólo pasa con la flecha que se está arrastrando, o con tarjetas
+ *  fuera de orden) no hay forma de salir y entrar hacia abajo sin rodear: ahí
+ *  se mantiene el rodeo de 30 px. */
+export function linkPath(a: Point, b: Point): string {
+  const span = b.y - a.y;
+  const dy = span >= 0 ? span / 2 : 30;
+  return `M ${a.x} ${a.y} C ${a.x} ${a.y + dy}, ${b.x} ${b.y - dy}, ${b.x} ${b.y}`;
+}
+
 export function parallelFrames<T>(layers: T[][], at: (t: T) => Point, width: number, height: number) {
   return layers.flatMap((row, step) => {
     if (row.length < 2) return [];

@@ -14,7 +14,7 @@
   // editor itself, the slash menu, and saving. What it does NOT own is where
   // the text comes from or where it goes — that is the caller's, because one
   // writes a thread's document and the other a page.
-  import { droppedFile, insertAttachment, pastedImage } from '../lib/attach';
+  import { canPasteByButton, clipboardImage, droppedFile, insertAttachment, pastedImage } from '../lib/attach';
   import { annotate } from '../lib/annotate';
   import { acceptUploads } from '../lib/limits.svelte';
   import { onDestroy, untrack } from 'svelte';
@@ -262,6 +262,31 @@
     }
   }
 
+  /** «Pegar imagen» como botón, para la tablet: ver `clipboardImage`. */
+  const pasteButton = canPasteByButton();
+  let clipNote = $state('');
+  let clipNoteTimer: ReturnType<typeof setTimeout> | undefined;
+  function noteClip(text: string) {
+    clipNote = text;
+    clearTimeout(clipNoteTimer);
+    clipNoteTimer = setTimeout(() => (clipNote = ''), 3500);
+  }
+  function pasteFromClipboard() {
+    // Sin `await` antes de leer: la lectura tiene que nacer del clic.
+    clipboardImage()
+      .then((file) => {
+        if (!file) return noteClip('No hay ninguna imagen en el portapapeles.');
+        return annotate(file).then((out) => out && attach(out));
+      })
+      .catch((err) =>
+        noteClip(
+          err?.name === 'NotAllowedError'
+            ? 'El navegador no dejó leer el portapapeles.'
+            : err?.message || 'No se pudo leer el portapapeles.',
+        ),
+      );
+  }
+
   function dropped(e: DragEvent) {
     const file = droppedFile(e);
     if (file) {
@@ -413,6 +438,14 @@
     <button class="vim" disabled={attaching} onclick={() => picker?.click()} title="adjuntar un archivo">
       {#if attaching}<Loading compact label="Subiendo archivo" />{:else}<Icon of="paperclip" />{/if}
     </button>
+    {#if pasteButton}
+      <!-- En una tablet el pegado del sistema no siempre trae la imagen como
+           evento: este botón la pide al portapapeles. -->
+      <button class="vim" disabled={attaching} onclick={pasteFromClipboard} title="pegar imagen del portapapeles">
+        <Icon of="image" />
+      </button>
+      {#if clipNote}<span class="clip-note" role="status">{clipNote}</span>{/if}
+    {/if}
     <input
       class="hidden-file"
       type="file"
@@ -538,6 +571,7 @@
   .vim:hover { color: var(--text); background: var(--hover); }
   .vim:disabled { opacity: 0.5; }
   .hidden-file { display: none; }
+  .clip-note { font-size: 0.75rem; color: var(--muted); }
   .vim.on { color: var(--accent); border-color: color-mix(in oklab, var(--accent) 45%, transparent); }
 
   .elsewhere {

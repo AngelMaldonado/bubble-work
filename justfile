@@ -95,6 +95,12 @@ release-preview:
     @echo "siguiente: $(scripts/version.sh || echo '(nada que publicar)')"
     @scripts/notes.sh
 
+# Arreglar lo publicado sin tocar wip, en el worktree ../bubble-work-hotfix.
+# `just hotfix start` lo deja en origin/main; `just hotfix ship` abre el PR a main.
+# Tras el release, el CI abre el PR main→wip (deploy/CI.md).
+hotfix +ARGS:
+    scripts/hotfix.sh {{ARGS}}
+
 # Actualizar ESTA máquina si aloja una instancia (necesita compose.yml y docker).
 update *ARGS:
     scripts/update.sh {{ARGS}}
